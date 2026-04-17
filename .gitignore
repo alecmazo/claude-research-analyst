@@ -1,0 +1,30 @@
+# Secrets / PII
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Script outputs (regenerable; keep the source, not the deliverables)
+stocks/*.docx
+stocks/*.pptx
+stocks/*.md
+stocks/*.json
+# but keep these:
+!stocks/dga_system_prompt.txt
+!stocks/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
