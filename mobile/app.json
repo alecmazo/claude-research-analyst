@@ -4,27 +4,14 @@
     "slug": "dga-research-analyst",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0A1628"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.dgacapital.researchanalyst"
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0A1628"
-      },
       "package": "com.dgacapital.researchanalyst"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "plugins": []
+    "sdkVersion": "54.0.0"
   }
 }
