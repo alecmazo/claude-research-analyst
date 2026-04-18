@@ -3,8 +3,9 @@ FastAPI backend for the DGA Capital Research Analyst iPhone app.
 
 Exposes the existing Python pipeline (SEC → Grok → Word/PPTX) via REST.
 
-Start:
-    uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
+Start (from the project root — either works):
+    python api/server.py
+    python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 """
 
 from __future__ import annotations
@@ -217,3 +218,8 @@ def list_reports():
             "has_pptx": has_pptx,
         })
     return reports
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
