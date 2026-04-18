@@ -1,0 +1,56 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const DEFAULT_BASE_URL = 'http://localhost:8000';
+const BASE_URL_KEY = '@dga_api_base_url';
+
+export async function getBaseUrl() {
+  try {
+    const stored = await AsyncStorage.getItem(BASE_URL_KEY);
+    return stored || DEFAULT_BASE_URL;
+  } catch {
+    return DEFAULT_BASE_URL;
+  }
+}
+
+export async function setBaseUrl(url) {
+  await AsyncStorage.setItem(BASE_URL_KEY, url.replace(/\/$/, ''));
+}
+
+async function request(path, options = {}) {
+  const base = await getBaseUrl();
+  const url = `${base}${path}`;
+  const resp = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+export const api = {
+  health: () => request('/health'),
+
+  startAnalysis: (ticker, generateGamma = false) =>
+    request('/api/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ ticker, generate_gamma: generateGamma }),
+    }),
+
+  getJobStatus: (jobId) => request(`/api/jobs/${jobId}`),
+
+  listJobs: () => request('/api/jobs'),
+
+  getReport: (ticker) => request(`/api/report/${ticker}`),
+
+  listReports: () => request('/api/reports'),
+
+  getQuote: (ticker) => request(`/api/quote/${ticker}`),
+
+  downloadUrl: async (ticker, type) => {
+    const base = await getBaseUrl();
+    return `${base}/api/download/${ticker}/${type}`;
+  },
+};
