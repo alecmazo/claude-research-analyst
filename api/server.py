@@ -99,6 +99,7 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
 # ---------------------------------------------------------------------------
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+BRANDING_DIR = Path(__file__).resolve().parent.parent / "branding"
 
 
 @app.get("/")
@@ -233,6 +234,9 @@ def list_reports():
 # ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
+if BRANDING_DIR.exists():
+    app.mount("/branding", StaticFiles(directory=str(BRANDING_DIR)), name="branding")
+
 if WEB_DIR.exists():
     app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 

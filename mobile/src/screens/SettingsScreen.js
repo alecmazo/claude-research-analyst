@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ScrollView, Switch,
+  Alert, ScrollView, Switch, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled } from '../api/client';
 import { colors } from '../components/theme';
+
+let dgaLogo = null;
+try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState] = useState('');
@@ -121,6 +124,7 @@ export default function SettingsScreen() {
       {/* About */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>ABOUT</Text>
+        {dgaLogo && <Image source={dgaLogo} style={styles.aboutLogo} resizeMode="contain" />}
         <Text style={styles.aboutText}>DGA Capital Research Analyst v1.0</Text>
         <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
       </View>
@@ -197,4 +201,5 @@ const styles = StyleSheet.create({
   switchLabelText: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
   switchLabelHint: { fontSize: 12, color: colors.midGray, marginTop: 2 },
   aboutText: { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
+  aboutLogo: { width: 140, height: 56, marginBottom: 10 },
 });

@@ -361,6 +361,12 @@ def extract_summary_from_report(report_text: str) -> dict:
 # ============================================================================
 def _gamma_design_block() -> str:
     return """IMPORTANT DESIGN RULES (enforce strictly):
+- Branding: DGA CAPITAL. Place a bold "DGA CAPITAL" wordmark in gold
+  (#C9A84C) on a deep navy (#0A1628) background on the title card and as
+  a small header on every subsequent card. Use "DGA Capital Research" as
+  the recurring footer line on every slide.
+- Color palette: navy (#0A1628 / #132040), gold (#C9A84C / #D9BE6E),
+  off-white (#F5F7FA), dark gray (#3D4A5C). Use gold sparingly as accent.
 - Clean, modern corporate-finance theme (Chisel or equivalent).
 - ALL TEXT minimum 12pt (titles 28–32pt, headings 20–24pt, body 14–18pt).
 - CHARTS: solid fills, bold borders, high contrast, ample white space.

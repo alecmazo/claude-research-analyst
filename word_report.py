@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
@@ -239,8 +240,17 @@ def _add_paragraph_with_inline_md(doc: Document, text: str) -> None:
 # ---------------------------------------------------------------------------
 # Header / cover
 # ---------------------------------------------------------------------------
+_BRANDING_DIR = Path(__file__).resolve().parent / "branding"
+
+
 def _add_cover(doc: Document, ticker: str, entity: str, rating_hint: str = "",
                price: str | float | None = None, as_of: str | None = None) -> None:
+    logo_path = _BRANDING_DIR / "dga_logo.png"
+    if logo_path.exists():
+        logo_para = doc.add_paragraph()
+        logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        logo_para.add_run().add_picture(str(logo_path), width=Inches(3.0))
+
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _run_styled(title, "DGA CAPITAL RESEARCH", bold=True, size=20,

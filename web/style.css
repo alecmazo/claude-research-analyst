@@ -56,6 +56,19 @@ body {
   letter-spacing: 1px;
 }
 
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
 .status-dot {
   display: inline-block;
   width: 10px;
@@ -506,6 +519,13 @@ body {
   font-size: 13px;
   color: var(--dark-gray);
   margin: 4px 0;
+}
+
+.about-logo {
+  max-width: 160px;
+  height: auto;
+  display: block;
+  margin: 0 0 12px;
 }
 
 /* ============ SMALL SCREENS ============ */

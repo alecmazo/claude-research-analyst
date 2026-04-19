@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
+  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Image,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { api, getGammaEnabled, setGammaEnabled as saveGamma } from '../api/client';
 import { colors } from '../components/theme';
+
+let dgaLogo = null;
+try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
 
 export default function HomeScreen({ navigation }) {
   const [ticker, setTicker] = useState('');
@@ -100,7 +103,10 @@ export default function HomeScreen({ navigation }) {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>DGA Research</Text>
+        <View style={styles.headerBrand}>
+          {dgaLogo && <Image source={dgaLogo} style={styles.headerLogo} resizeMode="contain" />}
+          <Text style={styles.headerTitle}>DGA Research</Text>
+        </View>
         <View style={[styles.statusDot, { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber }]} />
       </View>
 
@@ -168,6 +174,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerLogo: { width: 36, height: 36 },
   headerTitle: { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   inputSection: {
