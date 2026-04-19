@@ -152,6 +152,12 @@ TAG_PRIORITIES: dict[str, list[str]] = {
     "RnD": [
         "ResearchAndDevelopmentExpense",
     ],
+    "DepreciationAmortization": [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+        "Depreciation",
+        "DepreciationAmortizationAndAccretionNet",
+    ],
 }
 
 # Tags that are balance-sheet (instant period) vs income-statement (duration).
@@ -517,6 +523,7 @@ def extract_financials(
             "Dividends",
             "BuybacksCash",
             "RnD",
+            "DepreciationAmortization",
         ):
             hit, tag = _first_hit(
                 facts,
@@ -530,6 +537,9 @@ def extract_financials(
                 row["start"] = hit.get("start", row.get("start", ""))
                 row["accession"] = hit.get("accn", row.get("accession", ""))
                 row["filed"] = hit.get("filed", row.get("filed", ""))
+        # Derive GrossProfit from Revenue - CostOfRevenue when the tag is absent.
+        if "GrossProfit" not in row and row.get("Revenue") and row.get("CostOfRevenue"):
+            row["GrossProfit"] = row["Revenue"] - row["CostOfRevenue"]
         # EPS (share units)
         eps_hit, eps_tag = _first_hit(
             facts,
@@ -579,10 +589,18 @@ def extract_financials(
         if "OperatingCashFlow" in row and "CapEx" in row:
             row["FreeCashFlow"] = row["OperatingCashFlow"] - row["CapEx"]
         # Margins
-        if row.get("Revenue") and row.get("OperatingIncome") is not None:
-            row["OperatingMargin"] = row["OperatingIncome"] / row["Revenue"]
-        if row.get("Revenue") and row.get("NetIncome") is not None:
-            row["NetMargin"] = row["NetIncome"] / row["Revenue"]
+        rev = row.get("Revenue")
+        if rev and row.get("GrossProfit") is not None:
+            row["GrossMargin"] = row["GrossProfit"] / rev
+        if rev and row.get("OperatingIncome") is not None:
+            row["OperatingMargin"] = row["OperatingIncome"] / rev
+        if rev and row.get("NetIncome") is not None:
+            row["NetMargin"] = row["NetIncome"] / rev
+        # EBITDA = OperatingIncome + D&A (derived; EBITDA is non-GAAP)
+        if row.get("OperatingIncome") is not None and row.get("DepreciationAmortization"):
+            row["EBITDA"] = row["OperatingIncome"] + row["DepreciationAmortization"]
+            if rev:
+                row["EBITDAMargin"] = row["EBITDA"] / rev
         annuals.append(row)
 
     # ---------- Quarterly (latest 10-Q) ----------
@@ -655,6 +673,7 @@ def _build_quarter_row(facts: dict, fy: int, fp: str, *, is_ytd: bool) -> dict[s
         "NetIncome",
         "OperatingCashFlow",
         "CapEx",
+        "DepreciationAmortization",
     ):
         hit, tag = _first_hit(facts, TAG_PRIORITIES[metric], picker)
         if hit:
@@ -662,6 +681,8 @@ def _build_quarter_row(facts: dict, fy: int, fp: str, *, is_ytd: bool) -> dict[s
             row.setdefault("_tags", {})[metric] = tag
             row["end"] = hit.get("end", row.get("end", ""))
             row["start"] = hit.get("start", row.get("start", ""))
+    if "GrossProfit" not in row and row.get("Revenue") and row.get("CostOfRevenue"):
+        row["GrossProfit"] = row["Revenue"] - row["CostOfRevenue"]
     eps_hit, eps_tag = _first_hit(
         facts, TAG_PRIORITIES["DilutedEPS"], picker, unit_pref=("USD/shares",)
     )
@@ -686,10 +707,17 @@ def _build_quarter_row(facts: dict, fy: int, fp: str, *, is_ytd: bool) -> dict[s
                 row["TotalDebt"] = ltd + std
     if "OperatingCashFlow" in row and "CapEx" in row:
         row["FreeCashFlow"] = row["OperatingCashFlow"] - row["CapEx"]
-    if row.get("Revenue") and row.get("OperatingIncome") is not None:
-        row["OperatingMargin"] = row["OperatingIncome"] / row["Revenue"]
-    if row.get("Revenue") and row.get("NetIncome") is not None:
-        row["NetMargin"] = row["NetIncome"] / row["Revenue"]
+    rev = row.get("Revenue")
+    if rev and row.get("GrossProfit") is not None:
+        row["GrossMargin"] = row["GrossProfit"] / rev
+    if rev and row.get("OperatingIncome") is not None:
+        row["OperatingMargin"] = row["OperatingIncome"] / rev
+    if rev and row.get("NetIncome") is not None:
+        row["NetMargin"] = row["NetIncome"] / rev
+    if row.get("OperatingIncome") is not None and row.get("DepreciationAmortization"):
+        row["EBITDA"] = row["OperatingIncome"] + row["DepreciationAmortization"]
+        if rev:
+            row["EBITDAMargin"] = row["EBITDA"] / rev
     return row
 
 
@@ -744,7 +772,8 @@ def format_verified_block(data: dict) -> str:
     # Annual table
     lines.append("")
     lines.append("[ANNUAL DATA - from latest 10-K filings, $ in millions unless noted]")
-    header = ["FY", "PeriodEnd", "Revenue", "GrossProfit", "OpInc", "OpMargin%",
+    header = ["FY", "PeriodEnd", "Revenue", "GrossProfit", "GrossMargin%",
+              "EBITDA", "EBITDAMargin%", "OpInc", "OpMargin%",
               "NetInc", "NetMargin%", "DilEPS", "OCF", "CapEx", "FCF",
               "Cash", "TotalDebt", "TotalAssets", "Equity"]
     lines.append(" | ".join(header))
@@ -754,6 +783,9 @@ def format_verified_block(data: dict) -> str:
             str(row.get("end", "")),
             _fmt_money(row.get("Revenue")),
             _fmt_money(row.get("GrossProfit")),
+            _fmt_pct(row.get("GrossMargin")),
+            _fmt_money(row.get("EBITDA")),
+            _fmt_pct(row.get("EBITDAMargin")),
             _fmt_money(row.get("OperatingIncome")),
             _fmt_pct(row.get("OperatingMargin")),
             _fmt_money(row.get("NetIncome")),
@@ -773,7 +805,7 @@ def format_verified_block(data: dict) -> str:
     if quarterly.get("current"):
         lines.append("")
         lines.append("[QUARTERLY DATA - from latest 10-Q, $ in millions unless noted]")
-        lines.append("Period | FY | FP | PeriodEnd | Revenue | OpInc | OpMargin% | NetInc | NetMargin% | DilEPS | OCF | FCF")
+        lines.append("Period | FY | FP | PeriodEnd | Revenue | GrossProfit | GrossMargin% | EBITDA | EBITDAMargin% | OpInc | OpMargin% | NetInc | NetMargin% | DilEPS | OCF | FCF")
         labels = [
             ("Latest Quarter (3mo)", quarterly.get("current")),
             ("Same Q Prior Year (3mo)", quarterly.get("prior_year_same_q")),
@@ -789,6 +821,10 @@ def format_verified_block(data: dict) -> str:
                 q.get("fp", ""),
                 str(q.get("end", "")),
                 _fmt_money(q.get("Revenue")),
+                _fmt_money(q.get("GrossProfit")),
+                _fmt_pct(q.get("GrossMargin")),
+                _fmt_money(q.get("EBITDA")),
+                _fmt_pct(q.get("EBITDAMargin")),
                 _fmt_money(q.get("OperatingIncome")),
                 _fmt_pct(q.get("OperatingMargin")),
                 _fmt_money(q.get("NetIncome")),
@@ -805,8 +841,12 @@ def format_verified_block(data: dict) -> str:
             lines.append(f" - {e}")
 
     lines.append("")
-    lines.append("Instruction: use ONLY these numbers for all tables and calculations. "
-                 "If a cell is 'N/A', write: 'Data not available in verified filing - please check latest 10-K/10-Q'.")
+    lines.append(
+        "Instruction: use ONLY these numbers for all tables and calculations. "
+        "GrossProfit may be derived (Revenue - CostOfRevenue) if not directly tagged. "
+        "EBITDA is always derived (OperatingIncome + D&A) and is non-GAAP. "
+        "If a cell is 'N/A', write 'N/A' — do NOT write a long disclaimer phrase."
+    )
     return "\n".join(lines)
 
 

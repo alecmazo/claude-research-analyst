@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerLogo: { width: 36, height: 36 },
+  headerLogo: { width: 110, height: 44 },
   headerTitle: { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   inputSection: {

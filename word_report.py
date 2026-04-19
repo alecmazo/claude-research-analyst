@@ -56,9 +56,9 @@ def _set_cell_shading(cell, fill_hex: str) -> None:
     shd.set(qn("w:fill"), fill_hex)
 
 
-def _set_cell_margins(cell, top: int = 80, bottom: int = 80,
-                      left: int = 120, right: int = 120) -> None:
-    """Cell padding in DXA (1440 = 1 inch). 80 ≈ 5.5pt top/bottom padding."""
+def _set_cell_margins(cell, top: int = 60, bottom: int = 60,
+                      left: int = 90, right: int = 90) -> None:
+    """Cell padding in DXA (1440 = 1 inch). 60 ≈ 4pt top/bottom, 90 ≈ 6pt left/right."""
     tcPr = cell._tc.get_or_add_tcPr()
     tcMar = OxmlElement("w:tcMar")
     for side, val in (("top", top), ("bottom", bottom),
@@ -145,19 +145,52 @@ HEADER_FONT_COLOR = RGBColor(0xFF, 0xFF, 0xFF)
 ALT_ROW_FILL = "F2F5FA"  # very light navy tint
 
 
+def _lock_table_layout(table) -> None:
+    """Force Word to honour explicit column widths (tblLayout type=fixed)."""
+    tbl = table._tbl
+    tblPr = tbl.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl.insert(0, tblPr)
+    # Remove stale tblLayout, then re-add.
+    for old in tblPr.findall(qn("w:tblLayout")):
+        tblPr.remove(old)
+    tblLayout = OxmlElement("w:tblLayout")
+    tblLayout.set(qn("w:type"), "fixed")
+    tblPr.append(tblLayout)
+
+
+def _set_col_widths(table, widths_dxa: list[int]) -> None:
+    """Set explicit column widths via <w:gridCol> in <w:tblGrid>."""
+    tbl = table._tbl
+    for old in tbl.findall(qn("w:tblGrid")):
+        tbl.remove(old)
+    tblGrid = OxmlElement("w:tblGrid")
+    for w in widths_dxa:
+        col = OxmlElement("w:gridCol")
+        col.set(qn("w:w"), str(w))
+        tblGrid.append(col)
+    tbl.insert(0, tblGrid)
+
+
 def _add_bordered_table(doc: Document, headers: list[str], rows: list[list[str]]) -> None:
     if not headers:
         return
     n_cols = len(headers)
     table = doc.add_table(rows=1 + len(rows), cols=n_cols)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    # Even column widths using DXA. Content width on US Letter 1" margins = 9360 DXA
-    # python-docx uses EMUs (914400/inch), so we set cell.width via Inches.
-    total_content = 6.5  # inches — use 6.5" to leave nice margins
-    # Weight the first column (label) wider than the numeric columns.
-    first_col = min(2.2, max(1.6, total_content * 0.30))
-    other = (total_content - first_col) / max(1, n_cols - 1)
-    widths_in = [first_col] + [other] * (n_cols - 1)
+    _lock_table_layout(table)
+
+    # Column widths: content width = 6.5" = 9360 DXA (US Letter, 1" margins).
+    # Give the label column 28-32% and split the rest evenly across numeric cols.
+    TOTAL_DXA = 9360
+    first_dxa = min(3168, max(2304, int(TOTAL_DXA * 0.30)))   # 28-33%
+    other_dxa = (TOTAL_DXA - first_dxa) // max(1, n_cols - 1)
+    # Re-distribute any rounding remainder to the last column.
+    last_dxa = TOTAL_DXA - first_dxa - other_dxa * (n_cols - 2) if n_cols > 1 else first_dxa
+    widths_dxa = [first_dxa] + [other_dxa] * (n_cols - 2) + ([last_dxa] if n_cols > 1 else [])
+    _set_col_widths(table, widths_dxa)
+    widths_in = [w / 1440 for w in widths_dxa]
 
     # Header row
     hdr = table.rows[0]

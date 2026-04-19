@@ -142,6 +142,12 @@ CONCEPT_PRIORITIES: dict[str, list[str]] = {
     ]),
     "BuybacksCash": _p(["PaymentsForRepurchaseOfCommonStock"]),
     "RnD": _p(["ResearchAndDevelopmentExpense"]),
+    "DepreciationAmortization": _p([
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+        "Depreciation",
+        "DepreciationAmortizationAndAccretionNet",
+    ]),
 }
 
 # Statements where each metric is expected to live.
@@ -150,7 +156,7 @@ IS_METRICS = {
     "NetIncome", "DilutedEPS", "BasicEPS", "DilutedShares",
     "SharesOutstanding", "RnD",
 }
-CF_METRICS = {"OperatingCashFlow", "CapEx", "Dividends", "BuybacksCash"}
+CF_METRICS = {"OperatingCashFlow", "CapEx", "Dividends", "BuybacksCash", "DepreciationAmortization"}
 BS_METRICS = {
     "Cash", "ShortTermInvestments", "TotalAssets", "TotalLiabilities",
     "StockholdersEquity", "LongTermDebt", "ShortTermDebt", "TotalDebt",
@@ -401,7 +407,7 @@ def _build_period_row(
     # edgartools signs outflow concepts as negative. The downstream pipeline
     # expects CapEx / Dividends / Buybacks as *positive magnitudes* (outflow
     # amount), matching the companyfacts convention. Normalize here.
-    OUTFLOW_METRICS = {"CapEx", "Dividends", "BuybacksCash"}
+    OUTFLOW_METRICS = {"CapEx", "Dividends", "BuybacksCash"}  # DepreciationAmortization is an inflow add-back
     if cf_df is not None and cf_col:
         for metric in CF_METRICS:
             v, tag = _pick_value_with_tag(cf_df, CONCEPT_PRIORITIES[metric], cf_col)
@@ -427,13 +433,25 @@ def _build_period_row(
             if ltd or std:
                 row["TotalDebt"] = ltd + std
 
+    # Derive GrossProfit when the tag is absent from the filing
+    if "GrossProfit" not in row and row.get("Revenue") and row.get("CostOfRevenue"):
+        row["GrossProfit"] = row["Revenue"] - row["CostOfRevenue"]
+
     # Derive FCF / margins
     if "OperatingCashFlow" in row and "CapEx" in row:
         row["FreeCashFlow"] = row["OperatingCashFlow"] - row["CapEx"]
-    if row.get("Revenue") and row.get("OperatingIncome") is not None:
-        row["OperatingMargin"] = row["OperatingIncome"] / row["Revenue"]
-    if row.get("Revenue") and row.get("NetIncome") is not None:
-        row["NetMargin"] = row["NetIncome"] / row["Revenue"]
+    rev = row.get("Revenue")
+    if rev and row.get("GrossProfit") is not None:
+        row["GrossMargin"] = row["GrossProfit"] / rev
+    if rev and row.get("OperatingIncome") is not None:
+        row["OperatingMargin"] = row["OperatingIncome"] / rev
+    if rev and row.get("NetIncome") is not None:
+        row["NetMargin"] = row["NetIncome"] / rev
+    # EBITDA = OperatingIncome + D&A (non-GAAP; always derived)
+    if row.get("OperatingIncome") is not None and row.get("DepreciationAmortization"):
+        row["EBITDA"] = row["OperatingIncome"] + row["DepreciationAmortization"]
+        if rev:
+            row["EBITDAMargin"] = row["EBITDA"] / rev
 
     if tags:
         row["_tags"] = tags
@@ -695,7 +713,8 @@ def format_verified_block(data: dict) -> str:
 
     lines.append("")
     lines.append("[ANNUAL DATA - from latest 10-K, $ in millions unless noted]")
-    header = ["FY", "PeriodEnd", "Revenue", "GrossProfit", "OpInc", "OpMargin%",
+    header = ["FY", "PeriodEnd", "Revenue", "GrossProfit", "GrossMargin%",
+              "EBITDA", "EBITDAMargin%", "OpInc", "OpMargin%",
               "NetInc", "NetMargin%", "DilEPS", "OCF", "CapEx", "FCF",
               "Cash", "TotalDebt", "TotalAssets", "Equity"]
     lines.append(" | ".join(header))
@@ -705,6 +724,9 @@ def format_verified_block(data: dict) -> str:
             str(row.get("end", "")),
             _fmt_money(row.get("Revenue")),
             _fmt_money(row.get("GrossProfit")),
+            _fmt_pct(row.get("GrossMargin")),
+            _fmt_money(row.get("EBITDA")),
+            _fmt_pct(row.get("EBITDAMargin")),
             _fmt_money(row.get("OperatingIncome")),
             _fmt_pct(row.get("OperatingMargin")),
             _fmt_money(row.get("NetIncome")),
@@ -724,7 +746,8 @@ def format_verified_block(data: dict) -> str:
         lines.append("")
         lines.append("[QUARTERLY DATA - from latest 10-Q, $ in millions unless noted]")
         lines.append(
-            "Period | FY | FP | PeriodEnd | Revenue | OpInc | OpMargin% | "
+            "Period | FY | FP | PeriodEnd | Revenue | GrossProfit | GrossMargin% | "
+            "EBITDA | EBITDAMargin% | OpInc | OpMargin% | "
             "NetInc | NetMargin% | DilEPS | OCF | FCF"
         )
         labels = [
@@ -742,6 +765,10 @@ def format_verified_block(data: dict) -> str:
                 q.get("fp", ""),
                 str(q.get("end", "")),
                 _fmt_money(q.get("Revenue")),
+                _fmt_money(q.get("GrossProfit")),
+                _fmt_pct(q.get("GrossMargin")),
+                _fmt_money(q.get("EBITDA")),
+                _fmt_pct(q.get("EBITDAMargin")),
                 _fmt_money(q.get("OperatingIncome")),
                 _fmt_pct(q.get("OperatingMargin")),
                 _fmt_money(q.get("NetIncome")),
@@ -764,8 +791,9 @@ def format_verified_block(data: dict) -> str:
     lines.append("")
     lines.append(
         "Instruction: use ONLY these numbers for all tables and calculations. "
-        "If a cell is 'N/A', write: 'Data not available in verified filing - please "
-        "check latest 10-K/10-Q'."
+        "GrossProfit may be derived (Revenue - CostOfRevenue) if not directly tagged. "
+        "EBITDA is always derived (OperatingIncome + D&A) and is non-GAAP. "
+        "If a cell is 'N/A', write 'N/A' — do NOT write a long disclaimer phrase."
     )
     return "\n".join(lines)
 
