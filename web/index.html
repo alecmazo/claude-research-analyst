@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="theme-color" content="#0A1628">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>DGA Research</title>
+  <link rel="stylesheet" href="/app/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<!-- ============ HOME VIEW ============ -->
+<section id="view-home" class="view active">
+  <header class="header">
+    <h1>DGA Research</h1>
+    <span id="status-dot" class="status-dot"></span>
+  </header>
+
+  <div class="card">
+    <div class="label">ANALYZE TICKER</div>
+    <div class="input-row">
+      <input type="text" id="ticker-input" placeholder="e.g. AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="10">
+      <button id="analyze-btn" class="btn-primary">RUN</button>
+    </div>
+    <p class="hint">Downloads SEC filings → Grok AI analysis → Institutional-grade report</p>
+  </div>
+
+  <div class="label section-label">SAVED REPORTS</div>
+  <div id="reports-list" class="reports-list">
+    <div class="empty">Loading…</div>
+  </div>
+</section>
+
+<!-- ============ ANALYSIS VIEW ============ -->
+<section id="view-analysis" class="view">
+  <header class="header">
+    <button class="back-btn" data-target="view-home">← Back</button>
+    <h1 id="analysis-ticker"></h1>
+    <span></span>
+  </header>
+
+  <div class="card analysis-card">
+    <div class="analysis-title" id="analysis-title"></div>
+    <p class="analysis-subtitle">Institutional Research Analysis</p>
+
+    <ul class="steps" id="steps">
+      <li data-step="0"><span class="step-icon">⏱</span> Queued</li>
+      <li data-step="1"><span class="step-icon">⬇</span> Downloading SEC Filings</li>
+      <li data-step="2"><span class="step-icon">📊</span> Extracting Financials</li>
+      <li data-step="3"><span class="step-icon">🧠</span> Grok AI Analysis</li>
+      <li data-step="4"><span class="step-icon">✓</span> Report Ready</li>
+    </ul>
+
+    <div id="analysis-result" class="result-box" style="display:none;"></div>
+    <div id="analysis-error" class="error-box" style="display:none;"></div>
+
+    <button id="view-report-btn" class="btn-primary full-width" style="display:none;">View Full Report →</button>
+  </div>
+</section>
+
+<!-- ============ REPORT VIEW ============ -->
+<section id="view-report" class="view">
+  <header class="header report-header">
+    <button class="back-btn" data-target="view-home">←</button>
+    <div>
+      <h1 id="report-ticker"></h1>
+      <div class="report-price" id="report-price"></div>
+    </div>
+    <div class="header-actions">
+      <button id="download-docx" class="icon-btn" title="Download Word">📄</button>
+      <button id="download-pptx" class="icon-btn icon-btn-gold" title="Download Presentation">📊</button>
+    </div>
+  </header>
+  <div class="generated-at" id="report-generated"></div>
+  <article id="report-content" class="report-content">Loading…</article>
+</section>
+
+<!-- ============ FOOTER TABS ============ -->
+<nav class="tab-bar">
+  <button class="tab active" data-target="view-home">
+    <span class="tab-icon">📈</span>
+    <span>Research</span>
+  </button>
+  <button class="tab" data-target="view-settings">
+    <span class="tab-icon">⚙️</span>
+    <span>Settings</span>
+  </button>
+</nav>
+
+<!-- ============ SETTINGS VIEW ============ -->
+<section id="view-settings" class="view">
+  <div style="padding: 24px 16px 16px;">
+    <h1 class="page-title">Settings</h1>
+  </div>
+
+  <div class="card">
+    <div class="label">SERVER STATUS</div>
+    <div class="server-info">
+      <div>Server: <strong id="server-host"></strong></div>
+      <div>Status: <span id="server-status-text">Checking…</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">ABOUT</div>
+    <p class="about-line">DGA Capital Research Analyst v1.0</p>
+    <p class="about-line">Powered by SEC EDGAR + xAI Grok</p>
+  </div>
+</section>
+
+<script src="/app/app.js"></script>
+</body>
+</html>

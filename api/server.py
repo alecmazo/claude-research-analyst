@@ -20,7 +20,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Make the project root importable when running from the repo root.
@@ -97,8 +98,17 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+
 @app.get("/")
 def root():
+    """Redirect to the web UI."""
+    return RedirectResponse(url="/app/")
+
+
+@app.get("/info")
+def info():
     return {"service": "DGA Research Analyst API", "status": "ok"}
 
 
@@ -218,6 +228,13 @@ def list_reports():
             "has_pptx": has_pptx,
         })
     return reports
+
+
+# ---------------------------------------------------------------------------
+# Static web UI — mount last so API routes take precedence.
+# ---------------------------------------------------------------------------
+if WEB_DIR.exists():
+    app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 
 if __name__ == "__main__":
