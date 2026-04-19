@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, RefreshControl, Alert,
+  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '../api/client';
+import { api, getGammaEnabled, setGammaEnabled as saveGamma } from '../api/client';
 import { colors } from '../components/theme';
 
 export default function HomeScreen({ navigation }) {
@@ -14,6 +14,7 @@ export default function HomeScreen({ navigation }) {
   const [reports, setReports] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [serverOk, setServerOk] = useState(null);
+  const [gammaEnabled, setGammaEnabled] = useState(true);
 
   const checkServer = async () => {
     try {
@@ -37,6 +38,7 @@ export default function HomeScreen({ navigation }) {
     useCallback(() => {
       checkServer();
       loadReports();
+      getGammaEnabled().then(setGammaEnabled);
     }, [])
   );
 
@@ -55,7 +57,7 @@ export default function HomeScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const job = await api.startAnalysis(t);
+      const job = await api.startAnalysis(t, gammaEnabled);
       setTicker('');
       navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
     } catch (err) {
@@ -128,9 +130,15 @@ export default function HomeScreen({ navigation }) {
             }
           </TouchableOpacity>
         </View>
-        <Text style={styles.hint}>
-          Downloads SEC filings → Grok AI analysis → Institutional-grade report
-        </Text>
+        <View style={styles.gammaRow}>
+          <Text style={styles.gammaLabel}>Generate Gamma Presentation</Text>
+          <Switch
+            value={gammaEnabled}
+            onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
+            trackColor={{ false: colors.lightGray, true: colors.gold }}
+            thumbColor={colors.white}
+          />
+        </View>
       </View>
 
       {/* Reports list */}
@@ -196,6 +204,16 @@ const styles = StyleSheet.create({
   },
   analyzeBtnDisabled: { opacity: 0.5 },
   analyzeBtnText: { color: colors.navy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
+  gammaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.lightGray,
+  },
+  gammaLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
   hint: { marginTop: 10, fontSize: 12, color: colors.midGray, lineHeight: 17 },
   sectionTitle: {
     fontSize: 11, fontWeight: '700', color: colors.midGray,

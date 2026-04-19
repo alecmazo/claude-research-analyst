@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const DEFAULT_BASE_URL = 'http://localhost:8000';
 const BASE_URL_KEY = '@dga_api_base_url';
+const GAMMA_KEY = '@dga_gamma_enabled';
 
 export async function getBaseUrl() {
   try {
@@ -14,6 +15,19 @@ export async function getBaseUrl() {
 
 export async function setBaseUrl(url) {
   await AsyncStorage.setItem(BASE_URL_KEY, url.replace(/\/$/, ''));
+}
+
+export async function getGammaEnabled() {
+  try {
+    const stored = await AsyncStorage.getItem(GAMMA_KEY);
+    return stored === null ? true : stored === 'true'; // default ON
+  } catch {
+    return true;
+  }
+}
+
+export async function setGammaEnabled(value) {
+  await AsyncStorage.setItem(GAMMA_KEY, value ? 'true' : 'false');
 }
 
 async function request(path, options = {}) {

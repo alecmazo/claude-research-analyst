@@ -121,10 +121,11 @@ let pollTimer = null;
 async function startAnalysis() {
   const ticker = tickerInput.value.trim().toUpperCase();
   if (!ticker) return;
+  const generateGamma = document.getElementById('gamma-toggle').checked;
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = '…';
   try {
-    const job = await api.startAnalysis(ticker);
+    const job = await api.startAnalysis(ticker, generateGamma);
     currentJobId = job.job_id;
     tickerInput.value = '';
     openAnalysis(ticker, job.job_id);

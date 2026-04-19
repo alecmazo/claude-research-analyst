@@ -4,7 +4,7 @@ import {
   Alert, ScrollView, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { api, getBaseUrl, setBaseUrl } from '../api/client';
+import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled } from '../api/client';
 import { colors } from '../components/theme';
 
 export default function SettingsScreen() {
@@ -15,6 +15,7 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
+    getGammaEnabled().then(setGammaDefault);
   }, []);
 
   const testConnection = async () => {
@@ -110,7 +111,7 @@ export default function SettingsScreen() {
           </View>
           <Switch
             value={gammaDefault}
-            onValueChange={setGammaDefault}
+            onValueChange={v => { setGammaDefault(v); setGammaEnabled(v); }}
             trackColor={{ false: colors.lightGray, true: colors.gold }}
             thumbColor={colors.white}
           />
