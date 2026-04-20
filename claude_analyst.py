@@ -268,31 +268,41 @@ def _html_ranked_table(rows: list[dict] | None) -> str:
     """Render ranked positions table. Rows come from strategy_results[key]['rows']."""
     if not rows:
         return "<p style='color:#888;font-style:italic'>Ranked table unavailable</p>"
-    # Sort by upside descending; skip rows with no positive score
-    sorted_rows = sorted(
-        [r for r in rows if r.get("upside_pct") is not None],
-        key=lambda r: -(r.get("upside_pct") or 0),
-    ) or rows
+
+    def _num(v):
+        try:
+            return float(v) if v is not None and v != "" else None
+        except (TypeError, ValueError):
+            return None
+
+    # Compute a display upside for each row (prefer provided, else price+target).
+    def _effective_upside(r):
+        u = _num(r.get("upside_pct"))
+        if u is not None:
+            return u
+        p = _num(r.get("price") or r.get("current_price") or r.get("market_price"))
+        t = _num(r.get("price_target") or r.get("target_price"))
+        if p and t:
+            return (t - p) / p * 100.0
+        return None
+
+    # Sort by computed upside desc; rows with no upside land at the bottom.
+    sortable = [(r, _effective_upside(r)) for r in rows]
+    sortable.sort(key=lambda pair: (-999 if pair[1] is None else -pair[1]))
+    sorted_rows = [r for r, _ in sortable]
+
     rows_html = ""
     for i, r in enumerate(sorted_rows[:25]):
         rating = str(r.get("rating") or "—")
-        # Field names from compute_rebalance: 'price', 'price_target', 'upside_pct', 'sector'
-        price = r.get("price") or r.get("current_price")
-        target = r.get("price_target") or r.get("target_price")
-        upside = r.get("upside_pct")
+        price = _num(r.get("price") or r.get("current_price") or r.get("market_price"))
+        target = _num(r.get("price_target") or r.get("target_price"))
+        upside = _effective_upside(r)
         sector = r.get("sector") or "—"
-        try:
-            price_str = f"${float(price):,.2f}" if price else "—"
-        except Exception:
-            price_str = f"${price}" if price else "—"
-        try:
-            target_str = f"${float(target):,.2f}" if target else "—"
-        except Exception:
-            target_str = f"${target}" if target else "—"
-        try:
-            upside_str = f"{float(upside):.1f}%"
-        except Exception:
-            upside_str = str(upside) if upside is not None else "—"
+        if sector == "Unknown":
+            sector = "—"
+        price_str = f"${price:,.2f}" if price is not None else "—"
+        target_str = f"${target:,.2f}" if target is not None else "—"
+        upside_str = f"{upside:+.1f}%" if upside is not None else "—"
         bg = "#f8f9fb" if i % 2 == 0 else "#fff"
         rows_html += (
             f"<tr style='background:{bg}'>"
@@ -763,10 +773,23 @@ _RATING_RE = re.compile(
 _PRICE_TARGET_RE = re.compile(
     r"price target[^\$]{0,60}\$([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)", re.IGNORECASE,
 )
-# Stronger anchors that reliably appear in DGA reports.
+# Stronger anchors that reliably appear in DGA reports. Handles bold markdown,
+# colons, dashes, unicode punctuation, and multiple section-title variations.
 _PT_STRONG_RE = re.compile(
-    r"(?:12-?Month\s+Price\s+Target|Base\s+Case\s+Price\s+Target|"
-    r"12-?month\s+target)[^\$]{0,40}\$\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)",
+    r"(?:12[-\s–]?Month\s+Price\s+Target|Base\s+Case\s+Price\s+Target|"
+    r"12[-\s–]?month\s+target|Price\s+Target|Fair\s+Value|Target\s+Price|"
+    r"Intrinsic\s+Value)"
+    r"[\*\s:]{0,20}"  # allow "**: " etc between label and number
+    r"\$\s*([0-9]{1,5}(?:,[0-9]{3})*(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_PT_TABLE_RE = re.compile(
+    # e.g. "| **12M Price Target** | $38.46 |" from the Price Target Derivation table.
+    r"\|\s*\**\s*12[Mm]?\s+Price\s+Target\s*\**\s*\|[^\|]*\|[^\|]*\|\s*\**\s*"
+    r"\$\s*([0-9]{1,5}(?:,[0-9]{3})*(?:\.[0-9]+)?)"
+)
+_SECTOR_REPORT_RE = re.compile(
+    r"\*{0,2}\s*Sector\s*:?\s*\*{0,2}\s*([A-Z][A-Za-z &/\-]+?)(?:\s*\*{0,2}\s*(?:\||\n|Industry))",
     re.IGNORECASE,
 )
 _CURRENT_PRICE_RE = re.compile(
@@ -810,12 +833,20 @@ def extract_summary_from_report(report_text: str) -> dict:
     price_target = None
     m = _PT_STRONG_RE.search(report_text)
     if not m:
+        m = _PT_TABLE_RE.search(report_text)
+    if not m:
         m = _PRICE_TARGET_RE.search(report_text)
     if m:
         try:
             price_target = float(m.group(1).replace(",", ""))
         except ValueError:
             pass
+
+    # --- Sector (from the report header table).
+    sector = None
+    sm = _SECTOR_REPORT_RE.search(report_text[:4000])
+    if sm:
+        sector = sm.group(1).strip(" *|\t")
 
     # --- Current Price.
     current_price = None
@@ -854,6 +885,7 @@ def extract_summary_from_report(report_text: str) -> dict:
         "price_target": price_target,
         "current_price": current_price,
         "upside_pct": upside_pct,
+        "sector": sector,
         "thesis": thesis,
     }
 
@@ -1731,7 +1763,15 @@ def compute_rebalance(
     # Hydrate sector for each ticker (cheap, cached if already set).
     for r in usable:
         if not r.get("sector"):
-            r["sector"] = fetch_sector(r["ticker"])
+            # First try the sector we parsed out of the report itself.
+            report_sector = (r.get("summary") or {}).get("sector")
+            if report_sector:
+                r["sector"] = report_sector
+            else:
+                try:
+                    r["sector"] = fetch_sector(r["ticker"]) or "Unknown"
+                except Exception:
+                    r["sector"] = "Unknown"
 
     # Enrich with portfolio Grok roll-up if available.
     _merge_ranked_rows(usable, ranked_rows)
