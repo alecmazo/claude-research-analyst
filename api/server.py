@@ -80,6 +80,7 @@ async def auth_middleware(request: Request, call_next):
              or "")
     if not _valid_token(token):
         return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
 _jobs: dict[str, dict[str, Any]] = {}
