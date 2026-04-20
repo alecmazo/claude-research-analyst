@@ -180,9 +180,9 @@ export default function PortfolioScreen() {
           />
         </View>
         <TouchableOpacity
-          style={[styles.runBtn, (!file || submitting) && styles.runBtnDisabled]}
+          style={[styles.runBtn, (!file || submitting || (job && job.status !== 'done' && job.status !== 'failed')) && styles.runBtnDisabled]}
           onPress={startRun}
-          disabled={!file || submitting}
+          disabled={!file || submitting || (job && job.status !== 'done' && job.status !== 'failed')}
         >
           {submitting
             ? <ActivityIndicator color={colors.navy} />

@@ -189,6 +189,143 @@ def _strategy_weights_text(strategy_results: dict[str, dict] | None) -> str:
     return "\n\n".join(blocks)
 
 
+def _rating_color(rating: str) -> str:
+    r = (rating or "").lower()
+    if "strong buy" in r:  return "#1a7a3c"
+    if "buy" in r:         return "#2e9e54"
+    if "hold" in r:        return "#b07d00"
+    if "sell" in r:        return "#c0392b"
+    return "#555555"
+
+
+def _upside_color(upside: Any) -> str:
+    try:
+        v = float(str(upside).replace("%", ""))
+        if v >= 30:   return "#1a7a3c"
+        if v >= 10:   return "#2e9e54"
+        if v >= 0:    return "#b07d00"
+        return "#c0392b"
+    except Exception:
+        return "#555555"
+
+
+def _md_to_html(md: str) -> str:
+    """Convert the most common markdown patterns to HTML for email display."""
+    import re
+    # Escape HTML special chars first
+    md = md.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Bold + italic
+    md = re.sub(r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", md)
+    md = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", md)
+    md = re.sub(r"\*(.+?)\*", r"<em>\1</em>", md)
+    # Headers
+    md = re.sub(r"^### (.+)$", r"<h4 style='margin:16px 0 6px;color:#0A1628'>\1</h4>", md, flags=re.MULTILINE)
+    md = re.sub(r"^## (.+)$",  r"<h3 style='margin:18px 0 8px;color:#0A1628'>\1</h3>", md, flags=re.MULTILINE)
+    md = re.sub(r"^# (.+)$",   r"<h2 style='margin:20px 0 10px;color:#0A1628'>\1</h2>", md, flags=re.MULTILINE)
+    # Pipe tables → HTML tables
+    def _pipe_table(m: re.Match) -> str:
+        lines = [l.strip() for l in m.group(0).strip().splitlines() if l.strip()]
+        rows = [[c.strip() for c in l.strip("|").split("|")] for l in lines]
+        # Second row is separator (---)
+        header, body_rows = rows[0], rows[2:]
+        th = "".join(f"<th style='padding:6px 10px;background:#0A1628;color:#fff;text-align:left;font-size:12px'>{c}</th>" for c in header)
+        trs = ""
+        for i, row in enumerate(body_rows):
+            bg = "#f8f9fb" if i % 2 == 0 else "#fff"
+            tds = "".join(f"<td style='padding:5px 10px;border-bottom:1px solid #e8eaed;font-size:12px'>{c}</td>" for c in row)
+            trs += f"<tr style='background:{bg}'>{tds}</tr>"
+        return (
+            "<table style='border-collapse:collapse;width:100%;margin:10px 0'>"
+            f"<thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
+        )
+    md = re.sub(r"(\|.+\|\n\|[-| :]+\|\n(?:\|.+\|\n?)+)", _pipe_table, md)
+    # Bullet lists
+    md = re.sub(r"^[-*] (.+)$", r"<li style='margin:3px 0'>\1</li>", md, flags=re.MULTILINE)
+    md = re.sub(r"(<li.*</li>\n?)+", lambda m: f"<ul style='margin:8px 0 8px 20px;padding:0'>{m.group(0)}</ul>", md)
+    # Newlines → paragraphs (two newlines = paragraph break)
+    paragraphs = re.split(r"\n{2,}", md)
+    parts = []
+    for p in paragraphs:
+        p = p.strip()
+        if not p:
+            continue
+        if p.startswith("<h") or p.startswith("<table") or p.startswith("<ul"):
+            parts.append(p)
+        else:
+            p = p.replace("\n", "<br>")
+            parts.append(f"<p style='margin:6px 0;line-height:1.5'>{p}</p>")
+    return "\n".join(parts)
+
+
+def _html_ranked_table(ranked_rows: list[dict] | None) -> str:
+    if not ranked_rows:
+        return "<p style='color:#888;font-style:italic'>Ranked table unavailable</p>"
+    rows_html = ""
+    for i, r in enumerate(ranked_rows[:25]):
+        rating = str(r.get("rating") or "—")
+        upside = r.get("upside_pct") or ""
+        try:
+            upside_str = f"{float(upside):.1f}%"
+        except Exception:
+            upside_str = str(upside) or "—"
+        bg = "#f8f9fb" if i % 2 == 0 else "#fff"
+        rows_html += (
+            f"<tr style='background:{bg}'>"
+            f"<td style='padding:7px 10px;font-weight:700;color:#0A1628;border-bottom:1px solid #e8eaed'>{r.get('ticker','')}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;color:{_rating_color(rating)};font-weight:600'>{rating}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right'>${r.get('current_price') or '—'}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right'>${r.get('target_price') or '—'}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right;color:{_upside_color(upside)};font-weight:600'>{upside_str}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;color:#555;font-size:12px'>{r.get('sector') or '—'}</td>"
+            f"</tr>"
+        )
+    return (
+        "<table style='border-collapse:collapse;width:100%'>"
+        "<thead><tr>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:left'>Ticker</th>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:left'>Rating</th>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:right'>Price</th>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:right'>12M Target</th>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:right'>Upside</th>"
+        "<th style='padding:8px 10px;background:#0A1628;color:#C9A84C;text-align:left'>Sector</th>"
+        "</tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>"
+    )
+
+
+def _html_strategy_weights(strategy_results: dict[str, dict] | None) -> str:
+    if not strategy_results:
+        return "<p style='color:#888;font-style:italic'>No strategy weights computed</p>"
+    blocks = []
+    for skey, res in strategy_results.items():
+        weights = {t: w for t, w in (res.get("weights") or {}).items() if w and w > 0}
+        if not weights:
+            continue
+        label = res.get("label") or skey
+        sorted_w = sorted(weights.items(), key=lambda kv: kv[1], reverse=True)
+        rows_html = ""
+        for i, (ticker, w) in enumerate(sorted_w):
+            bg = "#f8f9fb" if i % 2 == 0 else "#fff"
+            bar_w = int(w * 400)
+            rows_html += (
+                f"<tr style='background:{bg}'>"
+                f"<td style='padding:6px 10px;font-weight:700;color:#0A1628;width:70px'>{ticker}</td>"
+                f"<td style='padding:6px 10px'>"
+                f"<div style='background:#e8eaed;border-radius:3px;height:10px;width:100%'>"
+                f"<div style='background:#C9A84C;border-radius:3px;height:10px;width:{min(bar_w,400)}px'></div></div></td>"
+                f"<td style='padding:6px 10px;text-align:right;font-weight:600;color:#0A1628;width:60px'>{w*100:.1f}%</td>"
+                f"</tr>"
+            )
+        blocks.append(
+            f"<div style='flex:1;min-width:200px;margin:0 8px 16px'>"
+            f"<div style='background:#0A1628;color:#C9A84C;padding:8px 10px;font-weight:700;font-size:13px;border-radius:6px 6px 0 0'>"
+            f"{label} &nbsp;<span style='color:#fff;font-weight:400;font-size:11px'>({len(sorted_w)} positions)</span></div>"
+            f"<table style='border-collapse:collapse;width:100%;border:1px solid #e8eaed;border-top:none;border-radius:0 0 6px 6px'>"
+            f"<tbody>{rows_html}</tbody></table></div>"
+        )
+    return f"<div style='display:flex;flex-wrap:wrap;margin:0 -8px'>{''.join(blocks)}</div>"
+
+
 def build_portfolio_email(
     *,
     tickers_ok: list[str],
@@ -200,51 +337,123 @@ def build_portfolio_email(
     portfolio_docx: Path | None,
     gamma_url: str | None,
 ) -> EmailMessage:
-    """Compose the EmailMessage for a portfolio-analysis run."""
+    """Compose the EmailMessage for a portfolio-analysis run (HTML + plain text)."""
     to_addr = _optional_env("PORTFOLIO_EMAIL_TO", DEFAULT_PORTFOLIO_EMAIL_TO)
     from_addr = _optional_env("GMAIL_USER", to_addr)
     today = datetime.now().strftime("%Y-%m-%d")
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     subject = f"DGA Portfolio Analysis — {today} — {len(tickers_ok)} positions"
 
-    parts: list[str] = []
-    parts.append(f"DGA Capital — Portfolio Analysis Run")
-    parts.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    parts.append("")
-    parts.append(f"Tickers analyzed (ok):     {', '.join(tickers_ok) or '(none)'}")
+    # ---- Plain-text fallback ------------------------------------------------
+    plain_parts = [
+        "DGA Capital — Portfolio Analysis Run",
+        f"Generated: {generated}",
+        "",
+        f"Tickers analyzed: {', '.join(tickers_ok) or '(none)'}",
+    ]
     if tickers_failed:
-        parts.append(f"Tickers failed:            {', '.join(tickers_failed)}")
+        plain_parts.append(f"Failed: {', '.join(tickers_failed)}")
     if gamma_url:
-        parts.append(f"Gamma deck:                {gamma_url}")
-    parts.append("")
-    parts.append("=" * 70)
-    parts.append("RANKED TABLE")
-    parts.append("=" * 70)
-    parts.append(_ranked_table_text(ranked_rows))
-    parts.append("")
-    parts.append("=" * 70)
-    parts.append("STRATEGY WEIGHTS")
-    parts.append("=" * 70)
-    parts.append(_strategy_weights_text(strategy_results))
-    parts.append("")
-    parts.append("=" * 70)
-    parts.append("PORTFOLIO ROLL-UP (Grok)")
-    parts.append("=" * 70)
-    # Cap the markdown body to keep emails reasonable.
-    md = (summary_markdown or "").strip()
-    if len(md) > 60_000:
-        md = md[:60_000] + "\n\n[...truncated for email; see attached docx...]"
-    parts.append(md or "(no roll-up generated)")
+        plain_parts.append(f"Gamma deck: {gamma_url}")
+    plain_parts += ["", "RANKED TABLE", "=" * 60, _ranked_table_text(ranked_rows),
+                    "", "STRATEGY WEIGHTS", "=" * 60, _strategy_weights_text(strategy_results),
+                    "", "PORTFOLIO ROLL-UP", "=" * 60,
+                    (summary_markdown or "(no roll-up generated)").strip()]
+    plain_body = "\n".join(plain_parts)
 
-    body = "\n".join(parts)
+    # ---- HTML body ----------------------------------------------------------
+    failed_row = ""
+    if tickers_failed:
+        failed_row = (
+            f"<tr><td style='color:#888;width:130px'>Failed</td>"
+            f"<td style='color:#c0392b'>{', '.join(tickers_failed)}</td></tr>"
+        )
+    gamma_row = ""
+    if gamma_url:
+        gamma_row = (
+            f"<tr><td style='color:#888'>Gamma deck</td>"
+            f"<td><a href='{gamma_url}' style='color:#C9A84C'>{gamma_url}</a></td></tr>"
+        )
+    md_html = _md_to_html((summary_markdown or "").strip()[:60_000]
+                          or "<em>No roll-up generated.</em>")
+
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:'Helvetica Neue',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:24px 0">
+<tr><td align="center">
+<table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%">
+
+  <!-- Header -->
+  <tr><td style="background:#0A1628;border-radius:10px 10px 0 0;padding:24px 32px">
+    <span style="color:#C9A84C;font-size:22px;font-weight:700;letter-spacing:2px">DGA CAPITAL</span>
+    <span style="color:#fff;font-size:14px;margin-left:16px;opacity:.7">Portfolio Analysis</span>
+  </td></tr>
+
+  <!-- Meta -->
+  <tr><td style="background:#fff;padding:20px 32px;border-bottom:2px solid #C9A84C">
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#333">
+      <tr>
+        <td style="color:#888;width:130px">Generated</td>
+        <td style="font-weight:600">{generated}</td>
+      </tr>
+      <tr>
+        <td style="color:#888;padding-top:4px">Tickers</td>
+        <td style="padding-top:4px">{', '.join(tickers_ok) or '(none)'}</td>
+      </tr>
+      {failed_row}
+      {gamma_row}
+    </table>
+  </td></tr>
+
+  <!-- Ranked Table -->
+  <tr><td style="background:#fff;padding:24px 32px">
+    <h2 style="margin:0 0 14px;font-size:15px;font-weight:700;color:#0A1628;
+               letter-spacing:1px;text-transform:uppercase;border-left:4px solid #C9A84C;padding-left:10px">
+      Ranked Positions
+    </h2>
+    {_html_ranked_table(ranked_rows)}
+  </td></tr>
+
+  <!-- Strategy Weights -->
+  <tr><td style="background:#f8f9fb;padding:24px 32px;border-top:1px solid #e8eaed">
+    <h2 style="margin:0 0 16px;font-size:15px;font-weight:700;color:#0A1628;
+               letter-spacing:1px;text-transform:uppercase;border-left:4px solid #C9A84C;padding-left:10px">
+      Strategy Weights
+    </h2>
+    {_html_strategy_weights(strategy_results)}
+  </td></tr>
+
+  <!-- Roll-Up -->
+  <tr><td style="background:#fff;padding:24px 32px;border-top:1px solid #e8eaed">
+    <h2 style="margin:0 0 14px;font-size:15px;font-weight:700;color:#0A1628;
+               letter-spacing:1px;text-transform:uppercase;border-left:4px solid #C9A84C;padding-left:10px">
+      Portfolio Roll-Up
+    </h2>
+    <div style="font-size:13px;color:#333;line-height:1.6">
+      {md_html}
+    </div>
+  </td></tr>
+
+  <!-- Footer -->
+  <tr><td style="background:#0A1628;border-radius:0 0 10px 10px;padding:16px 32px;text-align:center">
+    <span style="color:#888;font-size:11px">DGA Capital · Portfolio Analysis · {today}</span>
+    {"&nbsp;·&nbsp;<a href='" + gamma_url + "' style='color:#C9A84C;font-size:11px'>View Gamma Deck</a>" if gamma_url else ""}
+  </td></tr>
+
+</table>
+</td></tr></table>
+</body></html>"""
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = from_addr
     msg["To"] = to_addr
-    msg.set_content(body)
+    msg.set_content(plain_body)
+    msg.add_alternative(html_body, subtype="html")
 
-    # Attach the Word roll-up and the optimized portfolio xlsx if available.
+    # Attach xlsx and Word report.
     for path in (portfolio_docx, output_xlsx):
         if path and Path(path).is_file():
             ctype, _ = mimetypes.guess_type(str(path))
