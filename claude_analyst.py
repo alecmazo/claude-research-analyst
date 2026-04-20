@@ -156,18 +156,25 @@ def get_gamma_api_key() -> str:
 # writes it to disk under stocks/Portfolio_Email.eml so nothing is lost.
 # ============================================================================
 
-def _ranked_table_text(ranked_rows: list[dict] | None, limit: int = 25) -> str:
-    if not ranked_rows:
+def _ranked_table_text(rows: list[dict] | None, limit: int = 25) -> str:
+    if not rows:
         return "(ranked table unavailable)"
-    headers = ["Ticker", "Rating", "Price", "Target", "Upside %", "Sector"]
+    headers = ["Ticker", "Rating", "Price", "12M Target", "Upside %", "Sector"]
     lines = [" | ".join(headers), " | ".join("---" for _ in headers)]
-    for r in ranked_rows[:limit]:
+    for r in rows[:limit]:
+        price = r.get("price") or r.get("current_price") or ""
+        target = r.get("price_target") or r.get("target_price") or ""
+        upside = r.get("upside_pct") or ""
+        try:
+            upside_str = f"{float(upside):.1f}%"
+        except Exception:
+            upside_str = str(upside) or ""
         lines.append(" | ".join([
             str(r.get("ticker", ""))[:6],
-            str(r.get("rating", ""))[:8],
-            f"{r.get('current_price', '') or ''}"[:10],
-            f"{r.get('target_price', '') or ''}"[:10],
-            f"{r.get('upside_pct', '') or ''}"[:8],
+            str(r.get("rating", ""))[:12],
+            f"${price}" if price else "",
+            f"${target}" if target else "",
+            upside_str,
             str(r.get("sector", ""))[:24],
         ]))
     return "\n".join(lines)
@@ -257,26 +264,44 @@ def _md_to_html(md: str) -> str:
     return "\n".join(parts)
 
 
-def _html_ranked_table(ranked_rows: list[dict] | None) -> str:
-    if not ranked_rows:
+def _html_ranked_table(rows: list[dict] | None) -> str:
+    """Render ranked positions table. Rows come from strategy_results[key]['rows']."""
+    if not rows:
         return "<p style='color:#888;font-style:italic'>Ranked table unavailable</p>"
+    # Sort by upside descending; skip rows with no positive score
+    sorted_rows = sorted(
+        [r for r in rows if r.get("upside_pct") is not None],
+        key=lambda r: -(r.get("upside_pct") or 0),
+    ) or rows
     rows_html = ""
-    for i, r in enumerate(ranked_rows[:25]):
+    for i, r in enumerate(sorted_rows[:25]):
         rating = str(r.get("rating") or "—")
-        upside = r.get("upside_pct") or ""
+        # Field names from compute_rebalance: 'price', 'price_target', 'upside_pct', 'sector'
+        price = r.get("price") or r.get("current_price")
+        target = r.get("price_target") or r.get("target_price")
+        upside = r.get("upside_pct")
+        sector = r.get("sector") or "—"
+        try:
+            price_str = f"${float(price):,.2f}" if price else "—"
+        except Exception:
+            price_str = f"${price}" if price else "—"
+        try:
+            target_str = f"${float(target):,.2f}" if target else "—"
+        except Exception:
+            target_str = f"${target}" if target else "—"
         try:
             upside_str = f"{float(upside):.1f}%"
         except Exception:
-            upside_str = str(upside) or "—"
+            upside_str = str(upside) if upside is not None else "—"
         bg = "#f8f9fb" if i % 2 == 0 else "#fff"
         rows_html += (
             f"<tr style='background:{bg}'>"
             f"<td style='padding:7px 10px;font-weight:700;color:#0A1628;border-bottom:1px solid #e8eaed'>{r.get('ticker','')}</td>"
             f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;color:{_rating_color(rating)};font-weight:600'>{rating}</td>"
-            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right'>${r.get('current_price') or '—'}</td>"
-            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right'>${r.get('target_price') or '—'}</td>"
-            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right;color:{_upside_color(upside)};font-weight:600'>{upside_str}</td>"
-            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;color:#555;font-size:12px'>{r.get('sector') or '—'}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right;font-family:monospace'>{price_str}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right;font-family:monospace'>{target_str}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;text-align:right;color:{_upside_color(upside)};font-weight:700'>{upside_str}</td>"
+            f"<td style='padding:7px 10px;border-bottom:1px solid #e8eaed;color:#555;font-size:12px'>{sector}</td>"
             f"</tr>"
         )
     return (
@@ -338,12 +363,23 @@ def build_portfolio_email(
     gamma_url: str | None,
 ) -> EmailMessage:
     """Compose the EmailMessage for a portfolio-analysis run (HTML + plain text)."""
+    import base64 as _b64
+
     to_addr = _optional_env("PORTFOLIO_EMAIL_TO", DEFAULT_PORTFOLIO_EMAIL_TO)
     from_addr = _optional_env("GMAIL_USER", to_addr)
     today = datetime.now().strftime("%Y-%m-%d")
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     subject = f"DGA Portfolio Analysis — {today} — {len(tickers_ok)} positions"
+
+    # Use strategy rows (always complete) for the ranked table, sorted by upside desc.
+    primary_strategy = next(iter(strategy_results)) if strategy_results else None
+    email_rows = []
+    if strategy_results and primary_strategy:
+        email_rows = sorted(
+            strategy_results[primary_strategy].get("rows", []),
+            key=lambda r: -(r.get("upside_pct") or 0),
+        )
 
     # ---- Plain-text fallback ------------------------------------------------
     plain_parts = [
@@ -356,11 +392,23 @@ def build_portfolio_email(
         plain_parts.append(f"Failed: {', '.join(tickers_failed)}")
     if gamma_url:
         plain_parts.append(f"Gamma deck: {gamma_url}")
-    plain_parts += ["", "RANKED TABLE", "=" * 60, _ranked_table_text(ranked_rows),
+    plain_parts += ["", "RANKED TABLE", "=" * 60, _ranked_table_text(email_rows),
                     "", "STRATEGY WEIGHTS", "=" * 60, _strategy_weights_text(strategy_results),
                     "", "PORTFOLIO ROLL-UP", "=" * 60,
                     (summary_markdown or "(no roll-up generated)").strip()]
     plain_body = "\n".join(plain_parts)
+
+    # ---- Logo (base64 embedded so it shows in all email clients) ------------
+    logo_img_tag = ""
+    for logo_name in ("DGAlogo-web184.png", "dga_logo.png", "dga_logo_small.png"):
+        logo_path = SCRIPT_DIR / "branding" / logo_name
+        if logo_path.exists():
+            logo_b64 = _b64.b64encode(logo_path.read_bytes()).decode()
+            logo_img_tag = (
+                f"<img src='data:image/png;base64,{logo_b64}' "
+                f"alt='DGA Capital' style='height:44px;width:auto;display:block'>"
+            )
+            break
 
     # ---- HTML body ----------------------------------------------------------
     failed_row = ""
@@ -387,8 +435,10 @@ def build_portfolio_email(
 
   <!-- Header -->
   <tr><td style="background:#0A1628;border-radius:10px 10px 0 0;padding:24px 32px">
-    <span style="color:#C9A84C;font-size:22px;font-weight:700;letter-spacing:2px">DGA CAPITAL</span>
-    <span style="color:#fff;font-size:14px;margin-left:16px;opacity:.7">Portfolio Analysis</span>
+    <table cellpadding="0" cellspacing="0"><tr>
+      <td style="vertical-align:middle">{logo_img_tag if logo_img_tag else '<span style="color:#C9A84C;font-size:22px;font-weight:700;letter-spacing:2px">DGA CAPITAL</span>'}</td>
+      <td style="vertical-align:middle;padding-left:16px;color:rgba(255,255,255,0.5);font-size:13px;letter-spacing:1px">Portfolio Analysis</td>
+    </tr></table>
   </td></tr>
 
   <!-- Meta -->
@@ -413,7 +463,7 @@ def build_portfolio_email(
                letter-spacing:1px;text-transform:uppercase;border-left:4px solid #C9A84C;padding-left:10px">
       Ranked Positions
     </h2>
-    {_html_ranked_table(ranked_rows)}
+    {_html_ranked_table(email_rows)}
   </td></tr>
 
   <!-- Strategy Weights -->
