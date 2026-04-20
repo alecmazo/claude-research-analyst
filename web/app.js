@@ -3,18 +3,70 @@
 // ============================================================================
 const API_BASE = window.location.origin;
 
+// ---------- Auth ----------
+const TOKEN_KEY = 'dga_auth_token';
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+function showLogin(errorMsg) {
+  document.getElementById('login-overlay').classList.remove('hidden');
+  const err = document.getElementById('login-error');
+  if (err) err.textContent = errorMsg || '';
+}
+function hideLogin() {
+  document.getElementById('login-overlay').classList.add('hidden');
+}
+
+async function login(password) {
+  const resp = await fetch(`${API_BASE}/api/auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!resp.ok) throw new Error('Incorrect password');
+  const { token } = await resp.json();
+  setToken(token);
+  hideLogin();
+  boot();
+}
+
+// Wire up login form
+document.getElementById('login-btn').addEventListener('click', handleLogin);
+document.getElementById('login-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') handleLogin();
+});
+
+async function handleLogin() {
+  const pw = document.getElementById('login-password').value;
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  try {
+    await login(pw);
+  } catch {
+    showLogin('Incorrect password — try again');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---------- API helpers ----------
 async function apiGet(path) {
-  const resp = await fetch(`${API_BASE}${path}`);
+  const resp = await fetch(`${API_BASE}${path}`, {
+    headers: { 'x-auth-token': getToken() },
+  });
+  if (resp.status === 401) { clearToken(); showLogin('Session expired — please log in again'); throw new Error('Unauthorized'); }
   if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
   return resp.json();
 }
 async function apiPost(path, body) {
   const resp = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
     body: JSON.stringify(body),
   });
+  if (resp.status === 401) { clearToken(); showLogin('Session expired — please log in again'); throw new Error('Unauthorized'); }
   if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
   return resp.json();
 }
@@ -28,11 +80,20 @@ const api = {
   getReport: (ticker) => apiGet(`/api/report/${ticker}`),
   getQuote: (ticker) => apiGet(`/api/quote/${ticker}`),
   listStrategies: () => apiGet('/api/strategies'),
-  startPortfolio: (formData) =>
-    fetch(`${API_BASE}/api/portfolio`, { method: 'POST', body: formData })
-      .then(async r => { if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`); return r.json(); }),
+  startPortfolio: (formData) => {
+    formData.append('token', getToken());
+    return fetch(`${API_BASE}/api/portfolio`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'x-auth-token': getToken() },
+    }).then(async r => {
+      if (r.status === 401) { clearToken(); showLogin('Session expired'); throw new Error('Unauthorized'); }
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+      return r.json();
+    });
+  },
   getPortfolioJob: (id) => apiGet(`/api/portfolio/${id}`),
-  portfolioDownloadUrl: (id) => `${API_BASE}/api/portfolio/${id}/download`,
+  portfolioDownloadUrl: (id) => `${API_BASE}/api/portfolio/${id}/download?token=${getToken()}`,
 };
 
 // ---------- View switching ----------
@@ -378,7 +439,25 @@ async function loadStrategies() {
 }
 
 // ---------- Boot ----------
-checkServer();
-loadReports();
-loadStrategies();
+async function boot() {
+  checkServer();
+  loadReports();
+  loadStrategies();
+}
+
+// On load: if we have a stored token, validate it; otherwise show login.
+(async () => {
+  if (getToken()) {
+    try {
+      await apiGet('/api/reports'); // lightweight auth check
+      hideLogin();
+      boot();
+    } catch {
+      showLogin();
+    }
+  } else {
+    showLogin();
+  }
+})();
+
 setInterval(checkServer, 30000);

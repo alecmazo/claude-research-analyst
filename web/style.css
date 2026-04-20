@@ -634,3 +634,104 @@ body {
   .analysis-title { font-size: 28px; }
   #ticker-input { font-size: 16px; }
 }
+
+/* ============ LOGIN OVERLAY ============ */
+#login-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--navy);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+#login-overlay.hidden { display: none; }
+
+#login-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+#login-logo {
+  height: 60px;
+  width: auto;
+  object-fit: contain;
+  margin-bottom: 20px;
+}
+
+#login-brand {
+  color: var(--gold);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  text-align: center;
+}
+
+#login-subtitle {
+  color: rgba(255,255,255,0.45);
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-top: 4px;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+#login-password {
+  width: 100%;
+  height: 52px;
+  background: rgba(255,255,255,0.07);
+  border: 1.5px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  color: var(--white);
+  font-size: 18px;
+  text-align: center;
+  letter-spacing: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 12px;
+}
+#login-password::placeholder {
+  color: rgba(255,255,255,0.25);
+  letter-spacing: 1px;
+  font-size: 14px;
+}
+#login-password:focus { border-color: var(--gold); }
+
+#login-btn {
+  width: 100%;
+  height: 52px;
+  background: var(--gold);
+  color: var(--navy);
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+  margin-bottom: 16px;
+}
+#login-btn:hover { background: var(--gold-light); }
+#login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#login-error {
+  color: #ff6b6b;
+  font-size: 13px;
+  text-align: center;
+  min-height: 18px;
+  margin-bottom: 8px;
+}
+
+#login-hint {
+  color: rgba(255,255,255,0.2);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-align: center;
+  text-transform: uppercase;
+}

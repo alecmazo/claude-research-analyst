@@ -20,9 +20,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
+import hashlib
+import hmac
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -36,9 +39,47 @@ app = FastAPI(title="DGA Research Analyst API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Auth — stateless HMAC token (survives restarts, no DB needed)
+# ---------------------------------------------------------------------------
+_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/"}
+
+def _portfolio_password() -> str:
+    return os.environ.get("PORTFOLIO_PASSWORD", "dgacapital").strip()
+
+def _token_secret() -> str:
+    return os.environ.get("TOKEN_SECRET", "dga-capital-jwt-secret").strip()
+
+def _make_token(password: str) -> str:
+    """Derive a deterministic token from password + secret (HMAC-SHA256)."""
+    return hmac.new(  # type: ignore[attr-defined]
+        _token_secret().encode(), password.encode(), hashlib.sha256
+    ).hexdigest()
+
+def _valid_token(token: str) -> bool:
+    expected = _make_token(_portfolio_password())
+    return hmac.compare_digest(token.strip(), expected)
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Always allow: public API paths, static assets, the web app shell
+    if (path in _PUBLIC_PATHS
+            or path.startswith("/app/")
+            or path.startswith("/branding/")
+            or not path.startswith("/api/")):
+        return await call_next(request)
+    # Check token from header or query string
+    token = (request.headers.get("x-auth-token")
+             or request.query_params.get("token")
+             or "")
+    if not _valid_token(token):
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
 _jobs: dict[str, dict[str, Any]] = {}
@@ -72,6 +113,19 @@ class PortfolioJobStatus(BaseModel):
     error: str | None = None
     result: dict | None = None
 
+
+# ---------------------------------------------------------------------------
+# Auth route
+# ---------------------------------------------------------------------------
+
+class AuthRequest(BaseModel):
+    password: str
+
+@app.post("/api/auth")
+def auth(req: AuthRequest):
+    if hmac.compare_digest(req.password.strip(), _portfolio_password()):
+        return {"token": _make_token(req.password.strip())}
+    raise HTTPException(status_code=401, detail="Invalid password")
 
 # ---------------------------------------------------------------------------
 # Background worker
