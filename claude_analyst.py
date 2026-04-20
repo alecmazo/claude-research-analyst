@@ -2239,76 +2239,71 @@ def push_to_google_sheets(
 # ============================================================================
 
 def push_to_google_drive(file_paths: list[Path | str], *, folder_name: str = "DGA Research Reports") -> dict:
-    """Upload one or more files to a Google Drive folder using the service account.
+    """Archive report markdown files into a 'Reports Archive' sheet in the existing Google Sheets spreadsheet.
 
-    Required env var:
-      GOOGLE_SERVICE_ACCOUNT_JSON — path to (or JSON content of) the service account key
+    Service accounts have zero binary storage quota on personal Google Drive, so
+    we store .md report text directly in Sheets (no quota impact) using the same
+    gspread auth that already works for portfolio data.
 
-    Creates the target folder if it doesn't exist; overwrites files with the same name.
-    Returns {"ok": True, "folder_id": "...", "uploaded": [...]} or {"ok": False, "error": "..."}.
+    Each .md file gets its own tab named after the ticker (e.g. "AAPL").
+    .xlsx and .docx files are noted in the archive index but not stored as binary.
+
+    Returns {"ok": True, "archived": [...]} or {"ok": False, "error": "..."}.
     """
     creds_src = _optional_env("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if not creds_src:
-        return {"ok": False, "skipped": True, "error": "GOOGLE_SERVICE_ACCOUNT_JSON not configured"}
+    spreadsheet_id = _optional_env("GOOGLE_SHEETS_SPREADSHEET_ID")
+    if not creds_src or not spreadsheet_id:
+        return {"ok": False, "skipped": True,
+                "error": "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SHEETS_SPREADSHEET_ID not configured"}
 
     try:
+        import gspread
         from google.oauth2.service_account import Credentials
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
     except ImportError:
-        return {"ok": False, "error": "google-api-python-client not installed; run: pip install google-api-python-client"}
+        return {"ok": False, "error": "gspread not installed"}
 
     try:
-        scopes = ["https://www.googleapis.com/auth/drive"]
-        # Support both a file path and an inline JSON string (Railway env var).
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
         if creds_src.strip().startswith("{"):
-            import io
             info = json.loads(creds_src)
             creds = Credentials.from_service_account_info(info, scopes=scopes)
         else:
             creds = Credentials.from_service_account_file(creds_src, scopes=scopes)
-        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(spreadsheet_id)
     except Exception as exc:
-        return {"ok": False, "error": f"Drive auth failed: {exc}"}
+        return {"ok": False, "error": f"Sheets auth failed: {exc}"}
 
     try:
-        # Find or create the target folder.
-        q = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
-        res = service.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
-        folders = res.get("files", [])
-        if folders:
-            folder_id = folders[0]["id"]
-        else:
-            meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
-            folder_id = service.files().create(body=meta, fields="id").execute()["id"]
+        archived: list[str] = []
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-        uploaded: list[str] = []
         for fp in file_paths:
             fp = Path(fp)
             if not fp.exists():
                 continue
-            mime, _ = mimetypes.guess_type(str(fp))
-            mime = mime or "application/octet-stream"
 
-            # Overwrite if a file with the same name exists in the folder.
-            q2 = f"name='{fp.name}' and '{folder_id}' in parents and trashed=false"
-            existing = service.files().list(q=q2, fields="files(id)", pageSize=1).execute().get("files", [])
-            media = MediaFileUpload(str(fp), mimetype=mime, resumable=False)
-            if existing:
-                service.files().update(
-                    fileId=existing[0]["id"],
-                    media_body=media,
-                ).execute()
-            else:
-                service.files().create(
-                    body={"name": fp.name, "parents": [folder_id]},
-                    media_body=media,
-                    fields="id",
-                ).execute()
-            uploaded.append(fp.name)
+            if fp.suffix.lower() == ".md":
+                # Store the full report text in a dedicated ticker tab.
+                ticker = fp.stem.replace("_DGA_Report", "").replace("_DGA_report", "")
+                report_text = fp.read_text(encoding="utf-8", errors="replace")
+                # Sheets cells cap at 50 000 chars; truncate gracefully.
+                truncated = report_text[:49_900]
+                tab_title = ticker[:50]  # sheet name limit
+                try:
+                    ws = sh.worksheet(tab_title)
+                    ws.clear()
+                except gspread.exceptions.WorksheetNotFound:
+                    ws = sh.add_worksheet(title=tab_title, rows=500, cols=2)
+                ws.update("A1", [[f"Report: {ticker}", f"Updated: {now}"]])
+                ws.update("A2", [[truncated]])
+                archived.append(ticker)
 
-        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        return {"ok": True, "folder_id": folder_id, "folder_url": folder_url, "uploaded": uploaded}
+        sheets_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+        return {"ok": True, "archived": archived, "sheets_url": sheets_url}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
