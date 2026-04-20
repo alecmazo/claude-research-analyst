@@ -1153,6 +1153,18 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             report_text, ticker, data.get("latest_filing_type", "10-K"), out_pptx=out_pptx
         )
 
+    # Upload report files to Google Drive (best-effort, non-blocking).
+    drive_files = [p for p in [md_path, out_docx] if p.exists()]
+    if generate_gamma:
+        pptx_path = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
+        if pptx_path.exists():
+            drive_files.append(pptx_path)
+    gdrive_status: dict = {"ok": False, "skipped": True}
+    try:
+        gdrive_status = push_to_google_drive(drive_files)
+    except Exception:  # noqa: BLE001
+        pass
+
     result.update({
         "ok": True,
         "entity_name": data.get("entity_name", ticker),
@@ -1165,6 +1177,7 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
         "gamma_url": gamma_url,
         "gamma_credits": gamma_credits,
         "summary": summary,
+        "gdrive": gdrive_status,
     })
     return result
 
@@ -2182,6 +2195,85 @@ def push_to_google_sheets(
 
 
 # ============================================================================
+# Google Drive upload
+# ============================================================================
+
+def push_to_google_drive(file_paths: list[Path | str], *, folder_name: str = "DGA Research Reports") -> dict:
+    """Upload one or more files to a Google Drive folder using the service account.
+
+    Required env var:
+      GOOGLE_SERVICE_ACCOUNT_JSON — path to (or JSON content of) the service account key
+
+    Creates the target folder if it doesn't exist; overwrites files with the same name.
+    Returns {"ok": True, "folder_id": "...", "uploaded": [...]} or {"ok": False, "error": "..."}.
+    """
+    creds_src = _optional_env("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not creds_src:
+        return {"ok": False, "skipped": True, "error": "GOOGLE_SERVICE_ACCOUNT_JSON not configured"}
+
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+    except ImportError:
+        return {"ok": False, "error": "google-api-python-client not installed; run: pip install google-api-python-client"}
+
+    try:
+        scopes = ["https://www.googleapis.com/auth/drive"]
+        # Support both a file path and an inline JSON string (Railway env var).
+        if creds_src.strip().startswith("{"):
+            import io
+            info = json.loads(creds_src)
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
+        else:
+            creds = Credentials.from_service_account_file(creds_src, scopes=scopes)
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception as exc:
+        return {"ok": False, "error": f"Drive auth failed: {exc}"}
+
+    try:
+        # Find or create the target folder.
+        q = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
+        res = service.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+        folders = res.get("files", [])
+        if folders:
+            folder_id = folders[0]["id"]
+        else:
+            meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
+            folder_id = service.files().create(body=meta, fields="id").execute()["id"]
+
+        uploaded: list[str] = []
+        for fp in file_paths:
+            fp = Path(fp)
+            if not fp.exists():
+                continue
+            mime, _ = mimetypes.guess_type(str(fp))
+            mime = mime or "application/octet-stream"
+
+            # Overwrite if a file with the same name exists in the folder.
+            q2 = f"name='{fp.name}' and '{folder_id}' in parents and trashed=false"
+            existing = service.files().list(q=q2, fields="files(id)", pageSize=1).execute().get("files", [])
+            media = MediaFileUpload(str(fp), mimetype=mime, resumable=False)
+            if existing:
+                service.files().update(
+                    fileId=existing[0]["id"],
+                    media_body=media,
+                ).execute()
+            else:
+                service.files().create(
+                    body={"name": fp.name, "parents": [folder_id]},
+                    media_body=media,
+                    fields="id",
+                ).execute()
+            uploaded.append(fp.name)
+
+        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+        return {"ok": True, "folder_id": folder_id, "folder_url": folder_url, "uploaded": uploaded}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# ============================================================================
 # High-level orchestration (used by CLI *and* API)
 # ============================================================================
 def run_portfolio_rebalance(
@@ -2302,6 +2394,19 @@ def run_portfolio_rebalance(
         except Exception as exc:  # noqa: BLE001
             gsheets_status = {"ok": False, "error": str(exc)}
 
+    # Google Drive upload — portfolio xlsx + all per-ticker reports.
+    gdrive_status: dict = {"ok": False, "skipped": True}
+    try:
+        drive_files: list[Path] = [output_path]
+        for r in ok_results:
+            for key in ("docx", "md"):
+                p = r.get(key)
+                if p and Path(p).exists():
+                    drive_files.append(Path(p))
+        gdrive_status = push_to_google_drive(drive_files)
+    except Exception as exc:  # noqa: BLE001
+        gdrive_status = {"ok": False, "error": str(exc)}
+
     return {
         "ok": bool(ok_results),
         "primary_strategy": primary_strategy,
@@ -2313,6 +2418,7 @@ def run_portfolio_rebalance(
         "strategies": {k: _slim(v) for k, v in strategy_results.items()},
         "email": email_status,
         "gsheets": gsheets_status,
+        "gdrive": gdrive_status,
     }
 
 
