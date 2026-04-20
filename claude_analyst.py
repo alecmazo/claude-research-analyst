@@ -2617,11 +2617,6 @@ def main() -> int:
         )
         print(f"  💾 Optimized portfolio: {out_path}")
 
-        # Surface the instructions blob so an orchestrator (or the cowork
-        # agent) can push the file to Google Sheets via the Drive MCP.
-        instr = google_sheets_upload_instructions(out_path)
-        print(f"  ☁️  Google Sheets upload payload: {instr}")
-
         # Email the results — portfolio runs only (single-ticker analyses
         # never email; that branch never reaches here).
         try:
