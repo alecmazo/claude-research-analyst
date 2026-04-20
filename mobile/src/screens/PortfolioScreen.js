@@ -236,6 +236,15 @@ export default function PortfolioScreen() {
               <Text style={styles.runBtnText}>Download DGA-portfolio.xlsx</Text>
             </TouchableOpacity>
           )}
+          {job.status === 'done' && result?.gsheets?.ok && (
+            <TouchableOpacity
+              style={[styles.runBtn, styles.sheetsBtn]}
+              onPress={() => Linking.openURL(result.gsheets.url)}
+            >
+              <Ionicons name="logo-google" size={16} color={colors.white} style={{ marginRight: 6 }} />
+              <Text style={[styles.runBtnText, { color: colors.white }]}>Open in Google Sheets</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
     </ScrollView>
@@ -326,6 +335,7 @@ const styles = StyleSheet.create({
   },
   runBtnDisabled: { opacity: 0.5 },
   runBtnText: { color: colors.navy, fontWeight: '800', fontSize: 14, letterSpacing: 1 },
+  sheetsBtn: { backgroundColor: '#0F9D58', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   statusText: { fontSize: 14, fontWeight: '600', color: colors.navy, marginBottom: 6 },
   errorText: { fontSize: 13, color: colors.red, marginTop: 4 },
   resultBlock: {

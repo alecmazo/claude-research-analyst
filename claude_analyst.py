@@ -1767,21 +1767,159 @@ def write_dga_portfolio_xlsx(
 # The actual MCP call is performed from the outer agent — this helper just
 # builds the payload path and metadata.
 # ============================================================================
-def google_sheets_upload_instructions(xlsx_path: Path) -> dict:
-    """Return everything needed to push the xlsx up as a Google Sheet.
+def _gsheets_upsert_sheet(sh, title: str, rows: list[list]) -> None:
+    """Clear and rewrite a worksheet, creating it if it doesn't exist."""
+    import gspread
+    try:
+        ws = sh.worksheet(title)
+        ws.clear()
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=max(len(rows) + 20, 50), cols=30)
+    if rows:
+        ws.update(rows)
 
-    The parent agent performs the actual MCP call (mcp__<drive>__create_file)
-    because credentials / session context live there; this function just keeps
-    the contract in one place.
+
+def _gsheets_append_log(sh, title: str, headers: list, row: list) -> None:
+    """Append a row to a log sheet, creating with headers if it doesn't exist."""
+    import gspread
+    try:
+        ws = sh.worksheet(title)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=200, cols=10)
+        ws.append_row(headers)
+    ws.append_row(row)
+
+
+def push_to_google_sheets(
+    *,
+    input_records: list[dict],
+    primary_strategy: str,
+    strategy_results: dict[str, dict],
+    run_timestamp: str,
+) -> dict:
+    """Push portfolio results to Google Sheets via a service account.
+
+    Required env vars:
+      GOOGLE_SERVICE_ACCOUNT_JSON  — path to the service account key JSON file
+      GOOGLE_SHEETS_SPREADSHEET_ID — ID from the spreadsheet URL
+
+    Creates / updates three sheets: Portfolio, Summary, Run Log.
+    Returns {"ok": True, "url": "..."} or {"ok": False, "error": "..."}.
     """
-    return {
-        "local_path": str(xlsx_path),
-        "drive_name": "DGA-portfolio",
-        "mime_type_target": "application/vnd.google-apps.spreadsheet",
-        "source_mime_type": (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-    }
+    creds_path = _optional_env("GOOGLE_SERVICE_ACCOUNT_JSON")
+    spreadsheet_id = _optional_env("GOOGLE_SHEETS_SPREADSHEET_ID")
+
+    if not creds_path or not spreadsheet_id:
+        return {
+            "ok": False,
+            "skipped": True,
+            "error": "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SHEETS_SPREADSHEET_ID not configured",
+        }
+
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        return {"ok": False, "error": "gspread not installed; run: pip install gspread google-auth"}
+
+    try:
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(spreadsheet_id)
+    except Exception as exc:
+        return {"ok": False, "error": f"Auth/open failed: {exc}"}
+
+    try:
+        other_order = [s for s in ("pro", "concentrated", "allin") if s != primary_strategy]
+        order = [primary_strategy] + other_order
+
+        input_tickers = [r["ticker"] for r in input_records]
+        input_weight_lookup = {r["ticker"]: r.get("weight", 0.0) or 0.0 for r in input_records}
+
+        all_tickers: list[str] = list(input_tickers)
+        for key in order:
+            for t in strategy_results[key]["weights"]:
+                if t not in all_tickers:
+                    all_tickers.append(t)
+
+        primary_label = strategy_results[primary_strategy]["label"]
+
+        # ---- Sheet: Portfolio ----
+        port_headers = ["Ticker", "Weight (Prior)", f"Optimized [{primary_label}]"]
+        for key in other_order:
+            port_headers.append(strategy_results[key]["label"])
+
+        port_rows: list[list] = [port_headers]
+        for ticker in all_tickers:
+            row: list = [
+                ticker,
+                round(input_weight_lookup.get(ticker, 0.0), 4),
+                round(strategy_results[primary_strategy]["weights"].get(ticker, 0.0), 4),
+            ]
+            for key in other_order:
+                row.append(round(strategy_results[key]["weights"].get(ticker, 0.0), 4))
+            port_rows.append(row)
+
+        total_row: list = ["TOTAL", round(sum(input_weight_lookup.values()), 4)]
+        total_row.append(round(sum(strategy_results[primary_strategy]["weights"].get(t, 0.0) for t in all_tickers), 4))
+        for key in other_order:
+            total_row.append(round(sum(strategy_results[key]["weights"].get(t, 0.0) for t in all_tickers), 4))
+        port_rows.append(total_row)
+
+        _gsheets_upsert_sheet(sh, "Portfolio", port_rows)
+
+        # ---- Sheet: Summary ----
+        sum_headers = [
+            "Ticker", "Rating", "Current Price", "12M Target", "Upside %", "Sector",
+            f"{primary_label} (Primary)",
+        ]
+        for key in other_order:
+            sum_headers.append(strategy_results[key]["label"])
+
+        primary_rows_by_tkr = {
+            r["ticker"]: r for r in strategy_results[primary_strategy]["rows"]
+        }
+        sum_rows: list[list] = [sum_headers]
+        for ticker in all_tickers:
+            meta = primary_rows_by_tkr.get(ticker, {})
+            srow: list = [
+                ticker,
+                meta.get("rating", "—"),
+                meta.get("price"),
+                meta.get("price_target"),
+                meta.get("upside_pct"),
+                meta.get("sector", "Unknown"),
+                round(strategy_results[primary_strategy]["weights"].get(ticker, 0.0), 4),
+            ]
+            for key in other_order:
+                srow.append(round(strategy_results[key]["weights"].get(ticker, 0.0), 4))
+            sum_rows.append(srow)
+
+        _gsheets_upsert_sheet(sh, "Summary", sum_rows)
+
+        # ---- Sheet: Run Log (append-only audit trail) ----
+        log_headers = ["Timestamp", "Tickers", "Strategy", "Top Picks", "# Positions"]
+        top_picks = sorted(
+            strategy_results[primary_strategy]["weights"].items(), key=lambda x: -x[1]
+        )[:3]
+        log_row = [
+            run_timestamp,
+            ", ".join(all_tickers),
+            primary_label,
+            ", ".join(f"{t} {w:.1%}" for t, w in top_picks),
+            sum(1 for v in strategy_results[primary_strategy]["weights"].values() if v > 0),
+        ]
+        _gsheets_append_log(sh, "Run Log", log_headers, log_row)
+
+        url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+        return {"ok": True, "url": url}
+
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 # ============================================================================
@@ -1872,6 +2010,8 @@ def run_portfolio_rebalance(
             "weights": {k: round(v, 4) for k, v in w.items() if v > 0},
         }
 
+    run_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
     # Email portfolio results — only fires for multi-ticker (portfolio) runs.
     email_status: dict = {"ok": False, "skipped": True}
     if len(ok_results) > 1:
@@ -1890,6 +2030,19 @@ def run_portfolio_rebalance(
         except Exception as exc:  # noqa: BLE001
             email_status = {"ok": False, "error": str(exc)}
 
+    # Google Sheets push — only fires for multi-ticker runs.
+    gsheets_status: dict = {"ok": False, "skipped": True}
+    if len(ok_results) > 1:
+        try:
+            gsheets_status = push_to_google_sheets(
+                input_records=portfolio_records,
+                primary_strategy=primary_strategy,
+                strategy_results=strategy_results,
+                run_timestamp=run_ts,
+            )
+        except Exception as exc:  # noqa: BLE001
+            gsheets_status = {"ok": False, "error": str(exc)}
+
     return {
         "ok": bool(ok_results),
         "primary_strategy": primary_strategy,
@@ -1900,6 +2053,7 @@ def run_portfolio_rebalance(
         "portfolio_roll_up_ok": bool(roll.get("ok")),
         "strategies": {k: _slim(v) for k, v in strategy_results.items()},
         "email": email_status,
+        "gsheets": gsheets_status,
     }
 
 
