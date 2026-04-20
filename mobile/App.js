@@ -9,6 +9,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import AnalysisScreen from './src/screens/AnalysisScreen';
 import ReportScreen from './src/screens/ReportScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import PortfolioScreen from './src/screens/PortfolioScreen';
 import { colors } from './src/components/theme';
 
 const Stack = createNativeStackNavigator();
@@ -43,6 +44,7 @@ export default function App() {
           tabBarIcon: ({ focused, color, size }) => {
             const icons = {
               Research: focused ? 'analytics' : 'analytics-outline',
+              Portfolio: focused ? 'briefcase' : 'briefcase-outline',
               Settings: focused ? 'settings' : 'settings-outline',
             };
             return <Ionicons name={icons[route.name]} size={size} color={color} />;
@@ -50,6 +52,7 @@ export default function App() {
         })}
       >
         <Tab.Screen name="Research" component={HomeStack} />
+        <Tab.Screen name="Portfolio" component={PortfolioScreen} />
         <Tab.Screen name="Settings" component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>

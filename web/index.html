@@ -87,11 +87,90 @@
   <article id="report-content" class="report-content">Loading…</article>
 </section>
 
+<!-- ============ PORTFOLIO VIEW ============ -->
+<section id="view-portfolio" class="view">
+  <header class="header">
+    <div class="header-brand">
+      <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
+      <h1>Portfolio Rebalance</h1>
+    </div>
+    <span></span>
+  </header>
+
+  <div class="card">
+    <div class="label">UPLOAD PORTFOLIO</div>
+    <p class="hint">
+      CSV or XLSX with columns: <strong>Ticker</strong>, <strong>Weight</strong> (%), <strong>Optimized</strong>.
+      The Optimized column (if present) is ignored on input.
+    </p>
+    <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" class="file-input">
+    <div id="portfolio-file-info" class="file-info"></div>
+  </div>
+
+  <div class="card">
+    <div class="label">PRIMARY STRATEGY</div>
+    <div class="strategy-list" id="strategy-list">
+      <label class="strategy-option">
+        <input type="radio" name="strategy" value="pro" checked>
+        <div class="strategy-body">
+          <div class="strategy-title">Pro Standard</div>
+          <div class="strategy-desc">10–20 positions, max 12% each, sector cap 25%. Institutional risk/reward.</div>
+        </div>
+      </label>
+      <label class="strategy-option">
+        <input type="radio" name="strategy" value="concentrated">
+        <div class="strategy-body">
+          <div class="strategy-title">Concentrated High Conviction</div>
+          <div class="strategy-desc">8–10 positions, max 20% each, sector cap 35%. Higher conviction tilt.</div>
+        </div>
+      </label>
+      <label class="strategy-option">
+        <input type="radio" name="strategy" value="allin">
+        <div class="strategy-body">
+          <div class="strategy-title">All In — Top 3</div>
+          <div class="strategy-desc">Only the 3 highest-conviction names, up to 40% each. Max aggression.</div>
+        </div>
+      </label>
+    </div>
+    <p class="hint">The xlsx output contains <strong>all three</strong> strategies; your primary choice shows first.</p>
+  </div>
+
+  <div class="card">
+    <div class="gamma-row">
+      <label class="gamma-label" for="portfolio-reuse">Reuse cached reports (faster)</label>
+      <label class="toggle-switch">
+        <input type="checkbox" id="portfolio-reuse" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="gamma-row">
+      <label class="gamma-label" for="portfolio-gamma">Generate Gamma Presentations</label>
+      <label class="toggle-switch">
+        <input type="checkbox" id="portfolio-gamma">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
+  </div>
+
+  <div class="card" id="portfolio-progress-card" style="display:none;">
+    <div class="label">STATUS</div>
+    <div id="portfolio-status-text" class="portfolio-status">Queued…</div>
+    <div id="portfolio-result" style="display:none;"></div>
+    <div id="portfolio-error" class="error-box" style="display:none;"></div>
+    <button id="portfolio-download-btn" class="btn-primary full-width" style="display:none;">Download DGA-portfolio.xlsx</button>
+  </div>
+</section>
+
 <!-- ============ FOOTER TABS ============ -->
 <nav class="tab-bar">
   <button class="tab active" data-target="view-home">
     <span class="tab-icon">📈</span>
     <span>Research</span>
+  </button>
+  <button class="tab" data-target="view-portfolio">
+    <span class="tab-icon">💼</span>
+    <span>Portfolio</span>
   </button>
   <button class="tab" data-target="view-settings">
     <span class="tab-icon">⚙️</span>

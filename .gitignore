@@ -16,9 +16,21 @@ stocks/*.docx
 stocks/*.pptx
 stocks/*.md
 stocks/*.json
+stocks/*.eml
 # but keep these:
 !stocks/dga_system_prompt.txt
 !stocks/.gitkeep
+
+# Portfolio data (sensitive financial holdings / generated outputs)
+*.xlsx
+DGA-portfolio_csvs/
+portfolio_runs/
+
+# Downloaded financial data (large, regenerable via SEC EDGAR)
+stock-financials/
+
+# Claude Code internal state
+.claude/
 
 # OS
 .DS_Store

@@ -20,17 +20,29 @@ Usage:
     python3 claude_analyst.py AAPL
     python3 claude_analyst.py --portfolio /path/to/portfolio.csv
     python3 claude_analyst.py --portfolio /path/to/portfolio.xlsx --no-gamma
+    python3 claude_analyst.py --portfolio portfolio_watchlist.xlsx --strategy pro
+    python3 claude_analyst.py --portfolio portfolio_watchlist.xlsx --strategy concentrated --reuse
+
+Portfolio file schema (CSV or XLSX) — exactly three columns, first row headers:
+    Ticker | Weight | Optimized
+The "Optimized" column is intentionally IGNORED when loaded, so the output of
+one run (DGA-portfolio.xlsx) can be fed back in as the input for the next run.
+Weights can be expressed either as decimals (0.05) or whole-number percents (5).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import re
+import smtplib
+import ssl
 import sys
 import time
 from datetime import datetime
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +60,9 @@ from word_report import render_report
 SCRIPT_DIR = Path(__file__).resolve().parent
 STOCKS_FOLDER = SCRIPT_DIR / "stocks"
 STOCKS_FOLDER.mkdir(parents=True, exist_ok=True)
+
+# Default recipient for portfolio-analysis emails (override via PORTFOLIO_EMAIL_TO env var).
+DEFAULT_PORTFOLIO_EMAIL_TO = "alecmazo1@gmail.com"
 
 
 def _load_dotenv() -> None:
@@ -124,6 +139,165 @@ def get_grok_api_key() -> str:
 
 def get_gamma_api_key() -> str:
     return _require_env("GAMMA_API_KEY", hint="Get yours at https://gamma.app/account")
+
+
+# ============================================================================
+# Portfolio-analysis email notification
+# ----------------------------------------------------------------------------
+# Triggered ONLY for multi-ticker (portfolio) runs. Single-ticker runs do not
+# send mail. Configure via .env:
+#   PORTFOLIO_EMAIL_TO=alecmazo1@gmail.com   (override default recipient)
+#   GMAIL_USER=you@gmail.com                  (Gmail address to send from)
+#   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx    (Gmail App Password — NOT your
+#                                              normal Google password. Create at
+#                                              https://myaccount.google.com/apppasswords
+#                                              with 2FA enabled.)
+# If credentials are missing, the function still composes the email body and
+# writes it to disk under stocks/Portfolio_Email.eml so nothing is lost.
+# ============================================================================
+
+def _ranked_table_text(ranked_rows: list[dict] | None, limit: int = 25) -> str:
+    if not ranked_rows:
+        return "(ranked table unavailable)"
+    headers = ["Ticker", "Rating", "Price", "Target", "Upside %", "Sector"]
+    lines = [" | ".join(headers), " | ".join("---" for _ in headers)]
+    for r in ranked_rows[:limit]:
+        lines.append(" | ".join([
+            str(r.get("ticker", ""))[:6],
+            str(r.get("rating", ""))[:8],
+            f"{r.get('current_price', '') or ''}"[:10],
+            f"{r.get('target_price', '') or ''}"[:10],
+            f"{r.get('upside_pct', '') or ''}"[:8],
+            str(r.get("sector", ""))[:24],
+        ]))
+    return "\n".join(lines)
+
+
+def _strategy_weights_text(strategy_results: dict[str, dict] | None) -> str:
+    if not strategy_results:
+        return "(no strategy weights computed)"
+    blocks: list[str] = []
+    for skey, res in strategy_results.items():
+        weights = res.get("weights", {}) or {}
+        held = {t: w for t, w in weights.items() if w and w > 0}
+        if not held:
+            blocks.append(f"[{skey}] (no positions held)")
+            continue
+        rows = sorted(held.items(), key=lambda kv: kv[1], reverse=True)
+        body = "\n".join(f"  {t:<6} {w*100:6.2f}%" for t, w in rows)
+        blocks.append(f"[{skey}]  ({len(rows)} positions)\n{body}")
+    return "\n\n".join(blocks)
+
+
+def build_portfolio_email(
+    *,
+    tickers_ok: list[str],
+    tickers_failed: list[str],
+    summary_markdown: str,
+    ranked_rows: list[dict] | None,
+    strategy_results: dict[str, dict] | None,
+    output_xlsx: Path | None,
+    portfolio_docx: Path | None,
+    gamma_url: str | None,
+) -> EmailMessage:
+    """Compose the EmailMessage for a portfolio-analysis run."""
+    to_addr = _optional_env("PORTFOLIO_EMAIL_TO", DEFAULT_PORTFOLIO_EMAIL_TO)
+    from_addr = _optional_env("GMAIL_USER", to_addr)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    subject = f"DGA Portfolio Analysis — {today} — {len(tickers_ok)} positions"
+
+    parts: list[str] = []
+    parts.append(f"DGA Capital — Portfolio Analysis Run")
+    parts.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    parts.append("")
+    parts.append(f"Tickers analyzed (ok):     {', '.join(tickers_ok) or '(none)'}")
+    if tickers_failed:
+        parts.append(f"Tickers failed:            {', '.join(tickers_failed)}")
+    if gamma_url:
+        parts.append(f"Gamma deck:                {gamma_url}")
+    parts.append("")
+    parts.append("=" * 70)
+    parts.append("RANKED TABLE")
+    parts.append("=" * 70)
+    parts.append(_ranked_table_text(ranked_rows))
+    parts.append("")
+    parts.append("=" * 70)
+    parts.append("STRATEGY WEIGHTS")
+    parts.append("=" * 70)
+    parts.append(_strategy_weights_text(strategy_results))
+    parts.append("")
+    parts.append("=" * 70)
+    parts.append("PORTFOLIO ROLL-UP (Grok)")
+    parts.append("=" * 70)
+    # Cap the markdown body to keep emails reasonable.
+    md = (summary_markdown or "").strip()
+    if len(md) > 60_000:
+        md = md[:60_000] + "\n\n[...truncated for email; see attached docx...]"
+    parts.append(md or "(no roll-up generated)")
+
+    body = "\n".join(parts)
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.set_content(body)
+
+    # Attach the Word roll-up and the optimized portfolio xlsx if available.
+    for path in (portfolio_docx, output_xlsx):
+        if path and Path(path).is_file():
+            ctype, _ = mimetypes.guess_type(str(path))
+            maintype, subtype = (ctype.split("/", 1) if ctype else ("application", "octet-stream"))
+            with open(path, "rb") as fh:
+                msg.add_attachment(
+                    fh.read(), maintype=maintype, subtype=subtype, filename=Path(path).name,
+                )
+
+    return msg
+
+
+def send_portfolio_email(msg: EmailMessage) -> dict:
+    """Send via Gmail SMTP using GMAIL_USER + GMAIL_APP_PASSWORD.
+
+    Returns {ok, sent_to, fallback_path?, error?}. Always writes a .eml fallback
+    next to the stocks folder so the artifact survives even if SMTP is misconfigured.
+    """
+    fallback = STOCKS_FOLDER / "Portfolio_Email.eml"
+    try:
+        with open(fallback, "wb") as fh:
+            fh.write(bytes(msg))
+    except Exception as exc:  # pragma: no cover — disk write should not fail in practice
+        print(f"   ⚠️  Could not write fallback .eml: {exc}")
+
+    user = _optional_env("GMAIL_USER", "")
+    pwd = _optional_env("GMAIL_APP_PASSWORD", "")
+    if not user or not pwd:
+        return {
+            "ok": False,
+            "sent_to": msg["To"],
+            "fallback_path": str(fallback),
+            "error": (
+                "Email NOT sent — set GMAIL_USER and GMAIL_APP_PASSWORD in .env "
+                "(create an App Password at https://myaccount.google.com/apppasswords). "
+                f"Email body saved to {fallback}."
+            ),
+        }
+
+    try:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as smtp:
+            smtp.login(user, pwd)
+            smtp.send_message(msg)
+        return {"ok": True, "sent_to": msg["To"], "fallback_path": str(fallback)}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "sent_to": msg["To"],
+            "fallback_path": str(fallback),
+            "error": f"SMTP send failed: {exc}. Email body saved to {fallback}.",
+        }
+
 
 # ============================================================================
 # DGA_SYSTEM_PROMPT  (reads from /stocks/dga_system_prompt.txt if present, else uses default)
@@ -330,30 +504,99 @@ _RATING_RE = re.compile(
 _PRICE_TARGET_RE = re.compile(
     r"price target[^\$]{0,60}\$([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)", re.IGNORECASE,
 )
+# Stronger anchors that reliably appear in DGA reports.
+_PT_STRONG_RE = re.compile(
+    r"(?:12-?Month\s+Price\s+Target|Base\s+Case\s+Price\s+Target|"
+    r"12-?month\s+target)[^\$]{0,40}\$\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_CURRENT_PRICE_RE = re.compile(
+    r"(?:Current\s+Price|CURRENT_PRICE|Current\s+market\s+price)"
+    r"[^\$\d-]{0,15}\$?\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_UPSIDE_RE = re.compile(
+    r"(?:Implied\s+Return|Upside|Expected\s+Return|Implied\s+Upside)"
+    r"[^\d\-\+]{0,15}([+-]?\d+(?:\.\d+)?)\s*%",
+    re.IGNORECASE,
+)
+_RATING_ANCHORED_RE = re.compile(
+    r"(?:"
+    r"(?:Overall\s+[Rr]ating|Final\s+Recommendation|Recommendation|Conviction\s+Level)"
+    r"[:\*\s]{0,8}"
+    r"|We\s+rate\s+[A-Z.]+\s+"
+    r"|[Rr]ating[:\s]+\**\s*"
+    r")\**\s*(Strong Buy|Buy|Hold|Sell|Strong Sell)\**",
+    re.IGNORECASE,
+)
 
 
 def extract_summary_from_report(report_text: str) -> dict:
-    """Pull rating + 12-month price target + headline thesis from the Grok output."""
+    """Pull rating + 12-month price target + current price + upside + thesis.
+
+    Uses strong anchors when present (the DGA report template is consistent),
+    falls back to looser matching for older reports.
+    """
+    # --- Rating: prefer anchored matches (Overall Rating / We rate XXX BUY).
     rating = None
-    for m in _RATING_RE.finditer(report_text[:4000]):
+    m = _RATING_ANCHORED_RE.search(report_text[:6000])
+    if m:
         rating = m.group(1).title()
-        break
+    else:
+        m2 = _RATING_RE.search(report_text[:4000])
+        if m2:
+            rating = m2.group(1).title()
+
+    # --- 12M Price Target.
     price_target = None
-    for m in _PRICE_TARGET_RE.finditer(report_text):
+    m = _PT_STRONG_RE.search(report_text)
+    if not m:
+        m = _PRICE_TARGET_RE.search(report_text)
+    if m:
         try:
             price_target = float(m.group(1).replace(",", ""))
-            break
         except ValueError:
-            continue
-    # Grab the first non-empty non-heading paragraph as a thesis hint.
+            pass
+
+    # --- Current Price.
+    current_price = None
+    m = _CURRENT_PRICE_RE.search(report_text)
+    if m:
+        try:
+            current_price = float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+
+    # --- Upside / Implied Return.
+    upside_pct = None
+    m = _UPSIDE_RE.search(report_text)
+    if m:
+        try:
+            upside_pct = float(m.group(1))
+        except ValueError:
+            pass
+    if upside_pct is None and price_target and current_price:
+        try:
+            upside_pct = round((price_target - current_price) / current_price * 100, 2)
+        except ZeroDivisionError:
+            pass
+
+    # Thesis hint.
     thesis = ""
     for line in report_text.split("\n"):
         s = line.strip()
-        if not s or s.startswith("#") or s.startswith("|"):
+        if not s or s.startswith("#") or s.startswith("|") or s.startswith(">"):
             continue
         thesis = s[:400]
         break
-    return {"rating": rating, "price_target": price_target, "thesis": thesis}
+
+    return {
+        "rating": rating,
+        "price_target": price_target,
+        "current_price": current_price,
+        "upside_pct": upside_pct,
+        "thesis": thesis,
+    }
 
 
 # ============================================================================
@@ -517,9 +760,50 @@ def _gamma_generate(input_text: str, num_cards: int,
 # Per-ticker analysis pipeline
 # ============================================================================
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
-                   verbose: bool = True) -> dict:
+                   verbose: bool = True, reuse_existing: bool = False) -> dict:
+    """Analyze a single ticker end-to-end.
+
+    When ``reuse_existing`` is True and a cached markdown report already exists
+    in /stocks, we load it instead of re-calling Grok. This is what the
+    portfolio-rebalance flow uses by default so we don't burn 20+ API calls
+    every time we re-optimize weights.
+    """
     ticker = ticker.strip().upper()
     result = {"ticker": ticker, "ok": False}
+
+    # --- Fast path: reuse an existing report if present and requested.
+    md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+    if reuse_existing and md_path.exists():
+        print(f"♻️  {ticker}: reusing cached report at {md_path.name}")
+        report_text = md_path.read_text()
+        mkt = fetch_market_snapshot(ticker)
+        audit_path = STOCKS_FOLDER / f"{ticker}_xbrl_extract.json"
+        entity_name, latest_filing_type = ticker, "10-K"
+        if audit_path.exists():
+            try:
+                with open(audit_path) as fh:
+                    d = json.load(fh)
+                entity_name = d.get("entity_name", ticker) or ticker
+                latest_filing_type = d.get("latest_filing_type", "10-K") or "10-K"
+            except Exception:
+                pass
+        summary = extract_summary_from_report(report_text)
+        market_price = mkt.get("price") or summary.get("current_price")
+        return {
+            "ok": True,
+            "ticker": ticker,
+            "entity_name": entity_name,
+            "latest_filing_type": latest_filing_type,
+            "market_price": market_price,
+            "report_text": report_text,
+            "docx": str(STOCKS_FOLDER / f"{ticker}_DGA_Report.docx"),
+            "md": str(md_path),
+            "xbrl_json": str(audit_path) if audit_path.exists() else None,
+            "gamma_url": None,
+            "gamma_credits": 0,
+            "summary": summary,
+            "cached": True,
+        }
 
     # --- Step 1: download the latest 10-K and 10-Q into stock-financials/{TICKER}/
     # This parses the actual XBRL instance documents from each filing, so the
@@ -721,6 +1005,7 @@ def run_portfolio_summary(ticker_results: list[dict], *, generate_gamma: bool) -
         "ok": True,
         "docx": str(out_docx),
         "md": str(md_path),
+        "summary_md": summary_md,
         "gamma_url": gamma_url,
         "gamma_credits": gamma_credits,
         "ranked_rows": ranked_rows,
@@ -794,7 +1079,23 @@ def _parse_action_table(summary_md: str) -> list[dict]:
 # ============================================================================
 # Portfolio file loader
 # ============================================================================
-def load_portfolio_file(path: str) -> list[str]:
+def load_portfolio_file(path: str) -> list[dict]:
+    """Load a portfolio file.
+
+    Expected schema (new):
+        | Ticker | Weight | Optimized |
+        |--------|--------|-----------|
+        | AAPL   | 0.05   |           |
+
+    - The "Optimized" column is intentionally ignored so the same file can be
+      re-used as input on the NEXT run, where the rebalancer will write a
+      fresh Optimized column.
+    - Weight can be expressed as a decimal (0.05) or a whole-number percent (5).
+    - Falls back to legacy two-column (ticker, Allocation) and single-column
+      files for backward compatibility.
+
+    Returns a list of dicts: [{"ticker": "AAPL", "weight": 0.05}, ...]
+    """
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(path)
@@ -806,13 +1107,800 @@ def load_portfolio_file(path: str) -> list[str]:
     else:
         raise ValueError(f"Unsupported portfolio file: {p.suffix}")
 
-    # Try several reasonable column names.
-    for col in ("ticker", "Ticker", "TICKER", "symbol", "Symbol", "SYMBOL"):
-        if col in df.columns:
-            return [str(x).strip().upper() for x in df[col].dropna().tolist()]
-    # Fall back to first column.
-    first_col = df.columns[0]
-    return [str(x).strip().upper() for x in df[first_col].dropna().tolist()]
+    cols_lower = {str(c).strip().lower(): c for c in df.columns}
+
+    # Ticker column: accept Ticker / ticker / symbol / TICKER
+    ticker_col = None
+    for key in ("ticker", "tickers", "symbol", "symbols"):
+        if key in cols_lower:
+            ticker_col = cols_lower[key]
+            break
+    if ticker_col is None:
+        ticker_col = df.columns[0]
+
+    # Weight column: Weight / Allocation / Weight %
+    weight_col = None
+    for key in ("weight", "weights", "allocation", "alloc", "weight %", "weight (%)",
+                "allocation %", "allocation (%)"):
+        if key in cols_lower:
+            weight_col = cols_lower[key]
+            break
+
+    # Optimized column is deliberately ignored (we will OVERWRITE it on the way out).
+    records: list[dict] = []
+    for _, row in df.iterrows():
+        raw_t = row[ticker_col]
+        if pd.isna(raw_t):
+            continue
+        ticker = str(raw_t).strip().upper()
+        if not ticker or ticker in ("NAN", "NONE"):
+            continue
+        # Skip summary/footer rows that DGA-portfolio.xlsx writes at the bottom
+        # (so the output file is safe to re-use as input).
+        if ticker in ("TOTAL", "TOTALS", "SUBTOTAL", "CASH"):
+            continue
+        # Tickers are alphanumeric (dots/dashes allowed). Anything else is noise.
+        if not all(c.isalnum() or c in (".", "-") for c in ticker):
+            continue
+        weight: float | None = None
+        if weight_col is not None and pd.notna(row[weight_col]):
+            try:
+                weight = float(row[weight_col])
+                # If it looks like a whole-number percent, convert to decimal.
+                if weight > 1.5:
+                    weight = weight / 100.0
+            except (TypeError, ValueError):
+                weight = None
+        records.append({"ticker": ticker, "weight": weight})
+
+    # If no weights were provided, assign equal-weight across all positions.
+    if records and all(r["weight"] is None for r in records):
+        n = len(records)
+        for r in records:
+            r["weight"] = round(1.0 / n, 6)
+
+    return records
+
+
+def portfolio_tickers(records: list[dict]) -> list[str]:
+    return [r["ticker"] for r in records]
+
+
+# ============================================================================
+# Sector lookup (Yahoo Finance quoteSummary, best-effort)
+# ============================================================================
+_SECTOR_OVERRIDES = {
+    # Fall-backs for tickers that Yahoo sometimes misses / labels oddly.
+    "FNMA": "Financial Services",
+    "IBRX": "Healthcare",
+    "MOH":  "Healthcare",
+    "HHH":  "Real Estate",
+    "SPG":  "Real Estate",
+    "ASML": "Technology",
+    "TSM":  "Technology",
+    "SMCI": "Technology",
+    "INTC": "Technology",
+    "CSCO": "Technology",
+    "PYPL": "Financial Services",
+    "C":    "Financial Services",
+    "WFC":  "Financial Services",
+    "NFLX": "Communication Services",
+    "CMCSA": "Communication Services",
+    "DIS":  "Communication Services",
+    "T":    "Communication Services",
+    "TSLA": "Consumer Cyclical",
+    "HAL":  "Energy",
+    "VALE": "Basic Materials",
+}
+
+
+def fetch_sector(ticker: str) -> str:
+    """Best-effort sector lookup via Yahoo Finance. Falls back to overrides above."""
+    t = ticker.strip().upper()
+    if t in _SECTOR_OVERRIDES:
+        return _SECTOR_OVERRIDES[t]
+    try:
+        url = (
+            f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{t}"
+            f"?modules=assetProfile,summaryProfile"
+        )
+        resp = requests.get(
+            url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+        )
+        data = resp.json()
+        results = data.get("quoteSummary", {}).get("result", []) or []
+        if results:
+            profile = results[0].get("assetProfile") or results[0].get("summaryProfile") or {}
+            s = profile.get("sector")
+            if s:
+                return s
+    except Exception:
+        pass
+    return "Unknown"
+
+
+# ============================================================================
+# Rebalancer — 3 strategies
+# ============================================================================
+STRATEGIES = {
+    "pro": {
+        "label": "Pro Standard",
+        "description": "10–20 positions, max 12% each, min 3% if held, max 25% per sector.",
+        "min_names": 10,
+        "target_names": 15,
+        "max_names": 20,
+        "max_position": 0.12,
+        "min_position": 0.03,
+        "max_sector": 0.25,
+        "score_exponent": 1.4,
+    },
+    "concentrated": {
+        "label": "Concentrated High Conviction",
+        "description": "8–10 positions, max 20% each, min 5% if held, max 35% per sector.",
+        "min_names": 8,
+        "target_names": 9,
+        "max_names": 10,
+        "max_position": 0.20,
+        "min_position": 0.05,
+        "max_sector": 0.35,
+        "score_exponent": 1.8,
+    },
+    "allin": {
+        "label": "All In — Top 3",
+        "description": "Only the 3 highest-conviction names, proportional to score up to 40% cap.",
+        "min_names": 3,
+        "target_names": 3,
+        "max_names": 3,
+        "max_position": 0.40,
+        "min_position": 0.20,
+        "max_sector": 1.00,  # effectively unconstrained
+        "score_exponent": 2.0,
+    },
+}
+
+_RATING_SCORE = {
+    "strong buy": 5.0,
+    "buy": 3.5,
+    "hold": 1.0,
+    "sell": -1.0,
+    "strong sell": -3.0,
+}
+
+
+def _score_ticker(result: dict) -> dict:
+    """Composite rebalance score for a single analyzed ticker."""
+    s = result.get("summary") or {}
+    rating = (s.get("rating") or "Hold").lower()
+    rating_score = _RATING_SCORE.get(rating, 1.0)
+
+    price = result.get("market_price")
+    pt = s.get("price_target")
+
+    # Prefer a pre-computed upside from the portfolio Grok roll-up if available.
+    upside = s.get("upside_pct")
+    if upside is None:
+        if isinstance(price, (int, float)) and isinstance(pt, (int, float)) and price:
+            upside = (pt - price) / price * 100.0
+        else:
+            upside = 0.0
+    # Clip extreme outliers so one +500% fantasy target doesn't dominate.
+    upside = max(-60.0, min(120.0, float(upside)))
+
+    # Composite: rating dominates, upside fine-tunes the ranking within a rating.
+    composite = rating_score + (upside / 10.0)
+    return {
+        "ticker": result["ticker"],
+        "rating": rating.title(),
+        "price": price,
+        "price_target": pt,
+        "upside_pct": round(upside, 2),
+        "score": round(composite, 4),
+        "sector": result.get("sector", "Unknown"),
+        "action": s.get("action", ""),
+    }
+
+
+def _waterfall_cap(items: list[dict], key: str, cap: float) -> None:
+    """Iteratively cap item[key] at `cap` and redistribute excess to uncapped items."""
+    for _ in range(60):
+        over = [i for i in items if i[key] > cap + 1e-9]
+        if not over:
+            return
+        excess = sum(i[key] - cap for i in over)
+        for i in over:
+            i[key] = cap
+        uncapped = [i for i in items if i[key] < cap - 1e-9]
+        pool = sum(i[key] for i in uncapped)
+        if pool <= 0:
+            # Everyone is at the cap — renormalize and bail.
+            total = sum(i[key] for i in items) or 1.0
+            for i in items:
+                i[key] /= total
+            return
+        for i in uncapped:
+            i[key] += excess * (i[key] / pool)
+
+
+def _apply_floor(items: list[dict], key: str, floor: float, cap: float) -> None:
+    """Bump sub-floor items up to `floor`, take proportionally from items above floor."""
+    for _ in range(30):
+        below = [i for i in items if i[key] < floor - 1e-9]
+        if not below:
+            return
+        deficit = sum(floor - i[key] for i in below)
+        for i in below:
+            i[key] = floor
+        above = [i for i in items if i[key] > floor + 1e-9]
+        pool = sum(i[key] for i in above)
+        if pool <= 0:
+            return
+        for i in above:
+            i[key] -= deficit * (i[key] / pool)
+        _waterfall_cap(items, key, cap)
+
+
+def _apply_sector_cap(items: list[dict], key: str, max_sector: float, max_pos: float) -> None:
+    """Scale down any sector whose aggregate weight exceeds the cap, redistribute excess."""
+    if max_sector >= 1.0:
+        return
+    for _ in range(10):
+        sector_totals: dict[str, float] = {}
+        for i in items:
+            sector_totals[i["sector"]] = sector_totals.get(i["sector"], 0.0) + i[key]
+        violators = [s for s, w in sector_totals.items() if w > max_sector + 1e-9]
+        if not violators:
+            return
+        for sect in violators:
+            sw = sector_totals[sect]
+            scale = max_sector / sw
+            excess = sw - max_sector
+            # Scale down over-weight sector
+            for i in items:
+                if i["sector"] == sect:
+                    i[key] *= scale
+            # Distribute excess to names in other sectors, proportional to current weight.
+            others = [i for i in items if i["sector"] != sect and i[key] > 0]
+            pool = sum(i[key] for i in others)
+            if pool <= 0:
+                continue
+            for i in others:
+                i[key] += excess * (i[key] / pool)
+        _waterfall_cap(items, key, max_pos)
+
+
+def _merge_ranked_rows(
+    ticker_results: list[dict], ranked_rows: list[dict] | None
+) -> list[dict]:
+    """Attach Grok-synthesized rating/target/upside/action to each ticker result.
+
+    Any field already present on the ticker result is preserved; ranked_rows
+    only fills in gaps.
+    """
+    if not ranked_rows:
+        return ticker_results
+    rr_by_tkr = {}
+    for r in ranked_rows:
+        tk = (r.get("ticker") or "").strip().upper()
+        if tk:
+            rr_by_tkr[tk] = r
+
+    import re as _re
+    pct_re = _re.compile(r"(-?\d+(?:\.\d+)?)")
+
+    for tr in ticker_results:
+        tk = tr["ticker"]
+        rr = rr_by_tkr.get(tk)
+        if not rr:
+            continue
+        s = tr.setdefault("summary", {}) or {}
+        # Rating
+        if rr.get("rating") and not s.get("rating"):
+            s["rating"] = rr["rating"]
+        # Price target
+        pt_raw = rr.get("price_target")
+        if pt_raw and not s.get("price_target"):
+            m = pct_re.search(str(pt_raw).replace(",", ""))
+            if m:
+                try:
+                    s["price_target"] = float(m.group(1))
+                except ValueError:
+                    pass
+        # Current price (if Yahoo was unavailable)
+        cp_raw = rr.get("current_price")
+        if cp_raw and tr.get("market_price") in (None, 0):
+            m = pct_re.search(str(cp_raw).replace(",", ""))
+            if m:
+                try:
+                    tr["market_price"] = float(m.group(1))
+                except ValueError:
+                    pass
+        # Upside
+        up_raw = rr.get("upside")
+        if up_raw:
+            m = pct_re.search(str(up_raw).replace(",", ""))
+            if m:
+                try:
+                    s["upside_pct"] = float(m.group(1))
+                except ValueError:
+                    pass
+        # Action (SELL/TRIM/HOLD/ADD/BUY)
+        action = (rr.get("action") or "").strip().upper()
+        if action:
+            s["action"] = action
+            # If Grok says SELL/STRONG SELL, fold that into the rating.
+            if "STRONG SELL" in action:
+                s["rating"] = "Strong Sell"
+            elif action == "SELL":
+                s["rating"] = "Sell"
+    return ticker_results
+
+
+def compute_rebalance(
+    ticker_results: list[dict],
+    strategy: str = "pro",
+    ranked_rows: list[dict] | None = None,
+) -> dict:
+    """Produce an optimized weight vector for the given strategy.
+
+    If ``ranked_rows`` (from the portfolio Grok roll-up) is supplied, it is
+    used to fill in rating / price / target / upside / action on each ticker
+    result before scoring — that signal is strictly better than the quick
+    regex scraped from the per-stock report.
+
+    Returns a dict with:
+      - strategy: key (e.g. "pro")
+      - label / description
+      - weights: {ticker: fraction_0_to_1}
+      - rows: list of {ticker, score, rating, upside, sector, weight} (all tickers)
+    """
+    cfg = STRATEGIES.get(strategy) or STRATEGIES["pro"]
+    usable = [r for r in ticker_results if r.get("ok")]
+
+    # Hydrate sector for each ticker (cheap, cached if already set).
+    for r in usable:
+        if not r.get("sector"):
+            r["sector"] = fetch_sector(r["ticker"])
+
+    # Enrich with portfolio Grok roll-up if available.
+    _merge_ranked_rows(usable, ranked_rows)
+
+    scored = [_score_ticker(r) for r in usable]
+
+    # Drop anything the analyst said SELL / Strong Sell — those are always 0%.
+    eligible = [s for s in scored if s["rating"].lower() not in ("sell", "strong sell")]
+    # Also drop anything with a non-positive composite score.
+    eligible = [s for s in eligible if s["score"] > 0]
+
+    if not eligible:
+        return {
+            "strategy": strategy,
+            "label": cfg["label"],
+            "description": cfg["description"],
+            "weights": {s["ticker"]: 0.0 for s in scored},
+            "rows": [dict(s, weight=0.0, in_portfolio=False) for s in scored],
+        }
+
+    # Rank and pick the target number of names.
+    eligible.sort(key=lambda x: -x["score"])
+    n_target = min(max(cfg["min_names"], cfg["target_names"]), cfg["max_names"], len(eligible))
+    selected = [dict(s) for s in eligible[:n_target]]
+
+    # Initial allocation proportional to score^exponent.
+    exponent = cfg["score_exponent"]
+    total = sum(max(s["score"], 0) ** exponent for s in selected) or 1.0
+    for s in selected:
+        s["weight"] = (max(s["score"], 0) ** exponent) / total
+
+    # Enforce caps and floors.
+    _waterfall_cap(selected, "weight", cfg["max_position"])
+    _apply_floor(selected, "weight", cfg["min_position"], cfg["max_position"])
+    _apply_sector_cap(selected, "weight", cfg["max_sector"], cfg["max_position"])
+
+    # Final renormalize for rounding drift.
+    total = sum(s["weight"] for s in selected) or 1.0
+    for s in selected:
+        s["weight"] = s["weight"] / total
+
+    # Build final weights dict over ALL analyzed tickers (zero for dropped).
+    selected_by_tkr = {s["ticker"]: s for s in selected}
+    weights = {}
+    rows = []
+    for s in scored:
+        sel = selected_by_tkr.get(s["ticker"])
+        w = round(float(sel["weight"]), 4) if sel else 0.0
+        weights[s["ticker"]] = w
+        rows.append({**s, "weight": w, "in_portfolio": bool(sel)})
+
+    # Small residual correction so weights sum to exactly 1.0.
+    total_w = sum(weights.values())
+    if total_w > 0 and abs(total_w - 1.0) > 1e-6:
+        scale = 1.0 / total_w
+        weights = {k: round(v * scale, 4) for k, v in weights.items()}
+        for row in rows:
+            row["weight"] = weights[row["ticker"]]
+
+    return {
+        "strategy": strategy,
+        "label": cfg["label"],
+        "description": cfg["description"],
+        "weights": weights,
+        "rows": rows,
+    }
+
+
+# ============================================================================
+# DGA-portfolio.xlsx writer
+# ============================================================================
+DGA_PORTFOLIO_FILENAME = "DGA-portfolio.xlsx"
+
+
+def write_dga_portfolio_xlsx(
+    *,
+    output_path: Path,
+    input_records: list[dict],
+    primary_strategy: str,
+    strategy_results: dict[str, dict],
+) -> Path:
+    """Write the DGA-portfolio.xlsx output.
+
+    Layout:
+      Columns: Ticker | Weight | Optimized | <other strategy 1> | <other strategy 2>
+      - "Weight" is the user's INPUT weight (what they held coming in).
+      - "Optimized" is the PRIMARY strategy's new weights — this is the column
+        the loader will IGNORE on the next input run, as required.
+      - The remaining strategies appear as extra comparison columns so the user
+        can see all three side by side.
+      - A second sheet "Summary" lists per-ticker rating, price target, upside,
+        sector, and the weight under each strategy for auditability.
+      - A third sheet "Strategies" documents the constraint definitions.
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    # Column order: primary first, then the other two in a stable order.
+    other_order = [s for s in ("pro", "concentrated", "allin") if s != primary_strategy]
+    order = [primary_strategy] + other_order
+
+    # Build a ticker list starting with the input file order, then append any
+    # extras (shouldn't happen normally, but covers edge cases).
+    input_tickers = [r["ticker"] for r in input_records]
+    input_weight_lookup = {r["ticker"]: r.get("weight", 0.0) or 0.0 for r in input_records}
+
+    all_tickers_in_play = list(input_tickers)
+    for key in order:
+        for t in strategy_results[key]["weights"].keys():
+            if t not in all_tickers_in_play:
+                all_tickers_in_play.append(t)
+
+    wb = openpyxl.Workbook()
+
+    # -----------------------------------------------------------------------
+    # Sheet 1: Portfolio (the thing the user cares about)
+    # -----------------------------------------------------------------------
+    ws = wb.active
+    ws.title = "Portfolio"
+
+    # Styling
+    navy_fill = PatternFill("solid", fgColor="0A1628")
+    gold_fill = PatternFill("solid", fgColor="C9A84C")
+    header_font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+    primary_header_font = Font(name="Calibri", size=12, bold=True, color="0A1628")
+    cell_font = Font(name="Calibri", size=11)
+    bold_font = Font(name="Calibri", size=11, bold=True)
+    thin = Side(border_style="thin", color="3D4A5C")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Headers
+    primary_label = strategy_results[primary_strategy]["label"]
+    headers = ["Ticker", "Weight", "Optimized"]
+    for key in other_order:
+        headers.append(strategy_results[key]["label"])
+
+    for col_idx, name in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=name)
+        cell.font = primary_header_font if col_idx == 3 else header_font
+        cell.fill = gold_fill if col_idx == 3 else navy_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    # Subheader row showing what strategy each column represents.
+    sub_cell = ws.cell(row=2, column=1, value="")
+    sub_cell.font = cell_font
+    sub_cell.alignment = Alignment(horizontal="center")
+    ws.cell(row=2, column=2, value="Previous (input)").font = Font(
+        name="Calibri", size=9, italic=True, color="3D4A5C"
+    )
+    ws.cell(row=2, column=2).alignment = Alignment(horizontal="center")
+    ws.cell(row=2, column=3, value=f"[{primary_label}]").font = Font(
+        name="Calibri", size=9, italic=True, color="0A1628", bold=True
+    )
+    ws.cell(row=2, column=3).alignment = Alignment(horizontal="center")
+    for i, key in enumerate(other_order, start=4):
+        c = ws.cell(row=2, column=i, value=f"[{strategy_results[key]['label']}]")
+        c.font = Font(name="Calibri", size=9, italic=True, color="3D4A5C")
+        c.alignment = Alignment(horizontal="center")
+
+    # Data rows
+    for r_idx, ticker in enumerate(all_tickers_in_play, start=3):
+        row_values = [ticker, input_weight_lookup.get(ticker, 0.0)]
+        row_values.append(strategy_results[primary_strategy]["weights"].get(ticker, 0.0))
+        for key in other_order:
+            row_values.append(strategy_results[key]["weights"].get(ticker, 0.0))
+        for c_idx, v in enumerate(row_values, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=v)
+            cell.font = bold_font if c_idx == 1 else cell_font
+            if c_idx >= 2:
+                cell.number_format = "0.00%"
+                cell.alignment = Alignment(horizontal="right")
+            else:
+                cell.alignment = Alignment(horizontal="center")
+            cell.border = border
+
+    # Totals row
+    last_row = 3 + len(all_tickers_in_play)
+    total_cell = ws.cell(row=last_row, column=1, value="TOTAL")
+    total_cell.font = bold_font
+    total_cell.alignment = Alignment(horizontal="center")
+    total_cell.border = border
+    for col_idx in range(2, len(headers) + 1):
+        col_letter = get_column_letter(col_idx)
+        cell = ws.cell(
+            row=last_row,
+            column=col_idx,
+            value=f"=SUM({col_letter}3:{col_letter}{last_row-1})",
+        )
+        cell.font = bold_font
+        cell.number_format = "0.00%"
+        cell.alignment = Alignment(horizontal="right")
+        cell.fill = PatternFill("solid", fgColor="F5F7FA")
+        cell.border = border
+
+    # Column widths
+    ws.column_dimensions["A"].width = 12
+    for c_idx in range(2, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = max(18, len(headers[c_idx-1]) + 6)
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A3"
+
+    # -----------------------------------------------------------------------
+    # Sheet 2: Summary / Audit
+    # -----------------------------------------------------------------------
+    ws2 = wb.create_sheet("Summary")
+    summary_headers = [
+        "Ticker", "Rating", "Current Price", "12M Target", "Upside %", "Sector",
+        f"{strategy_results[primary_strategy]['label']} (Primary)",
+    ]
+    for key in other_order:
+        summary_headers.append(strategy_results[key]["label"])
+    for col_idx, name in enumerate(summary_headers, start=1):
+        c = ws2.cell(row=1, column=col_idx, value=name)
+        c.font = header_font
+        c.fill = navy_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = border
+
+    # Build a lookup of per-ticker row data from the primary strategy (it has all
+    # metadata since every ticker is in `rows`).
+    primary_rows_by_tkr = {row["ticker"]: row for row in strategy_results[primary_strategy]["rows"]}
+    for r_idx, ticker in enumerate(all_tickers_in_play, start=2):
+        meta = primary_rows_by_tkr.get(ticker, {})
+        vals = [
+            ticker,
+            meta.get("rating", "—"),
+            meta.get("price"),
+            meta.get("price_target"),
+            meta.get("upside_pct"),
+            meta.get("sector", "Unknown"),
+            strategy_results[primary_strategy]["weights"].get(ticker, 0.0),
+        ]
+        for key in other_order:
+            vals.append(strategy_results[key]["weights"].get(ticker, 0.0))
+        for c_idx, v in enumerate(vals, start=1):
+            cell = ws2.cell(row=r_idx, column=c_idx, value=v)
+            cell.font = cell_font
+            cell.border = border
+            if c_idx == 1:
+                cell.font = bold_font
+                cell.alignment = Alignment(horizontal="center")
+            elif c_idx in (3, 4):  # prices
+                cell.number_format = "$#,##0.00"
+                cell.alignment = Alignment(horizontal="right")
+            elif c_idx == 5:
+                cell.number_format = "0.00"
+                cell.alignment = Alignment(horizontal="right")
+            elif c_idx >= 7:
+                cell.number_format = "0.00%"
+                cell.alignment = Alignment(horizontal="right")
+            else:
+                cell.alignment = Alignment(horizontal="left")
+
+    for c_idx, name in enumerate(summary_headers, start=1):
+        ws2.column_dimensions[get_column_letter(c_idx)].width = max(14, len(name) + 4)
+    ws2.freeze_panes = "B2"
+
+    # -----------------------------------------------------------------------
+    # Sheet 3: Strategy definitions
+    # -----------------------------------------------------------------------
+    ws3 = wb.create_sheet("Strategies")
+    cfg_headers = [
+        "Strategy", "Label", "Min names", "Target", "Max names",
+        "Max per position", "Min per position", "Max per sector", "Description",
+    ]
+    for col_idx, name in enumerate(cfg_headers, start=1):
+        c = ws3.cell(row=1, column=col_idx, value=name)
+        c.font = header_font
+        c.fill = navy_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = border
+    for r_idx, skey in enumerate(order, start=2):
+        cfg = STRATEGIES[skey]
+        tag = " (PRIMARY)" if skey == primary_strategy else ""
+        vals = [
+            skey + tag,
+            cfg["label"],
+            cfg["min_names"],
+            cfg["target_names"],
+            cfg["max_names"],
+            cfg["max_position"],
+            cfg["min_position"],
+            cfg["max_sector"],
+            cfg["description"],
+        ]
+        for c_idx, v in enumerate(vals, start=1):
+            cell = ws3.cell(row=r_idx, column=c_idx, value=v)
+            cell.font = bold_font if skey == primary_strategy else cell_font
+            cell.border = border
+            if c_idx in (6, 7, 8):
+                cell.number_format = "0.00%"
+    for c_idx, name in enumerate(cfg_headers, start=1):
+        ws3.column_dimensions[get_column_letter(c_idx)].width = max(14, len(name) + 4)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+    return output_path
+
+
+# ============================================================================
+# Google Drive upload (uses MCP-connected Drive from the cowork session).
+# The actual MCP call is performed from the outer agent — this helper just
+# builds the payload path and metadata.
+# ============================================================================
+def google_sheets_upload_instructions(xlsx_path: Path) -> dict:
+    """Return everything needed to push the xlsx up as a Google Sheet.
+
+    The parent agent performs the actual MCP call (mcp__<drive>__create_file)
+    because credentials / session context live there; this function just keeps
+    the contract in one place.
+    """
+    return {
+        "local_path": str(xlsx_path),
+        "drive_name": "DGA-portfolio",
+        "mime_type_target": "application/vnd.google-apps.spreadsheet",
+        "source_mime_type": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    }
+
+
+# ============================================================================
+# High-level orchestration (used by CLI *and* API)
+# ============================================================================
+def run_portfolio_rebalance(
+    portfolio_records: list[dict],
+    *,
+    primary_strategy: str = "pro",
+    generate_gamma: bool = False,
+    reuse_existing: bool = True,
+    output_path: Path | str | None = None,
+    system_prompt: str | None = None,
+    verbose: bool = False,
+) -> dict:
+    """Analyze every ticker in *portfolio_records* and produce DGA-portfolio.xlsx.
+
+    Returns a dict with:
+      - ok: bool
+      - tickers_ok / tickers_failed
+      - strategy_results: { strategy_key: { weights, held, strategy, ... } }
+      - xlsx_path: str path to the generated xlsx
+      - primary_strategy: key of the primary strategy shown first
+      - summary: short roll-up for API responses
+    """
+    if primary_strategy not in STRATEGIES:
+        raise ValueError(f"Unknown strategy: {primary_strategy}")
+
+    if system_prompt is None:
+        system_prompt = load_system_prompt()
+
+    tickers = portfolio_tickers(portfolio_records)
+    ticker_results: list[dict] = []
+    for ticker in tickers:
+        try:
+            r = analyze_ticker(
+                ticker,
+                system_prompt=system_prompt,
+                generate_gamma=generate_gamma,
+                verbose=verbose,
+                reuse_existing=reuse_existing,
+            )
+        except Exception as exc:  # noqa: BLE001
+            r = {"ticker": ticker, "ok": False, "error": str(exc)}
+        ticker_results.append(r)
+
+    ok_results = [r for r in ticker_results if r.get("ok")]
+    failed = [r for r in ticker_results if not r.get("ok")]
+
+    # Run the Grok roll-up (best-effort — gives us ranked rows if reachable).
+    ranked_rows = None
+    roll = {"ok": False}
+    if len(ok_results) > 1:
+        try:
+            roll = run_portfolio_summary(ok_results, generate_gamma=generate_gamma)
+            if roll.get("ok"):
+                ranked_rows = roll.get("ranked_rows")
+        except Exception:  # noqa: BLE001
+            roll = {"ok": False}
+
+    # Always compute ALL three strategies so the xlsx shows comparisons.
+    strategy_results: dict[str, dict] = {}
+    for skey in STRATEGIES:
+        strategy_results[skey] = compute_rebalance(
+            ok_results, strategy=skey, ranked_rows=ranked_rows,
+        )
+
+    # Choose where to write the xlsx.
+    if output_path is None:
+        output_path = Path.cwd() / DGA_PORTFOLIO_FILENAME
+    else:
+        output_path = Path(output_path)
+
+    write_dga_portfolio_xlsx(
+        output_path=output_path,
+        input_records=portfolio_records,
+        primary_strategy=primary_strategy,
+        strategy_results=strategy_results,
+    )
+
+    # Build a lightweight JSON-safe summary for the API.
+    def _slim(res: dict) -> dict:
+        w = res.get("weights", {})
+        return {
+            "strategy": res.get("strategy"),
+            "label": res.get("label"),
+            "held": sum(1 for v in w.values() if v > 0),
+            "weights": {k: round(v, 4) for k, v in w.items() if v > 0},
+        }
+
+    # Email portfolio results — only fires for multi-ticker (portfolio) runs.
+    email_status: dict = {"ok": False, "skipped": True}
+    if len(ok_results) > 1:
+        try:
+            email_msg = build_portfolio_email(
+                tickers_ok=[r["ticker"] for r in ok_results],
+                tickers_failed=[r["ticker"] for r in failed],
+                summary_markdown=(roll.get("summary_md") if roll.get("ok") else "") or "",
+                ranked_rows=ranked_rows,
+                strategy_results=strategy_results,
+                output_xlsx=output_path,
+                portfolio_docx=Path(roll["docx"]) if roll.get("ok") and roll.get("docx") else None,
+                gamma_url=roll.get("gamma_url") if roll.get("ok") else None,
+            )
+            email_status = send_portfolio_email(email_msg)
+        except Exception as exc:  # noqa: BLE001
+            email_status = {"ok": False, "error": str(exc)}
+
+    return {
+        "ok": bool(ok_results),
+        "primary_strategy": primary_strategy,
+        "tickers_ok": [r["ticker"] for r in ok_results],
+        "tickers_failed": [{"ticker": r["ticker"], "error": r.get("error")}
+                            for r in failed],
+        "xlsx_path": str(output_path),
+        "portfolio_roll_up_ok": bool(roll.get("ok")),
+        "strategies": {k: _slim(v) for k, v in strategy_results.items()},
+        "email": email_status,
+    }
 
 
 # ============================================================================
@@ -829,9 +1917,16 @@ def _prompt_yes_no(prompt: str, default: bool = False) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="DGA Capital Research — Claude Edition")
     ap.add_argument("ticker", nargs="?", help="Single ticker (e.g. AAPL)")
-    ap.add_argument("--portfolio", help="Path to a CSV or XLSX with a 'ticker' column")
+    ap.add_argument("--portfolio", help="Path to a CSV or XLSX portfolio file "
+                                        "(columns: Ticker | Weight | Optimized)")
     ap.add_argument("--gamma", action="store_true", help="Force Gamma deck generation")
     ap.add_argument("--no-gamma", action="store_true", help="Skip Gamma deck generation")
+    ap.add_argument("--strategy", choices=list(STRATEGIES.keys()), default="pro",
+                    help="Primary rebalance strategy (default: pro)")
+    ap.add_argument("--reuse", action="store_true",
+                    help="Reuse cached markdown reports from /stocks where present")
+    ap.add_argument("--out",
+                    help=f"Output xlsx path (defaults to ./{DGA_PORTFOLIO_FILENAME})")
     args = ap.parse_args()
 
     print("╔══════════════════════════════════════════════════╗")
@@ -839,35 +1934,40 @@ def main() -> int:
     print("╚══════════════════════════════════════════════════╝")
 
     # Resolve input: CLI takes precedence; else prompt.
-    tickers: list[str] = []
+    portfolio_records: list[dict] = []
+    single_ticker_mode = False
     if args.portfolio:
-        tickers = load_portfolio_file(args.portfolio)
+        portfolio_records = load_portfolio_file(args.portfolio)
     elif args.ticker:
-        tickers = [args.ticker.strip().upper()]
+        portfolio_records = [{"ticker": args.ticker.strip().upper(), "weight": None}]
+        single_ticker_mode = True
     else:
         print("\nChoose input mode:")
         print("  1) Single ticker")
-        print("  2) Portfolio CSV or XLSX")
+        print("  2) Portfolio CSV or XLSX (Ticker | Weight | Optimized)")
         mode = input("Select 1 or 2 (or paste a ticker directly): ").strip()
         if mode == "1":
             t = input("Enter ticker (e.g. AAPL): ").strip().upper()
             if t:
-                tickers = [t]
+                portfolio_records = [{"ticker": t, "weight": None}]
+                single_ticker_mode = True
         elif mode == "2":
             pf = input("Path to portfolio file (.csv or .xlsx): ").strip()
             try:
-                tickers = load_portfolio_file(pf)
+                portfolio_records = load_portfolio_file(pf)
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ Could not load portfolio: {exc}")
                 return 2
         else:
-            # Treat any other input as a ticker.
             if mode:
-                tickers = [mode.upper()]
+                portfolio_records = [{"ticker": mode.upper(), "weight": None}]
+                single_ticker_mode = True
 
-    if not tickers:
+    if not portfolio_records:
         print("❌ No tickers to analyze.")
         return 2
+
+    tickers = portfolio_tickers(portfolio_records)
 
     # Gamma decision
     if args.gamma:
@@ -885,6 +1985,9 @@ def main() -> int:
     print(f"\n📋 Tickers to analyze ({len(tickers)}): {', '.join(tickers)}")
     print(f"📁 Output folder: {STOCKS_FOLDER}")
     print(f"🎨 Gamma generation: {'ON' if generate_gamma else 'OFF'}")
+    if not single_ticker_mode:
+        print(f"⚖️  Primary rebalance strategy: {STRATEGIES[args.strategy]['label']}")
+        print(f"♻️  Reuse cached reports: {'ON' if args.reuse else 'OFF'}")
 
     results: list[dict] = []
     for ticker in tickers:
@@ -894,6 +1997,7 @@ def main() -> int:
                 system_prompt=system_prompt,
                 generate_gamma=generate_gamma,
                 verbose=False,
+                reuse_existing=args.reuse,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"❌ {ticker} failed: {exc}")
@@ -907,24 +2011,78 @@ def main() -> int:
     print(f"  SUMMARY: {len(ok)} succeeded, {len(fail)} failed")
     print("==============================================")
     for r in ok:
-        print(f"  ✅ {r['ticker']}  →  {r['docx']}")
+        tag = " [cached]" if r.get("cached") else ""
+        print(f"  ✅ {r['ticker']}{tag}  →  {r.get('docx','')}")
         if r.get("gamma_url"):
             print(f"       📽️   {r['gamma_url']}")
     for r in fail:
         print(f"  ❌ {r['ticker']}  {r.get('error','')}")
 
-    # Portfolio roll-up
-    if len(ok) > 1:
+    # Portfolio flow (only if we have more than 1 ticker OR a portfolio file).
+    if len(ok) > 1 and not single_ticker_mode:
         print("\n==============================================")
-        print("  PORTFOLIO ROLL-UP")
+        print("  PORTFOLIO ROLL-UP + REBALANCE")
         print("==============================================")
         roll = run_portfolio_summary(ok, generate_gamma=generate_gamma)
+        ranked_rows = None
         if roll.get("ok"):
             print(f"  ✅ Portfolio Word: {roll['docx']}")
             if roll.get("gamma_url"):
                 print(f"  📽️   {roll['gamma_url']}")
+            ranked_rows = roll.get("ranked_rows")
         else:
-            print(f"  ❌ Portfolio roll-up failed: {roll.get('error')}")
+            print(f"  ⚠️  Portfolio roll-up failed: {roll.get('error')}")
+
+        # Compute all three strategies, using the Grok roll-up's ranked table
+        # (rating + upside) to enrich the scoring signal when available.
+        strategy_results: dict[str, dict] = {}
+        for skey in STRATEGIES:
+            strategy_results[skey] = compute_rebalance(
+                ok, strategy=skey, ranked_rows=ranked_rows,
+            )
+            held = sum(1 for w in strategy_results[skey]["weights"].values() if w > 0)
+            print(f"  📊 {STRATEGIES[skey]['label']}: {held} positions")
+
+        # Write the xlsx.
+        out_path = Path(args.out) if args.out else (SCRIPT_DIR.parent / DGA_PORTFOLIO_FILENAME)
+        # If user didn't override --out, default to the working directory the
+        # script was launched from (so it lands next to the portfolio file).
+        if not args.out:
+            out_path = Path.cwd() / DGA_PORTFOLIO_FILENAME
+
+        write_dga_portfolio_xlsx(
+            output_path=out_path,
+            input_records=portfolio_records,
+            primary_strategy=args.strategy,
+            strategy_results=strategy_results,
+        )
+        print(f"  💾 Optimized portfolio: {out_path}")
+
+        # Surface the instructions blob so an orchestrator (or the cowork
+        # agent) can push the file to Google Sheets via the Drive MCP.
+        instr = google_sheets_upload_instructions(out_path)
+        print(f"  ☁️  Google Sheets upload payload: {instr}")
+
+        # Email the results — portfolio runs only (single-ticker analyses
+        # never email; that branch never reaches here).
+        try:
+            email_msg = build_portfolio_email(
+                tickers_ok=[r["ticker"] for r in ok],
+                tickers_failed=[r["ticker"] for r in fail],
+                summary_markdown=(roll.get("summary_md") if roll.get("ok") else "") or "",
+                ranked_rows=ranked_rows,
+                strategy_results=strategy_results,
+                output_xlsx=out_path,
+                portfolio_docx=Path(roll["docx"]) if roll.get("ok") and roll.get("docx") else None,
+                gamma_url=roll.get("gamma_url") if roll.get("ok") else None,
+            )
+            email_res = send_portfolio_email(email_msg)
+            if email_res.get("ok"):
+                print(f"  📧 Emailed portfolio results to {email_res['sent_to']}")
+            else:
+                print(f"  📧 Email pending — {email_res.get('error', 'unknown error')}")
+        except Exception as exc:
+            print(f"  ⚠️  Could not send portfolio email: {exc}")
 
     return 0 if ok else 1
 

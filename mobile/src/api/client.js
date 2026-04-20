@@ -67,4 +67,33 @@ export const api = {
     const base = await getBaseUrl();
     return `${base}/api/download/${ticker}/${type}`;
   },
+
+  // ---------- Portfolio ----------
+  listStrategies: () => request('/api/strategies'),
+
+  startPortfolio: async ({ fileUri, fileName, mimeType, strategy, reuseExisting, generateGamma }) => {
+    const base = await getBaseUrl();
+    const fd = new FormData();
+    fd.append('file', {
+      uri: fileUri,
+      name: fileName || 'portfolio.xlsx',
+      type: mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    fd.append('strategy', strategy || 'pro');
+    fd.append('reuse_existing', reuseExisting ? 'true' : 'false');
+    fd.append('generate_gamma', generateGamma ? 'true' : 'false');
+    const resp = await fetch(`${base}/api/portfolio`, { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json();
+  },
+
+  getPortfolioJob: (jobId) => request(`/api/portfolio/${jobId}`),
+
+  portfolioDownloadUrl: async (jobId) => {
+    const base = await getBaseUrl();
+    return `${base}/api/portfolio/${jobId}/download`;
+  },
 };

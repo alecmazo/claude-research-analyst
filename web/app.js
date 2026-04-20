@@ -27,6 +27,12 @@ const api = {
   listReports: () => apiGet('/api/reports'),
   getReport: (ticker) => apiGet(`/api/report/${ticker}`),
   getQuote: (ticker) => apiGet(`/api/quote/${ticker}`),
+  listStrategies: () => apiGet('/api/strategies'),
+  startPortfolio: (formData) =>
+    fetch(`${API_BASE}/api/portfolio`, { method: 'POST', body: formData })
+      .then(async r => { if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`); return r.json(); }),
+  getPortfolioJob: (id) => apiGet(`/api/portfolio/${id}`),
+  portfolioDownloadUrl: (id) => `${API_BASE}/api/portfolio/${id}/download`,
 };
 
 // ---------- View switching ----------
@@ -233,7 +239,146 @@ async function openReport(ticker) {
   }
 }
 
+// ============================================================================
+// PORTFOLIO FLOW
+// ============================================================================
+const portfolioFileInput = document.getElementById('portfolio-file');
+const portfolioFileInfo = document.getElementById('portfolio-file-info');
+const portfolioRunBtn = document.getElementById('portfolio-run-btn');
+const portfolioProgressCard = document.getElementById('portfolio-progress-card');
+const portfolioStatusText = document.getElementById('portfolio-status-text');
+const portfolioResultBox = document.getElementById('portfolio-result');
+const portfolioErrorBox = document.getElementById('portfolio-error');
+const portfolioDownloadBtn = document.getElementById('portfolio-download-btn');
+
+let portfolioJobId = null;
+let portfolioPollTimer = null;
+
+if (portfolioFileInput) {
+  portfolioFileInput.addEventListener('change', () => {
+    const f = portfolioFileInput.files?.[0];
+    if (f) {
+      portfolioFileInfo.textContent = `📄 ${f.name} — ${(f.size / 1024).toFixed(1)} KB`;
+      portfolioRunBtn.disabled = false;
+    } else {
+      portfolioFileInfo.textContent = '';
+      portfolioRunBtn.disabled = true;
+    }
+  });
+}
+
+if (portfolioRunBtn) {
+  portfolioRunBtn.addEventListener('click', async () => {
+    const file = portfolioFileInput.files?.[0];
+    if (!file) return;
+    const strategy = document.querySelector('input[name="strategy"]:checked')?.value || 'pro';
+    const reuse = document.getElementById('portfolio-reuse').checked;
+    const gamma = document.getElementById('portfolio-gamma').checked;
+
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('strategy', strategy);
+    fd.append('reuse_existing', reuse ? 'true' : 'false');
+    fd.append('generate_gamma', gamma ? 'true' : 'false');
+
+    portfolioRunBtn.disabled = true;
+    portfolioRunBtn.textContent = 'Starting…';
+    portfolioProgressCard.style.display = 'block';
+    portfolioStatusText.textContent = 'Queued…';
+    portfolioResultBox.style.display = 'none';
+    portfolioErrorBox.style.display = 'none';
+    portfolioDownloadBtn.style.display = 'none';
+
+    try {
+      const job = await api.startPortfolio(fd);
+      portfolioJobId = job.job_id;
+      if (portfolioPollTimer) clearInterval(portfolioPollTimer);
+      pollPortfolio();
+      portfolioPollTimer = setInterval(pollPortfolio, 4000);
+    } catch (err) {
+      portfolioErrorBox.textContent = err.message;
+      portfolioErrorBox.style.display = 'block';
+    } finally {
+      portfolioRunBtn.disabled = false;
+      portfolioRunBtn.textContent = 'RUN REBALANCE';
+    }
+  });
+}
+
+async function pollPortfolio() {
+  if (!portfolioJobId) return;
+  try {
+    const job = await api.getPortfolioJob(portfolioJobId);
+    if (job.status === 'queued' || job.status === 'running') {
+      portfolioStatusText.textContent =
+        `${job.status === 'running' ? 'Analyzing' : 'Queued'} — ${job.n_tickers} tickers (${job.strategy})…`;
+    } else if (job.status === 'done') {
+      clearInterval(portfolioPollTimer);
+      portfolioStatusText.textContent = `✅ Done — ${job.n_tickers} tickers analyzed`;
+      renderPortfolioResult(job.result);
+      portfolioDownloadBtn.style.display = 'block';
+      portfolioDownloadBtn.onclick = () =>
+        window.location.href = api.portfolioDownloadUrl(portfolioJobId);
+    } else if (job.status === 'failed') {
+      clearInterval(portfolioPollTimer);
+      portfolioStatusText.textContent = '❌ Failed';
+      portfolioErrorBox.textContent = job.error || 'Unknown error';
+      portfolioErrorBox.style.display = 'block';
+    }
+  } catch (err) {
+    clearInterval(portfolioPollTimer);
+    portfolioErrorBox.textContent = err.message;
+    portfolioErrorBox.style.display = 'block';
+  }
+}
+
+function renderPortfolioResult(result) {
+  if (!result) return;
+  const primary = result.primary_strategy;
+  const order = [primary, ...Object.keys(result.strategies).filter(k => k !== primary)];
+  const blocks = order.map(k => {
+    const s = result.strategies[k];
+    if (!s) return '';
+    const weights = Object.entries(s.weights)
+      .sort(([, a], [, b]) => b - a)
+      .map(([t, w]) => `<span class="pill">${t} <strong>${(w * 100).toFixed(1)}%</strong></span>`)
+      .join('');
+    const isPrimary = k === primary;
+    return `
+      <div class="strategy-result ${isPrimary ? 'primary' : ''}">
+        <div class="strategy-result-head">
+          <span class="strategy-result-title">${s.label}${isPrimary ? ' — Primary' : ''}</span>
+          <span class="strategy-result-count">${s.held} positions</span>
+        </div>
+        <div class="strategy-result-pills">${weights || '<em>No positions</em>'}</div>
+      </div>`;
+  }).join('');
+  portfolioResultBox.innerHTML = blocks;
+  portfolioResultBox.style.display = 'block';
+}
+
+// Load strategy metadata from the server (keeps UI in sync with backend).
+async function loadStrategies() {
+  try {
+    const strategies = await api.listStrategies();
+    const list = document.getElementById('strategy-list');
+    if (!list || !strategies?.length) return;
+    list.innerHTML = strategies.map((s, i) => `
+      <label class="strategy-option">
+        <input type="radio" name="strategy" value="${s.key}" ${i === 0 ? 'checked' : ''}>
+        <div class="strategy-body">
+          <div class="strategy-title">${s.label}</div>
+          <div class="strategy-desc">${s.description}</div>
+        </div>
+      </label>
+    `).join('');
+  } catch {
+    // keep static fallback
+  }
+}
+
 // ---------- Boot ----------
 checkServer();
 loadReports();
+loadStrategies();
 setInterval(checkServer, 30000);
