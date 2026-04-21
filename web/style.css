@@ -67,6 +67,9 @@ body {
   width: auto;
   object-fit: contain;
   display: block;
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 3px 8px;
 }
 
 .status-dot {
@@ -662,6 +665,9 @@ body {
   width: auto;
   object-fit: contain;
   margin-bottom: 20px;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 6px 14px;
 }
 
 #login-brand {

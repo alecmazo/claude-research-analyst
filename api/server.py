@@ -450,6 +450,50 @@ def download_portfolio_xlsx(job_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Dropbox startup hydration — runs once in a background thread so it doesn't
+# block the server from accepting requests. Lists every *_DGA_Report.md in the
+# Dropbox app folder and downloads any that are missing from the local /stocks
+# folder. This repopulates the Saved Reports list after a Railway redeploy.
+# ---------------------------------------------------------------------------
+def _hydrate_from_dropbox() -> None:
+    dbx = analyst._dropbox_client()
+    if dbx is None:
+        return
+    folder = analyst._dropbox_folder()
+    try:
+        result = dbx.files_list_folder(folder if folder else "")
+        entries = result.entries
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            entries += result.entries
+    except Exception:
+        return
+
+    downloaded = 0
+    for entry in entries:
+        name = getattr(entry, "name", "")
+        if not name.endswith("_DGA_Report.md"):
+            continue
+        local = analyst.STOCKS_FOLDER / name
+        if local.exists():
+            continue
+        try:
+            import dropbox as _dbx_mod  # noqa: PLC0415
+            _, resp = dbx.files_download(
+                f"{folder}/{name}" if folder else f"/{name}"
+            )
+            local.write_bytes(resp.content)
+            downloaded += 1
+        except Exception:
+            pass
+    if downloaded:
+        print(f"☁️  Hydrated {downloaded} report(s) from Dropbox into /stocks")
+
+
+threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
 if BRANDING_DIR.exists():
