@@ -11,3 +11,4 @@ python-dotenv>=1.0.0
 edgartools>=5.0.0
 openai>=1.0.0
 google-api-python-client>=2.0.0
+dropbox>=11.36.0

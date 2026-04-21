@@ -2360,6 +2360,108 @@ def _drive_find_file(svc, folder_id: str, filename: str) -> str | None:
     return files[0]["id"] if files else None
 
 
+# ============================================================================
+# Dropbox storage — primary cache backend.
+#
+# Requires three env vars set in Railway (or .env):
+#   DROPBOX_APP_KEY      — from dropbox.com/developers
+#   DROPBOX_APP_SECRET   — from dropbox.com/developers
+#   DROPBOX_REFRESH_TOKEN — obtained once via the /tmp/dropbox_auth.py helper
+#
+# Files land at: /DGA Research Reports/<filename>
+# (or DROPBOX_FOLDER_PATH if you override it)
+# ============================================================================
+DROPBOX_DEFAULT_FOLDER = "/DGA Research Reports"
+
+_DROPBOX_CLIENT_CACHE: dict[str, Any] = {"client": None}
+
+
+def _dropbox_client():
+    """Return a cached Dropbox client, or None if not configured."""
+    if _DROPBOX_CLIENT_CACHE["client"] is not None:
+        return _DROPBOX_CLIENT_CACHE["client"]
+    try:
+        import dropbox  # type: ignore
+    except ImportError:
+        return None
+    refresh_token = _optional_env("DROPBOX_REFRESH_TOKEN")
+    app_key = _optional_env("DROPBOX_APP_KEY")
+    app_secret = _optional_env("DROPBOX_APP_SECRET")
+    if not (refresh_token and app_key and app_secret):
+        return None
+    try:
+        dbx = dropbox.Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=app_key,
+            app_secret=app_secret,
+        )
+        dbx.users_get_current_account()  # validate credentials on first use
+        _DROPBOX_CLIENT_CACHE["client"] = dbx
+        return dbx
+    except Exception:
+        return None
+
+
+def _dropbox_folder() -> str:
+    return _optional_env("DROPBOX_FOLDER_PATH", DROPBOX_DEFAULT_FOLDER).rstrip("/")
+
+
+def push_to_dropbox(file_paths: list[Path | str]) -> dict:
+    """Upload files to the Dropbox 'DGA Research Reports' folder.
+
+    Returns {"ok": True, "uploaded": [...], "folder": "..."} or
+    {"ok": False, "skipped"?: bool, "error": "..."}.
+    """
+    dbx = _dropbox_client()
+    if dbx is None:
+        return {"ok": False, "skipped": True,
+                "error": "Dropbox not configured (need DROPBOX_APP_KEY, "
+                         "DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN)"}
+    try:
+        import dropbox  # type: ignore
+    except ImportError:
+        return {"ok": False, "error": "dropbox package not installed"}
+
+    folder = _dropbox_folder()
+    uploaded: list[str] = []
+    errors: list[str] = []
+    for fp in file_paths:
+        p = Path(fp)
+        if not p.exists():
+            continue
+        dest = f"{folder}/{p.name}"
+        try:
+            dbx.files_upload(
+                p.read_bytes(),
+                dest,
+                mode=dropbox.files.WriteMode.overwrite,
+                mute=True,
+            )
+            uploaded.append(p.name)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{p.name}: {exc}")
+
+    return {
+        "ok": bool(uploaded) or not [Path(f) for f in file_paths if Path(f).exists()],
+        "uploaded": uploaded,
+        "folder": folder,
+        "errors": errors or None,
+    }
+
+
+def fetch_from_dropbox(ticker: str) -> str | None:
+    """Download `{TICKER}_DGA_Report.md` from the Dropbox folder, or None."""
+    dbx = _dropbox_client()
+    if dbx is None:
+        return None
+    path = f"{_dropbox_folder()}/{ticker}_DGA_Report.md"
+    try:
+        _, response = dbx.files_download(path)
+        return response.content.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
 def _is_drive_quota_error(exc: Exception) -> bool:
     s = str(exc).lower()
     return "storagequotaexceeded" in s or "do not have storage quota" in s
@@ -2498,7 +2600,21 @@ def push_to_google_drive(
             continue
         (md_paths if p.suffix.lower() == ".md" else non_md_paths).append(p)
 
-    # --- Primary: Drive upload ---
+    # --- Preferred: Dropbox upload (works on personal accounts, no quota issues) ---
+    dbx_result = push_to_dropbox(md_paths + non_md_paths)
+    if dbx_result.get("ok") and dbx_result.get("uploaded"):
+        result["ok"] = True
+        result["dropbox_uploaded"] = dbx_result["uploaded"]
+        result["dropbox_folder"] = dbx_result.get("folder")
+        if not result["errors"]:
+            result.pop("errors")
+        return result
+    if not dbx_result.get("skipped"):
+        # Dropbox was configured but failed — surface errors.
+        for e in (dbx_result.get("errors") or []):
+            result["errors"].append(f"dropbox: {e}")
+
+    # --- Secondary: Drive upload ---
     svc = _drive_service()
     folder_id = _drive_folder_id()
     quota_hit = False
@@ -2575,11 +2691,16 @@ def push_to_google_drive(
 def fetch_report_from_drive(ticker: str) -> str | None:
     """Try to load a cached `{TICKER}_DGA_Report.md`.
 
-    Checks the shared Drive folder first (only works if uploads actually
-    succeeded — see push_to_google_drive docstring), then falls back to the
-    Sheets-tab archive. Returns markdown text if found, else None.
+    Checks Dropbox first (preferred, works on personal accounts), then the
+    shared Drive folder (requires Workspace), then the Sheets-tab archive.
+    Returns markdown text if found, else None.
     """
-    # --- Drive first ---
+    # --- Dropbox first (preferred) ---
+    dbx_text = fetch_from_dropbox(ticker)
+    if dbx_text:
+        return dbx_text
+
+    # --- Drive second ---
     svc = _drive_service()
     folder_id = _drive_folder_id()
     if svc is not None and folder_id:
