@@ -409,14 +409,19 @@ def build_portfolio_email(
     plain_body = "\n".join(plain_parts)
 
     # ---- Logo (base64 embedded so it shows in all email clients) ------------
+    # Logos are RGBA with transparent bg — wrap in a white pill so the dark
+    # DGA lettering is visible on the navy header background.
     logo_img_tag = ""
-    for logo_name in ("DGAlogo-web184.png", "dga_logo.png", "dga_logo_small.png"):
+    for logo_name in ("DGAlogo-webFINAL-68.png", "dga_logo_small.png", "DGAlogo-web184.png", "dga_logo.png"):
         logo_path = SCRIPT_DIR / "branding" / logo_name
         if logo_path.exists():
             logo_b64 = _b64.b64encode(logo_path.read_bytes()).decode()
             logo_img_tag = (
+                "<div style='background:#ffffff;border-radius:8px;padding:6px 14px;"
+                "display:inline-block;line-height:0'>"
                 f"<img src='data:image/png;base64,{logo_b64}' "
-                f"alt='DGA Capital' style='height:44px;width:auto;display:block'>"
+                f"alt='DGA Capital' style='height:40px;width:auto;display:block'>"
+                "</div>"
             )
             break
 
@@ -695,21 +700,21 @@ SECTION 7 — Catalyst Calendar:
 → Timeline of potential catalysts over the next 12 months
 
 SECTION 7.5 — Institutional Analyst Consensus:
-→ Provide a table of the latest publicly reported ratings and 12-month price targets from the following five firms — in this exact order:
-    Morningstar, Fidelity, Morgan Stanley, Goldman Sachs, Merrill Lynch (BofA Securities).
-→ Use this exact markdown column order and format. No deviations:
+→ If an ANALYST_RATINGS_BLOCK is provided in the user message, use those exact values for the table — do not substitute or fabricate different numbers.
+→ Produce the following table for Goldman Sachs, Morgan Stanley, Merrill Lynch (BofA Securities), Fidelity, and Morningstar — in that order:
 
-| Firm | Rating | 12M Price Target | Upside vs Current | Report Date | Source |
-|------|--------|------------------|-------------------|-------------|--------|
-| Morningstar              | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Fidelity                 | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Morgan Stanley           | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Firm | Rating | 12M Price Target | Upside vs Current | Date | Action |
+|------|--------|-----------------|-------------------|------|--------|
 | Goldman Sachs            | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morgan Stanley           | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
 | Merrill Lynch (BofA Securities) | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Fidelity                 | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morningstar              | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
 
-→ If you do not have access to a firm's current published rating or target, write "Not publicly available" for that cell — never fabricate. Use the most recent data you have; if it is older than 6 months, flag the age in the Report Date column (e.g. "2025-03-10 (stale)").
-→ After the table, add a one-paragraph "Street vs DGA" commentary: where does the DGA view diverge from the Street consensus (more bullish, more bearish, different catalyst framing), and why.
-→ If 3 or more firms disagree with the DGA rating in the same direction, explicitly acknowledge it here and explain the thesis divergence before issuing the DGA verdict in Section 8.
+→ Compute Upside vs Current yourself from the provided price target and CURRENT_PRICE.
+→ If a firm's data was not in the ANALYST_RATINGS_BLOCK (or no block was provided), write "Not available" — never fabricate.
+→ After the table write a "Street vs DGA" paragraph: explain where and why DGA's rating/target diverges from the Street consensus.
+→ If 3 or more firms disagree with the DGA rating direction, explicitly acknowledge it and explain the thesis divergence before the Section 8 verdict.
 
 SECTION 8 — The Verdict:
 → Bull case: Price target and what has to go right (with probability estimate)
@@ -756,6 +761,77 @@ def fetch_market_snapshot(ticker: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         print(f"   ⚠️  Market snapshot failed: {exc}")
     return out
+
+
+# ============================================================================
+# GuruFocus — analyst upgrades/downgrades for Section 7.5
+# ============================================================================
+
+# Canonical name fragments we match against whatever GuruFocus returns.
+_GF_FIRMS = {
+    "Goldman Sachs":   ["goldman"],
+    "Morgan Stanley":  ["morgan stanley"],
+    "Merrill Lynch":   ["merrill", "bofa", "bank of america", "b. riley"],
+    "Fidelity":        ["fidelity"],
+    "Morningstar":     ["morningstar"],
+}
+
+
+def fetch_analyst_ratings(ticker: str) -> str:
+    """Return a pre-formatted markdown block of analyst ratings for the 5 key firms.
+
+    Calls the GuruFocus upgrades/downgrades endpoint (requires GURUFOCUS_TOKEN).
+    Returns an empty string if the token is absent or the call fails — Grok then
+    falls back to its own training data for section 7.5.
+    """
+    token = _optional_env("GURUFOCUS_TOKEN")
+    if not token:
+        return ""
+    try:
+        url = f"https://api.gurufocus.com/public/user/{token}/stock/{ticker}/upgrades_downgrades"
+        resp = requests.get(url, headers={"User-Agent": "DGA Research Analyst"},
+                            timeout=15)
+        if resp.status_code != 200:
+            return ""
+        raw = resp.json()
+        # GuruFocus returns either a list directly or {"upgrades_downgrades": [...]}
+        records: list[dict] = (
+            raw if isinstance(raw, list)
+            else raw.get("upgrades_downgrades") or raw.get("data") or []
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+    # Keep only the most recent entry per target firm.
+    latest: dict[str, dict] = {}
+    for rec in records:
+        analyst = str(rec.get("analyst") or rec.get("firm") or "").lower()
+        for label, fragments in _GF_FIRMS.items():
+            if any(f in analyst for f in fragments) and label not in latest:
+                latest[label] = rec
+                break
+
+    if not latest:
+        return ""
+
+    lines = [
+        "ANALYST_RATINGS_BLOCK (pre-fetched from GuruFocus — use these exact values in Section 7.5):",
+        "| Firm | Rating | 12M Price Target | Date | Action |",
+        "|------|--------|-----------------|------|--------|",
+    ]
+    for label in ["Goldman Sachs", "Morgan Stanley", "Merrill Lynch", "Fidelity", "Morningstar"]:
+        rec = latest.get(label)
+        if rec:
+            rating = rec.get("current_rating") or rec.get("rating") or rec.get("new_rating") or "—"
+            target = rec.get("price_target") or rec.get("new_target") or rec.get("target_price") or "—"
+            date = rec.get("date") or "—"
+            action = rec.get("action") or rec.get("type") or "—"
+            target_fmt = f"${target}" if target != "—" else "—"
+            lines.append(f"| {label} | {rating} | {target_fmt} | {date} | {action} |")
+        else:
+            lines.append(f"| {label} | Not available in GuruFocus | — | — | — |")
+
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -1164,6 +1240,13 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
     # Current price
     mkt = fetch_market_snapshot(ticker)
 
+    # Fetch live analyst ratings from GuruFocus (best-effort, non-blocking).
+    analyst_block = fetch_analyst_ratings(ticker)
+    if analyst_block:
+        print(f"   📊 GuruFocus analyst ratings fetched for {ticker}")
+    else:
+        print(f"   ⚠️  No GuruFocus analyst data (set GURUFOCUS_TOKEN for live ratings)")
+
     # Compose Grok user message
     today = datetime.now().strftime("%Y-%m-%d")
     user_msg = (
@@ -1174,7 +1257,8 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
         f"PREVIOUS_CLOSE: {mkt.get('previous_close')}\n"
         f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
         f"{verified_block}\n\n"
-        f"Generate the full research report for {ticker} following every rule in your system prompt."
+        + (f"{analyst_block}\n\n" if analyst_block else "")
+        + f"Generate the full research report for {ticker} following every rule in your system prompt."
     )
 
     print(f"   🧠 Calling Grok ({GROK_MODEL})…")
