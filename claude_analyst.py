@@ -694,6 +694,23 @@ SECTION 7 — Catalyst Calendar:
 → Macro events that specifically impact this stock
 → Timeline of potential catalysts over the next 12 months
 
+SECTION 7.5 — Institutional Analyst Consensus:
+→ Provide a table of the latest publicly reported ratings and 12-month price targets from the following five firms — in this exact order:
+    Morningstar, Fidelity, Morgan Stanley, Goldman Sachs, Merrill Lynch (BofA Securities).
+→ Use this exact markdown column order and format. No deviations:
+
+| Firm | Rating | 12M Price Target | Upside vs Current | Report Date | Source |
+|------|--------|------------------|-------------------|-------------|--------|
+| Morningstar              | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Fidelity                 | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morgan Stanley           | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Goldman Sachs            | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Merrill Lynch (BofA Securities) | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+
+→ If you do not have access to a firm's current published rating or target, write "Not publicly available" for that cell — never fabricate. Use the most recent data you have; if it is older than 6 months, flag the age in the Report Date column (e.g. "2025-03-10 (stale)").
+→ After the table, add a one-paragraph "Street vs DGA" commentary: where does the DGA view diverge from the Street consensus (more bullish, more bearish, different catalyst framing), and why.
+→ If 3 or more firms disagree with the DGA rating in the same direction, explicitly acknowledge it here and explain the thesis divergence before issuing the DGA verdict in Section 8.
+
 SECTION 8 — The Verdict:
 → Bull case: Price target and what has to go right (with probability estimate)
 → Base case: Price target and most likely scenario (with probability estimate)
@@ -1064,6 +1081,16 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
 
     # --- Fast path: reuse an existing report if present and requested.
     md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+    if reuse_existing and not md_path.exists():
+        # Local cache miss — try the shared 'DGA Research Reports' Drive folder.
+        # This survives Railway redeploys, which wipe the local /stocks folder.
+        drive_md = fetch_report_from_drive(ticker)
+        if drive_md:
+            try:
+                md_path.write_text(drive_md)
+                print(f"☁️   {ticker}: hydrated cached report from Google Drive")
+            except Exception:  # noqa: BLE001
+                pass
     if reuse_existing and md_path.exists():
         print(f"♻️  {ticker}: reusing cached report at {md_path.name}")
         report_text = md_path.read_text()
@@ -2235,33 +2262,128 @@ def push_to_google_sheets(
 
 
 # ============================================================================
-# Google Drive upload
+# Google Drive upload — real Drive folder this time.
+#
+# A service account has zero personal Drive quota, BUT if *you* share a Drive
+# folder with the service-account email (same way you shared the spreadsheet),
+# then files the service account creates inside that folder count against your
+# storage, not its own. That's how we persist report .md / .docx / .pptx / .xlsx
+# files across Railway restarts (the local /stocks cache gets wiped on every
+# redeploy).
+#
+# Folder resolution order:
+#   1. GOOGLE_DRIVE_FOLDER_ID env var (explicit ID wins).
+#   2. A folder named GOOGLE_DRIVE_FOLDER_NAME (default "DGA Research Reports")
+#      that is shared with the service account.
 # ============================================================================
+DGA_DRIVE_FOLDER_NAME = "DGA Research Reports"
 
-def push_to_google_drive(file_paths: list[Path | str], *, folder_name: str = "DGA Research Reports") -> dict:
-    """Archive report markdown files into a 'Reports Archive' sheet in the existing Google Sheets spreadsheet.
+_DRIVE_CACHE: dict[str, Any] = {"svc": None, "folder_id": None, "checked": False}
 
-    Service accounts have zero binary storage quota on personal Google Drive, so
-    we store .md report text directly in Sheets (no quota impact) using the same
-    gspread auth that already works for portfolio data.
 
-    Each .md file gets its own tab named after the ticker (e.g. "AAPL").
-    .xlsx and .docx files are noted in the archive index but not stored as binary.
+def _drive_service():
+    """Build (and cache) a Google Drive v3 service from the service-account creds."""
+    if _DRIVE_CACHE["svc"] is not None:
+        return _DRIVE_CACHE["svc"]
+    creds_src = _optional_env("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not creds_src:
+        return None
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+    except ImportError:
+        return None
+    try:
+        scopes = ["https://www.googleapis.com/auth/drive"]
+        if creds_src.strip().startswith("{"):
+            info = json.loads(creds_src)
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
+        else:
+            creds = Credentials.from_service_account_file(creds_src, scopes=scopes)
+        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception:
+        return None
+    _DRIVE_CACHE["svc"] = svc
+    return svc
 
-    Returns {"ok": True, "archived": [...]} or {"ok": False, "error": "..."}.
+
+def _drive_folder_id() -> str | None:
+    """Resolve (and cache) the target Drive folder ID."""
+    if _DRIVE_CACHE["folder_id"]:
+        return _DRIVE_CACHE["folder_id"]
+
+    explicit = _optional_env("GOOGLE_DRIVE_FOLDER_ID")
+    if explicit:
+        _DRIVE_CACHE["folder_id"] = explicit
+        return explicit
+
+    svc = _drive_service()
+    if svc is None:
+        return None
+
+    folder_name = _optional_env("GOOGLE_DRIVE_FOLDER_NAME", DGA_DRIVE_FOLDER_NAME)
+    # Escape single quotes in the name for the Drive query DSL.
+    safe_name = folder_name.replace("'", "\\'")
+    try:
+        resp = svc.files().list(
+            q=(f"mimeType='application/vnd.google-apps.folder' "
+               f"and name='{safe_name}' and trashed=false"),
+            fields="files(id, name)",
+            pageSize=5,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute()
+    except Exception:
+        return None
+    files = resp.get("files") or []
+    if not files:
+        return None
+    folder_id = files[0]["id"]
+    _DRIVE_CACHE["folder_id"] = folder_id
+    return folder_id
+
+
+def _drive_find_file(svc, folder_id: str, filename: str) -> str | None:
+    """Return the Drive file ID of *filename* in *folder_id*, or None."""
+    safe_name = filename.replace("'", "\\'")
+    try:
+        resp = svc.files().list(
+            q=f"name='{safe_name}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id, name, modifiedTime)",
+            pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute()
+    except Exception:
+        return None
+    files = resp.get("files") or []
+    return files[0]["id"] if files else None
+
+
+def _is_drive_quota_error(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "storagequotaexceeded" in s or "do not have storage quota" in s
+
+
+def _sheets_archive_handle():
+    """Return a gspread spreadsheet handle for the markdown archive fallback.
+
+    We store each ticker report as a tab in the existing DGA-portfolio sheet
+    because a service account CAN write to cells of a sheet owned-and-shared by
+    a real user (no quota cost), but it CANNOT create new binary files in a
+    personal Drive folder (the service account has zero storage quota, and
+    personal Drive folders don't proxy to the owner's quota — only Google
+    Workspace Shared Drives do).
     """
     creds_src = _optional_env("GOOGLE_SERVICE_ACCOUNT_JSON")
     spreadsheet_id = _optional_env("GOOGLE_SHEETS_SPREADSHEET_ID")
     if not creds_src or not spreadsheet_id:
-        return {"ok": False, "skipped": True,
-                "error": "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SHEETS_SPREADSHEET_ID not configured"}
-
+        return None
     try:
         import gspread
         from google.oauth2.service_account import Credentials
     except ImportError:
-        return {"ok": False, "error": "gspread not installed"}
-
+        return None
     try:
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -2273,39 +2395,212 @@ def push_to_google_drive(file_paths: list[Path | str], *, folder_name: str = "DG
         else:
             creds = Credentials.from_service_account_file(creds_src, scopes=scopes)
         gc = gspread.authorize(creds)
-        sh = gc.open_by_key(spreadsheet_id)
-    except Exception as exc:
-        return {"ok": False, "error": f"Sheets auth failed: {exc}"}
+        return gc.open_by_key(spreadsheet_id)
+    except Exception:
+        return None
 
+
+def _sheets_archive_write(ticker: str, report_text: str) -> bool:
+    """Write *report_text* into a ticker-named tab of the portfolio sheet."""
+    sh = _sheets_archive_handle()
+    if sh is None:
+        return False
     try:
-        archived: list[str] = []
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        import gspread
+    except ImportError:
+        return False
+    tab_title = f"{ticker[:45]} (Report)"
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    # Google Sheets hard-caps a cell at 50 000 characters; split the report
+    # across column-A rows in ~45 000 char chunks so we never lose text.
+    chunk_size = 45_000
+    chunks = [report_text[i:i + chunk_size]
+              for i in range(0, max(len(report_text), 1), chunk_size)] or [""]
+    try:
+        try:
+            ws = sh.worksheet(tab_title)
+            ws.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=tab_title, rows=max(len(chunks) + 5, 20), cols=2)
+        ws.update("A1", [[f"Report: {ticker}", f"Updated: {now}"]])
+        # Each chunk goes in its own row starting at A2.
+        body = [[c] for c in chunks]
+        end_row = 1 + len(body)
+        ws.update(f"A2:A{end_row}", body)
+        return True
+    except Exception:
+        return False
 
-        for fp in file_paths:
-            fp = Path(fp)
-            if not fp.exists():
-                continue
 
-            if fp.suffix.lower() == ".md":
-                # Store the full report text in a dedicated ticker tab.
-                ticker = fp.stem.replace("_DGA_Report", "").replace("_DGA_report", "")
-                report_text = fp.read_text(encoding="utf-8", errors="replace")
-                # Sheets cells cap at 50 000 chars; truncate gracefully.
-                truncated = report_text[:49_900]
-                tab_title = ticker[:50]  # sheet name limit
+def _sheets_archive_read(ticker: str) -> str | None:
+    """Read a cached report out of the portfolio sheet's ticker tab."""
+    sh = _sheets_archive_handle()
+    if sh is None:
+        return None
+    try:
+        import gspread
+    except ImportError:
+        return None
+    # Prefer the new, clearer tab name but also fall back to the older
+    # tab-named-exactly-after-the-ticker layout that earlier runs produced.
+    for tab_title in (f"{ticker[:45]} (Report)", ticker[:50]):
+        try:
+            ws = sh.worksheet(tab_title)
+        except gspread.exceptions.WorksheetNotFound:
+            continue
+        except Exception:
+            continue
+        try:
+            values = ws.col_values(1)  # column A only
+        except Exception:
+            continue
+        # Row 1 is the header ("Report: TKR"); content is row 2 onward.
+        body = "".join(values[1:]).strip()
+        if body:
+            return body
+    return None
+
+
+def push_to_google_drive(
+    file_paths: list[Path | str],
+    *,
+    folder_name: str = DGA_DRIVE_FOLDER_NAME,
+) -> dict:
+    """Persist report files so they survive Railway redeploys.
+
+    Primary path: real Drive upload into the shared DGA folder. This path
+    ONLY works when:
+      - the folder lives on a Google Workspace Shared Drive, OR
+      - GOOGLE_SERVICE_ACCOUNT_JSON holds OAuth user-delegated creds.
+    With a vanilla personal-Gmail + service-account setup, Google returns
+    403 storageQuotaExceeded on every upload.
+
+    Fallback path: write the .md reports (and DGA-portfolio.xlsx row metadata)
+    into ticker-named tabs of the portfolio Google Sheet. A service account
+    CAN mutate cells in a sheet that's been shared with it, so this works
+    everywhere. Sheet URL is returned as `sheets_url`.
+
+    Returns a dict with {ok, drive_uploaded, sheets_archived, folder_url?,
+    sheets_url?, errors?}.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "drive_uploaded": [],
+        "sheets_archived": [],
+        "errors": [],
+    }
+
+    md_paths: list[Path] = []
+    non_md_paths: list[Path] = []
+    for fp in file_paths:
+        p = Path(fp)
+        if not p.exists():
+            continue
+        (md_paths if p.suffix.lower() == ".md" else non_md_paths).append(p)
+
+    # --- Primary: Drive upload ---
+    svc = _drive_service()
+    folder_id = _drive_folder_id()
+    quota_hit = False
+    if svc is not None and folder_id:
+        try:
+            from googleapiclient.http import MediaFileUpload
+        except ImportError:
+            svc = None  # fall through to sheets-only
+        if svc is not None:
+            for p in md_paths + non_md_paths:
                 try:
-                    ws = sh.worksheet(tab_title)
-                    ws.clear()
-                except gspread.exceptions.WorksheetNotFound:
-                    ws = sh.add_worksheet(title=tab_title, rows=500, cols=2)
-                ws.update("A1", [[f"Report: {ticker}", f"Updated: {now}"]])
-                ws.update("A2", [[truncated]])
-                archived.append(ticker)
+                    mime, _ = mimetypes.guess_type(str(p))
+                    media = MediaFileUpload(
+                        str(p), mimetype=mime or "application/octet-stream",
+                        resumable=False,
+                    )
+                    existing = _drive_find_file(svc, folder_id, p.name)
+                    if existing:
+                        svc.files().update(
+                            fileId=existing,
+                            media_body=media,
+                            supportsAllDrives=True,
+                        ).execute()
+                    else:
+                        svc.files().create(
+                            body={"name": p.name, "parents": [folder_id]},
+                            media_body=media,
+                            fields="id",
+                            supportsAllDrives=True,
+                        ).execute()
+                    result["drive_uploaded"].append(p.name)
+                except Exception as exc:  # noqa: BLE001
+                    if _is_drive_quota_error(exc):
+                        quota_hit = True
+                        break  # don't bother retrying the rest — quota won't change mid-run
+                    result["errors"].append(f"drive:{p.name}: {exc}")
+        result["folder_id"] = folder_id
+        result["folder_url"] = f"https://drive.google.com/drive/folders/{folder_id}"
 
-        sheets_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-        return {"ok": True, "archived": archived, "sheets_url": sheets_url}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    # --- Fallback: Sheets-tab archive for the .md reports ---
+    # We do this when Drive upload hit quota, OR when Drive isn't configured.
+    # The xlsx / docx / pptx files are skipped here — they can't be reconstructed
+    # from sheet cells and live in Sheets as dedicated uploads would need quota too.
+    if quota_hit or svc is None or not folder_id:
+        sh = _sheets_archive_handle()
+        if sh is not None:
+            for p in md_paths:
+                ticker = p.stem.replace("_DGA_Report", "").replace("_DGA_report", "")
+                ok = _sheets_archive_write(ticker, p.read_text(encoding="utf-8",
+                                                              errors="replace"))
+                if ok:
+                    result["sheets_archived"].append(ticker)
+                else:
+                    result["errors"].append(f"sheets:{p.name}: write failed")
+            sid = _optional_env("GOOGLE_SHEETS_SPREADSHEET_ID")
+            if sid:
+                result["sheets_url"] = f"https://docs.google.com/spreadsheets/d/{sid}"
+
+    if quota_hit:
+        result["errors"].append(
+            "Drive folder upload hit the service-account 0-quota wall. "
+            "Using Sheets-tab archive as fallback. To enable real Drive "
+            "folder uploads, move the folder to a Google Workspace Shared "
+            "Drive or switch to OAuth user-delegated credentials."
+        )
+
+    result["ok"] = bool(result["drive_uploaded"] or result["sheets_archived"])
+    # Drop the errors key if there were none — keeps the status response tidy.
+    if not result["errors"]:
+        result.pop("errors")
+    return result
+
+
+def fetch_report_from_drive(ticker: str) -> str | None:
+    """Try to load a cached `{TICKER}_DGA_Report.md`.
+
+    Checks the shared Drive folder first (only works if uploads actually
+    succeeded — see push_to_google_drive docstring), then falls back to the
+    Sheets-tab archive. Returns markdown text if found, else None.
+    """
+    # --- Drive first ---
+    svc = _drive_service()
+    folder_id = _drive_folder_id()
+    if svc is not None and folder_id:
+        filename = f"{ticker}_DGA_Report.md"
+        file_id = _drive_find_file(svc, folder_id, filename)
+        if file_id:
+            try:
+                from googleapiclient.http import MediaIoBaseDownload
+                import io
+                buf = io.BytesIO()
+                request = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
+                downloader = MediaIoBaseDownload(buf, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                return buf.getvalue().decode("utf-8", errors="replace")
+            except Exception:
+                pass  # fall through to sheets
+
+    # --- Sheets fallback ---
+    return _sheets_archive_read(ticker)
 
 
 # ============================================================================
