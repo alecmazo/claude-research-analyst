@@ -703,19 +703,29 @@ SECTION 7 — Catalyst Calendar:
 → Timeline of potential catalysts over the next 12 months
 
 SECTION 7.5 — Institutional Analyst Consensus:
-→ If an ANALYST_RATINGS_BLOCK is provided in the user message, use those exact values for the table — do not substitute or fabricate different numbers.
-→ Produce the following table for Goldman Sachs, Morgan Stanley, Merrill Lynch (BofA Securities), Fidelity, and Morningstar — in that order:
+
+TWO PATHS — follow whichever applies:
+
+PATH A — ANALYST_RATINGS_BLOCK IS present in the user message:
+→ Use the exact values from the block for every row that has data. Do not substitute or invent different numbers.
+→ For rows marked "Not available in GuruFocus", fill in the best estimate from your most current training knowledge AND append "(est.)" to the Rating cell to distinguish it from confirmed data.
+→ Compute Upside vs Current yourself from the price target and CURRENT_PRICE.
+
+PATH B — NO ANALYST_RATINGS_BLOCK in the user message:
+→ Use your most up-to-date training knowledge for each firm's rating and 12-month price target.
+→ Append "(est.)" to every Rating cell so the reader knows these are model estimates, not confirmed live data.
+→ Compute Upside vs Current from the price target and CURRENT_PRICE.
+
+BOTH PATHS — always produce this exact table structure (do not omit it):
 
 | Firm | Rating | 12M Price Target | Upside vs Current | Date | Action |
 |------|--------|-----------------|-------------------|------|--------|
-| Goldman Sachs            | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Morgan Stanley           | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Goldman Sachs                   | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morgan Stanley                  | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
 | Merrill Lynch (BofA Securities) | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Fidelity                 | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Morningstar              | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Fidelity                        | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morningstar                     | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
 
-→ Compute Upside vs Current yourself from the provided price target and CURRENT_PRICE.
-→ If a firm's data was not in the ANALYST_RATINGS_BLOCK (or no block was provided), write "Not available" — never fabricate.
 → After the table write a "Street vs DGA" paragraph: explain where and why DGA's rating/target diverges from the Street consensus.
 → If 3 or more firms disagree with the DGA rating direction, explicitly acknowledge it and explain the thesis divergence before the Section 8 verdict.
 
@@ -784,38 +794,62 @@ def fetch_analyst_ratings(ticker: str) -> str:
     """Return a pre-formatted markdown block of analyst ratings for the 5 key firms.
 
     Calls the GuruFocus upgrades/downgrades endpoint (requires GURUFOCUS_TOKEN).
-    Returns an empty string if the token is absent or the call fails — Grok then
-    falls back to its own training data for section 7.5.
+    Returns an empty string only when the token is absent — Grok then uses its
+    training-data fallback branch in Section 7.5. When the token IS set we
+    always return at least a header block (with "Not available" rows for firms
+    not found) so Grok knows the data source was queried.
     """
     token = _optional_env("GURUFOCUS_TOKEN")
     if not token:
-        return ""
+        return ""   # No token → signal Grok to fall back to training-data branch
+
+    records: list[dict] = []
     try:
-        url = f"https://api.gurufocus.com/public/user/{token}/stock/{ticker}/upgrades_downgrades"
-        resp = requests.get(url, headers={"User-Agent": "DGA Research Analyst"},
-                            timeout=15)
-        if resp.status_code != 200:
-            return ""
-        raw = resp.json()
-        # GuruFocus returns either a list directly or {"upgrades_downgrades": [...]}
-        records: list[dict] = (
-            raw if isinstance(raw, list)
-            else raw.get("upgrades_downgrades") or raw.get("data") or []
+        url = (
+            f"https://api.gurufocus.com/public/user/{token}/stock/{ticker}/upgrades_downgrades"
         )
-    except Exception:  # noqa: BLE001
-        return ""
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "DGA Research Analyst"},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            raw = resp.json()
+            # GuruFocus returns either a top-level list, or a dict with one of
+            # several possible wrapper keys depending on API version.
+            if isinstance(raw, list):
+                records = raw
+            elif isinstance(raw, dict):
+                for key in ("upgrades_downgrades", "data", "result", "results"):
+                    if isinstance(raw.get(key), list):
+                        records = raw[key]
+                        break
+        else:
+            print(f"   ⚠️  GuruFocus API returned {resp.status_code} for {ticker}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  GuruFocus API error for {ticker}: {exc}")
+
+    def _field(rec: dict, *keys: str) -> str:
+        """Return the first non-empty value among the given keys."""
+        for k in keys:
+            v = rec.get(k)
+            if v is not None and str(v).strip() not in ("", "None", "null"):
+                return str(v).strip()
+        return "—"
 
     # Keep only the most recent entry per target firm.
+    # GuruFocus may use many different field names across API versions.
     latest: dict[str, dict] = {}
     for rec in records:
-        analyst = str(rec.get("analyst") or rec.get("firm") or "").lower()
+        firm_raw = _field(
+            rec,
+            "analyst", "analyst_firm", "firm", "firm_name",
+            "company", "broker", "institution",
+        ).lower()
         for label, fragments in _GF_FIRMS.items():
-            if any(f in analyst for f in fragments) and label not in latest:
+            if any(f in firm_raw for f in fragments) and label not in latest:
                 latest[label] = rec
                 break
-
-    if not latest:
-        return ""
 
     lines = [
         "ANALYST_RATINGS_BLOCK (pre-fetched from GuruFocus — use these exact values in Section 7.5):",
@@ -825,10 +859,18 @@ def fetch_analyst_ratings(ticker: str) -> str:
     for label in ["Goldman Sachs", "Morgan Stanley", "Merrill Lynch", "Fidelity", "Morningstar"]:
         rec = latest.get(label)
         if rec:
-            rating = rec.get("current_rating") or rec.get("rating") or rec.get("new_rating") or "—"
-            target = rec.get("price_target") or rec.get("new_target") or rec.get("target_price") or "—"
-            date = rec.get("date") or "—"
-            action = rec.get("action") or rec.get("type") or "—"
+            rating = _field(
+                rec,
+                "current_rating", "new_rating", "rating", "recommendation",
+                "action_pt", "adj_pt_rating",
+            )
+            target = _field(
+                rec,
+                "price_target", "new_target", "target_price", "pt",
+                "new_price_target", "adj_price_target",
+            )
+            date   = _field(rec, "date", "action_date", "updated_date", "created_at")
+            action = _field(rec, "action", "type", "action_type", "change_type", "event")
             target_fmt = f"${target}" if target != "—" else "—"
             lines.append(f"| {label} | {rating} | {target_fmt} | {date} | {action} |")
         else:

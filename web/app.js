@@ -431,7 +431,19 @@ function renderPortfolioResult(result) {
       </div>`;
   }
 
-  portfolioResultBox.innerHTML = blocks + failedHtml;
+  // Show email delivery status.
+  let emailHtml = '';
+  const email = result.email;
+  if (email && !email.skipped) {
+    if (email.ok) {
+      emailHtml = `<div class="email-status-ok">📧 Report emailed to ${email.sent_to || 'recipient'}</div>`;
+    } else {
+      const reason = email.error || 'Unknown error';
+      emailHtml = `<div class="email-status-err">📧 Email not sent — ${reason}</div>`;
+    }
+  }
+
+  portfolioResultBox.innerHTML = blocks + failedHtml + emailHtml;
   portfolioResultBox.style.display = 'block';
 }
 
