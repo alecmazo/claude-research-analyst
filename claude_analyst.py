@@ -104,12 +104,15 @@ def _require_env(name: str, *, hint: str = "") -> str:
     val = os.environ.get(name, "").strip()
     if not val:
         msg = (
-            f"❌ Missing required environment variable: {name}\n"
+            f"Missing required environment variable: {name}\n"
             f"   Set it in your shell or in {SCRIPT_DIR / '.env'}"
         )
         if hint:
             msg += f"\n   Hint: {hint}"
-        raise SystemExit(msg)
+        # Raise RuntimeError (subclass of Exception) so background threads and
+        # API handlers can catch it with `except Exception`.  CLI entry-point
+        # catches it separately and exits cleanly.
+        raise RuntimeError(msg)
     return val
 
 
@@ -3144,4 +3147,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except RuntimeError as exc:
+        # _require_env raises RuntimeError for missing env vars so background
+        # threads can catch them. Re-surface as a clean CLI exit here.
+        print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(1)

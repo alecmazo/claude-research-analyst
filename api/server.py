@@ -155,7 +155,7 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
             else:
                 _jobs[job_id]["status"] = "failed"
                 _jobs[job_id]["error"] = result.get("error", "Unknown error")
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
         with _jobs_lock:
             _jobs[job_id]["status"] = "failed"
             _jobs[job_id]["error"] = str(exc)
@@ -190,7 +190,7 @@ def _run_portfolio(
             _pjobs[job_id]["result"] = result
             if not result.get("ok"):
                 _pjobs[job_id]["error"] = "No tickers could be analyzed."
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
         with _pjobs_lock:
             _pjobs[job_id]["status"] = "failed"
             _pjobs[job_id]["error"] = str(exc)
@@ -313,6 +313,25 @@ def get_quote(ticker: str):
     ticker = ticker.strip().upper()
     snapshot = analyst.fetch_market_snapshot(ticker)
     return {"ticker": ticker, **snapshot}
+
+
+@app.delete("/api/cache")
+def clear_local_cache():
+    """Delete all locally-cached _DGA_Report.md files from /stocks.
+
+    Dropbox / Drive files are NOT touched — only this server instance's
+    local copy is cleared. After the user deletes files from Dropbox,
+    calling this endpoint ensures the Research tab reflects the true state
+    instead of showing stale reports that were hydrated at startup.
+    """
+    cleared: list[str] = []
+    for md in analyst.STOCKS_FOLDER.glob("*_DGA_Report.md"):
+        try:
+            md.unlink()
+            cleared.append(md.name.replace("_DGA_Report.md", ""))
+        except OSError:
+            pass
+    return {"cleared": cleared, "count": len(cleared)}
 
 
 @app.get("/api/reports")

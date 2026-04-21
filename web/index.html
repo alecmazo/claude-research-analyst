@@ -206,6 +206,13 @@
   </div>
 
   <div class="card">
+    <div class="label">CACHE</div>
+    <p class="hint">Remove all locally-cached report files from this server instance. Dropbox files are <strong>not</strong> affected — only what's loaded on this server is cleared. Use this after deleting files from Dropbox so the Research tab reflects the true state.</p>
+    <button id="clear-cache-btn" class="btn-danger full-width" style="margin-top:12px;">Clear Local Report Cache</button>
+    <div id="clear-cache-result" class="hint" style="display:none;margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
     <div class="label">ABOUT</div>
     <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="about-logo" onerror="this.style.display='none'">
     <p class="about-line">DGA Capital Research Analyst v1.0</p>

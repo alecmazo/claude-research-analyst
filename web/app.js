@@ -281,9 +281,9 @@ async function openReport(ticker) {
   showView('view-report');
 
   document.getElementById('download-docx').onclick = () =>
-    window.location.href = `${API_BASE}/api/download/${ticker}/docx`;
+    window.location.href = `${API_BASE}/api/download/${ticker}/docx?token=${getToken()}`;
   document.getElementById('download-pptx').onclick = () =>
-    window.location.href = `${API_BASE}/api/download/${ticker}/pptx`;
+    window.location.href = `${API_BASE}/api/download/${ticker}/pptx?token=${getToken()}`;
 
   try {
     const [report, quote] = await Promise.all([
@@ -385,6 +385,8 @@ async function pollPortfolio() {
       portfolioStatusText.textContent = '❌ Failed';
       portfolioErrorBox.textContent = job.error || 'Unknown error';
       portfolioErrorBox.style.display = 'block';
+      // Still render any partial results / per-ticker errors so the user can see what went wrong.
+      if (job.result) renderPortfolioResult(job.result);
     }
   } catch (err) {
     clearInterval(portfolioPollTimer);
@@ -396,11 +398,11 @@ async function pollPortfolio() {
 function renderPortfolioResult(result) {
   if (!result) return;
   const primary = result.primary_strategy;
-  const order = [primary, ...Object.keys(result.strategies).filter(k => k !== primary)];
+  const order = [primary, ...Object.keys(result.strategies || {}).filter(k => k !== primary)];
   const blocks = order.map(k => {
-    const s = result.strategies[k];
+    const s = (result.strategies || {})[k];
     if (!s) return '';
-    const weights = Object.entries(s.weights)
+    const weights = Object.entries(s.weights || {})
       .sort(([, a], [, b]) => b - a)
       .map(([t, w]) => `<span class="pill">${t} <strong>${(w * 100).toFixed(1)}%</strong></span>`)
       .join('');
@@ -414,7 +416,22 @@ function renderPortfolioResult(result) {
         <div class="strategy-result-pills">${weights || '<em>No positions</em>'}</div>
       </div>`;
   }).join('');
-  portfolioResultBox.innerHTML = blocks;
+
+  // Show any tickers that failed analysis so the user knows what happened.
+  let failedHtml = '';
+  const failed = result.tickers_failed || [];
+  if (failed.length > 0) {
+    const rows = failed.map(f =>
+      `<div class="failed-ticker-row"><strong>${f.ticker}</strong>: ${f.error || 'Unknown error'}</div>`
+    ).join('');
+    failedHtml = `
+      <div class="failed-section">
+        <div class="label" style="margin-top:14px;">FAILED TICKERS (${failed.length})</div>
+        <div class="failed-ticker-list">${rows}</div>
+      </div>`;
+  }
+
+  portfolioResultBox.innerHTML = blocks + failedHtml;
   portfolioResultBox.style.display = 'block';
 }
 
@@ -437,6 +454,34 @@ async function loadStrategies() {
     // keep static fallback
   }
 }
+
+// ---------- Cache clear ----------
+document.getElementById('clear-cache-btn')?.addEventListener('click', async () => {
+  if (!confirm('Delete all locally-cached reports from this server?\n\nDropbox files are NOT affected — only the server\'s in-memory copy is cleared.')) return;
+  const btn = document.getElementById('clear-cache-btn');
+  const info = document.getElementById('clear-cache-result');
+  btn.disabled = true;
+  btn.textContent = 'Clearing…';
+  try {
+    const resp = await fetch(`${API_BASE}/api/cache`, {
+      method: 'DELETE',
+      headers: { 'x-auth-token': getToken() },
+    });
+    if (resp.status === 401) { clearToken(); showLogin('Session expired'); return; }
+    const data = await resp.json();
+    info.textContent = `Cleared ${data.count} cached report(s).`;
+    info.style.color = 'var(--green)';
+    info.style.display = 'block';
+    loadReports(); // refresh the Saved Reports list
+  } catch (err) {
+    info.textContent = 'Error: ' + err.message;
+    info.style.color = 'var(--red)';
+    info.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Clear Local Report Cache';
+  }
+});
 
 // ---------- Boot ----------
 async function boot() {
