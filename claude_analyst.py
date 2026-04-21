@@ -2371,7 +2371,9 @@ def _drive_find_file(svc, folder_id: str, filename: str) -> str | None:
 # Files land at: /DGA Research Reports/<filename>
 # (or DROPBOX_FOLDER_PATH if you override it)
 # ============================================================================
-DROPBOX_DEFAULT_FOLDER = "/DGA Research Reports"
+# With App Folder permission type the SDK root IS the app folder
+# (/Apps/DGA Research/ in your Dropbox). We write directly to that root.
+DROPBOX_DEFAULT_FOLDER = ""
 
 _DROPBOX_CLIENT_CACHE: dict[str, Any] = {"client": None}
 
@@ -2403,7 +2405,11 @@ def _dropbox_client():
 
 
 def _dropbox_folder() -> str:
-    return _optional_env("DROPBOX_FOLDER_PATH", DROPBOX_DEFAULT_FOLDER).rstrip("/")
+    # Empty string = app folder root (correct for "App Folder" permission type).
+    # Set DROPBOX_FOLDER_PATH to a subfolder name (e.g. "Reports") if you want
+    # a subfolder inside the app folder.
+    raw = _optional_env("DROPBOX_FOLDER_PATH", DROPBOX_DEFAULT_FOLDER).strip("/")
+    return f"/{raw}" if raw else ""
 
 
 def push_to_dropbox(file_paths: list[Path | str]) -> dict:
@@ -2429,7 +2435,7 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
         p = Path(fp)
         if not p.exists():
             continue
-        dest = f"{folder}/{p.name}"
+        dest = f"{folder}/{p.name}" if folder else f"/{p.name}"
         try:
             dbx.files_upload(
                 p.read_bytes(),
@@ -2454,7 +2460,8 @@ def fetch_from_dropbox(ticker: str) -> str | None:
     dbx = _dropbox_client()
     if dbx is None:
         return None
-    path = f"{_dropbox_folder()}/{ticker}_DGA_Report.md"
+    folder = _dropbox_folder()
+    path = f"{folder}/{ticker}_DGA_Report.md" if folder else f"/{ticker}_DGA_Report.md"
     try:
         _, response = dbx.files_download(path)
         return response.content.decode("utf-8", errors="replace")
