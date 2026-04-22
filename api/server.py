@@ -555,6 +555,25 @@ threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()
 # ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def no_cache_shell_middleware(request: Request, call_next):
+    """Force the browser to re-fetch the HTML/CSS/JS shell on every request.
+
+    Railway redeploys don't change the file URL, so default browser caching
+    (which can keep static files for hours) would leave users staring at
+    the previous build. We want the shell *itself* to refresh so the
+    ``?v=`` pins on the CSS/JS tags get honored.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/app/") or path == "/":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 if BRANDING_DIR.exists():
     app.mount("/branding", StaticFiles(directory=str(BRANDING_DIR)), name="branding")
 
