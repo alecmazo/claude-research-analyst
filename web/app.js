@@ -80,6 +80,10 @@ const api = {
   getReport: (ticker) => apiGet(`/api/report/${ticker}`),
   getQuote: (ticker) => apiGet(`/api/quote/${ticker}`),
   listStrategies: () => apiGet('/api/strategies'),
+  clearCache: () => fetch(`${API_BASE}/api/cache`, {
+    method: 'DELETE',
+    headers: { 'x-auth-token': getToken() },
+  }).then(r => r.ok ? r.json() : { count: 0 }),
   startPortfolio: (formData) => {
     formData.append('token', getToken());
     return fetch(`${API_BASE}/api/portfolio`, {
@@ -94,6 +98,8 @@ const api = {
   },
   getPortfolioJob: (id) => apiGet(`/api/portfolio/${id}`),
   portfolioDownloadUrl: (id) => `${API_BASE}/api/portfolio/${id}/download?token=${getToken()}`,
+  getLastPortfolio: () => apiGet('/api/portfolio/last'),
+  getPortfolioSummary: () => apiGet('/api/portfolio/summary'),
 };
 
 // ---------- View switching ----------
@@ -111,7 +117,8 @@ document.querySelectorAll('[data-target]').forEach(el => {
     e.preventDefault();
     const t = el.dataset.target;
     showView(t);
-    if (t === 'view-home') loadReports();
+    if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
+    if (t === 'view-portfolio') rehydratePortfolioLastCard();
   });
 });
 
@@ -345,12 +352,24 @@ if (portfolioRunBtn) {
     portfolioRunBtn.disabled = true;
     portfolioRunBtn.textContent = 'Starting…';
     portfolioProgressCard.style.display = 'block';
-    portfolioStatusText.textContent = 'Queued…';
+    portfolioStatusText.textContent = reuse ? 'Queued…' : 'Clearing cache…';
     portfolioResultBox.style.display = 'none';
     portfolioErrorBox.style.display = 'none';
     portfolioDownloadBtn.style.display = 'none';
 
     try {
+      // If the user turned reuse OFF, wipe the server-side report cache first
+      // so every ticker is re-analyzed against the newest data.
+      if (!reuse) {
+        try {
+          const cleared = await api.clearCache();
+          portfolioStatusText.textContent =
+            `Cache cleared (${cleared.count || 0} report${cleared.count === 1 ? '' : 's'}) — queuing…`;
+        } catch (e) {
+          // Non-fatal: proceed even if the cache endpoint hiccups.
+          console.warn('Cache clear failed before run:', e);
+        }
+      }
       const job = await api.startPortfolio(fd);
       portfolioJobId = job.job_id;
       if (portfolioPollTimer) clearInterval(portfolioPollTimer);
@@ -380,6 +399,14 @@ async function pollPortfolio() {
       portfolioDownloadBtn.style.display = 'block';
       portfolioDownloadBtn.onclick = () =>
         window.location.href = api.portfolioDownloadUrl(portfolioJobId);
+      // Persist for "Last portfolio run" card.
+      persistPortfolioLast({
+        job_id: portfolioJobId,
+        n_tickers: job.n_tickers,
+        strategy: job.strategy,
+        completed_at: new Date().toISOString(),
+        result: job.result,
+      });
     } else if (job.status === 'failed') {
       clearInterval(portfolioPollTimer);
       portfolioStatusText.textContent = '❌ Failed';
@@ -395,8 +422,83 @@ async function pollPortfolio() {
   }
 }
 
-function renderPortfolioResult(result) {
-  if (!result) return;
+// ---------- Last portfolio persistence ----------
+const LAST_PORTFOLIO_KEY = 'dga_last_portfolio';
+
+function persistPortfolioLast(payload) {
+  try {
+    localStorage.setItem(LAST_PORTFOLIO_KEY, JSON.stringify(payload));
+  } catch { /* quota — ignore */ }
+}
+function readPortfolioLast() {
+  try {
+    const raw = localStorage.getItem(LAST_PORTFOLIO_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function rehydratePortfolioLastCard() {
+  const card = document.getElementById('portfolio-last-card');
+  if (!card) return;
+  const last = readPortfolioLast();
+  if (!last) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('portfolio-last-date').textContent =
+    `Ran ${formatDateTime(last.completed_at)} — ${last.n_tickers} tickers (${last.strategy})`;
+  const body = document.getElementById('portfolio-last-result');
+  body.innerHTML = buildPortfolioResultHtml(last.result);
+
+  const dlBtn = document.getElementById('portfolio-last-download-btn');
+  if (dlBtn) {
+    if (last.job_id) {
+      dlBtn.onclick = () => window.location.href = api.portfolioDownloadUrl(last.job_id);
+      dlBtn.style.display = 'block';
+    } else {
+      dlBtn.style.display = 'none';
+    }
+  }
+  const viewBtn = document.getElementById('portfolio-last-view-btn');
+  if (viewBtn) viewBtn.onclick = openPortfolioSummary;
+}
+
+// ---------- Last portfolio card on Research page ----------
+async function loadLastPortfolioCard() {
+  const card = document.getElementById('last-portfolio-card');
+  if (!card) return;
+  try {
+    const info = await api.getLastPortfolio();
+    if (!info || !info.exists) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    document.getElementById('last-portfolio-date').textContent =
+      `Last run ${formatDateTime(info.generated_at)}`;
+    document.getElementById('last-portfolio-title').textContent =
+      info.title || 'Portfolio Review';
+    document.getElementById('view-last-portfolio-btn').onclick = openPortfolioSummary;
+  } catch {
+    card.style.display = 'none';
+  }
+}
+
+async function openPortfolioSummary() {
+  document.getElementById('portfolio-summary-generated').textContent = '';
+  document.getElementById('portfolio-summary-content').textContent = 'Loading…';
+  showView('view-portfolio-summary');
+  try {
+    const info = await api.getPortfolioSummary();
+    if (info?.generated_at) {
+      document.getElementById('portfolio-summary-generated').textContent =
+        `Generated ${formatDateTime(info.generated_at)}`;
+    }
+    document.getElementById('portfolio-summary-content').innerHTML =
+      marked.parse(info?.summary_md || '_No portfolio summary available yet._');
+  } catch (err) {
+    document.getElementById('portfolio-summary-content').textContent =
+      'Error loading portfolio summary: ' + err.message;
+  }
+}
+
+function buildPortfolioResultHtml(result) {
+  if (!result) return '';
   const primary = result.primary_strategy;
   const order = [primary, ...Object.keys(result.strategies || {}).filter(k => k !== primary)];
   const blocks = order.map(k => {
@@ -417,7 +519,6 @@ function renderPortfolioResult(result) {
       </div>`;
   }).join('');
 
-  // Show any tickers that failed analysis so the user knows what happened.
   let failedHtml = '';
   const failed = result.tickers_failed || [];
   if (failed.length > 0) {
@@ -431,7 +532,6 @@ function renderPortfolioResult(result) {
       </div>`;
   }
 
-  // Show email delivery status.
   let emailHtml = '';
   const email = result.email;
   if (email && !email.skipped) {
@@ -443,8 +543,14 @@ function renderPortfolioResult(result) {
     }
   }
 
-  portfolioResultBox.innerHTML = blocks + failedHtml + emailHtml;
-  portfolioResultBox.style.display = 'block';
+  return blocks + failedHtml + emailHtml;
+}
+
+function renderPortfolioResult(result, target) {
+  const el = target || portfolioResultBox;
+  if (!el) return;
+  el.innerHTML = buildPortfolioResultHtml(result);
+  el.style.display = 'block';
 }
 
 // Load strategy metadata from the server (keeps UI in sync with backend).
@@ -467,39 +573,13 @@ async function loadStrategies() {
   }
 }
 
-// ---------- Cache clear ----------
-document.getElementById('clear-cache-btn')?.addEventListener('click', async () => {
-  if (!confirm('Delete all locally-cached reports from this server?\n\nDropbox files are NOT affected — only the server\'s in-memory copy is cleared.')) return;
-  const btn = document.getElementById('clear-cache-btn');
-  const info = document.getElementById('clear-cache-result');
-  btn.disabled = true;
-  btn.textContent = 'Clearing…';
-  try {
-    const resp = await fetch(`${API_BASE}/api/cache`, {
-      method: 'DELETE',
-      headers: { 'x-auth-token': getToken() },
-    });
-    if (resp.status === 401) { clearToken(); showLogin('Session expired'); return; }
-    const data = await resp.json();
-    info.textContent = `Cleared ${data.count} cached report(s).`;
-    info.style.color = 'var(--green)';
-    info.style.display = 'block';
-    loadReports(); // refresh the Saved Reports list
-  } catch (err) {
-    info.textContent = 'Error: ' + err.message;
-    info.style.color = 'var(--red)';
-    info.style.display = 'block';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Clear Local Report Cache';
-  }
-});
-
 // ---------- Boot ----------
 async function boot() {
   checkServer();
   loadReports();
   loadStrategies();
+  loadLastPortfolioCard();
+  rehydratePortfolioLastCard();
 }
 
 // On load: if we have a stored token, validate it; otherwise show login.

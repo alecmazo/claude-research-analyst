@@ -447,6 +447,37 @@ async def start_portfolio(
     return _pjobs[job_id]
 
 
+@app.get("/api/portfolio/last")
+def get_last_portfolio():
+    """Return metadata about the most recent portfolio run (for the Research page link).
+
+    Looks at the most-recently-modified Portfolio_Summary.md in /stocks as the
+    ground truth for "when was a portfolio last run?" — this file is written
+    by :func:`run_portfolio_summary` on every successful multi-ticker run and
+    survives Railway redeploys via Dropbox hydration.
+    """
+    md_path = analyst.STOCKS_FOLDER / "Portfolio_Summary.md"
+    if not md_path.exists():
+        return {"exists": False}
+    return {
+        "exists": True,
+        "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
+        "title": "Portfolio Review",
+    }
+
+
+@app.get("/api/portfolio/summary")
+def get_portfolio_summary_md():
+    """Return the full markdown of the last Portfolio_Summary.md."""
+    md_path = analyst.STOCKS_FOLDER / "Portfolio_Summary.md"
+    if not md_path.exists():
+        raise HTTPException(status_code=404, detail="No portfolio summary available yet")
+    return {
+        "summary_md": md_path.read_text(),
+        "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
+    }
+
+
 @app.get("/api/portfolio/{job_id}", response_model=PortfolioJobStatus)
 def get_portfolio_status(job_id: str):
     """Poll a portfolio run."""
@@ -498,7 +529,9 @@ def _hydrate_from_dropbox() -> None:
     downloaded = 0
     for entry in entries:
         name = getattr(entry, "name", "")
-        if not name.endswith("_DGA_Report.md"):
+        # Hydrate per-ticker reports AND the last Portfolio_Summary so the
+        # Research page's "Last Portfolio Summary" card survives redeploys.
+        if not (name.endswith("_DGA_Report.md") or name == "Portfolio_Summary.md"):
             continue
         local = analyst.STOCKS_FOLDER / name
         if local.exists():

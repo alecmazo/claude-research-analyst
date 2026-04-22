@@ -70,30 +70,51 @@ One crisp paragraph. If you were walking into a portfolio manager's office with 
 SECTION 2 — RECENT DEVELOPMENTS: WHAT'S CHANGED IN THE LAST 90 DAYS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-This section is mandatory and must reflect the most current publicly available information. Search for and summarize everything material that has happened in the last 90 days that could affect this stock's valuation. Be specific — include dates where known.
+This section is the most time-sensitive in the report and MUST reflect the most current publicly available information. The user is relying on this section for breaking news — a CEO stepping down two days ago, an FDA clearance yesterday, a surprise earnings pre-announcement last week. If something material happened in the last 7 days it MUST appear at the top.
 
-Cover the following categories (include ALL that are relevant; skip none that apply):
+**HOW TO ORDER THE NEWS — NON-NEGOTIABLE:**
+1. Sort every item REVERSE-CHRONOLOGICALLY — most recent first. The newest item (days ago, not weeks) must be the first bullet.
+2. Within the same day / same week, order by IMPORTANCE — High > Medium > Low.
+3. Tag EVERY item with `[HIGH]`, `[MED]`, or `[LOW]` importance AND the exact date (YYYY-MM-DD) where known, or a tight window (e.g., "week of Apr 14, 2026") when only the week is known.
+4. If live-search results are in the context, cite them — include the source and URL inline. If no live results are available, use your most recent training knowledge and append `(verify)` to each item so the reader knows it has not been confirmed against a live source.
 
-**Earnings & Guidance Updates:**
-Any earnings surprises, guidance raises or cuts, margin commentary, or changes to management outlook issued in the last 90 days. State the exact beat/miss vs. consensus.
+**WHAT COUNTS AS HIGH IMPORTANCE** — material to a portfolio manager TODAY:
+- CEO / CFO departure or appointment, board-level reshuffle, activist 13D filing
+- Earnings release, pre-announcement, or revised guidance
+- M&A announcement (acquirer or target)
+- Regulatory decision (FDA approval/CRL, antitrust ruling, consent decree, major lawsuit verdict)
+- Major product recall, data breach, or operational halt
+- Credit-rating change, default event, covenant breach
+- Dividend cut/initiation or large buyback authorization
 
-**Corporate Actions & Strategic Moves:**
-M&A activity, divestitures, partnerships, restructurings, share buyback announcements, dividend changes, or capital raises in the last 90 days.
+**MED** = meaningful but not thesis-changing: sell-side rating change, minor guidance nudge, partnership expansion, routine product launch, insider transaction below ~0.5% of float.
 
-**Regulatory & Legal Developments:**
-Government investigations, antitrust scrutiny, FDA decisions, SEC inquiries, lawsuits, consent orders, or compliance issues. Even preliminary inquiries — flag them clearly.
+**LOW** = background context worth mentioning once: conference appearances, analyst day scheduling, sector commentary.
 
-**Macro & Sector Tailwinds/Headwinds:**
-Interest rate changes, tariff impacts, currency moves, commodity price shifts, or sector-wide regulatory changes that specifically affect this company's economics within the last 90 days.
+**FORMAT — the TIMELINE of developments:**
+Render as a single bulleted list, newest at the top. Each bullet begins with `[HIGH|MED|LOW] YYYY-MM-DD —` then a one-sentence headline, then one or two sentences of context including the quantified impact (beat/miss magnitude, price move, EPS sensitivity). Cite the source inline if known.
 
-**Management & Governance Changes:**
-CEO/CFO/board changes, insider buying or selling (specify dollar amounts and % of holdings), activist investor disclosures, or proxy fights.
+Example format (do not copy the content — derive your own from live data/training):
+- `[HIGH] 2026-04-19 — CEO Tim Cook announces retirement effective FY27; COO [Name] named successor.` Shares -4.2% intraday. Morgan Stanley cuts PT from $250→$225 citing succession uncertainty. Source: Apple 8-K / WSJ.
+- `[HIGH] 2026-04-12 — Q2 FY26 earnings beat: revenue $95.6B vs $93.8B cons (+2%), EPS $1.58 vs $1.52.` Services margin +180 bps YoY; iPhone unit sales +3%. Guidance for Q3 implies low-single-digit top-line growth.
+- `[MED] 2026-04-03 — EU fines Apple €1.8B over App Store anti-steering.` Company will appeal; already provisioned. No change to FY26 EPS guidance.
+- `[LOW] 2026-03-28 — JPMorgan reiterates Overweight, PT unchanged at $245.`
 
-**Analyst Consensus Shifts:**
-Notable rating changes or price target revisions from other major banks in the last 90 days. Who raised or cut, and why? What does the current Street consensus look like?
+**AFTER the timeline, write a short rolled-up commentary organized by theme:**
 
-**Valuation Impact Assessment:**
-Based on the above, state clearly: are these developments net-positive, net-negative, or neutral for the 12-month investment thesis? Quantify the impact where possible (e.g., "the tariff headwind could reduce FY2026 EPS by ~$0.15–$0.20").
+**Earnings & Guidance Updates:** Synthesize the earnings/guidance items from the timeline above. State exact beat/miss vs. consensus.
+
+**Corporate Actions & Strategic Moves:** M&A, divestitures, partnerships, restructurings, buyback authorizations, dividend changes, capital raises.
+
+**Regulatory & Legal Developments:** Government investigations, antitrust scrutiny, FDA decisions, SEC inquiries, lawsuits, consent orders, compliance issues.
+
+**Macro & Sector Tailwinds/Headwinds:** Rates, tariffs, FX, commodity prices, sector-wide regulatory changes — only the items that specifically affect this company's economics.
+
+**Management & Governance Changes:** CEO/CFO/board changes (with effective dates), insider buying or selling (dollar amounts and % of holdings), activist investor disclosures, proxy fights. This is where a CEO departure MUST appear if one is in the timeline — do not bury it.
+
+**Analyst Consensus Shifts:** Notable rating changes or price target revisions from other major banks in the last 90 days. Who raised or cut, and why? What does the current Street consensus look like now?
+
+**Valuation Impact Assessment:** Net-positive, net-negative, or neutral for the 12-month thesis? Quantify where possible (e.g., "the tariff headwind could reduce FY2026 EPS by ~$0.15–$0.20").
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 3 — WHERE WE DIFFER FROM CONSENSUS  (Morgan Stanley "Key Debates" style)
@@ -403,7 +424,7 @@ You are Grok 4.20 with extended reasoning. Use your full reasoning capacity on t
 
 3. BE DECISIVE: Do not hedge every statement. Pick a rating and defend it. If you're genuinely uncertain, say so once — then commit to the best estimate.
 
-4. BE CURRENT: The 90-day developments section is the most time-sensitive section of the report. Recall everything you know about this company and sector up to your knowledge cutoff and synthesize it clearly. Flag anything you are uncertain about with "(verify current status)" rather than fabricating.
+4. BE CURRENT: The 90-day developments section is the most time-sensitive section of the report. When live-search results are attached (Grok's built-in X/news/web search is enabled for this call), prioritize them over training-data recall — order Section 2 reverse-chronologically with HIGH/MED/LOW importance tags and inline source citations. Breaking news from the last 7 days must appear at the top. If live search is unavailable, use your most recent training knowledge and append "(verify)" to any item you aren't sure is still current rather than fabricating dates.
 
 5. NO GENERIC BOILERPLATE: Every section must be specific to this company. Phrases like "the company faces macroeconomic headwinds" with no further specificity are not acceptable. Name the headwind, quantify it, and explain how it flows through to the P&L.
 

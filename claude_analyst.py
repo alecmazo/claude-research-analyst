@@ -42,7 +42,7 @@ import ssl
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -1176,9 +1176,85 @@ def _client():
     return OpenAI(api_key=get_grok_api_key(), base_url="https://api.x.ai/v1")
 
 
+def _extract_responses_text(resp) -> str:
+    """Extract the assistant text from an xAI Responses API reply.
+
+    Shape of the reply (OpenAI-compatible Responses API):
+        resp.output = [ { "type": "message", "content": [ {"type":"output_text","text":"..."} ] } ]
+    We also accept ``resp.output_text`` (SDK convenience) when present.
+    """
+    # Convenience aggregate that newer SDK builds expose.
+    text = getattr(resp, "output_text", None)
+    if text:
+        return text
+
+    output = getattr(resp, "output", None) or []
+    chunks: list[str] = []
+    for item in output:
+        # Pydantic model -> dict coercion for either shape.
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for c in item.get("content") or []:
+                if hasattr(c, "model_dump"):
+                    c = c.model_dump()
+                if isinstance(c, dict) and c.get("type") in ("output_text", "text"):
+                    t = c.get("text") or ""
+                    if t:
+                        chunks.append(t)
+    return "\n".join(chunks)
+
+
 def call_grok(system_prompt: str, user_content: str,
-              model: str = GROK_MODEL) -> str:
+              model: str = GROK_MODEL,
+              *,
+              live_search: bool = False,
+              search_from_date: str | None = None) -> str:
+    """Call xAI Grok.
+
+    When ``live_search=True`` we use xAI's Responses API with the server-side
+    ``web_search`` and ``x_search`` tools so Grok can pull fresh news, X
+    (Twitter) posts, and web results while writing the report. This is how
+    Section 2 (Recent Developments) surfaces breaking news like a CEO
+    stepping down two days ago — past the model's training cutoff.
+
+    When ``live_search=False`` (default) we use plain chat.completions, which
+    is faster and cheaper for non-time-sensitive calls (e.g. the portfolio
+    roll-up where every per-ticker report already has the news baked in).
+
+    If the Responses API path trips for any reason (old SDK, API drift,
+    quota), we fall back to chat.completions so a bad parameter never breaks
+    the pipeline.
+    """
     client = _client()
+
+    if live_search:
+        # xAI Responses API with built-in web + X search tools.
+        # The model decides when to call the tools; the server runs them
+        # and folds the results back in before returning the final message.
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                tools=[
+                    {"type": "web_search"},
+                    {"type": "x_search"},
+                ],
+            )
+            text = _extract_responses_text(resp)
+            if text:
+                return text
+            # Empty text is treated as a soft failure — fall through.
+            print("   ⚠️  Grok live-search returned empty text; retrying without search.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"   ⚠️  Grok live-search call failed ({exc}); retrying without search.")
+
+    # Fallback / default path.
     resp = client.chat.completions.create(
         model=model,
         messages=[
@@ -1639,9 +1715,13 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         + f"Generate the full research report for {ticker} following every rule in your system prompt."
     )
 
-    print(f"   🧠 Calling Grok ({GROK_MODEL})…")
+    # live_search=True makes Grok scan X/news/web for the last ~90 days of
+    # developments on this ticker, which is how Section 2 (Recent
+    # Developments) can surface a CEO departure from two days ago even
+    # though it's past the model's training cutoff.
+    print(f"   🧠 Calling Grok ({GROK_MODEL}) with live X/news/web search…")
     try:
-        report_text = call_grok(system_prompt, user_msg)
+        report_text = call_grok(system_prompt, user_msg, live_search=True)
     except Exception as exc:  # noqa: BLE001
         print(f"   ❌ Grok API error: {exc}")
         result["error"] = f"Grok: {exc}"
@@ -3314,13 +3394,22 @@ def run_portfolio_rebalance(
         except Exception as exc:  # noqa: BLE001
             gsheets_status = {"ok": False, "error": str(exc)}
 
-    # Google Drive upload — portfolio xlsx + all per-ticker reports.
+    # Google Drive upload — portfolio xlsx + all per-ticker reports + the
+    # Grok portfolio roll-up (Portfolio_Summary.md/.docx) so the Research
+    # page's "Last Portfolio Summary" card can hydrate from Dropbox after
+    # a Railway redeploy.
     gdrive_status: dict = {"ok": False, "skipped": True}
     try:
         drive_files: list[Path] = [output_path]
         for r in ok_results:
             for key in ("docx", "md"):
                 p = r.get(key)
+                if p and Path(p).exists():
+                    drive_files.append(Path(p))
+        # Add the portfolio roll-up files if we produced them.
+        if roll.get("ok"):
+            for key in ("md", "docx"):
+                p = roll.get(key)
                 if p and Path(p).exists():
                     drive_files.append(Path(p))
         gdrive_status = push_to_google_drive(drive_files)

@@ -50,6 +50,18 @@
     </div>
   </div>
 
+  <!-- Last portfolio summary card — populated when a portfolio has been run at least once -->
+  <div class="card last-portfolio-card" id="last-portfolio-card" style="display:none;">
+    <div class="label">LAST PORTFOLIO SUMMARY</div>
+    <div class="last-portfolio-body">
+      <div class="last-portfolio-meta">
+        <div class="last-portfolio-title" id="last-portfolio-title">Portfolio Review</div>
+        <div class="last-portfolio-date" id="last-portfolio-date"></div>
+      </div>
+      <button id="view-last-portfolio-btn" class="btn-secondary">View →</button>
+    </div>
+  </div>
+
   <div class="label section-label">SAVED REPORTS</div>
   <div id="reports-list" class="reports-list">
     <div class="empty">Loading…</div>
@@ -149,13 +161,17 @@
   </div>
 
   <div class="card">
-    <div class="gamma-row">
+    <div class="gamma-row" style="margin-top:0;padding-top:0;border-top:none;">
       <label class="gamma-label" for="portfolio-reuse">Reuse cached reports (faster)</label>
       <label class="toggle-switch">
         <input type="checkbox" id="portfolio-reuse" checked>
         <span class="toggle-slider"></span>
       </label>
     </div>
+    <p class="hint" id="portfolio-reuse-hint">
+      ON: reuses existing per-ticker reports from the server (fast, cheap).
+      OFF: <strong>clears the local report cache first</strong> and re-runs every ticker through Grok — use when you want the latest news folded in.
+    </p>
     <div class="gamma-row">
       <label class="gamma-label" for="portfolio-gamma">Generate Gamma Presentations</label>
       <label class="toggle-switch">
@@ -173,6 +189,28 @@
     <div id="portfolio-error" class="error-box" style="display:none;"></div>
     <button id="portfolio-download-btn" class="btn-primary full-width" style="display:none;">Download DGA-portfolio.xlsx</button>
   </div>
+
+  <!-- Persistent last-result card. Populated from localStorage on tab activation. -->
+  <div class="card" id="portfolio-last-card" style="display:none;">
+    <div class="label">LAST PORTFOLIO RUN</div>
+    <div class="last-portfolio-date" id="portfolio-last-date"></div>
+    <div id="portfolio-last-result"></div>
+    <div class="last-portfolio-actions">
+      <button id="portfolio-last-view-btn" class="btn-secondary">View Summary →</button>
+      <button id="portfolio-last-download-btn" class="btn-primary">Download xlsx</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PORTFOLIO SUMMARY VIEW (last Grok roll-up) ============ -->
+<section id="view-portfolio-summary" class="view">
+  <header class="header">
+    <button class="back-btn" data-target="view-home">← Back</button>
+    <h1>Portfolio Summary</h1>
+    <span></span>
+  </header>
+  <div class="generated-at" id="portfolio-summary-generated"></div>
+  <article id="portfolio-summary-content" class="report-content">Loading…</article>
 </section>
 
 <!-- ============ FOOTER TABS ============ -->
@@ -206,10 +244,12 @@
   </div>
 
   <div class="card">
-    <div class="label">CACHE</div>
-    <p class="hint">Remove all locally-cached report files from this server instance. Dropbox files are <strong>not</strong> affected — only what's loaded on this server is cleared. Use this after deleting files from Dropbox so the Research tab reflects the true state.</p>
-    <button id="clear-cache-btn" class="btn-danger full-width" style="margin-top:12px;">Clear Local Report Cache</button>
-    <div id="clear-cache-result" class="hint" style="display:none;margin-top:8px;"></div>
+    <div class="label">CACHE BEHAVIOR</div>
+    <p class="hint">
+      Cache is managed automatically by the <strong>Reuse cached reports</strong> toggle on the Portfolio page.
+      Turn it OFF to wipe the server's local report cache and regenerate every ticker with the latest Grok call.
+      Dropbox files are never affected.
+    </p>
   </div>
 
   <div class="card">
