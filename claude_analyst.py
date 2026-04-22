@@ -41,6 +41,7 @@ import smtplib
 import ssl
 import sys
 import time
+import traceback
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -1268,8 +1269,18 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             verified_block = edgar.format_verified_block(data)
         except Exception as exc2:  # noqa: BLE001
             print(f"   ❌ EDGAR fallback also failed: {exc2}")
-            result["error"] = str(exc2)
-            return result
+            traceback.print_exc()
+            # Last-resort: continue with no verified financials so Grok can still
+            # produce a qualitative report (it will note the data is unavailable).
+            print(f"   ⚠️  Proceeding without verified financials for {ticker}.")
+            verified_block = (
+                f"## ⚠️ Financial Data Unavailable\n\n"
+                f"Automated extraction failed for **{ticker}**. "
+                f"Error: {exc2}\n\n"
+                f"The analysis below relies on Grok's training data and publicly "
+                f"available information only. No SEC XBRL figures have been verified."
+            )
+            data = {"ticker": ticker, "errors": [str(exc2)]}
 
     # Cache the raw extract for auditing.
     audit_path = STOCKS_FOLDER / f"{ticker}_xbrl_extract.json"

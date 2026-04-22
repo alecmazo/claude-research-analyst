@@ -194,7 +194,13 @@ def _get_json(sess: requests.Session, url: str, *, retries: int = 3) -> dict:
         try:
             resp = sess.get(url, timeout=30)
             if resp.status_code == 200:
-                return resp.json()
+                result = resp.json()
+                if not isinstance(result, dict):
+                    raise ValueError(
+                        f"SEC API returned {type(result).__name__} instead of dict "
+                        f"from {url}: {str(result)[:200]}"
+                    )
+                return result
             if resp.status_code == 429:
                 # SEC is rate-limiting us.
                 time.sleep(1.5 * (attempt + 1))
@@ -478,7 +484,17 @@ def extract_financials(
     """
     cik = resolve_cik(ticker, user_agent=user_agent)
     submissions = fetch_submissions(cik, user_agent=user_agent)
+    if not isinstance(submissions, dict):
+        raise ValueError(
+            f"SEC submissions API returned {type(submissions).__name__} for {ticker} "
+            f"(CIK {cik}); expected dict."
+        )
     facts = fetch_company_facts(cik, user_agent=user_agent)
+    if not isinstance(facts, dict):
+        raise ValueError(
+            f"SEC companyfacts API returned {type(facts).__name__} for {ticker} "
+            f"(CIK {cik}); expected dict."
+        )
     latest = latest_filings(submissions)
 
     # Determine most recent filing (by filed date).
