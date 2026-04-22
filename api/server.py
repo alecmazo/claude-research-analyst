@@ -16,6 +16,7 @@ import uuid
 import shutil
 import tempfile
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -156,9 +157,15 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
                 _jobs[job_id]["status"] = "failed"
                 _jobs[job_id]["error"] = result.get("error", "Unknown error")
     except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
+        # Log FULL traceback so we can see where the error actually happened.
+        tb_str = traceback.format_exc()
+        print(f"\n❌ Single-ticker job {job_id} ({ticker}) CRASHED:\n{tb_str}", flush=True)
         with _jobs_lock:
             _jobs[job_id]["status"] = "failed"
-            _jobs[job_id]["error"] = str(exc)
+            # Include last line of traceback in error so the UI shows something
+            # more useful than just the message.
+            tb_tail = tb_str.strip().splitlines()[-3:] if tb_str else []
+            _jobs[job_id]["error"] = f"{exc} | {' | '.join(tb_tail)}"
 
 
 # In-memory portfolio job store.

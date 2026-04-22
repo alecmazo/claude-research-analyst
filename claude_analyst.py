@@ -766,9 +766,12 @@ def fetch_market_snapshot(ticker: str) -> dict:
             timeout=15,
         )
         data = resp.json()
-        result = data.get("chart", {}).get("result", [])
-        if result:
-            meta = result[0].get("meta", {})
+        if not isinstance(data, dict):
+            return out
+        chart = data.get("chart", {}) if isinstance(data.get("chart"), dict) else {}
+        result = chart.get("result", []) if isinstance(chart.get("result"), list) else []
+        if result and isinstance(result[0], dict):
+            meta = result[0].get("meta", {}) if isinstance(result[0].get("meta"), dict) else {}
             out["price"] = meta.get("regularMarketPrice") or meta.get("previousClose")
             out["previous_close"] = meta.get("previousClose")
             out["source"] = "Yahoo Finance"
@@ -842,6 +845,10 @@ def fetch_analyst_ratings(ticker: str) -> str:
     # GuruFocus may use many different field names across API versions.
     latest: dict[str, dict] = {}
     for rec in records:
+        # Guard: GuruFocus sometimes returns records that are not plain dicts
+        # (lists, strings, None). Skip anything we can't introspect.
+        if not isinstance(rec, dict):
+            continue
         firm_raw = _field(
             rec,
             "analyst", "analyst_firm", "firm", "firm_name",
@@ -1191,6 +1198,42 @@ def _gamma_generate(input_text: str, num_cards: int,
 # ============================================================================
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
                    verbose: bool = True, reuse_existing: bool = False) -> dict:
+    """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
+
+    Any uncaught exception inside the pipeline is converted to a structured
+    ``{"ok": False, "error": "<msg>", "traceback": "..."}`` result and the
+    full traceback is printed so Railway logs show the exact file+line of
+    the crash (including cryptic errors like 'list' object has no attribute
+    'get' that previously bubbled up with no location info).
+    """
+    try:
+        return _analyze_ticker_impl(
+            ticker,
+            system_prompt=system_prompt,
+            generate_gamma=generate_gamma,
+            verbose=verbose,
+            reuse_existing=reuse_existing,
+        )
+    except BaseException as exc:  # noqa: BLE001
+        tb_str = traceback.format_exc()
+        print(f"\n❌ analyze_ticker({ticker}) CRASHED:\n{tb_str}", flush=True)
+        # Extract the last traceback frame (the actual crash site) for the UI.
+        tb_lines = tb_str.strip().splitlines()
+        last_frame = ""
+        for i, line in enumerate(tb_lines):
+            if line.lstrip().startswith("File "):
+                last_frame = line.strip()
+        tail = " @ " + last_frame if last_frame else ""
+        return {
+            "ticker": ticker.strip().upper(),
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}{tail}",
+            "traceback": tb_str,
+        }
+
+
+def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
+                         verbose: bool = True, reuse_existing: bool = False) -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
