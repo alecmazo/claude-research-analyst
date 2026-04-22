@@ -535,11 +535,120 @@ def build_portfolio_email(
     return msg
 
 
-def send_portfolio_email(msg: EmailMessage) -> dict:
-    """Send via Gmail SMTP using GMAIL_USER + GMAIL_APP_PASSWORD.
+def _email_msg_to_resend_payload(msg: EmailMessage, from_override: str | None = None) -> dict:
+    """Convert a stdlib EmailMessage into Resend's JSON schema.
 
-    Returns {ok, sent_to, fallback_path?, error?}. Always writes a .eml fallback
-    next to the stocks folder so the artifact survives even if SMTP is misconfigured.
+    Extracts text body, html body, and base64-encodes every attachment.
+    """
+    import base64
+    text_body = ""
+    html_body = ""
+    attachments: list[dict] = []
+
+    # Walk every MIME part. set_content + add_alternative + add_attachment
+    # produce a multipart tree, so we iterate over all parts.
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        ctype = part.get_content_type()
+        disp = (part.get("Content-Disposition") or "").lower()
+        if "attachment" in disp or part.get_filename():
+            try:
+                payload = part.get_payload(decode=True) or b""
+                attachments.append({
+                    "filename": part.get_filename() or "attachment.bin",
+                    "content": base64.b64encode(payload).decode("ascii"),
+                    "content_type": ctype,
+                })
+            except Exception as exc:  # noqa: BLE001
+                print(f"   ⚠️  Could not encode attachment {part.get_filename()}: {exc}")
+            continue
+        if ctype == "text/plain" and not text_body:
+            text_body = part.get_content() if hasattr(part, "get_content") else str(part.get_payload(decode=True) or "", "utf-8", "replace")
+        elif ctype == "text/html" and not html_body:
+            html_body = part.get_content() if hasattr(part, "get_content") else str(part.get_payload(decode=True) or "", "utf-8", "replace")
+
+    to_hdr = msg["To"] or ""
+    to_list = [addr.strip() for addr in to_hdr.split(",") if addr.strip()]
+
+    payload = {
+        "from": from_override or msg["From"] or "onboarding@resend.dev",
+        "to": to_list,
+        "subject": msg["Subject"] or "(no subject)",
+    }
+    if html_body:
+        payload["html"] = html_body
+    if text_body:
+        payload["text"] = text_body
+    if attachments:
+        payload["attachments"] = attachments
+    return payload
+
+
+def _send_via_resend(msg: EmailMessage) -> dict | None:
+    """Send via Resend HTTPS API. Returns result dict, or None if RESEND_API_KEY absent.
+
+    Railway blocks outbound SMTP on port 465/587 by default, so we need an
+    HTTPS-based transport. Resend's free tier (3k emails/month) works and
+    doesn't require domain verification when sending from onboarding@resend.dev.
+    """
+    api_key = _optional_env("RESEND_API_KEY", "")
+    if not api_key:
+        return None
+
+    # Resend requires the From address to be on a verified domain OR use the
+    # test sender onboarding@resend.dev. Honor RESEND_FROM if set, otherwise
+    # fall back to the test sender (works out of the box).
+    from_override = _optional_env("RESEND_FROM", "") or "DGA Capital <onboarding@resend.dev>"
+    payload = _email_msg_to_resend_payload(msg, from_override=from_override)
+
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "transport": "resend", "error": f"Resend network error: {exc}"}
+
+    if resp.status_code in (200, 202):
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return {
+            "ok": True,
+            "transport": "resend",
+            "sent_to": msg["To"],
+            "resend_id": body.get("id", ""),
+        }
+
+    # Error path — surface the Resend error message so the user can fix the key.
+    try:
+        err_body = resp.json()
+        err_msg = err_body.get("message") or err_body.get("error") or resp.text
+    except Exception:  # noqa: BLE001
+        err_msg = resp.text
+    return {
+        "ok": False,
+        "transport": "resend",
+        "error": f"Resend API {resp.status_code}: {err_msg}",
+    }
+
+
+def send_portfolio_email(msg: EmailMessage) -> dict:
+    """Send portfolio email with smart multi-transport fallback.
+
+    Transport priority:
+      1. Resend HTTPS API (RESEND_API_KEY) — works on Railway
+      2. Gmail SMTP (GMAIL_USER + GMAIL_APP_PASSWORD) — works locally
+      3. Save .eml file to disk so the artifact always survives
+
+    Returns {ok, sent_to, transport, fallback_path, error?}.
     """
     fallback = STOCKS_FOLDER / "Portfolio_Email.eml"
     try:
@@ -548,33 +657,51 @@ def send_portfolio_email(msg: EmailMessage) -> dict:
     except Exception as exc:  # pragma: no cover — disk write should not fail in practice
         print(f"   ⚠️  Could not write fallback .eml: {exc}")
 
+    errors: list[str] = []
+
+    # --- Transport 1: Resend (HTTPS-based, Railway-compatible)
+    resend_result = _send_via_resend(msg)
+    if resend_result is not None:
+        if resend_result.get("ok"):
+            resend_result["fallback_path"] = str(fallback)
+            print(f"   📧 Email sent via Resend → {msg['To']} "
+                  f"(id: {resend_result.get('resend_id','')})")
+            return resend_result
+        # Resend returned an error; remember it and try SMTP too.
+        errors.append(resend_result.get("error", "Resend unknown error"))
+
+    # --- Transport 2: Gmail SMTP (works locally; blocked on Railway)
     user = _optional_env("GMAIL_USER", "")
     pwd = _optional_env("GMAIL_APP_PASSWORD", "")
-    if not user or not pwd:
-        return {
-            "ok": False,
-            "sent_to": msg["To"],
-            "fallback_path": str(fallback),
-            "error": (
-                "Email NOT sent — set GMAIL_USER and GMAIL_APP_PASSWORD in .env "
-                "(create an App Password at https://myaccount.google.com/apppasswords). "
-                f"Email body saved to {fallback}."
-            ),
-        }
+    if user and pwd:
+        try:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as smtp:
+                smtp.login(user, pwd)
+                smtp.send_message(msg)
+            print(f"   📧 Email sent via Gmail SMTP → {msg['To']}")
+            return {
+                "ok": True,
+                "transport": "gmail_smtp",
+                "sent_to": msg["To"],
+                "fallback_path": str(fallback),
+            }
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Gmail SMTP failed: {exc}")
 
-    try:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as smtp:
-            smtp.login(user, pwd)
-            smtp.send_message(msg)
-        return {"ok": True, "sent_to": msg["To"], "fallback_path": str(fallback)}
-    except Exception as exc:
-        return {
-            "ok": False,
-            "sent_to": msg["To"],
-            "fallback_path": str(fallback),
-            "error": f"SMTP send failed: {exc}. Email body saved to {fallback}.",
-        }
+    # --- All transports failed (or none configured).
+    if not errors:
+        errors.append(
+            "No email transport configured — set RESEND_API_KEY (recommended "
+            "for Railway) or GMAIL_USER + GMAIL_APP_PASSWORD (for local use)."
+        )
+    return {
+        "ok": False,
+        "transport": "none",
+        "sent_to": msg["To"],
+        "fallback_path": str(fallback),
+        "error": f"{' | '.join(errors)}. Email body saved to {fallback}.",
+    }
 
 
 # ============================================================================
