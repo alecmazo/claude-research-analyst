@@ -709,25 +709,27 @@ TWO PATHS — follow whichever applies:
 
 PATH A — ANALYST_RATINGS_BLOCK IS present in the user message:
 → Use the exact values from the block for every row that has data. Do not substitute or invent different numbers.
-→ For rows marked "Not available in GuruFocus", fill in the best estimate from your most current training knowledge AND append "(est.)" to the Rating cell to distinguish it from confirmed data.
+→ For rows marked "Not available", fill in the best estimate from your most current training knowledge AND append "(est.)" to the Rating cell to distinguish it from confirmed data.
 → Compute Upside vs Current yourself from the price target and CURRENT_PRICE.
+→ If a CONSENSUS_SUMMARY block is present, also cite the aggregate figures (number of analysts, mean/high/low target, consensus rating) in your Street vs DGA paragraph.
 
 PATH B — NO ANALYST_RATINGS_BLOCK in the user message:
 → Use your most up-to-date training knowledge for each firm's rating and 12-month price target.
 → Append "(est.)" to every Rating cell so the reader knows these are model estimates, not confirmed live data.
 → Compute Upside vs Current from the price target and CURRENT_PRICE.
 
-BOTH PATHS — always produce this exact table structure (do not omit it):
+BOTH PATHS — always produce this exact table structure (do not omit it). Use the firm list from the ANALYST_RATINGS_BLOCK if present; otherwise include the 5 most-covered firms you know of:
 
 | Firm | Rating | 12M Price Target | Upside vs Current | Date | Action |
 |------|--------|-----------------|-------------------|------|--------|
-| Goldman Sachs                   | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Morgan Stanley                  | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Merrill Lynch (BofA Securities) | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Fidelity                        | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
-| Morningstar                     | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Goldman Sachs    | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Morgan Stanley   | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| BofA Securities  | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| JPMorgan         | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+| Wells Fargo      | ... | $... | ±xx.x% | YYYY-MM-DD | ... |
+(and any additional rows provided by the ANALYST_RATINGS_BLOCK)
 
-→ After the table write a "Street vs DGA" paragraph: explain where and why DGA's rating/target diverges from the Street consensus.
+→ After the table write a "Street vs DGA" paragraph: explain where and why DGA's rating/target diverges from the Street consensus. When CONSENSUS_SUMMARY is provided, quote the aggregate numbers (# analysts, mean target, recommendation key) here.
 → If 3 or more firms disagree with the DGA rating direction, explicitly acknowledge it and explain the thesis divergence before the Section 8 verdict.
 
 SECTION 8 — The Verdict:
@@ -781,33 +783,118 @@ def fetch_market_snapshot(ticker: str) -> dict:
 
 
 # ============================================================================
-# GuruFocus — analyst upgrades/downgrades for Section 7.5
+# Analyst ratings — Yahoo Finance (primary) with GuruFocus fallback
 # ============================================================================
 
-# Canonical name fragments we match against whatever GuruFocus returns.
-_GF_FIRMS = {
-    "Goldman Sachs":   ["goldman"],
-    "Morgan Stanley":  ["morgan stanley"],
-    "Merrill Lynch":   ["merrill", "bofa", "bank of america", "b. riley"],
-    "Fidelity":        ["fidelity"],
-    "Morningstar":     ["morningstar"],
-}
+# Canonical target-firm labels mapped to name-fragments we match against
+# whatever the upstream provider returns. Order defines table-row order.
+# These firms are deliberately chosen because they are syndicated publicly by
+# Yahoo's upgrade/downgrade feed — Fidelity and Morningstar aren't (their
+# ratings are subscription-only and not in any free feed).
+_TARGET_FIRMS: list[tuple[str, list[str]]] = [
+    ("Goldman Sachs",   ["goldman sachs", "goldman"]),
+    ("Morgan Stanley",  ["morgan stanley"]),
+    ("BofA Securities", ["b of a", "bofa", "bank of america", "merrill"]),
+    ("JPMorgan",        ["jpmorgan", "j.p. morgan", "jp morgan"]),
+    ("Wells Fargo",     ["wells fargo"]),
+    ("Jefferies",       ["jefferies"]),
+    ("Citi",            ["citigroup", "citi ", "citi"]),
+    ("Barclays",        ["barclays"]),
+    ("UBS",             ["ubs"]),
+    ("Evercore ISI",    ["evercore"]),
+]
 
 
-def fetch_analyst_ratings(ticker: str) -> str:
-    """Return a pre-formatted markdown block of analyst ratings for the 5 key firms.
+def _fetch_yahoo_analyst_ratings(ticker: str) -> dict | None:
+    """Pull per-firm upgrades/downgrades + aggregate consensus from Yahoo.
 
-    Calls the GuruFocus upgrades/downgrades endpoint (requires GURUFOCUS_TOKEN).
-    Returns an empty string only when the token is absent — Grok then uses its
-    training-data fallback branch in Section 7.5. When the token IS set we
-    always return at least a header block (with "Not available" rows for firms
-    not found) so Grok knows the data source was queried.
+    Returns a dict with {"firms": [...], "consensus": {...}} or None if
+    Yahoo is unreachable or yfinance is not installed. Never raises.
     """
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  yfinance not available: {exc}")
+        return None
+
+    try:
+        t = yf.Ticker(ticker)
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  yfinance Ticker() failed for {ticker}: {exc}")
+        return None
+
+    # --- Per-firm upgrades/downgrades DataFrame (already sorted newest first).
+    firm_rows: list[dict] = []
+    try:
+        ud = t.upgrades_downgrades
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  yfinance upgrades_downgrades failed for {ticker}: {exc}")
+        ud = None
+
+    if ud is not None and hasattr(ud, "empty") and not ud.empty:
+        try:
+            df = ud.reset_index() if "GradeDate" not in ud.columns else ud.copy()
+        except Exception:  # noqa: BLE001
+            df = None
+        if df is not None and "Firm" in df.columns:
+            for label, fragments in _TARGET_FIRMS:
+                try:
+                    mask = df["Firm"].astype(str).str.lower().apply(
+                        lambda s, frags=fragments: any(f in s for f in frags)
+                    )
+                    sub = df[mask]
+                    if len(sub) == 0:
+                        continue
+                    row = sub.iloc[0]
+                    date_val = row.get("GradeDate", "")
+                    try:
+                        import pandas as pd  # local import; already project dep
+                        if isinstance(date_val, pd.Timestamp):
+                            date_val = date_val.strftime("%Y-%m-%d")
+                    except Exception:
+                        pass
+                    target_val = row.get("currentPriceTarget", 0) or 0
+                    try:
+                        target_val = float(target_val)
+                    except (TypeError, ValueError):
+                        target_val = 0.0
+                    firm_rows.append({
+                        "firm":   label,
+                        "rating": str(row.get("ToGrade", "") or "—").strip() or "—",
+                        "target": target_val,
+                        "date":   str(date_val)[:10],
+                        "action": str(row.get("Action", "") or "—").strip() or "—",
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    print(f"   ⚠️  Yahoo firm parse failed ({label}): {exc}")
+                    continue
+
+    # --- Aggregate consensus (targetMeanPrice, #analysts, recommendationKey).
+    consensus: dict = {}
+    try:
+        info = t.info if isinstance(t.info, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  yfinance info failed for {ticker}: {exc}")
+        info = {}
+    for k in ("targetMeanPrice", "targetHighPrice", "targetLowPrice",
+              "targetMedianPrice", "numberOfAnalystOpinions",
+              "recommendationKey", "recommendationMean", "currentPrice"):
+        v = info.get(k)
+        if v is not None:
+            consensus[k] = v
+
+    if not firm_rows and not consensus:
+        return None
+    return {"firms": firm_rows, "consensus": consensus}
+
+
+def _fetch_gurufocus_analyst_ratings(ticker: str) -> list[dict]:
+    """Legacy fallback — returns a list of normalized firm dicts (may be empty)."""
     token = _optional_env("GURUFOCUS_TOKEN")
     if not token:
-        return ""   # No token → signal Grok to fall back to training-data branch
+        return []
 
-    records: list[dict] = []
+    records: list = []
     try:
         url = (
             f"https://api.gurufocus.com/public/user/{token}/stock/{ticker}/upgrades_downgrades"
@@ -819,8 +906,6 @@ def fetch_analyst_ratings(ticker: str) -> str:
         )
         if resp.status_code == 200:
             raw = resp.json()
-            # GuruFocus returns either a top-level list, or a dict with one of
-            # several possible wrapper keys depending on API version.
             if isinstance(raw, list):
                 records = raw
             elif isinstance(raw, dict):
@@ -833,56 +918,123 @@ def fetch_analyst_ratings(ticker: str) -> str:
     except Exception as exc:  # noqa: BLE001
         print(f"   ⚠️  GuruFocus API error for {ticker}: {exc}")
 
-    def _field(rec: dict, *keys: str) -> str:
-        """Return the first non-empty value among the given keys."""
+    def _f(rec: dict, *keys: str) -> str:
         for k in keys:
             v = rec.get(k)
             if v is not None and str(v).strip() not in ("", "None", "null"):
                 return str(v).strip()
-        return "—"
+        return ""
 
-    # Keep only the most recent entry per target firm.
-    # GuruFocus may use many different field names across API versions.
-    latest: dict[str, dict] = {}
+    rows: list[dict] = []
+    seen: set[str] = set()
     for rec in records:
-        # Guard: GuruFocus sometimes returns records that are not plain dicts
-        # (lists, strings, None). Skip anything we can't introspect.
         if not isinstance(rec, dict):
             continue
-        firm_raw = _field(
-            rec,
-            "analyst", "analyst_firm", "firm", "firm_name",
-            "company", "broker", "institution",
-        ).lower()
-        for label, fragments in _GF_FIRMS.items():
-            if any(f in firm_raw for f in fragments) and label not in latest:
-                latest[label] = rec
+        firm_raw = _f(rec, "analyst", "analyst_firm", "firm", "firm_name",
+                      "company", "broker", "institution").lower()
+        for label, fragments in _TARGET_FIRMS:
+            if label in seen:
+                continue
+            if any(f in firm_raw for f in fragments):
+                target_raw = _f(rec, "price_target", "new_target", "target_price",
+                                "pt", "new_price_target", "adj_price_target")
+                try:
+                    target_val = float(target_raw.replace("$", "").replace(",", ""))
+                except (ValueError, AttributeError):
+                    target_val = 0.0
+                rows.append({
+                    "firm":   label,
+                    "rating": _f(rec, "current_rating", "new_rating", "rating",
+                                 "recommendation", "action_pt", "adj_pt_rating") or "—",
+                    "target": target_val,
+                    "date":   (_f(rec, "date", "action_date", "updated_date",
+                                  "created_at") or "—")[:10],
+                    "action": _f(rec, "action", "type", "action_type",
+                                 "change_type", "event") or "—",
+                })
+                seen.add(label)
                 break
+    return rows
 
+
+def fetch_analyst_ratings(ticker: str) -> str:
+    """Return a pre-formatted markdown block of analyst ratings for Section 7.5.
+
+    Source priority:
+      1. Yahoo Finance via yfinance (free, no API key, rich data)
+      2. GuruFocus (legacy, requires GURUFOCUS_TOKEN)
+      3. Empty string → Grok uses training-data fallback (PATH B)
+
+    Always returns a block with the full firm table (rows for firms we
+    couldn't get are marked "Not available") when ANY source succeeded,
+    so Grok renders the section deterministically.
+    """
+    firm_rows: list[dict] = []
+    consensus: dict = {}
+    source_label = ""
+
+    # --- Primary: Yahoo Finance
+    yahoo = _fetch_yahoo_analyst_ratings(ticker)
+    if yahoo:
+        firm_rows = yahoo.get("firms") or []
+        consensus = yahoo.get("consensus") or {}
+        if firm_rows or consensus:
+            source_label = "Yahoo Finance"
+            print(f"   📊 Yahoo: {len(firm_rows)} firm ratings + consensus for {ticker}")
+
+    # --- Fallback: GuruFocus (only if Yahoo yielded nothing)
+    if not firm_rows and not consensus:
+        gf_rows = _fetch_gurufocus_analyst_ratings(ticker)
+        if gf_rows:
+            firm_rows = gf_rows
+            source_label = "GuruFocus"
+            print(f"   📊 GuruFocus: {len(firm_rows)} firm ratings for {ticker}")
+
+    # --- Nothing worked: signal Grok to use training-data fallback.
+    if not firm_rows and not consensus:
+        return ""
+
+    # --- Build the markdown block. Keep row order = _TARGET_FIRMS order.
+    by_firm = {r["firm"]: r for r in firm_rows}
     lines = [
-        "ANALYST_RATINGS_BLOCK (pre-fetched from GuruFocus — use these exact values in Section 7.5):",
+        f"ANALYST_RATINGS_BLOCK (source: {source_label} — use these exact values in Section 7.5):",
         "| Firm | Rating | 12M Price Target | Date | Action |",
         "|------|--------|-----------------|------|--------|",
     ]
-    for label in ["Goldman Sachs", "Morgan Stanley", "Merrill Lynch", "Fidelity", "Morningstar"]:
-        rec = latest.get(label)
-        if rec:
-            rating = _field(
-                rec,
-                "current_rating", "new_rating", "rating", "recommendation",
-                "action_pt", "adj_pt_rating",
+    for label, _frags in _TARGET_FIRMS:
+        r = by_firm.get(label)
+        if r:
+            tgt = r.get("target") or 0
+            tgt_fmt = f"${tgt:,.2f}" if isinstance(tgt, (int, float)) and tgt > 0 else "—"
+            lines.append(
+                f"| {label} | {r.get('rating','—')} | {tgt_fmt} | "
+                f"{r.get('date','—')} | {r.get('action','—')} |"
             )
-            target = _field(
-                rec,
-                "price_target", "new_target", "target_price", "pt",
-                "new_price_target", "adj_price_target",
-            )
-            date   = _field(rec, "date", "action_date", "updated_date", "created_at")
-            action = _field(rec, "action", "type", "action_type", "change_type", "event")
-            target_fmt = f"${target}" if target != "—" else "—"
-            lines.append(f"| {label} | {rating} | {target_fmt} | {date} | {action} |")
         else:
-            lines.append(f"| {label} | Not available in GuruFocus | — | — | — |")
+            lines.append(f"| {label} | Not available | — | — | — |")
+
+    # --- Aggregate consensus block (richer signal for Grok).
+    if consensus:
+        lines.append("")
+        lines.append("CONSENSUS_SUMMARY (Yahoo Finance aggregate across ALL covering analysts):")
+        n = consensus.get("numberOfAnalystOpinions")
+        if n:
+            lines.append(f"- Analysts covering: {n}")
+        rk = consensus.get("recommendationKey")
+        rm = consensus.get("recommendationMean")
+        if rk:
+            rm_txt = f" (mean {rm:.2f}/5, 1=Strong Buy)" if isinstance(rm, (int, float)) else ""
+            lines.append(f"- Consensus rating: {rk.upper()}{rm_txt}")
+        tm = consensus.get("targetMeanPrice")
+        th = consensus.get("targetHighPrice")
+        tl = consensus.get("targetLowPrice")
+        tmed = consensus.get("targetMedianPrice")
+        if tm:
+            parts = [f"mean ${tm:,.2f}"]
+            if tmed: parts.append(f"median ${tmed:,.2f}")
+            if th:   parts.append(f"high ${th:,.2f}")
+            if tl:   parts.append(f"low ${tl:,.2f}")
+            lines.append(f"- 12M price target: {', '.join(parts)}")
 
     return "\n".join(lines)
 
@@ -1342,9 +1494,9 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     # Fetch live analyst ratings from GuruFocus (best-effort, non-blocking).
     analyst_block = fetch_analyst_ratings(ticker)
     if analyst_block:
-        print(f"   📊 GuruFocus analyst ratings fetched for {ticker}")
+        print(f"   📊 Analyst ratings block built for {ticker} ({len(analyst_block)} chars)")
     else:
-        print(f"   ⚠️  No GuruFocus analyst data (set GURUFOCUS_TOKEN for live ratings)")
+        print(f"   ⚠️  No live analyst data — Grok will use training-data estimates")
 
     # Compose Grok user message
     today = datetime.now().strftime("%Y-%m-%d")

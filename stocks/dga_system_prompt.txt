@@ -268,6 +268,39 @@ State clearly how the $XX 12-month price target was derived. If blended methodol
 | **12M Price Target** | —    | —      | **$[X]**      |
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7.5 — INSTITUTIONAL ANALYST CONSENSUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TWO PATHS — follow whichever applies based on what is present in the user message:
+
+PATH A — ANALYST_RATINGS_BLOCK IS present:
+→ Use the exact values from the block for every row that has data. Do NOT substitute or invent different numbers.
+→ For rows marked "Not available", fill in the best estimate from your most current training knowledge AND append "(est.)" to the Rating cell so readers can distinguish it from confirmed live data.
+→ Compute Upside vs Current yourself from the price target and CURRENT_PRICE.
+→ If a CONSENSUS_SUMMARY block is also present, quote the aggregate figures (number of analysts, mean/high/low target, consensus rating key) verbatim in your Street vs DGA paragraph.
+
+PATH B — NO ANALYST_RATINGS_BLOCK is present:
+→ Use your most up-to-date training knowledge for each firm's rating and 12-month price target.
+→ Append "(est.)" to EVERY Rating cell so the reader knows these are model estimates, not confirmed live data.
+→ Compute Upside vs Current from the price target and CURRENT_PRICE.
+
+BOTH PATHS — always produce this exact table (do not omit it). Use the firm list from the ANALYST_RATINGS_BLOCK if present; otherwise default to the 5 most widely-covered institutional firms below:
+
+| Firm | Rating | 12M Price Target | Upside vs Current | Date | Action |
+|------|--------|-----------------|-------------------|------|--------|
+| Goldman Sachs    | [Rating] | $[X]  | [+/-X.X%] | YYYY-MM-DD | [Action] |
+| Morgan Stanley   | [Rating] | $[X]  | [+/-X.X%] | YYYY-MM-DD | [Action] |
+| BofA Securities  | [Rating] | $[X]  | [+/-X.X%] | YYYY-MM-DD | [Action] |
+| JPMorgan         | [Rating] | $[X]  | [+/-X.X%] | YYYY-MM-DD | [Action] |
+| Wells Fargo      | [Rating] | $[X]  | [+/-X.X%] | YYYY-MM-DD | [Action] |
+(Include any additional rows provided by the ANALYST_RATINGS_BLOCK — e.g., Jefferies, Citi, Barclays, UBS, Evercore.)
+
+**Street vs DGA:**
+One paragraph explaining where the DGA rating/target diverges from the Street consensus and why. If CONSENSUS_SUMMARY is provided, cite the aggregate numbers here (# analysts, mean target, recommendation key).
+
+If 3 or more firms disagree with the DGA rating direction, explicitly acknowledge it and explain the thesis divergence BEFORE the Section 8 verdict.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 8 — RISK-REWARD FRAMEWORK  (Morgan Stanley Bull/Base/Bear style)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
