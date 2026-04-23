@@ -100,6 +100,24 @@ const api = {
   portfolioDownloadUrl: (id) => `${API_BASE}/api/portfolio/${id}/download?token=${getToken()}`,
   getLastPortfolio: () => apiGet('/api/portfolio/last'),
   getPortfolioSummary: () => apiGet('/api/portfolio/summary'),
+  // Watchlist
+  getWatchlist: () => apiGet('/api/watchlist'),
+  addWatchlistTicker: (t) => fetch(`${API_BASE}/api/watchlist/${t}`, {
+    method: 'POST', headers: { 'x-auth-token': getToken() }
+  }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); })),
+  removeWatchlistTicker: (t) => fetch(`${API_BASE}/api/watchlist/${t}`, {
+    method: 'DELETE', headers: { 'x-auth-token': getToken() }
+  }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); })),
+  // Scan
+  startScan: () => fetch(`${API_BASE}/api/scan`, {
+    method: 'POST', headers: { 'x-auth-token': getToken() }
+  }).then(async r => {
+    if (r.status === 401) { clearToken(); showLogin('Session expired'); throw new Error('Unauthorized'); }
+    if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+    return r.json();
+  }),
+  getScanJob: (id) => apiGet(`/api/scan/${id}`),
+  getLatestScan: () => apiGet('/api/scan/latest'),
 };
 
 // ---------- View switching ----------
@@ -138,35 +156,7 @@ async function checkServer() {
   }
 }
 
-// ---------- Reports list ----------
-async function loadReports() {
-  const list = document.getElementById('reports-list');
-  try {
-    const reports = await api.listReports();
-    if (!reports.length) {
-      list.innerHTML = '<div class="empty">No reports yet. Run your first analysis above.</div>';
-      return;
-    }
-    list.innerHTML = reports.map(r => `
-      <div class="report-item" data-ticker="${r.ticker}">
-        <div class="report-item-left">
-          <div class="ticker-name">${r.ticker}</div>
-          <div class="date">${formatDate(r.generated_at)}</div>
-        </div>
-        <div class="report-item-right">
-          ${r.has_docx ? '<span class="badge">DOCX</span>' : ''}
-          ${r.has_pptx ? '<span class="badge gold">PPTX</span>' : ''}
-          <span class="chevron">›</span>
-        </div>
-      </div>
-    `).join('');
-    list.querySelectorAll('.report-item').forEach(el => {
-      el.addEventListener('click', () => openReport(el.dataset.ticker));
-    });
-  } catch (err) {
-    list.innerHTML = `<div class="empty">Could not load reports: ${err.message}</div>`;
-  }
-}
+// loadReports is defined later in the file (with live-price injection).
 
 function formatDate(iso) {
   const d = new Date(iso);
@@ -573,6 +563,323 @@ async function loadStrategies() {
   }
 }
 
+// ============================================================================
+// REAL-TIME PRICES — inject live price tags into the Saved Reports list
+// ============================================================================
+async function injectReportPrices(reports) {
+  if (!reports || !reports.length) return;
+  // Fan out all quote fetches in parallel — non-blocking, best-effort.
+  const fetches = reports.map(async r => {
+    const el = document.getElementById(`price-tag-${r.ticker}`);
+    if (!el) return;
+    try {
+      const q = await api.getQuote(r.ticker);
+      if (!q?.price) return;
+      const price = Number(q.price);
+      const prev  = Number(q.previous_close);
+      el.textContent = `$${price.toFixed(2)}`;
+      if (prev && prev > 0) {
+        const pct = ((price - prev) / prev) * 100;
+        const sign = pct >= 0 ? '+' : '';
+        el.title = `${sign}${pct.toFixed(2)}% today`;
+        el.className = `report-price-tag ${pct > 0 ? 'up' : pct < 0 ? 'down' : ''}`;
+        el.textContent = `$${price.toFixed(2)} (${sign}${pct.toFixed(1)}%)`;
+      }
+    } catch { /* non-fatal */ }
+  });
+  await Promise.allSettled(fetches);
+}
+
+// ============================================================================
+// WATCHLIST — manage the persistent ticker list for market scans
+// ============================================================================
+let _watchlist = [];
+
+async function loadWatchlist() {
+  try {
+    const data = await api.getWatchlist();
+    _watchlist = data.tickers || [];
+  } catch {
+    _watchlist = [];
+  }
+  renderWatchlistChips();
+}
+
+function renderWatchlistChips() {
+  const container = document.getElementById('scan-watchlist-chips');
+  if (!container) return;
+  if (!_watchlist.length) {
+    container.innerHTML = '<span class="scan-watchlist-empty">Add tickers to scan…</span>';
+    return;
+  }
+  container.innerHTML = _watchlist.map(t => `
+    <span class="watchlist-chip" data-ticker="${t}">
+      ${t}
+      <button class="watchlist-chip-remove" data-ticker="${t}" title="Remove">×</button>
+    </span>
+  `).join('');
+  container.querySelectorAll('.watchlist-chip-remove').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      removeWatchlistTicker(btn.dataset.ticker);
+    });
+  });
+}
+
+async function addWatchlistTicker(ticker) {
+  const t = ticker.trim().toUpperCase().replace(/[^A-Z.]/g, '');
+  if (!t) return;
+  try {
+    const data = await api.addWatchlistTicker(t);
+    _watchlist = data.tickers || [];
+    renderWatchlistChips();
+    renderScanPlaceholderRow(t);
+  } catch (err) {
+    console.warn('Could not add to watchlist:', err.message);
+  }
+}
+
+async function removeWatchlistTicker(ticker) {
+  try {
+    const data = await api.removeWatchlistTicker(ticker);
+    _watchlist = data.tickers || [];
+    renderWatchlistChips();
+    // Remove the result panel for this ticker if present.
+    const panel = document.getElementById(`scan-panel-${ticker}`);
+    if (panel) panel.remove();
+  } catch (err) {
+    console.warn('Could not remove from watchlist:', err.message);
+  }
+}
+
+// Wire up the Add button and Enter key
+document.getElementById('scan-add-btn')?.addEventListener('click', () => {
+  const input = document.getElementById('scan-add-input');
+  if (input?.value) { addWatchlistTicker(input.value); input.value = ''; }
+});
+document.getElementById('scan-add-input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const input = e.target;
+    if (input.value) { addWatchlistTicker(input.value); input.value = ''; }
+  }
+  // Force uppercase as you type
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z.]/g, '');
+});
+document.getElementById('scan-add-input')?.addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z.]/g, '');
+});
+
+// ============================================================================
+// MARKET SCAN — run + display expandable per-ticker panels
+// ============================================================================
+let _scanJobId = null;
+let _scanPollTimer = null;
+
+document.getElementById('scan-run-btn')?.addEventListener('click', startScan);
+
+async function startScan() {
+  const btn = document.getElementById('scan-run-btn');
+  if (!btn) return;
+  if (!_watchlist.length) {
+    alert('Add at least one ticker to the watchlist first.');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning…';
+  btn.classList.add('scanning');
+
+  // Pre-show loading spinners for each watchlist ticker.
+  _watchlist.forEach(t => renderScanLoadingPanel(t));
+
+  try {
+    const job = await api.startScan();
+    _scanJobId = job.job_id;
+    if (_scanPollTimer) clearInterval(_scanPollTimer);
+    _scanPollTimer = setInterval(() => pollScan(_scanJobId), 4000);
+    pollScan(_scanJobId); // immediate first poll
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '⚡ Scan Now';
+    btn.classList.remove('scanning');
+    alert('Scan error: ' + err.message);
+  }
+}
+
+async function pollScan(jobId) {
+  if (!jobId) return;
+  try {
+    const job = await api.getScanJob(jobId);
+    // Render any completed results (partial streaming)
+    if (job.results) {
+      for (const [ticker, result] of Object.entries(job.results)) {
+        renderScanPanel(ticker, result);
+      }
+    }
+    if (job.status === 'done' || job.status === 'failed') {
+      clearInterval(_scanPollTimer);
+      _scanPollTimer = null;
+      const btn = document.getElementById('scan-run-btn');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⚡ Scan Now';
+        btn.classList.remove('scanning');
+      }
+      if (job.scanned_at) {
+        const el = document.getElementById('scan-last-time');
+        if (el) el.textContent = `Last scan: ${formatDateTime(job.scanned_at + 'Z')}`;
+      }
+    }
+  } catch (err) {
+    console.warn('Scan poll error:', err.message);
+  }
+}
+
+async function loadLatestScan() {
+  try {
+    const data = await api.getLatestScan();
+    if (!data?.exists || !data.results) return;
+    for (const [ticker, result] of Object.entries(data.results)) {
+      renderScanPanel(ticker, result);
+    }
+    if (data.scanned_at) {
+      const el = document.getElementById('scan-last-time');
+      if (el) el.textContent = `Last scan: ${formatDateTime(data.scanned_at + 'Z')}`;
+    }
+  } catch { /* first boot, no results yet */ }
+}
+
+// Inject a "loading…" placeholder panel before the scan result arrives.
+function renderScanLoadingPanel(ticker) {
+  const list = document.getElementById('scan-results-list');
+  if (!list) return;
+  let panel = document.getElementById(`scan-panel-${ticker}`);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = `scan-panel-${ticker}`;
+    panel.className = 'scan-result-panel';
+    list.appendChild(panel);
+  }
+  panel.innerHTML = `
+    <div class="scan-result-header" onclick="toggleScanPanel('${ticker}')">
+      <span class="scan-ticker-label">${ticker}</span>
+      <div class="scan-price-info">
+        <span class="scan-price-num">—</span>
+      </div>
+      <span class="scan-sentiment-badge UNKNOWN">SCANNING</span>
+      <span class="scan-chevron">›</span>
+    </div>
+    <div class="scan-result-body">
+      <div class="scan-result-loading">
+        <span style="animation:pulse 1.2s ease-in-out infinite;display:inline-block;">📡</span>
+        Fetching live data…
+      </div>
+    </div>`;
+}
+
+// Add an empty placeholder row for a newly-added ticker (no scan yet).
+function renderScanPlaceholderRow(ticker) {
+  const list = document.getElementById('scan-results-list');
+  if (!list || document.getElementById(`scan-panel-${ticker}`)) return;
+  const panel = document.createElement('div');
+  panel.id = `scan-panel-${ticker}`;
+  panel.className = 'scan-result-panel';
+  panel.innerHTML = `
+    <div class="scan-result-header" onclick="toggleScanPanel('${ticker}')">
+      <span class="scan-ticker-label">${ticker}</span>
+      <div class="scan-price-info"><span class="scan-price-num">—</span></div>
+      <span class="scan-sentiment-badge UNKNOWN">—</span>
+      <span class="scan-chevron">›</span>
+    </div>
+    <div class="scan-result-body">
+      <p style="font-size:13px;color:var(--mid-gray);padding:12px 0;">
+        Press ⚡ Scan Now to run a live news scan for ${ticker}.
+      </p>
+    </div>`;
+  list.appendChild(panel);
+}
+
+// Render (or update) a completed scan result panel.
+function renderScanPanel(ticker, result) {
+  const list = document.getElementById('scan-results-list');
+  if (!list) return;
+  let panel = document.getElementById(`scan-panel-${ticker}`);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = `scan-panel-${ticker}`;
+    panel.className = 'scan-result-panel';
+    list.appendChild(panel);
+  }
+
+  const price  = result.price  ? `$${Number(result.price).toFixed(2)}` : '—';
+  const prev   = result.previous_close;
+  const pct    = result.pct_change;
+  const sign   = (pct ?? 0) >= 0 ? '+' : '';
+  const pctTxt = pct != null ? `${sign}${pct.toFixed(2)}%` : '';
+  const pctCls = pct == null ? 'flat' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sentiment = result.sentiment || 'UNKNOWN';
+  const wasOpen = panel.classList.contains('open');
+
+  // Full detail — open the scan detail view.
+  const mdHtml = result.ok && result.markdown
+    ? `<div class="report-content">${marked.parse(result.markdown)}</div>`
+    : `<div class="scan-error-label">${result.error || 'No data'}</div>`;
+
+  panel.innerHTML = `
+    <div class="scan-result-header" onclick="toggleScanPanel('${ticker}')">
+      <span class="scan-ticker-label">${ticker}</span>
+      <div class="scan-price-info">
+        <span class="scan-price-num">${price}</span>
+        ${pctTxt ? `<span class="scan-price-chg ${pctCls}">${pctTxt}</span>` : ''}
+      </div>
+      <span class="scan-sentiment-badge ${sentiment}">${sentiment}</span>
+      <span class="scan-chevron">›</span>
+    </div>
+    <div class="scan-result-body">${mdHtml}</div>`;
+
+  if (wasOpen) panel.classList.add('open');
+}
+
+function toggleScanPanel(ticker) {
+  const panel = document.getElementById(`scan-panel-${ticker}`);
+  if (!panel) return;
+  panel.classList.toggle('open');
+}
+
+// ============================================================================
+// Updated loadReports — now also fetches live prices
+// ============================================================================
+async function loadReports() {
+  const list = document.getElementById('reports-list');
+  try {
+    const reports = await api.listReports();
+    if (!reports.length) {
+      list.innerHTML = '<div class="empty">No reports yet. Run your first analysis above.</div>';
+      return;
+    }
+    list.innerHTML = reports.map(r => `
+      <div class="report-item" data-ticker="${r.ticker}">
+        <div class="report-item-left">
+          <div class="ticker-name">${r.ticker}</div>
+          <div class="date">${formatDate(r.generated_at)}</div>
+        </div>
+        <div class="report-item-right">
+          <span class="report-price-tag" id="price-tag-${r.ticker}">…</span>
+          ${r.has_docx ? '<span class="badge">DOCX</span>' : ''}
+          ${r.has_pptx ? '<span class="badge gold">PPTX</span>' : ''}
+          <span class="chevron">›</span>
+        </div>
+      </div>
+    `).join('');
+    list.querySelectorAll('.report-item').forEach(el => {
+      el.addEventListener('click', () => openReport(el.dataset.ticker));
+    });
+    // Kick off price fetches without blocking the render.
+    injectReportPrices(reports);
+  } catch (err) {
+    list.innerHTML = `<div class="empty">Could not load reports: ${err.message}</div>`;
+  }
+}
+
 // ---------- Boot ----------
 async function boot() {
   checkServer();
@@ -580,6 +887,8 @@ async function boot() {
   loadStrategies();
   loadLastPortfolioCard();
   rehydratePortfolioLastCard();
+  loadWatchlist();
+  loadLatestScan();
 }
 
 // On load: if we have a stored token, validate it; otherwise show login.

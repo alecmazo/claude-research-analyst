@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import os
+import json
 import uuid
 import shutil
 import tempfile
@@ -171,6 +172,10 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
 # In-memory portfolio job store.
 _pjobs: dict[str, dict[str, Any]] = {}
 _pjobs_lock = threading.Lock()
+
+# In-memory scan job store.
+_sjobs: dict[str, dict[str, Any]] = {}
+_sjobs_lock = threading.Lock()
 
 
 def _run_portfolio(
@@ -445,6 +450,127 @@ async def start_portfolio(
         str(xlsx_out),
     )
     return _pjobs[job_id]
+
+
+# ---------------------------------------------------------------------------
+# Watchlist endpoints
+# ---------------------------------------------------------------------------
+
+class WatchlistUpdate(BaseModel):
+    tickers: list[str]
+
+
+@app.get("/api/watchlist")
+def get_watchlist():
+    """Return the current watchlist."""
+    return {"tickers": analyst.load_watchlist()}
+
+
+@app.put("/api/watchlist")
+def set_watchlist(body: WatchlistUpdate):
+    """Replace the entire watchlist."""
+    clean = [t.strip().upper() for t in body.tickers if t.strip()]
+    analyst.save_watchlist(clean)
+    return {"tickers": analyst.load_watchlist()}
+
+
+@app.post("/api/watchlist/{ticker}")
+def add_watchlist_ticker(ticker: str):
+    """Add a single ticker to the watchlist."""
+    t = ticker.strip().upper()
+    if not t or not t.replace(".", "").isalnum() or len(t) > 10:
+        raise HTTPException(status_code=422, detail="Invalid ticker")
+    tickers = analyst.add_to_watchlist(t)
+    return {"tickers": tickers}
+
+
+@app.delete("/api/watchlist/{ticker}")
+def remove_watchlist_ticker(ticker: str):
+    """Remove a single ticker from the watchlist."""
+    tickers = analyst.remove_from_watchlist(ticker.strip().upper())
+    return {"tickers": tickers}
+
+
+# ---------------------------------------------------------------------------
+# Scan job worker
+# ---------------------------------------------------------------------------
+
+def _run_scan(job_id: str, tickers: list[str]) -> None:
+    with _sjobs_lock:
+        _sjobs[job_id]["status"] = "running"
+
+    completed: dict[str, Any] = {}
+
+    def on_progress(ticker: str, result: dict) -> None:
+        with _sjobs_lock:
+            _sjobs[job_id]["results"][ticker] = result
+            _sjobs[job_id]["tickers_done"] = list(_sjobs[job_id]["results"].keys())
+
+    try:
+        final = analyst.run_portfolio_scan(tickers, on_progress=on_progress, verbose=True)
+        with _sjobs_lock:
+            _sjobs[job_id]["status"] = "done"
+            _sjobs[job_id]["results"] = final["results"]
+            _sjobs[job_id]["scanned_at"] = final["scanned_at"]
+            _sjobs[job_id]["tickers_done"] = list(final["results"].keys())
+    except BaseException as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        print(f"\n❌ Scan job {job_id} CRASHED:\n{tb}", flush=True)
+        with _sjobs_lock:
+            _sjobs[job_id]["status"] = "failed"
+            _sjobs[job_id]["error"] = str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Scan endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/scan")
+def start_scan(background_tasks: BackgroundTasks):
+    """Kick off a live-search news scan for all watchlist tickers."""
+    tickers = analyst.load_watchlist()
+    if not tickers:
+        raise HTTPException(status_code=422, detail="Watchlist is empty — add tickers first")
+
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _sjobs_lock:
+        _sjobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "tickers": tickers,
+            "tickers_done": [],
+            "results": {},
+            "scanned_at": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_scan, job_id, tickers)
+    return _sjobs[job_id]
+
+
+@app.get("/api/scan/latest")
+def get_latest_scan():
+    """Return the most-recently-completed scan (persisted to disk)."""
+    path = analyst.SCAN_RESULTS_FILE
+    if not path.exists():
+        return {"exists": False}
+    try:
+        data = json.loads(path.read_text())
+        data["exists"] = True
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read scan results: {exc}")
+
+
+@app.get("/api/scan/{job_id}")
+def get_scan_status(job_id: str):
+    """Poll a running or completed scan job."""
+    with _sjobs_lock:
+        job = _sjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    return job
 
 
 @app.get("/api/portfolio/last")

@@ -62,6 +62,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 STOCKS_FOLDER = SCRIPT_DIR / "stocks"
 STOCKS_FOLDER.mkdir(parents=True, exist_ok=True)
 
+# Watchlist & scan persistence
+WATCHLIST_FILE = STOCKS_FOLDER / "watchlist.json"
+SCAN_RESULTS_FILE = STOCKS_FOLDER / "scan_results.json"
+
 # Default recipient for portfolio-analysis emails (override via PORTFOLIO_EMAIL_TO env var).
 DEFAULT_PORTFOLIO_EMAIL_TO = "alecmazo1@gmail.com"
 
@@ -907,6 +911,241 @@ def fetch_market_snapshot(ticker: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         print(f"   ⚠️  Market snapshot failed: {exc}")
     return out
+
+
+# ============================================================================
+# Watchlist — persistent list of tickers to scan
+# ============================================================================
+
+def load_watchlist() -> list[str]:
+    """Return the saved watchlist (uppercase, deduplicated)."""
+    try:
+        if WATCHLIST_FILE.exists():
+            raw = json.loads(WATCHLIST_FILE.read_text())
+            tickers = raw.get("tickers", []) if isinstance(raw, dict) else []
+            return [t.strip().upper() for t in tickers if isinstance(t, str) and t.strip()]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+def save_watchlist(tickers: list[str]) -> None:
+    """Persist the watchlist to disk (atomic write)."""
+    clean = list(dict.fromkeys(t.strip().upper() for t in tickers if t.strip()))
+    tmp = WATCHLIST_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"tickers": clean}, indent=2))
+    tmp.replace(WATCHLIST_FILE)
+
+
+def add_to_watchlist(ticker: str) -> list[str]:
+    current = load_watchlist()
+    t = ticker.strip().upper()
+    if t and t not in current:
+        current.append(t)
+        save_watchlist(current)
+    return current
+
+
+def remove_from_watchlist(ticker: str) -> list[str]:
+    current = load_watchlist()
+    t = ticker.strip().upper()
+    current = [x for x in current if x != t]
+    save_watchlist(current)
+    return current
+
+
+# ============================================================================
+# Market Scan — daily news intelligence per ticker via Grok live search
+# ============================================================================
+
+SCAN_SYSTEM_PROMPT = """You are a real-time market intelligence scanner for a professional portfolio manager. Your job is FAST, SPECIFIC, and FACTUAL.
+
+For each stock scan request you receive, use your live web and X (Twitter) search results to produce a concise daily market digest.
+
+Rules:
+- Be SPECIFIC: exact dates, exact dollar amounts, exact % figures, and source URLs where possible
+- Be CURRENT: items from TODAY and YESTERDAY rank first; do not lead with 30-day-old news
+- Be CONCISE: the entire response must fit in under 500 words
+- NEVER invent news. If no confirmed live source exists for a fact, mark it "(unconfirmed)"
+- For price movement: name the SINGLE most important driver, not generic "market sentiment"
+- Tag every news item: [HIGH], [MED], or [LOW] by its market impact on this stock
+- [HIGH] = material to a PM today: CEO change, earnings, M&A, regulatory ruling, large guidance revision
+- [MED] = noteworthy: analyst action, product launch, partnership, material insider trade
+- [LOW] = background: sector commentary, conference attendance, minor data point"""
+
+_SCAN_USER_TEMPLATE = """\
+DATE: {today}
+TICKER: {ticker}
+COMPANY: {company}
+CURRENT_PRICE: {price}
+PREVIOUS_CLOSE: {prev_close}
+PRICE_CHANGE_PCT: {pct_change}%
+
+Using live web and X search, produce a market scan for {ticker}. Use this exact format:
+
+## {ticker} — ${price} ({sign}{pct_change_abs}%)
+
+**📰 Today's Move:** [ONE sentence — the PRIMARY driver of today's price action. Be specific. Cite source.]
+
+### News (newest first):
+- **[HIGH|MED|LOW] YYYY-MM-DD — headline** — 1-2 sentence context. Source: URL
+
+(Include 3–7 items. Skip LOW items if space is tight. Latest date first.)
+
+### Earnings:
+[If an earnings release occurred this week: Actual vs consensus EPS ($X.XX vs $X.XX est.), revenue ($XB vs $XB est.), and management outlook. Otherwise: "No earnings release this week."]
+
+### Analyst Actions:
+[Any upgrades, downgrades, or price-target changes from today or yesterday. Otherwise: "No analyst actions today."]
+
+### Macro / Policy / Legal:
+[Any macro event, Fed/central bank action, tariff/trade news, government policy, legislation, or lawsuit that specifically affects {ticker} today. Otherwise: "None identified."]
+
+**🎯 Sentiment: [BULLISH|NEUTRAL|BEARISH]** — one sentence conclusion.
+"""
+
+
+def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
+    """Run a live Grok scan for one ticker and return a structured result dict.
+
+    Returns:
+        {
+            "ticker": str,
+            "ok": bool,
+            "scanned_at": str (ISO),
+            "price": float | None,
+            "previous_close": float | None,
+            "pct_change": float | None,
+            "markdown": str,   # the Grok-generated digest
+            "sentiment": str,  # BULLISH | NEUTRAL | BEARISH | UNKNOWN
+            "error": str | None,
+        }
+    """
+    ticker = ticker.strip().upper()
+    now_iso = datetime.utcnow().isoformat()
+
+    mkt = fetch_market_snapshot(ticker)
+    price = mkt.get("price")
+    prev = mkt.get("previous_close")
+    pct_change: float | None = None
+    if price is not None and prev and prev != 0:
+        pct_change = round((price - prev) / prev * 100, 2)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    sign = "+" if (pct_change or 0) >= 0 else ""
+    pct_abs = abs(pct_change) if pct_change is not None else 0.0
+
+    user_msg = _SCAN_USER_TEMPLATE.format(
+        today=today,
+        ticker=ticker,
+        company=ticker,
+        price=f"{price:.2f}" if price else "N/A",
+        prev_close=f"{prev:.2f}" if prev else "N/A",
+        pct_change=f"{pct_change:.2f}" if pct_change is not None else "N/A",
+        sign=sign,
+        pct_change_abs=f"{pct_abs:.2f}",
+    )
+
+    if verbose:
+        print(f"   📡 Scanning {ticker} (${price}, {sign}{pct_abs:.2f}%)…")
+
+    try:
+        markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True)
+    except Exception as exc:  # noqa: BLE001
+        error_msg = str(exc)
+        if verbose:
+            print(f"   ❌ Scan failed for {ticker}: {error_msg}")
+        return {
+            "ticker": ticker,
+            "ok": False,
+            "scanned_at": now_iso,
+            "price": price,
+            "previous_close": prev,
+            "pct_change": pct_change,
+            "markdown": "",
+            "sentiment": "UNKNOWN",
+            "error": error_msg,
+        }
+
+    # Extract the BULLISH/NEUTRAL/BEARISH tag from the last line.
+    sentiment = "NEUTRAL"
+    for line in reversed(markdown.splitlines()):
+        up = line.upper()
+        if "BULLISH" in up:
+            sentiment = "BULLISH"
+            break
+        if "BEARISH" in up:
+            sentiment = "BEARISH"
+            break
+        if "NEUTRAL" in up:
+            sentiment = "NEUTRAL"
+            break
+
+    if verbose:
+        print(f"   ✅ {ticker} → {sentiment}")
+
+    return {
+        "ticker": ticker,
+        "ok": True,
+        "scanned_at": now_iso,
+        "price": price,
+        "previous_close": prev,
+        "pct_change": pct_change,
+        "markdown": markdown,
+        "sentiment": sentiment,
+        "error": None,
+    }
+
+
+def run_portfolio_scan(
+    tickers: list[str],
+    *,
+    on_progress: "Any | None" = None,
+    verbose: bool = True,
+) -> dict:
+    """Scan every ticker in the list and persist results to SCAN_RESULTS_FILE.
+
+    ``on_progress(ticker, result)`` is called after each ticker completes so
+    a background job can stream partial updates to the API.
+
+    Returns:
+        {
+            "ok": bool,
+            "scanned_at": str,
+            "tickers": [...],
+            "results": {TICKER: {...}, ...},
+        }
+    """
+    scanned_at = datetime.utcnow().isoformat()
+    results: dict[str, dict] = {}
+
+    for ticker in tickers:
+        result = scan_ticker_news(ticker, verbose=verbose)
+        results[ticker] = result
+        if on_progress is not None:
+            try:
+                on_progress(ticker, result)
+            except Exception:  # noqa: BLE001
+                pass
+
+    payload = {
+        "ok": bool(results),
+        "scanned_at": scanned_at,
+        "tickers": list(tickers),
+        "results": results,
+    }
+
+    # Persist to disk so /api/scan/latest can serve it after a redeploy.
+    try:
+        tmp = SCAN_RESULTS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str, indent=2))
+        tmp.replace(SCAN_RESULTS_FILE)
+        if verbose:
+            print(f"✅ Market scan complete — {len(results)} tickers. Saved to {SCAN_RESULTS_FILE.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not persist scan results: {exc}")
+
+    return payload
 
 
 # ============================================================================
@@ -3447,6 +3686,10 @@ def main() -> int:
     ap.add_argument("ticker", nargs="?", help="Single ticker (e.g. AAPL)")
     ap.add_argument("--portfolio", help="Path to a CSV or XLSX portfolio file "
                                         "(columns: Ticker | Weight | Optimized)")
+    ap.add_argument("--scan", nargs="*", metavar="TICKER",
+                    help="Run live news scan. Pass tickers (e.g. --scan AAPL MSFT) or "
+                         "omit to use the saved watchlist (stocks/watchlist.json). "
+                         "Results are printed and saved to stocks/scan_results.json.")
     ap.add_argument("--gamma", action="store_true", help="Force Gamma deck generation")
     ap.add_argument("--no-gamma", action="store_true", help="Skip Gamma deck generation")
     ap.add_argument("--strategy", choices=list(STRATEGIES.keys()), default="pro",
@@ -3456,6 +3699,31 @@ def main() -> int:
     ap.add_argument("--out",
                     help=f"Output xlsx path (defaults to ./{DGA_PORTFOLIO_FILENAME})")
     args = ap.parse_args()
+
+    # ── SCAN mode ─────────────────────────────────────────────────────────────
+    if args.scan is not None:
+        print("╔══════════════════════════════════════════════════╗")
+        print("║  DGA MARKET SCAN — Live News Intelligence        ║")
+        print("╚══════════════════════════════════════════════════╝")
+        tickers_to_scan: list[str] = [t.strip().upper() for t in args.scan if t.strip()]
+        if not tickers_to_scan:
+            tickers_to_scan = load_watchlist()
+        if not tickers_to_scan:
+            print("❌ No tickers to scan. Either pass them after --scan or add them "
+                  "to the watchlist (stocks/watchlist.json).")
+            return 2
+        print(f"\n📡 Scanning {len(tickers_to_scan)} ticker(s): {', '.join(tickers_to_scan)}\n")
+        scan = run_portfolio_scan(tickers_to_scan, verbose=True)
+        print("\n" + "─" * 60)
+        for ticker, r in scan["results"].items():
+            print(f"\n{'█' * 50}")
+            if r.get("ok") and r.get("markdown"):
+                print(r["markdown"])
+            else:
+                print(f"⚠️  {ticker}: {r.get('error', 'No data')}")
+        print("\n" + "─" * 60)
+        print(f"\n✅ Scan complete. Results saved → {SCAN_RESULTS_FILE}")
+        return 0
 
     print("╔══════════════════════════════════════════════════╗")
     print("║  DGA CAPITAL RESEARCH ANALYST — Claude Edition  ║")
