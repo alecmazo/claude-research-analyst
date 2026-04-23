@@ -1228,6 +1228,9 @@ def _fetch_yahoo_analyst_ratings(ticker: str) -> dict | None:
         print(f"   ⚠️  yfinance upgrades_downgrades failed for {ticker}: {exc}")
         ud = None
 
+    # Ratings older than 6 months are stale — ignore them.
+    _cutoff_date = (datetime.utcnow() - timedelta(days=183)).strftime("%Y-%m-%d")
+
     if ud is not None and hasattr(ud, "empty") and not ud.empty:
         try:
             df = ud.reset_index() if "GradeDate" not in ud.columns else ud.copy()
@@ -1250,6 +1253,11 @@ def _fetch_yahoo_analyst_ratings(ticker: str) -> dict | None:
                             date_val = date_val.strftime("%Y-%m-%d")
                     except Exception:
                         pass
+                    date_str = str(date_val)[:10]
+                    # Skip ratings older than 6 months — no longer actionable.
+                    if date_str and date_str < _cutoff_date:
+                        print(f"   ⏭️  Skipping stale {label} rating from {date_str} (>6 months old)")
+                        continue
                     target_val = row.get("currentPriceTarget", 0) or 0
                     try:
                         target_val = float(target_val)
@@ -1259,7 +1267,7 @@ def _fetch_yahoo_analyst_ratings(ticker: str) -> dict | None:
                         "firm":   label,
                         "rating": str(row.get("ToGrade", "") or "—").strip() or "—",
                         "target": target_val,
-                        "date":   str(date_val)[:10],
+                        "date":   date_str,
                         "action": str(row.get("Action", "") or "—").strip() or "—",
                     })
                 except Exception as exc:  # noqa: BLE001
@@ -1393,8 +1401,9 @@ def fetch_analyst_ratings(ticker: str) -> str:
 
     # --- Build the markdown block. Keep row order = _TARGET_FIRMS order.
     by_firm = {r["firm"]: r for r in firm_rows}
+    cutoff_display = (datetime.utcnow() - timedelta(days=183)).strftime("%Y-%m-%d")
     lines = [
-        f"ANALYST_RATINGS_BLOCK (source: {source_label} — use these exact values in Section 7.5):",
+        f"ANALYST_RATINGS_BLOCK (source: {source_label} — ratings within last 6 months only, cutoff {cutoff_display} — use these exact values in Section 7.5):",
         "| Firm | Rating | 12M Price Target | Date | Action |",
         "|------|--------|-----------------|------|--------|",
     ]
@@ -2363,30 +2372,37 @@ def fetch_sector(ticker: str) -> str:
 
 
 # ============================================================================
-# Rebalancer — 3 strategies
+# Rebalancer — strategies
 # ============================================================================
 STRATEGIES = {
+    "current": {
+        "label": "Current Portfolio",
+        "description": (
+            "Keeps every uploaded position — no selling. "
+            "Optimizes weights for risk-adjusted expected return. "
+            "Position caps vary by market cap tier: large caps up to 20%, "
+            "mid caps 15%, small caps 10%, micro caps 7%. "
+            "Sector cap 30%. Works with any number of positions."
+        ),
+        "min_names": 1,
+        "target_names": 999,   # all positions kept
+        "max_names": 999,
+        "max_position": 0.20,  # baseline; overridden per-ticker by market cap
+        "min_position": 0.01,  # 1% floor — everyone stays in
+        "max_sector": 0.30,
+        "score_exponent": 1.5,
+        "no_drop": True,       # never drop a position regardless of rating
+    },
     "pro": {
-        "label": "Pro Standard",
-        "description": "10–20 positions, max 12% each, min 3% if held, max 25% per sector.",
-        "min_names": 10,
-        "target_names": 15,
-        "max_names": 20,
-        "max_position": 0.12,
+        "label": "High Conviction",
+        "description": "8–15 best ideas, max 15% each, min 3% if held, sector cap 25%. Institutional risk/reward.",
+        "min_names": 8,
+        "target_names": 12,
+        "max_names": 15,
+        "max_position": 0.15,
         "min_position": 0.03,
         "max_sector": 0.25,
-        "score_exponent": 1.4,
-    },
-    "concentrated": {
-        "label": "Concentrated High Conviction",
-        "description": "8–10 positions, max 20% each, min 5% if held, max 35% per sector.",
-        "min_names": 8,
-        "target_names": 9,
-        "max_names": 10,
-        "max_position": 0.20,
-        "min_position": 0.05,
-        "max_sector": 0.35,
-        "score_exponent": 1.8,
+        "score_exponent": 1.6,
     },
     "allin": {
         "label": "All In — Top 3",
@@ -2400,6 +2416,24 @@ STRATEGIES = {
         "score_exponent": 2.0,
     },
 }
+
+
+def _market_cap_max_position(market_cap: float | None) -> float:
+    """Dynamic per-position cap based on market capitalisation.
+
+    Larger, more liquid names can absorb heavier allocation.
+    Small and micro caps are capped tighter to control idiosyncratic risk.
+    """
+    if market_cap is None or market_cap <= 0:
+        return 0.10  # Unknown — conservative default
+    b = market_cap / 1_000_000_000  # convert to billions
+    if b >= 10:
+        return 0.20  # Large / mega cap
+    if b >= 2:
+        return 0.15  # Mid cap
+    if b >= 0.3:
+        return 0.10  # Small cap
+    return 0.07       # Micro cap / speculative name
 
 _RATING_SCORE = {
     "strong buy": 5.0,
@@ -2596,13 +2630,12 @@ def compute_rebalance(
       - weights: {ticker: fraction_0_to_1}
       - rows: list of {ticker, score, rating, upside, sector, weight} (all tickers)
     """
-    cfg = STRATEGIES.get(strategy) or STRATEGIES["pro"]
+    cfg = STRATEGIES.get(strategy) or STRATEGIES["current"]
     usable = [r for r in ticker_results if r.get("ok")]
 
     # Hydrate sector for each ticker (cheap, cached if already set).
     for r in usable:
         if not r.get("sector"):
-            # First try the sector we parsed out of the report itself.
             report_sector = (r.get("summary") or {}).get("sector")
             if report_sector:
                 r["sector"] = report_sector
@@ -2617,37 +2650,92 @@ def compute_rebalance(
 
     scored = [_score_ticker(r) for r in usable]
 
-    # Drop anything the analyst said SELL / Strong Sell — those are always 0%.
-    eligible = [s for s in scored if s["rating"].lower() not in ("sell", "strong sell")]
-    # Also drop anything with a non-positive composite score.
-    eligible = [s for s in eligible if s["score"] > 0]
+    # ── "Current Portfolio" strategy — keep every position, no selling ────────
+    if cfg.get("no_drop"):
+        # Sell/Strong Sell tickers get a small positive score (minimum weight)
+        # rather than zero — they stay in the portfolio.
+        selected = [dict(s) for s in scored]
+        for s in selected:
+            if s["rating"].lower() in ("sell", "strong sell"):
+                s["score"] = 0.15  # kept at minimum weight
+            elif s["score"] <= 0:
+                s["score"] = 0.20  # small positive floor for unknowns
 
-    if not eligible:
-        return {
-            "strategy": strategy,
-            "label": cfg["label"],
-            "description": cfg["description"],
-            "weights": {s["ticker"]: 0.0 for s in scored},
-            "rows": [dict(s, weight=0.0, in_portfolio=False) for s in scored],
-        }
+        # Fetch market cap for dynamic per-position caps.
+        # Uses yfinance fast_info (already a dependency); never raises.
+        for s in selected:
+            mcap = None
+            try:
+                import yfinance as yf  # type: ignore
+                fi = yf.Ticker(s["ticker"]).fast_info
+                raw = getattr(fi, "market_cap", None)
+                if raw and float(raw) > 0:
+                    mcap = float(raw)
+            except Exception:  # noqa: BLE001
+                pass
+            s["_market_cap"] = mcap
+            s["_max_pos"] = _market_cap_max_position(mcap)
 
-    # Rank and pick the target number of names.
-    eligible.sort(key=lambda x: -x["score"])
-    n_target = min(max(cfg["min_names"], cfg["target_names"]), cfg["max_names"], len(eligible))
-    selected = [dict(s) for s in eligible[:n_target]]
+        # Initial allocation proportional to score^exponent.
+        exponent = cfg["score_exponent"]
+        total = sum(max(s["score"], 0) ** exponent for s in selected) or 1.0
+        for s in selected:
+            s["weight"] = (max(s["score"], 0) ** exponent) / total
 
-    # Initial allocation proportional to score^exponent.
-    exponent = cfg["score_exponent"]
-    total = sum(max(s["score"], 0) ** exponent for s in selected) or 1.0
-    for s in selected:
-        s["weight"] = (max(s["score"], 0) ** exponent) / total
+        # Apply per-ticker position caps (vary by market cap tier).
+        for _ in range(80):
+            over = [s for s in selected if s["weight"] > s["_max_pos"] + 1e-9]
+            if not over:
+                break
+            excess = sum(s["weight"] - s["_max_pos"] for s in over)
+            for s in over:
+                s["weight"] = s["_max_pos"]
+            uncapped = [s for s in selected if s["weight"] < s["_max_pos"] - 1e-9]
+            pool = sum(s["weight"] for s in uncapped)
+            if pool <= 0:
+                break
+            for s in uncapped:
+                s["weight"] += excess * (s["weight"] / pool)
 
-    # Enforce caps and floors.
-    _waterfall_cap(selected, "weight", cfg["max_position"])
-    _apply_floor(selected, "weight", cfg["min_position"], cfg["max_position"])
-    _apply_sector_cap(selected, "weight", cfg["max_sector"], cfg["max_position"])
+        # 1% floor so every position stays in.
+        global_max = max((s["_max_pos"] for s in selected), default=cfg["max_position"])
+        _apply_floor(selected, "weight", cfg["min_position"], global_max)
 
-    # Final renormalize for rounding drift.
+        # Sector cap.
+        _apply_sector_cap(selected, "weight", cfg["max_sector"], global_max)
+
+    # ── Standard strategies — select best N, can drop positions ──────────────
+    else:
+        # Drop SELL / Strong Sell and non-positive scores.
+        eligible = [s for s in scored if s["rating"].lower() not in ("sell", "strong sell")]
+        eligible = [s for s in eligible if s["score"] > 0]
+
+        if not eligible:
+            return {
+                "strategy": strategy,
+                "label": cfg["label"],
+                "description": cfg["description"],
+                "weights": {s["ticker"]: 0.0 for s in scored},
+                "rows": [dict(s, weight=0.0, in_portfolio=False) for s in scored],
+            }
+
+        eligible.sort(key=lambda x: -x["score"])
+        n_target = min(
+            max(cfg["min_names"], cfg["target_names"]), cfg["max_names"], len(eligible)
+        )
+        selected = [dict(s) for s in eligible[:n_target]]
+
+        exponent = cfg["score_exponent"]
+        total = sum(max(s["score"], 0) ** exponent for s in selected) or 1.0
+        for s in selected:
+            s["weight"] = (max(s["score"], 0) ** exponent) / total
+
+        _waterfall_cap(selected, "weight", cfg["max_position"])
+        _apply_floor(selected, "weight", cfg["min_position"], cfg["max_position"])
+        _apply_sector_cap(selected, "weight", cfg["max_sector"], cfg["max_position"])
+
+    # ── Shared finalisation ───────────────────────────────────────────────────
+    # Renormalize for rounding drift.
     total = sum(s["weight"] for s in selected) or 1.0
     for s in selected:
         s["weight"] = s["weight"] / total
@@ -2710,7 +2798,7 @@ def write_dga_portfolio_xlsx(
     from openpyxl.utils import get_column_letter
 
     # Column order: primary first, then the other two in a stable order.
-    other_order = [s for s in ("pro", "concentrated", "allin") if s != primary_strategy]
+    other_order = [s for s in ("current", "pro", "allin") if s != primary_strategy]
     order = [primary_strategy] + other_order
 
     # Build a ticker list starting with the input file order, then append any
@@ -3549,7 +3637,7 @@ def fetch_report_from_drive(ticker: str) -> str | None:
 def run_portfolio_rebalance(
     portfolio_records: list[dict],
     *,
-    primary_strategy: str = "pro",
+    primary_strategy: str = "current",
     generate_gamma: bool = False,
     reuse_existing: bool = True,
     output_path: Path | str | None = None,
@@ -3723,8 +3811,8 @@ def main() -> int:
                          "Results are printed and saved to stocks/scan_results.json.")
     ap.add_argument("--gamma", action="store_true", help="Force Gamma deck generation")
     ap.add_argument("--no-gamma", action="store_true", help="Skip Gamma deck generation")
-    ap.add_argument("--strategy", choices=list(STRATEGIES.keys()), default="pro",
-                    help="Primary rebalance strategy (default: pro)")
+    ap.add_argument("--strategy", choices=list(STRATEGIES.keys()), default="current",
+                    help="Primary rebalance strategy (default: current)")
     ap.add_argument("--reuse", action="store_true",
                     help="Reuse cached markdown reports from /stocks where present")
     ap.add_argument("--out",

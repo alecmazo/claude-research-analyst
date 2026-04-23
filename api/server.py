@@ -391,7 +391,7 @@ def list_strategies():
 @app.post("/api/portfolio", response_model=PortfolioJobStatus)
 async def start_portfolio(
     background_tasks: BackgroundTasks,
-    strategy: str = Form("pro"),
+    strategy: str = Form("current"),
     generate_gamma: bool = Form(False),
     reuse_existing: bool = Form(True),
     file: UploadFile = File(...),

@@ -11,14 +11,14 @@ import AppHeader from '../components/AppHeader';
 
 const FALLBACK_STRATEGIES = [
   {
-    key: 'pro',
-    label: 'Pro Standard',
-    description: '10–20 positions, max 12% each, sector cap 25%. Institutional risk/reward.',
+    key: 'current',
+    label: 'Current Portfolio',
+    description: 'Keeps every position — no selling. Optimizes weights for risk-adjusted return. Position caps scale with market cap (large caps ≤20%, small caps ≤10%). Works with any number of positions.',
   },
   {
-    key: 'concentrated',
-    label: 'Concentrated High Conviction',
-    description: '8–10 positions, max 20% each, sector cap 35%. Higher conviction tilt.',
+    key: 'pro',
+    label: 'High Conviction',
+    description: '8–15 best ideas, max 15% each, sector cap 25%. Can trim or exit weak positions.',
   },
   {
     key: 'allin',
@@ -29,7 +29,7 @@ const FALLBACK_STRATEGIES = [
 
 export default function PortfolioScreen() {
   const [strategies, setStrategies] = useState(FALLBACK_STRATEGIES);
-  const [selectedStrategy, setSelectedStrategy] = useState('pro');
+  const [selectedStrategy, setSelectedStrategy] = useState('current');
   const [file, setFile] = useState(null);
   const [reuseCache, setReuseCache] = useState(true);
   const [generateGamma, setGenerateGamma] = useState(false);
