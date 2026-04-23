@@ -4,13 +4,14 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import HomeScreen      from './src/screens/HomeScreen';
-import AnalysisScreen  from './src/screens/AnalysisScreen';
-import ReportScreen    from './src/screens/ReportScreen';
-import ScanScreen      from './src/screens/ScanScreen';
-import PortfolioScreen from './src/screens/PortfolioScreen';
-import SettingsScreen  from './src/screens/SettingsScreen';
-import CustomTabBar    from './src/components/CustomTabBar';
+import HomeScreen             from './src/screens/HomeScreen';
+import AnalysisScreen         from './src/screens/AnalysisScreen';
+import ReportScreen           from './src/screens/ReportScreen';
+import ScanScreen             from './src/screens/ScanScreen';
+import PortfolioScreen        from './src/screens/PortfolioScreen';
+import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
+import SettingsScreen         from './src/screens/SettingsScreen';
+import CustomTabBar           from './src/components/CustomTabBar';
 
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
@@ -25,6 +26,15 @@ function HomeStack() {
   );
 }
 
+function PortfolioStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Portfolio"        component={PortfolioScreen} />
+      <Stack.Screen name="PortfolioSummary" component={PortfolioSummaryScreen} />
+    </Stack.Navigator>
+  );
+}
+
 export default function App() {
   return (
     <NavigationContainer>
@@ -35,7 +45,7 @@ export default function App() {
       >
         <Tab.Screen name="Research"  component={HomeStack} />
         <Tab.Screen name="Scan"      component={ScanScreen} />
-        <Tab.Screen name="Portfolio" component={PortfolioScreen} />
+        <Tab.Screen name="Portfolio" component={PortfolioStack} />
         <Tab.Screen name="Settings"  component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>

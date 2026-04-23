@@ -3,11 +3,14 @@ import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   ActivityIndicator, Alert, Switch, Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
+
+const LAST_PORTFOLIO_KEY = '@dga_last_portfolio';
 
 const FALLBACK_STRATEGIES = [
   {
@@ -27,20 +30,25 @@ const FALLBACK_STRATEGIES = [
   },
 ];
 
-export default function PortfolioScreen() {
-  const [strategies, setStrategies] = useState(FALLBACK_STRATEGIES);
+export default function PortfolioScreen({ navigation }) {
+  const [strategies, setStrategies]     = useState(FALLBACK_STRATEGIES);
   const [selectedStrategy, setSelectedStrategy] = useState('current');
-  const [file, setFile] = useState(null);
-  const [reuseCache, setReuseCache] = useState(true);
+  const [file, setFile]                 = useState(null);
+  const [reuseCache, setReuseCache]     = useState(true);
   const [generateGamma, setGenerateGamma] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [job, setJob] = useState(null);
-  const [error, setError] = useState(null);
+  const [submitting, setSubmitting]     = useState(false);
+  const [job, setJob]                   = useState(null);
+  const [error, setError]               = useState(null);
+  const [lastRun, setLastRun]           = useState(null);   // persisted last job
   const pollRef = useRef(null);
 
   useEffect(() => {
     api.listStrategies()
       .then(s => { if (Array.isArray(s) && s.length) setStrategies(s); })
+      .catch(() => {});
+    // Load persisted last-run card
+    AsyncStorage.getItem(LAST_PORTFOLIO_KEY)
+      .then(raw => { if (raw) setLastRun(JSON.parse(raw)); })
       .catch(() => {});
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
@@ -92,7 +100,20 @@ export default function PortfolioScreen() {
     try {
       const j = await api.getPortfolioJob(jobId);
       setJob(j);
-      if (j.status === 'done' || j.status === 'failed') {
+      if (j.status === 'done') {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+        // Persist for "Last Portfolio Run" card
+        const payload = {
+          job_id: jobId,
+          n_tickers: j.n_tickers,
+          strategy: j.strategy,
+          completed_at: new Date().toISOString(),
+          result: j.result,
+        };
+        AsyncStorage.setItem(LAST_PORTFOLIO_KEY, JSON.stringify(payload)).catch(() => {});
+        setLastRun(payload);
+      } else if (j.status === 'failed') {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
@@ -106,6 +127,22 @@ export default function PortfolioScreen() {
     if (!job) return;
     const url = await api.portfolioDownloadUrl(job.job_id);
     Linking.openURL(url);
+  };
+
+  const openLastDownload = async () => {
+    if (!lastRun?.job_id) return;
+    const url = await api.portfolioDownloadUrl(lastRun.job_id);
+    Linking.openURL(url);
+  };
+
+  const formatDate = (iso) => {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+      });
+    } catch { return iso; }
   };
 
   const result = job?.result;
@@ -247,6 +284,67 @@ export default function PortfolioScreen() {
           )}
         </View>
       )}
+      {/* ── Last Portfolio Run (persisted across launches) ── */}
+      {lastRun && !job && (
+        <View style={styles.card}>
+          <Text style={styles.label}>LAST PORTFOLIO RUN</Text>
+          <Text style={styles.lastRunMeta}>
+            {formatDate(lastRun.completed_at)}
+            {lastRun.n_tickers ? `  ·  ${lastRun.n_tickers} tickers` : ''}
+            {lastRun.strategy  ? `  ·  ${lastRun.strategy}` : ''}
+          </Text>
+
+          {/* Mini result pills */}
+          {lastRun.result && (() => {
+            const r = lastRun.result;
+            const primary = r.primary_strategy;
+            const order = [primary, ...Object.keys(r.strategies || {}).filter(k => k !== primary)];
+            return order.map(k => {
+              const s = (r.strategies || {})[k];
+              if (!s) return null;
+              const isPrimary = k === primary;
+              const pills = Object.entries(s.weights || {}).sort(([,a],[,b]) => b - a);
+              return (
+                <View key={k} style={[styles.resultBlock, isPrimary && styles.resultBlockPrimary]}>
+                  <View style={styles.resultHead}>
+                    <Text style={styles.resultTitle}>{s.label}{isPrimary ? ' — Primary' : ''}</Text>
+                    <Text style={styles.resultCount}>{s.held} positions</Text>
+                  </View>
+                  <View style={styles.pillRow}>
+                    {pills.length === 0 && <Text style={styles.emptyPill}>No positions</Text>}
+                    {pills.map(([t, w]) => (
+                      <View key={t} style={styles.pill}>
+                        <Text style={styles.pillTicker}>{t}</Text>
+                        <Text style={styles.pillWeight}>{(w * 100).toFixed(1)}%</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              );
+            });
+          })()}
+
+          <View style={styles.lastRunActions}>
+            <TouchableOpacity
+              style={[styles.runBtn, styles.lastRunSummaryBtn]}
+              onPress={() => navigation.navigate('PortfolioSummary')}
+            >
+              <Ionicons name="document-text-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
+              <Text style={styles.runBtnText}>View Summary</Text>
+            </TouchableOpacity>
+            {lastRun.job_id && (
+              <TouchableOpacity
+                style={[styles.runBtn, { flex: 1 }]}
+                onPress={openLastDownload}
+              >
+                <Ionicons name="download-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
+                <Text style={styles.runBtnText}>Download xlsx</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       </ScrollView>
     </View>
   );
@@ -367,4 +465,23 @@ const styles = StyleSheet.create({
   pillTicker: { fontSize: 12, color: colors.darkGray },
   pillWeight: { fontSize: 12, fontWeight: '700', color: colors.navy },
   emptyPill: { fontSize: 12, color: colors.midGray, fontStyle: 'italic' },
+
+  lastRunMeta: {
+    fontSize: 12,
+    color: colors.midGray,
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  lastRunActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  lastRunSummaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.gold,
+  },
 });

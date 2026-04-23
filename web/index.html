@@ -249,18 +249,57 @@
 
 <!-- ============ FOOTER TABS ============ -->
 <nav class="tab-bar">
+
+  <!-- Research tab — area-chart spline (mirrors mobile chart-areaspline) -->
   <button class="tab active" data-target="view-home">
-    <span class="tab-icon">📈</span>
-    <span>Research</span>
+    <div class="tab-icon-wrap">
+      <span class="tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 17.5 L6.5 12 L10 14 L14.5 7.5 L18 10.5 L21 8.5"
+                stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 17.5 L6.5 12 L10 14 L14.5 7.5 L18 10.5 L21 8.5 L21 21 L3 21 Z"
+                fill="currentColor" opacity="0.20"/>
+        </svg>
+      </span>
+    </div>
+    <span class="tab-label">Research</span>
   </button>
+
+  <!-- Portfolio tab — bank / columns building (mirrors mobile bank icon) -->
   <button class="tab" data-target="view-portfolio">
-    <span class="tab-icon">💼</span>
-    <span>Portfolio</span>
+    <div class="tab-icon-wrap">
+      <span class="tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 10H21M3 21H21M12 3L3 8H21L12 3Z"
+                stroke="currentColor" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="6.5"  y1="10" x2="6.5"  y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          <line x1="12"   y1="10" x2="12"   y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          <line x1="17.5" y1="10" x2="17.5" y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+        </svg>
+      </span>
+    </div>
+    <span class="tab-label">Portfolio</span>
   </button>
+
+  <!-- Settings tab — horizontal sliders / tune (mirrors mobile tune-variant icon) -->
   <button class="tab" data-target="view-settings">
-    <span class="tab-icon">⚙️</span>
-    <span>Settings</span>
+    <div class="tab-icon-wrap">
+      <span class="tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <line x1="4" y1="6"  x2="20" y2="6"  stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="8"  cy="6"  r="2.6" fill="currentColor"/>
+          <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="16" cy="12" r="2.6" fill="currentColor"/>
+          <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="10" cy="18" r="2.6" fill="currentColor"/>
+        </svg>
+      </span>
+    </div>
+    <span class="tab-label">Settings</span>
   </button>
+
 </nav>
 
 <!-- ============ SETTINGS VIEW ============ -->
