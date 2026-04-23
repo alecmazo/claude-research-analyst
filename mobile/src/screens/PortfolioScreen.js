@@ -7,6 +7,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
+import AppHeader from '../components/AppHeader';
 
 const FALLBACK_STRATEGIES = [
   {
@@ -113,10 +114,9 @@ export default function PortfolioScreen() {
     : [];
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Portfolio Rebalance</Text>
-      </View>
+    <View style={styles.wrapper}>
+      <AppHeader title="Portfolio Rebalance" />
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
       {/* File picker card */}
       <View style={styles.card}>
@@ -247,20 +247,15 @@ export default function PortfolioScreen() {
           )}
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.offWhite },
+  wrapper:   { flex: 1, backgroundColor: colors.offWhite },
+  container: { flex: 1 },
   content: { paddingBottom: 40 },
-  header: {
-    backgroundColor: colors.navy,
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-  },
-  headerTitle: { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
   card: {
     backgroundColor: colors.white,
     margin: 16,

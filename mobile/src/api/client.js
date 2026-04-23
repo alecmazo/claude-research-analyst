@@ -54,6 +54,11 @@ async function request(path, options = {}) {
   if (token) headers['x-auth-token'] = token;
   const resp = await fetch(url, { ...options, headers });
   if (!resp.ok) {
+    if (resp.status === 401) {
+      const err = new Error('Authentication required. Please enter your server password in Settings → Auth Token.');
+      err.isAuthError = true;
+      throw err;
+    }
     const text = await resp.text();
     throw new Error(`${resp.status}: ${text}`);
   }

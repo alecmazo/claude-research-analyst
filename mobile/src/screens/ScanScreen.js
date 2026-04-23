@@ -8,6 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
+import AppHeader from '../components/AppHeader';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -114,7 +115,22 @@ function ScanCard({ ticker, result, isLoading }) {
 }
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
-export default function ScanScreen() {
+function alertError(err, navigation) {
+  if (err?.isAuthError) {
+    Alert.alert(
+      'Authentication Required',
+      'Enter your server password in Settings → Auth Token.',
+      [
+        { text: 'Go to Settings', onPress: () => navigation?.navigate('Settings') },
+        { text: 'OK', style: 'cancel' },
+      ]
+    );
+  } else {
+    Alert.alert('Error', err?.message || 'Unknown error');
+  }
+}
+
+export default function ScanScreen({ navigation }) {
   const [watchlist, setWatchlist]   = useState([]);
   const [addInput, setAddInput]     = useState('');
   const [scanResults, setScanResults] = useState({});   // { TICKER: result }
@@ -167,7 +183,7 @@ export default function ScanScreen() {
       setWatchlist(data.tickers || []);
       setAddInput('');
     } catch (err) {
-      Alert.alert('Error', err.message);
+      alertError(err, navigation);
     }
   };
 
@@ -177,7 +193,7 @@ export default function ScanScreen() {
       const data = await api.removeFromWatchlist(t);
       setWatchlist(data.tickers || []);
     } catch (err) {
-      Alert.alert('Error', err.message);
+      alertError(err, navigation);
     }
   };
 
@@ -197,7 +213,7 @@ export default function ScanScreen() {
       const job = await api.startScan(watchlist);
       pollScan(job.job_id);
     } catch (err) {
-      Alert.alert('Scan Failed', err.message);
+      alertError(err, navigation);
       setScanning(false);
     }
   };
@@ -228,12 +244,10 @@ export default function ScanScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
     >
       {/* Header */}
-      <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Market Scan</Text>
-        {lastScanned && (
-          <Text style={styles.lastScannedText}>Last: {relativeTime(lastScanned)}</Text>
-        )}
-      </View>
+      <AppHeader
+        title="Market Scan"
+        subtitle={lastScanned ? `Last scan: ${relativeTime(lastScanned)}` : null}
+      />
 
       {/* Scan button */}
       <TouchableOpacity
@@ -322,16 +336,8 @@ export default function ScanScreen() {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container:   { flex: 1, backgroundColor: colors.offWhite },
-  content:     { paddingBottom: 60 },
-  pageHeader:  {
-    backgroundColor: colors.navy,
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-  },
-  pageTitle:       { color: colors.gold, fontSize: 24, fontWeight: '800', letterSpacing: 1 },
-  lastScannedText: { color: colors.midGray, fontSize: 12, marginTop: 4 },
+  container: { flex: 1, backgroundColor: colors.offWhite },
+  content:   { paddingBottom: 60 },
 
   // Scan button
   scanBtn: {

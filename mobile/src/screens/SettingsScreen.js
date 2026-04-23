@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled, getToken, setToken } from '../api/client';
 import { colors } from '../components/theme';
+import AppHeader from '../components/AppHeader';
 
 let dgaLogo = null;
 try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
@@ -53,8 +54,9 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.pageTitle}>Settings</Text>
+    <View style={styles.wrapper}>
+      <AppHeader title="Settings" />
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
       {/* API Server */}
       <View style={styles.section}>
@@ -160,17 +162,15 @@ export default function SettingsScreen() {
         <Text style={styles.aboutText}>DGA Capital Research Analyst v1.0</Text>
         <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.offWhite },
+  wrapper:   { flex: 1, backgroundColor: colors.offWhite },
+  container: { flex: 1 },
   content: { padding: 16, paddingBottom: 60 },
-  pageTitle: {
-    fontSize: 28, fontWeight: '800', color: colors.navy,
-    marginBottom: 20, marginTop: 60,
-  },
   section: {
     backgroundColor: colors.white,
     borderRadius: 12,

@@ -1,15 +1,13 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Image,
+  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { api, getGammaEnabled, setGammaEnabled as saveGamma } from '../api/client';
 import { colors } from '../components/theme';
-
-let dgaLogo = null;
-try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
+import AppHeader from '../components/AppHeader';
 
 export default function HomeScreen({ navigation }) {
   const [ticker, setTicker]       = useState('');
@@ -76,7 +74,11 @@ export default function HomeScreen({ navigation }) {
       setTicker('');
       navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      if (err?.isAuthError) {
+        Alert.alert('Authentication Required', 'Enter your server password in Settings → Auth Token.');
+      } else {
+        Alert.alert('Error', err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -136,16 +138,15 @@ export default function HomeScreen({ navigation }) {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerBrand}>
-          {dgaLogo && <Image source={dgaLogo} style={styles.headerLogo} resizeMode="contain" />}
-          <Text style={styles.headerTitle}>DGA Research</Text>
-        </View>
-        <View style={[
-          styles.statusDot,
-          { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
-        ]} />
-      </View>
+      <AppHeader
+        title="Research"
+        right={
+          <View style={[
+            styles.statusDot,
+            { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
+          ]} />
+        }
+      />
 
       {/* Ticker input */}
       <View style={styles.inputSection}>
@@ -201,20 +202,8 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container:   { flex: 1, backgroundColor: colors.offWhite },
-  header: {
-    backgroundColor: colors.navy,
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerBrand:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerLogo:   { width: 110, height: 44 },
-  headerTitle:  { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
-  statusDot:    { width: 10, height: 10, borderRadius: 5 },
+  container:  { flex: 1, backgroundColor: colors.offWhite },
+  statusDot:  { width: 10, height: 10, borderRadius: 5 },
   inputSection: {
     backgroundColor: colors.white,
     margin: 16,
