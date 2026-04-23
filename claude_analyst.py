@@ -886,11 +886,39 @@ def load_system_prompt() -> str:
 
 
 # ============================================================================
-# Market price (free, no-key) — use Yahoo via requests-only lightweight call
+# Market price (free, no-key)
+# Primary:  yfinance fast_info — reliably exposes last_price + previous_close
+# Fallback: Yahoo Finance chart API via raw requests
 # ============================================================================
 def fetch_market_snapshot(ticker: str) -> dict:
-    """Best-effort current price + previous close via Yahoo Finance public endpoint."""
+    """Best-effort current price + previous close.
+
+    Uses yfinance fast_info as the primary source (reliable previous_close)
+    and falls back to the Yahoo chart JSON endpoint when yfinance is absent.
+    """
     out = {"price": None, "previous_close": None, "market_cap": None, "source": ""}
+
+    # ── Primary: yfinance fast_info ──────────────────────────────────────────
+    try:
+        import yfinance as yf  # type: ignore
+        fi = yf.Ticker(ticker).fast_info
+        price = getattr(fi, "last_price", None)
+        prev  = getattr(fi, "previous_close", None)
+        mcap  = getattr(fi, "market_cap", None)
+        if price and float(price) > 0:
+            out["price"] = float(price)
+            out["source"] = "Yahoo Finance (fast_info)"
+        if prev and float(prev) > 0:
+            out["previous_close"] = float(prev)
+        if mcap:
+            out["market_cap"] = mcap
+        # If we have both price and previous_close, we're done.
+        if out["price"] is not None and out["previous_close"] is not None:
+            return out
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  yfinance fast_info failed for {ticker}: {exc}")
+
+    # ── Fallback: raw Yahoo chart API ────────────────────────────────────────
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
         resp = requests.get(
@@ -899,17 +927,20 @@ def fetch_market_snapshot(ticker: str) -> dict:
             timeout=15,
         )
         data = resp.json()
-        if not isinstance(data, dict):
-            return out
-        chart = data.get("chart", {}) if isinstance(data.get("chart"), dict) else {}
-        result = chart.get("result", []) if isinstance(chart.get("result"), list) else []
-        if result and isinstance(result[0], dict):
-            meta = result[0].get("meta", {}) if isinstance(result[0].get("meta"), dict) else {}
-            out["price"] = meta.get("regularMarketPrice") or meta.get("previousClose")
-            out["previous_close"] = meta.get("previousClose")
-            out["source"] = "Yahoo Finance"
+        if isinstance(data, dict):
+            chart  = data.get("chart", {}) if isinstance(data.get("chart"), dict) else {}
+            result = chart.get("result", []) if isinstance(chart.get("result"), list) else []
+            if result and isinstance(result[0], dict):
+                meta = result[0].get("meta", {}) if isinstance(result[0].get("meta"), dict) else {}
+                if out["price"] is None:
+                    out["price"] = meta.get("regularMarketPrice") or meta.get("previousClose")
+                if out["previous_close"] is None:
+                    out["previous_close"] = meta.get("previousClose")
+                if not out["source"]:
+                    out["source"] = "Yahoo Finance"
     except Exception as exc:  # noqa: BLE001
-        print(f"   ⚠️  Market snapshot failed: {exc}")
+        print(f"   ⚠️  Market snapshot chart fallback failed for {ticker}: {exc}")
+
     return out
 
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Image,
@@ -12,11 +12,12 @@ let dgaLogo = null;
 try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
 
 export default function HomeScreen({ navigation }) {
-  const [ticker, setTicker] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [reports, setReports] = useState([]);
+  const [ticker, setTicker]       = useState('');
+  const [loading, setLoading]     = useState(false);
+  const [reports, setReports]     = useState([]);
+  const [prices, setPrices]       = useState({});  // { AAPL: { price, pct_change } }
   const [refreshing, setRefreshing] = useState(false);
-  const [serverOk, setServerOk] = useState(null);
+  const [serverOk, setServerOk]   = useState(null);
   const [gammaEnabled, setGammaEnabled] = useState(true);
 
   const checkServer = async () => {
@@ -32,6 +33,17 @@ export default function HomeScreen({ navigation }) {
     try {
       const data = await api.listReports();
       setReports(data);
+      // Fetch live prices in parallel (non-blocking — failures silently dropped)
+      const map = {};
+      await Promise.allSettled(
+        data.map(async (r) => {
+          try {
+            const q = await api.getQuote(r.ticker);
+            if (q && q.price != null) map[r.ticker] = q;
+          } catch {}
+        })
+      );
+      setPrices(map);
     } catch {
       // server may be offline; fail silently
     }
@@ -70,34 +82,56 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  const renderReport = ({ item }) => (
-    <TouchableOpacity
-      style={styles.reportCard}
-      onPress={() => navigation.navigate('Report', { ticker: item.ticker })}
-    >
-      <View style={styles.reportCardLeft}>
-        <Text style={styles.reportTicker}>{item.ticker}</Text>
-        <Text style={styles.reportDate}>
-          {new Date(item.generated_at).toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric',
-          })}
-        </Text>
-      </View>
-      <View style={styles.reportCardRight}>
-        {item.has_docx && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>DOCX</Text>
-          </View>
-        )}
-        {item.has_pptx && (
-          <View style={[styles.badge, styles.badgeGold]}>
-            <Text style={styles.badgeText}>PPTX</Text>
-          </View>
-        )}
-        <Ionicons name="chevron-forward" size={18} color={colors.midGray} />
-      </View>
-    </TouchableOpacity>
-  );
+  const renderReport = ({ item }) => {
+    const q   = prices[item.ticker];
+    const pct = q?.pct_change;
+    const priceStr = q?.price != null ? `$${Number(q.price).toFixed(2)}` : null;
+    const pctStr   = pct != null ? `${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%` : null;
+    const isUp     = pct != null && pct >= 0;
+
+    return (
+      <TouchableOpacity
+        style={styles.reportCard}
+        onPress={() => navigation.navigate('Report', { ticker: item.ticker })}
+      >
+        <View style={styles.reportCardLeft}>
+          <Text style={styles.reportTicker}>{item.ticker}</Text>
+          <Text style={styles.reportDate}>
+            {new Date(item.generated_at).toLocaleDateString('en-US', {
+              month: 'short', day: 'numeric', year: 'numeric',
+            })}
+          </Text>
+        </View>
+
+        <View style={styles.reportCardRight}>
+          {/* Live price + pct change */}
+          {priceStr && (
+            <View style={styles.priceGroup}>
+              <Text style={styles.priceText}>{priceStr}</Text>
+              {pctStr && (
+                <Text style={[styles.pctText, isUp ? styles.pctUp : styles.pctDown]}>
+                  {pctStr}
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* Format badges */}
+          {item.has_docx && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>DOCX</Text>
+            </View>
+          )}
+          {item.has_pptx && (
+            <View style={[styles.badge, styles.badgeGold]}>
+              <Text style={styles.badgeText}>PPTX</Text>
+            </View>
+          )}
+          <Ionicons name="chevron-forward" size={18} color={colors.midGray} />
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -107,7 +141,10 @@ export default function HomeScreen({ navigation }) {
           {dgaLogo && <Image source={dgaLogo} style={styles.headerLogo} resizeMode="contain" />}
           <Text style={styles.headerTitle}>DGA Research</Text>
         </View>
-        <View style={[styles.statusDot, { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber }]} />
+        <View style={[
+          styles.statusDot,
+          { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
+        ]} />
       </View>
 
       {/* Ticker input */}
@@ -164,7 +201,7 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.offWhite },
+  container:   { flex: 1, backgroundColor: colors.offWhite },
   header: {
     backgroundColor: colors.navy,
     paddingTop: 60,
@@ -174,10 +211,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerLogo: { width: 110, height: 44 },
-  headerTitle: { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  headerBrand:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerLogo:   { width: 110, height: 44 },
+  headerTitle:  { color: colors.gold, fontSize: 22, fontWeight: '700', letterSpacing: 1 },
+  statusDot:    { width: 10, height: 10, borderRadius: 5 },
   inputSection: {
     backgroundColor: colors.white,
     margin: 16,
@@ -189,7 +226,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  label: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 10 },
+  label:    { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 10 },
   inputRow: { flexDirection: 'row', gap: 10 },
   input: {
     flex: 1,
@@ -221,8 +258,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.lightGray,
   },
-  gammaLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
-  hint: { marginTop: 10, fontSize: 12, color: colors.midGray, lineHeight: 17 },
+  gammaLabel:   { fontSize: 14, fontWeight: '600', color: colors.darkGray },
   sectionTitle: {
     fontSize: 11, fontWeight: '700', color: colors.midGray,
     letterSpacing: 1.5, marginHorizontal: 16, marginBottom: 8,
@@ -232,7 +268,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 10,
-    padding: 16,
+    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -242,18 +278,20 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  reportCardLeft: { flex: 1 },
-  reportTicker: { fontSize: 17, fontWeight: '700', color: colors.navy, letterSpacing: 1 },
-  reportDate: { fontSize: 12, color: colors.midGray, marginTop: 2 },
+  reportCardLeft:  { flex: 1 },
+  reportTicker:    { fontSize: 17, fontWeight: '700', color: colors.navy, letterSpacing: 1 },
+  reportDate:      { fontSize: 12, color: colors.midGray, marginTop: 2 },
   reportCardRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  badge: {
-    backgroundColor: colors.navyLight,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 4,
-  },
-  badgeGold: { backgroundColor: colors.gold },
-  badgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
+  // Live price / pct
+  priceGroup:  { alignItems: 'flex-end', marginRight: 4 },
+  priceText:   { fontSize: 13, fontWeight: '700', color: colors.navy, fontFamily: 'Courier New' },
+  pctText:     { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', marginTop: 1 },
+  pctUp:       { color: colors.green },
+  pctDown:     { color: colors.red },
+  // Format badges
+  badge:       { backgroundColor: colors.navyLight, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4 },
+  badgeGold:   { backgroundColor: colors.gold },
+  badgeText:   { color: colors.white, fontSize: 10, fontWeight: '700' },
   emptyContainer: { flexGrow: 1, justifyContent: 'center' },
-  emptyText: { textAlign: 'center', color: colors.midGray, fontSize: 14, paddingHorizontal: 40 },
+  emptyText:      { textAlign: 'center', color: colors.midGray, fontSize: 14, paddingHorizontal: 40 },
 });

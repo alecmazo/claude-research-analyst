@@ -4,7 +4,7 @@ import {
   Alert, ScrollView, Switch, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled } from '../api/client';
+import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled, getToken, setToken } from '../api/client';
 import { colors } from '../components/theme';
 
 let dgaLogo = null;
@@ -12,6 +12,7 @@ try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState] = useState('');
+  const [token, setTokenState]     = useState('');
   const [serverStatus, setServerStatus] = useState(null);
   const [testing, setTesting] = useState(false);
   const [gammaDefault, setGammaDefault] = useState(false);
@@ -19,6 +20,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
     getGammaEnabled().then(setGammaDefault);
+    getToken().then(setTokenState);
   }, []);
 
   const testConnection = async () => {
@@ -43,6 +45,11 @@ export default function SettingsScreen() {
     }
     await setBaseUrl(url);
     Alert.alert('Saved', 'API server URL updated.');
+  };
+
+  const saveToken = async () => {
+    await setToken(token.trim());
+    Alert.alert('Saved', 'Auth token updated.');
   };
 
   return (
@@ -85,6 +92,31 @@ export default function SettingsScreen() {
           {serverStatus === 'error' && (
             <Ionicons name="close-circle" size={22} color={colors.red} />
           )}
+        </View>
+      </View>
+
+      {/* Auth Token */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>AUTH TOKEN</Text>
+        <Text style={styles.sectionHint}>
+          Password required to access the server. Matches the APP_PASSWORD set in your .env file.
+        </Text>
+        <View style={styles.inputRow}>
+          <TextInput
+            style={styles.input}
+            value={token}
+            onChangeText={setTokenState}
+            placeholder="Enter server password"
+            placeholderTextColor={colors.midGray}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={true}
+          />
+        </View>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.saveBtn} onPress={saveToken}>
+            <Text style={styles.saveBtnText}>Save</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
