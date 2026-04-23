@@ -1,20 +1,35 @@
+/**
+ * DGA Capital — API client for React Native
+ *
+ * Auth flow (matches the web app exactly):
+ *   1. App calls login(password) → POST /api/auth → server returns HMAC token
+ *   2. Token is cached in AsyncStorage
+ *   3. Every request sends   x-auth-token: <token>
+ *   4. On 401, cached token is cleared and login is retried once with the
+ *      stored password.  If that also fails, isAuthError is thrown.
+ *
+ * Default password is "dgacapital" (matches server default PORTFOLIO_PASSWORD).
+ * Users only need to change it if they set a custom PORTFOLIO_PASSWORD in .env.
+ */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_BASE_URL = 'http://localhost:8000';
-const BASE_URL_KEY = '@dga_api_base_url';
-const GAMMA_KEY    = '@dga_gamma_enabled';
-const TOKEN_KEY    = '@dga_auth_token';
+const DEFAULT_BASE_URL   = 'http://localhost:8000';
+const DEFAULT_PASSWORD   = 'dgacapital';           // server default
+
+const BASE_URL_KEY  = '@dga_api_base_url';
+const GAMMA_KEY     = '@dga_gamma_enabled';
+const PASSWORD_KEY  = '@dga_password';             // plain-text password user entered
+const TOKEN_KEY     = '@dga_token_cache';          // HMAC token returned by /api/auth
 
 // ── Base URL ─────────────────────────────────────────────────────────────────
 export async function getBaseUrl() {
   try {
-    const stored = await AsyncStorage.getItem(BASE_URL_KEY);
-    return stored || DEFAULT_BASE_URL;
+    const s = await AsyncStorage.getItem(BASE_URL_KEY);
+    return s || DEFAULT_BASE_URL;
   } catch {
     return DEFAULT_BASE_URL;
   }
 }
-
 export async function setBaseUrl(url) {
   await AsyncStorage.setItem(BASE_URL_KEY, url.replace(/\/$/, ''));
 }
@@ -22,43 +37,81 @@ export async function setBaseUrl(url) {
 // ── Gamma preference ─────────────────────────────────────────────────────────
 export async function getGammaEnabled() {
   try {
-    const stored = await AsyncStorage.getItem(GAMMA_KEY);
-    return stored === null ? true : stored === 'true'; // default ON
-  } catch {
-    return true;
+    const s = await AsyncStorage.getItem(GAMMA_KEY);
+    return s === null ? true : s === 'true';
+  } catch { return true; }
+}
+export async function setGammaEnabled(v) {
+  await AsyncStorage.setItem(GAMMA_KEY, v ? 'true' : 'false');
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+/** Exchange a plain password for the server's HMAC token and cache it. */
+export async function login(password) {
+  const base = await getBaseUrl();
+  const resp = await fetch(`${base}/api/auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: password.trim() }),
+  });
+  if (!resp.ok) {
+    const err = new Error('Incorrect password');
+    err.isAuthError = true;
+    throw err;
   }
+  const { token } = await resp.json();
+  await AsyncStorage.multiSet([
+    [PASSWORD_KEY, password.trim()],
+    [TOKEN_KEY,    token],
+  ]);
+  return token;
 }
 
-export async function setGammaEnabled(value) {
-  await AsyncStorage.setItem(GAMMA_KEY, value ? 'true' : 'false');
-}
-
-// ── Auth token ───────────────────────────────────────────────────────────────
+/** Get the cached HMAC token, auto-authenticating with the stored password
+ *  (or the server default "dgacapital") if no token is cached yet. */
 export async function getToken() {
   try {
-    return (await AsyncStorage.getItem(TOKEN_KEY)) || '';
+    const cached = await AsyncStorage.getItem(TOKEN_KEY);
+    if (cached) return cached;
+    // No token yet — silently authenticate with stored/default password
+    const password = (await AsyncStorage.getItem(PASSWORD_KEY)) || DEFAULT_PASSWORD;
+    return await login(password);
   } catch {
     return '';
   }
 }
 
-export async function setToken(token) {
-  await AsyncStorage.setItem(TOKEN_KEY, token.trim());
+export async function getStoredPassword() {
+  try { return (await AsyncStorage.getItem(PASSWORD_KEY)) || ''; }
+  catch { return ''; }
 }
 
-// ── Core fetch helper (injects x-auth-token automatically) ───────────────────
-async function request(path, options = {}) {
+export async function clearToken() {
+  await AsyncStorage.removeItem(TOKEN_KEY);
+}
+
+// ── Core fetch helper ─────────────────────────────────────────────────────────
+async function request(path, options = {}, _isRetry = false) {
   const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
   const url = `${base}${path}`;
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (token) headers['x-auth-token'] = token;
+
   const resp = await fetch(url, { ...options, headers });
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      const err = new Error('Authentication required. Please enter your server password in Settings → Auth Token.');
-      err.isAuthError = true;
-      throw err;
+
+  if (resp.status === 401) {
+    // Token may be stale — clear it and retry once by re-authenticating
+    await clearToken();
+    if (!_isRetry) {
+      return request(path, options, true);
     }
+    // Still 401 after re-auth → wrong password in Settings
+    const err = new Error('Incorrect password. Please update it in Settings → Server Password.');
+    err.isAuthError = true;
+    throw err;
+  }
+
+  if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`${resp.status}: ${text}`);
   }
@@ -67,8 +120,13 @@ async function request(path, options = {}) {
 
 // ── Public API surface ────────────────────────────────────────────────────────
 export const api = {
-  // ---------- Health ----------
-  health: () => request('/health'),
+  // ---------- Health (no auth needed) ----------
+  health: async () => {
+    const base = await getBaseUrl();
+    const resp = await fetch(`${base}/health`);
+    if (!resp.ok) throw new Error(`${resp.status}`);
+    return resp.json();
+  },
 
   // ---------- Single-ticker analysis ----------
   startAnalysis: (ticker, generateGamma = false) =>
@@ -94,14 +152,11 @@ export const api = {
   startPortfolio: async ({ fileUri, fileName, mimeType, strategy, reuseExisting, generateGamma }) => {
     const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
     const fd = new FormData();
-    fd.append('file', {
-      uri:  fileUri,
-      name: fileName || 'portfolio.xlsx',
-      type: mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    fd.append('strategy',       strategy       || 'pro');
-    fd.append('reuse_existing', reuseExisting  ? 'true' : 'false');
-    fd.append('generate_gamma', generateGamma  ? 'true' : 'false');
+    fd.append('file', { uri: fileUri, name: fileName || 'portfolio.xlsx',
+      type: mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    fd.append('strategy',       strategy      || 'pro');
+    fd.append('reuse_existing', reuseExisting ? 'true' : 'false');
+    fd.append('generate_gamma', generateGamma ? 'true' : 'false');
     const headers = {};
     if (token) headers['x-auth-token'] = token;
     const resp = await fetch(`${base}/api/portfolio`, { method: 'POST', headers, body: fd });
@@ -113,26 +168,22 @@ export const api = {
   },
 
   getPortfolioJob: (jobId) => request(`/api/portfolio/${jobId}`),
-
   portfolioDownloadUrl: async (jobId) => {
     const base = await getBaseUrl();
     return `${base}/api/portfolio/${jobId}/download`;
   },
-
   getLastPortfolio:    () => request('/api/portfolio/last'),
   getPortfolioSummary: () => request('/api/portfolio/summary'),
 
   // ---------- Watchlist ----------
-  getWatchlist:         ()       => request('/api/watchlist'),
-  addToWatchlist:       (ticker) => request(`/api/watchlist/${ticker}`, { method: 'POST' }),
-  removeFromWatchlist:  (ticker) => request(`/api/watchlist/${ticker}`, { method: 'DELETE' }),
+  getWatchlist:        ()       => request('/api/watchlist'),
+  addToWatchlist:      (ticker) => request(`/api/watchlist/${ticker}`, { method: 'POST' }),
+  removeFromWatchlist: (ticker) => request(`/api/watchlist/${ticker}`, { method: 'DELETE' }),
 
   // ---------- Market Scan ----------
-  startScan: (tickers) =>
-    request('/api/scan', {
-      method: 'POST',
-      body: JSON.stringify({ tickers }),
-    }),
+  startScan:     (tickers) => request('/api/scan', {
+    method: 'POST', body: JSON.stringify({ tickers }),
+  }),
   getScanJob:    (jobId) => request(`/api/scan/${jobId}`),
   getLatestScan: ()      => request('/api/scan/latest'),
 };

@@ -75,7 +75,7 @@ export default function HomeScreen({ navigation }) {
       navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
     } catch (err) {
       if (err?.isAuthError) {
-        Alert.alert('Authentication Required', 'Enter your server password in Settings → Auth Token.');
+        Alert.alert('Wrong Password', 'Go to Settings → Server Password. The default is "dgacapital".');
       } else {
         Alert.alert('Error', err.message);
       }

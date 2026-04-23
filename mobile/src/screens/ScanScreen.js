@@ -118,11 +118,11 @@ function ScanCard({ ticker, result, isLoading }) {
 function alertError(err, navigation) {
   if (err?.isAuthError) {
     Alert.alert(
-      'Authentication Required',
-      'Enter your server password in Settings → Auth Token.',
+      'Wrong Password',
+      'Go to Settings → Server Password and update it. The default is "dgacapital".',
       [
-        { text: 'Go to Settings', onPress: () => navigation?.navigate('Settings') },
-        { text: 'OK', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => navigation?.navigate('Settings') },
+        { text: 'Cancel', style: 'cancel' },
       ]
     );
   } else {

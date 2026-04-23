@@ -1,43 +1,47 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ScrollView, Switch, Image,
+  Alert, ScrollView, Switch, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { api, getBaseUrl, setBaseUrl, getGammaEnabled, setGammaEnabled, getToken, setToken } from '../api/client';
+import {
+  api, getBaseUrl, setBaseUrl,
+  getGammaEnabled, setGammaEnabled,
+  getStoredPassword, login,
+} from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
-let dgaLogo = null;
-try { dgaLogo = require('../../assets/dga_logo_small.png'); } catch (e) {}
-
 export default function SettingsScreen() {
-  const [baseUrl, setBaseUrlState] = useState('');
-  const [token, setTokenState]     = useState('');
-  const [serverStatus, setServerStatus] = useState(null);
-  const [testing, setTesting] = useState(false);
+  const [baseUrl, setBaseUrlState]     = useState('');
+  const [password, setPassword]        = useState('');
+  const [serverStatus, setServerStatus] = useState(null);   // null | 'ok' | 'error'
+  const [authStatus, setAuthStatus]    = useState(null);    // null | 'ok' | 'error'
+  const [testingConn, setTestingConn]  = useState(false);
+  const [savingPw, setSavingPw]        = useState(false);
   const [gammaDefault, setGammaDefault] = useState(false);
 
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
     getGammaEnabled().then(setGammaDefault);
-    getToken().then(setTokenState);
+    getStoredPassword().then(pw => setPassword(pw || ''));
   }, []);
 
+  // ── Test server connection ──────────────────────────────────────────────────
   const testConnection = async () => {
-    setTesting(true);
+    setTestingConn(true);
     setServerStatus(null);
     try {
       await api.health();
       setServerStatus('ok');
-    } catch (err) {
+    } catch {
       setServerStatus('error');
-      Alert.alert('Connection Failed', err.message);
     } finally {
-      setTesting(false);
+      setTestingConn(false);
     }
   };
 
+  // ── Save server URL ─────────────────────────────────────────────────────────
   const saveUrl = async () => {
     const url = baseUrl.trim();
     if (!url.startsWith('http')) {
@@ -45,12 +49,23 @@ export default function SettingsScreen() {
       return;
     }
     await setBaseUrl(url);
-    Alert.alert('Saved', 'API server URL updated.');
+    Alert.alert('Saved', 'Server URL updated.');
   };
 
-  const saveToken = async () => {
-    await setToken(token.trim());
-    Alert.alert('Saved', 'Auth token updated.');
+  // ── Save password — exchange for HMAC token via /api/auth ──────────────────
+  const savePassword = async () => {
+    const pw = password.trim() || 'dgacapital';
+    setSavingPw(true);
+    setAuthStatus(null);
+    try {
+      await login(pw);           // stores token in AsyncStorage automatically
+      setAuthStatus('ok');
+    } catch {
+      setAuthStatus('error');
+      Alert.alert('Wrong Password', 'The server rejected this password. Check your PORTFOLIO_PASSWORD in .env (default is "dgacapital").');
+    } finally {
+      setSavingPw(false);
+    }
   };
 
   return (
@@ -58,110 +73,104 @@ export default function SettingsScreen() {
       <AppHeader title="Settings" />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
-      {/* API Server */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>API SERVER</Text>
-        <Text style={styles.sectionHint}>
-          Run the FastAPI server on your local machine or a VPS and enter its address here.
-        </Text>
-        <View style={styles.inputRow}>
+        {/* ── Server URL ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>API SERVER</Text>
+          <Text style={styles.sectionHint}>
+            Your Railway (or local) server URL — e.g. https://your-app.up.railway.app
+          </Text>
           <TextInput
             style={styles.input}
             value={baseUrl}
             onChangeText={setBaseUrlState}
-            placeholder="http://192.168.1.10:8000"
+            placeholder="https://your-app.up.railway.app"
             placeholderTextColor={colors.midGray}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
           />
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.saveBtn} onPress={saveUrl}>
+              <Text style={styles.saveBtnText}>Save URL</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.testBtn, testingConn && styles.disabledBtn]}
+              onPress={testConnection}
+              disabled={testingConn}
+            >
+              {testingConn
+                ? <ActivityIndicator size="small" color={colors.navy} />
+                : <Ionicons name="wifi-outline" size={16} color={colors.navy} />
+              }
+              <Text style={styles.testBtnText}>{testingConn ? 'Testing…' : 'Test'}</Text>
+            </TouchableOpacity>
+            {serverStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={colors.green} />}
+            {serverStatus === 'error' && <Ionicons name="close-circle"     size={22} color={colors.red}   />}
+          </View>
         </View>
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.saveBtn} onPress={saveUrl}>
-            <Text style={styles.saveBtnText}>Save</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.testBtn, testing && styles.disabledBtn]}
-            onPress={testConnection}
-            disabled={testing}
-          >
-            <Ionicons name="wifi-outline" size={16} color={colors.navy} />
-            <Text style={styles.testBtnText}>{testing ? 'Testing…' : 'Test'}</Text>
-          </TouchableOpacity>
-          {serverStatus === 'ok' && (
-            <Ionicons name="checkmark-circle" size={22} color={colors.green} />
-          )}
-          {serverStatus === 'error' && (
-            <Ionicons name="close-circle" size={22} color={colors.red} />
-          )}
-        </View>
-      </View>
 
-      {/* Auth Token */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>AUTH TOKEN</Text>
-        <Text style={styles.sectionHint}>
-          Password required to access the server. Matches the APP_PASSWORD set in your .env file.
-        </Text>
-        <View style={styles.inputRow}>
+        {/* ── Password ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>SERVER PASSWORD</Text>
+          <Text style={styles.sectionHint}>
+            The password set on your server (PORTFOLIO_PASSWORD in .env).{'\n'}
+            <Text style={styles.hint_default}>Default is </Text>
+            <Text style={styles.hint_code}>dgacapital</Text>
+            <Text style={styles.hint_default}> — leave blank to use the default.</Text>
+          </Text>
           <TextInput
             style={styles.input}
-            value={token}
-            onChangeText={setTokenState}
-            placeholder="Enter server password"
+            value={password}
+            onChangeText={setPassword}
+            placeholder="dgacapital"
             placeholderTextColor={colors.midGray}
             autoCapitalize="none"
             autoCorrect={false}
-            secureTextEntry={true}
+            secureTextEntry={false}   // plain text so user can see what they typed
           />
-        </View>
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.saveBtn} onPress={saveToken}>
-            <Text style={styles.saveBtnText}>Save</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Server Setup Instructions */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>HOW TO START THE SERVER</Text>
-        <View style={styles.codeBlock}>
-          <Text style={styles.code}># Install dependencies</Text>
-          <Text style={styles.code}>pip install fastapi uvicorn</Text>
-          <Text style={styles.code}>{' '}</Text>
-          <Text style={styles.code}># From the project root:</Text>
-          <Text style={styles.code}>uvicorn api.server:app \</Text>
-          <Text style={styles.code}>  --host 0.0.0.0 --port 8000</Text>
-        </View>
-        <Text style={styles.sectionHint}>
-          Make sure your .env file has XAI_API_KEY and SEC_USER_AGENT set before starting.
-        </Text>
-      </View>
-
-      {/* Defaults */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>DEFAULTS</Text>
-        <View style={styles.switchRow}>
-          <View style={styles.switchLabel}>
-            <Text style={styles.switchLabelText}>Generate Gamma Presentation</Text>
-            <Text style={styles.switchLabelHint}>Requires Gamma API credits</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              style={[styles.saveBtn, styles.saveBtnGold, savingPw && styles.disabledBtn]}
+              onPress={savePassword}
+              disabled={savingPw}
+            >
+              {savingPw
+                ? <ActivityIndicator size="small" color={colors.navy} />
+                : <Text style={styles.saveBtnGoldText}>Save &amp; Connect</Text>
+              }
+            </TouchableOpacity>
+            {authStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={colors.green} />}
+            {authStatus === 'error' && <Ionicons name="close-circle"     size={22} color={colors.red}   />}
           </View>
-          <Switch
-            value={gammaDefault}
-            onValueChange={v => { setGammaDefault(v); setGammaEnabled(v); }}
-            trackColor={{ false: colors.lightGray, true: colors.gold }}
-            thumbColor={colors.white}
-          />
+          {authStatus === 'ok' && (
+            <Text style={styles.authOkText}>✓ Connected — token saved</Text>
+          )}
         </View>
-      </View>
 
-      {/* About */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>ABOUT</Text>
-        {dgaLogo && <Image source={dgaLogo} style={styles.aboutLogo} resizeMode="contain" />}
-        <Text style={styles.aboutText}>DGA Capital Research Analyst v1.0</Text>
-        <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
-      </View>
+        {/* ── Defaults ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>DEFAULTS</Text>
+          <View style={styles.switchRow}>
+            <View style={styles.switchLabel}>
+              <Text style={styles.switchLabelText}>Generate Gamma Presentation</Text>
+              <Text style={styles.switchLabelHint}>Requires Gamma API credits</Text>
+            </View>
+            <Switch
+              value={gammaDefault}
+              onValueChange={v => { setGammaDefault(v); setGammaEnabled(v); }}
+              trackColor={{ false: colors.lightGray, true: colors.gold }}
+              thumbColor={colors.white}
+            />
+          </View>
+        </View>
+
+        {/* ── About ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>ABOUT</Text>
+          <Text style={styles.aboutText}>DGA Capital Research Analyst v1.0</Text>
+          <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
+        </View>
+
       </ScrollView>
     </View>
   );
@@ -170,7 +179,7 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   wrapper:   { flex: 1, backgroundColor: colors.offWhite },
   container: { flex: 1 },
-  content: { padding: 16, paddingBottom: 60 },
+  content:   { padding: 16, paddingBottom: 60 },
   section: {
     backgroundColor: colors.white,
     borderRadius: 12,
@@ -184,54 +193,57 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 11, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5, marginBottom: 10,
+    letterSpacing: 1.5, marginBottom: 8,
   },
   sectionHint: { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 10 },
-  inputRow: { marginBottom: 10 },
+  hint_default: { fontSize: 12, color: colors.midGray },
+  hint_code:    { fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '700' },
   input: {
     borderWidth: 1.5,
     borderColor: colors.lightGray,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 14,
+    fontSize: 15,
     color: colors.navy,
     fontFamily: 'Courier New',
+    marginBottom: 10,
   },
-  buttonRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  buttonRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   saveBtn: {
     backgroundColor: colors.navy,
     borderRadius: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 10,
   },
-  saveBtnText: { color: colors.white, fontWeight: '700', fontSize: 14 },
-  testBtn: {
+  saveBtnText: { color: colors.white, fontWeight: '700', fontSize: 13 },
+  saveBtnGold: {
     backgroundColor: colors.gold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+  },
+  saveBtnGoldText: { color: colors.navy, fontWeight: '800', fontSize: 13 },
+  testBtn: {
+    backgroundColor: colors.lightGray,
     borderRadius: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  disabledBtn: { opacity: 0.5 },
-  testBtnText: { color: colors.navy, fontWeight: '700', fontSize: 14 },
-  codeBlock: {
-    backgroundColor: colors.navy,
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 10,
-  },
-  code: { color: '#A8D8A0', fontFamily: 'Courier New', fontSize: 12, lineHeight: 20 },
+  disabledBtn:  { opacity: 0.5 },
+  testBtnText:  { color: colors.navy, fontWeight: '700', fontSize: 13 },
+  authOkText:   { fontSize: 12, color: colors.green, marginTop: 8, fontWeight: '600' },
   switchRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  switchLabel: { flex: 1, marginRight: 12 },
+  switchLabel:     { flex: 1, marginRight: 12 },
   switchLabelText: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
   switchLabelHint: { fontSize: 12, color: colors.midGray, marginTop: 2 },
-  aboutText: { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
-  aboutLogo: { width: 140, height: 56, marginBottom: 10 },
+  aboutText:       { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
 });
