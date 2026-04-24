@@ -2347,11 +2347,14 @@ _SECTOR_OVERRIDES = {
 }
 
 
-def fetch_sector(ticker: str) -> str:
-    """Best-effort sector lookup via Yahoo Finance. Falls back to overrides above."""
+def fetch_sector_and_industry(ticker: str) -> tuple[str, str]:
+    """Return (sector, industry) for a ticker via Yahoo Finance assetProfile.
+
+    Both fields are returned in the same API call, so there is no extra cost
+    vs. the old fetch_sector() call.  Falls back to ("Unknown", "Unknown").
+    """
     t = ticker.strip().upper()
-    if t in _SECTOR_OVERRIDES:
-        return _SECTOR_OVERRIDES[t]
+    sector_override = _SECTOR_OVERRIDES.get(t)
     try:
         url = (
             f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{t}"
@@ -2364,12 +2367,18 @@ def fetch_sector(ticker: str) -> str:
         results = data.get("quoteSummary", {}).get("result", []) or []
         if results:
             profile = results[0].get("assetProfile") or results[0].get("summaryProfile") or {}
-            s = profile.get("sector")
-            if s:
-                return s
+            sector   = sector_override or profile.get("sector",   "Unknown") or "Unknown"
+            industry = profile.get("industry", "Unknown") or "Unknown"
+            return sector, industry
     except Exception:
         pass
-    return "Unknown"
+    return (sector_override or "Unknown"), "Unknown"
+
+
+def fetch_sector(ticker: str) -> str:
+    """Backward-compat wrapper — returns sector string only."""
+    s, _ = fetch_sector_and_industry(ticker)
+    return s
 
 
 # ============================================================================
@@ -2436,6 +2445,47 @@ def _market_cap_max_position(market_cap: float | None) -> float:
         return 0.10  # Small cap
     return 0.07       # Micro cap / speculative name
 
+# ── Biotech hard cap ─────────────────────────────────────────────────────────
+# Small / mid-cap biotech (<$15B market cap) is volatile enough to wipe a
+# portfolio if the thesis is wrong.  Cap those positions at 7% regardless
+# of the strategy's standard maximum.
+_BIOTECH_CAP_THRESHOLD_B = 15.0   # $15 billion
+_BIOTECH_MAX_POSITION    = 0.07   # 7% hard cap
+
+
+def _is_biotech(sector: str, industry: str) -> bool:
+    """Return True if sector/industry indicates biotech or biopharma."""
+    s = (sector   or "").lower()
+    i = (industry or "").lower()
+    return (
+        "biotech" in i
+        or "biopharmaceutical" in i
+        or "biopharma" in i
+        # "Drug Manufacturers - Specialty & Generic" under Healthcare
+        or ("drug manufacturer" in i and "healthcare" in s)
+        # Generic pharma — high binary risk, small cap
+        or ("pharmaceutical" in i and "healthcare" in s
+            and "large" not in i and "major" not in i)
+    )
+
+
+def _effective_max_position(
+    market_cap: float | None,
+    sector:     str = "",
+    industry:   str = "",
+) -> float:
+    """Per-ticker position cap: market-cap tier, overridden by biotech rule.
+
+    Biotech / biopharma companies below $15B market cap are hard-capped at 7%
+    regardless of what the strategy's standard maximum would allow.
+    """
+    base    = _market_cap_max_position(market_cap)
+    mcap_b  = (market_cap or 0) / 1_000_000_000
+    if mcap_b < _BIOTECH_CAP_THRESHOLD_B and _is_biotech(sector, industry):
+        return min(base, _BIOTECH_MAX_POSITION)
+    return base
+
+
 _RATING_SCORE = {
     "strong buy": 5.0,
     "buy": 3.5,
@@ -2473,7 +2523,8 @@ def _score_ticker(result: dict) -> dict:
         "price_target": pt,
         "upside_pct": round(upside, 2),
         "score": round(composite, 4),
-        "sector": result.get("sector", "Unknown"),
+        "sector":   result.get("sector",   "Unknown"),
+        "industry": result.get("industry", "Unknown"),
         "action": s.get("action", ""),
     }
 
@@ -2634,17 +2685,27 @@ def compute_rebalance(
     cfg = STRATEGIES.get(strategy) or STRATEGIES["current"]
     usable = [r for r in ticker_results if r.get("ok")]
 
-    # Hydrate sector for each ticker (cheap, cached if already set).
+    # Hydrate sector + industry for each ticker.
+    # Industry is needed for the biotech position cap.
     for r in usable:
-        if not r.get("sector"):
+        needs_sector   = not r.get("sector")
+        needs_industry = not r.get("industry")
+        if needs_sector or needs_industry:
             report_sector = (r.get("summary") or {}).get("sector")
-            if report_sector:
-                r["sector"] = report_sector
+            if report_sector and not needs_industry:
+                # Sector already known from report; no API call needed.
+                if needs_sector:
+                    r["sector"] = report_sector
             else:
                 try:
-                    r["sector"] = fetch_sector(r["ticker"]) or "Unknown"
+                    sec, ind = fetch_sector_and_industry(r["ticker"])
+                    if needs_sector:
+                        r["sector"]   = report_sector or sec or "Unknown"
+                    if needs_industry:
+                        r["industry"] = ind or "Unknown"
                 except Exception:
-                    r["sector"] = "Unknown"
+                    if needs_sector:   r["sector"]   = report_sector or "Unknown"
+                    if needs_industry: r["industry"] = "Unknown"
 
     # Enrich with portfolio Grok roll-up if available.
     _merge_ranked_rows(usable, ranked_rows)
@@ -2675,7 +2736,9 @@ def compute_rebalance(
             except Exception:  # noqa: BLE001
                 pass
             s["_market_cap"] = mcap
-            s["_max_pos"] = _market_cap_max_position(mcap)
+            s["_max_pos"] = _effective_max_position(
+                mcap, s.get("sector", ""), s.get("industry", "")
+            )
 
         # Initial allocation proportional to score^exponent.
         exponent = cfg["score_exponent"]
@@ -2726,12 +2789,44 @@ def compute_rebalance(
         )
         selected = [dict(s) for s in eligible[:n_target]]
 
+        # Fetch market cap for selected tickers so biotech caps can be applied.
+        for s in selected:
+            mcap = None
+            try:
+                import yfinance as yf  # type: ignore
+                fi = yf.Ticker(s["ticker"]).fast_info
+                raw = getattr(fi, "market_cap", None)
+                if raw and float(raw) > 0:
+                    mcap = float(raw)
+            except Exception:  # noqa: BLE001
+                pass
+            s["_market_cap"] = mcap
+            s["_max_pos"] = _effective_max_position(
+                mcap, s.get("sector", ""), s.get("industry", "")
+            )
+
         exponent = cfg["score_exponent"]
         total = sum(max(s["score"], 0) ** exponent for s in selected) or 1.0
         for s in selected:
             s["weight"] = (max(s["score"], 0) ** exponent) / total
 
+        # Standard uniform cap first, then per-ticker biotech override.
         _waterfall_cap(selected, "weight", cfg["max_position"])
+        # Apply per-ticker effective caps (biotech < $15B hard-capped at 7%).
+        for _ in range(80):
+            over = [s for s in selected if s["weight"] > s["_max_pos"] + 1e-9]
+            if not over:
+                break
+            excess = sum(s["weight"] - s["_max_pos"] for s in over)
+            for s in over:
+                s["weight"] = s["_max_pos"]
+            uncapped = [s for s in selected if s["weight"] < s["_max_pos"] - 1e-9]
+            pool = sum(s["weight"] for s in uncapped)
+            if pool <= 0:
+                break
+            for s in uncapped:
+                s["weight"] += excess * (s["weight"] / pool)
+
         _apply_floor(selected, "weight", cfg["min_position"], cfg["max_position"])
         _apply_sector_cap(selected, "weight", cfg["max_sector"], cfg["max_position"])
 
