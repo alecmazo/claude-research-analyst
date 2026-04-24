@@ -38,8 +38,8 @@ export async function setBaseUrl(url) {
 export async function getGammaEnabled() {
   try {
     const s = await AsyncStorage.getItem(GAMMA_KEY);
-    return s === null ? true : s === 'true';
-  } catch { return true; }
+    return s === null ? false : s === 'true';   // default OFF
+  } catch { return false; }
 }
 export async function setGammaEnabled(v) {
   await AsyncStorage.setItem(GAMMA_KEY, v ? 'true' : 'false');

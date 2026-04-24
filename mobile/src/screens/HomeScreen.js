@@ -16,7 +16,7 @@ export default function HomeScreen({ navigation }) {
   const [prices, setPrices]       = useState({});  // { AAPL: { price, pct_change } }
   const [refreshing, setRefreshing] = useState(false);
   const [serverOk, setServerOk]   = useState(null);
-  const [gammaEnabled, setGammaEnabled] = useState(true);
+  const [gammaEnabled, setGammaEnabled] = useState(false);  // default OFF
 
   const checkServer = async () => {
     try {

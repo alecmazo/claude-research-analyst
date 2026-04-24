@@ -280,6 +280,28 @@ def _pick_value(
     return None
 
 
+def _find_cf_col_for_end(cf_cols: list[dict], target_end: str) -> Optional[str]:
+    """Return the raw column name for the CF duration that ends on target_end.
+
+    Priority order:
+    1. fp == "YTD"  (standard 10-Q CF label from edgartools)
+    2. fp == "FY"   (annual CF column or Q1 where edgartools uses "FY" context)
+    3. Any DURATION column (catches Q1 10-Q where fp may be "Q1", not "YTD")
+
+    This handles the common case where Q1 10-Q CF columns are labeled with
+    the fiscal-quarter context ("Q1") instead of the YTD context, because
+    for Q1 filings the 3-month period equals the YTD period.
+    """
+    for preferred_fp in ("YTD", "FY"):
+        col = next((c["raw"] for c in cf_cols
+                    if c["fp"] == preferred_fp and c["end"] == target_end), None)
+        if col:
+            return col
+    # Fallback: any duration column (non-INSTANT) with the right end date
+    return next((c["raw"] for c in cf_cols
+                 if c["kind"] == "DURATION" and c["end"] == target_end), None)
+
+
 def _pick_value_with_tag(
     df: pd.DataFrame,
     concepts: Iterable[str],
@@ -589,39 +611,50 @@ def extract_financials(
                 if exact:
                     bs_cur = exact[0]["raw"]
 
-            # Build current quarter row (3-month; no CF since 10-Q CF is YTD-only)
+            # For Q1 10-Q: the 3-month period IS the YTD period, so CF data is
+            # valid for the current quarter row too (not just the YTD row).
+            cf_q1_col = (
+                _find_cf_col_for_end(cf_cols, current_q["end"])
+                if cur_fp == "Q1" else None
+            )
+
+            # Build current quarter row.
+            # Non-Q1: cf_col=None (10-Q CF is cumulative YTD; no standalone 3-month CF)
+            # Q1:     cf_col=cf_q1_col (3-month == YTD, so CF is valid here)
             quarterly["current"] = _build_period_row(
                 is_df, bs_df, cf_df,
-                is_col=current_q["raw"], bs_col=bs_cur, cf_col=None,
+                is_col=current_q["raw"], bs_col=bs_cur, cf_col=cf_q1_col,
                 end=current_q["end"], fy=cur_fy, fp=cur_fp, ytd=False,
             )
             # Prior-year same quarter (no BS — 10-Q only carries current Q + prior FY end)
             if prior_q:
                 prior_fy = cur_fy - 1 if cur_fy else None
+                cf_prior_q1 = (
+                    _find_cf_col_for_end(cf_cols, prior_q["end"])
+                    if cur_fp == "Q1" else None
+                )
                 quarterly["prior_year_same_q"] = _build_period_row(
                     is_df, bs_df, cf_df,
-                    is_col=prior_q["raw"], bs_col=None, cf_col=None,
+                    is_col=prior_q["raw"], bs_col=None, cf_col=cf_prior_q1,
                     end=prior_q["end"], fy=prior_fy, fp=cur_fp, ytd=False,
                 )
 
             # YTD rows (IS + CF aligned by end date)
+            # Use _find_cf_col_for_end which handles "YTD", "FY", and "Q1" labels
             if ytd_cols:
                 cur_ytd = next((c for c in ytd_cols if c["end"] == current_q["end"]), ytd_cols[0])
                 prior_ytd = next(
                     (c for c in ytd_cols if prior_q and c["end"] == prior_q["end"]),
                     ytd_cols[1] if len(ytd_cols) > 1 else None,
                 )
-                cf_ytd_cur = next((c["raw"] for c in cf_cols
-                                   if c["fp"] == "YTD" and c["end"] == cur_ytd["end"]), None)
+                cf_ytd_cur = _find_cf_col_for_end(cf_cols, cur_ytd["end"])
                 quarterly["current_ytd"] = _build_period_row(
                     is_df, bs_df, cf_df,
                     is_col=cur_ytd["raw"], bs_col=bs_cur, cf_col=cf_ytd_cur,
                     end=cur_ytd["end"], fy=cur_fy, fp=cur_fp, ytd=True,
                 )
                 if prior_ytd:
-                    cf_ytd_prior = next((c["raw"] for c in cf_cols
-                                         if c["fp"] == "YTD" and c["end"] == prior_ytd["end"]),
-                                        None)
+                    cf_ytd_prior = _find_cf_col_for_end(cf_cols, prior_ytd["end"])
                     prior_fy = cur_fy - 1 if cur_fy else None
                     quarterly["prior_ytd"] = _build_period_row(
                         is_df, bs_df, cf_df,
