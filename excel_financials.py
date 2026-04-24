@@ -595,6 +595,15 @@ def extract_financials(
         ytd_cols = [p for p in is_cols if p["fp"] == "YTD"]
         ytd_cols.sort(key=lambda p: p["end"], reverse=True)
 
+        # ── Q1 10-Q special case ────────────────────────────────────────────
+        # For Q1 filings the 3-month period IS the fiscal YTD period.
+        # edgartools labels the IS columns as "(Q1)" not "(YTD)", so ytd_cols
+        # ends up empty and the TTM bridge formula falls back to the prior FY
+        # annual for every flow metric (i.e. TTM appears identical to FY).
+        # Fix: treat the Q-period columns as the YTD proxy for Q1 filings.
+        if not ytd_cols and q_cols:
+            ytd_cols = list(q_cols)   # copy; sort already done above
+
         fy_end_iso = k10_meta.get("Period Of Report") if k10_meta else None
 
         if q_cols:
