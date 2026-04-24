@@ -727,13 +727,14 @@ MANDATORY DATA VERIFICATION STEP (perform this at the VERY START):
 2. You MUST use ONLY these exact numbers for ALL tables and calculations.
 3. The verified block contains:
    - LATEST_FILING_TYPE (10-K or 10-Q)
-   - ANNUAL DATA (last 3 fiscal years) from the latest 10-K
+   - ANNUAL DATA table: first row is TTM (pre-computed), followed by FY annual rows
    - QUARTERLY DATA (latest quarter + same quarter prior year + YTD both years) from the latest 10-Q
-4. Use the ANNUAL DATA for the main Key Metrics table.
-5. If LATEST_FILING_TYPE is 10-Q, also create the Latest Quarterly YoY Analysis table using the QUARTERLY DATA.
-6. If LATEST_FILING_TYPE is 10-K, skip the quarterly subsection entirely.
-7. If any number is 'N/A', write exactly: "Data not available in verified filing - please check latest 10-K/10-Q".
-8. All values in the VERIFIED block are reported in raw $ (or $ per share for EPS). For tables, convert to millions ($M) with one decimal place, unless EPS (two decimals).
+4. The TTM row in the ANNUAL DATA table is already computed — use it directly for the TTM column. Do NOT attempt to recalculate TTM from quarterly data.
+5. Use the ANNUAL DATA for the main Key Metrics table (TTM column = TTM row, FY columns = annual rows).
+6. If LATEST_FILING_TYPE is 10-Q, also create the Latest Quarterly YoY Analysis table using the QUARTERLY DATA.
+7. If LATEST_FILING_TYPE is 10-K, skip the quarterly subsection entirely.
+8. If any number is 'N/A', write exactly: "N/A".
+9. All values in the VERIFIED block are in $ millions (already converted). Use them directly — do NOT divide by 1,000,000 again. EPS is in $ per share (use as-is).
 
 TABLE FORMAT REQUIREMENT (use this exact markdown format - no deviations):
 | Metric                          | TTM (as of [Date]) | FY[Year] (ended [Date]) | FY[Year-1] (ended [Date]) | FY[Year-2] (ended [Date]) |
@@ -750,7 +751,7 @@ TABLE FORMAT REQUIREMENT (use this exact markdown format - no deviations):
 | Net Debt ($M)                   | exact_number      | exact_number            | exact_number             | exact_number             |
 
 At the top of the financial section you MUST write exactly:
-"Data Verification: Official company FY[Year] 10-K + 10-Q filings (verified via SEC EDGAR XBRL). Numbers used are exact filing figures only. TTM calculated as sum of last four quarters."
+"Data Verification: Official company FY[Year] 10-K + 10-Q filings (verified via SEC EDGAR XBRL). Numbers used are exact filing figures only. TTM pre-computed via bridge formula (FY annual + YTD delta)."
 
 Sources must always be stated at the bottom exactly as:
 "Sources: Official [Company Name] FY[Year] 10-K + 10-Q filings (verified via SEC EDGAR XBRL). Data Verification completed."

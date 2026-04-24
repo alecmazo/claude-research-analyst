@@ -98,10 +98,25 @@ CONCEPT_PRIORITIES: dict[str, list[str]] = {
     "OperatingCashFlow": _p([
         "NetCashProvidedByUsedInOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        "NetCashProvidedByUsedInOperatingActivitiesDiscontinuedOperations",
     ]),
     "CapEx": _p([
+        # Primary GAAP concept (used by most large-cap filers)
         "PaymentsToAcquirePropertyPlantAndEquipment",
+        # Alternative "productive assets" concept (Intel, some manufacturing co's)
         "PaymentsToAcquireProductiveAssets",
+        # Capital improvements (REITs, utilities, infrastructure)
+        "PaymentsForCapitalImprovements",
+        # "Other" PP&E sub-category that some filers use as the total line
+        "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+        # Variation used by some tech / healthcare filers
+        "PaymentsToAcquirePropertyAndEquipment",
+        # Combined PP&E + intangibles purchase line (some banks / diversified cos)
+        "PurchasesOfPropertyPlantAndEquipmentAndIntangibleAssets",
+        # Finance-lease buyout payments (some industrials count this as CapEx)
+        "CapitalExpenditureLeasedAsset",
+        # Incurred-but-not-yet-paid CapEx (rarely used as the primary tag)
+        "CapitalExpendituresIncurredButNotYetPaid",
     ]),
     "Cash": _p([
         "CashAndCashEquivalentsAtCarryingValue",
@@ -437,9 +452,12 @@ def _build_period_row(
     if "GrossProfit" not in row and row.get("Revenue") and row.get("CostOfRevenue"):
         row["GrossProfit"] = row["Revenue"] - row["CostOfRevenue"]
 
-    # Derive FCF / margins
-    if "OperatingCashFlow" in row and "CapEx" in row:
-        row["FreeCashFlow"] = row["OperatingCashFlow"] - row["CapEx"]
+    # Derive FCF = OCF - CapEx.
+    # If CapEx tag is absent (e.g. asset-light service companies), treat as 0
+    # so FCF still renders rather than showing N/A.
+    if "OperatingCashFlow" in row:
+        capex = row.get("CapEx") or 0
+        row["FreeCashFlow"] = row["OperatingCashFlow"] - capex
     rev = row.get("Revenue")
     if rev and row.get("GrossProfit") is not None:
         row["GrossMargin"] = row["GrossProfit"] / rev
@@ -636,6 +654,8 @@ def extract_financials(
     elif "10-Q" in latest_filings:
         latest_filing_type = "10-Q"
 
+    ttm = _compute_ttm(annuals, quarterly)
+
     return {
         "ticker": tkr,
         "cik": "",
@@ -644,9 +664,110 @@ def extract_financials(
         "latest_filing_type": latest_filing_type,
         "annuals": annuals,
         "quarterly": quarterly,
+        "ttm": ttm,
         "errors": errors,
         "source": "excel_xbrl",
     }
+
+
+# ---------------------------------------------------------------------------
+# TTM computation (bridge formula: last FY + current YTD − prior YTD)
+# ---------------------------------------------------------------------------
+def _compute_ttm(annuals: list[dict], quarterly: dict) -> dict:
+    """
+    Compute trailing-twelve-month (TTM) figures.
+
+    For flow metrics (P&L, cash flow):
+        TTM = last_FY_annual + current_YTD − prior_year_YTD
+
+    For point-in-time metrics (balance sheet):
+        TTM = latest quarterly balance (or last FY if no quarter available)
+
+    The result is keyed identically to an annual/quarterly row so
+    format_verified_block can render it with the same column set.
+    """
+    if not annuals:
+        return {}
+
+    last_fy  = annuals[0]
+    cur_ytd  = quarterly.get("current_ytd") or {}
+    pri_ytd  = quarterly.get("prior_ytd")   or {}
+    cur_q    = quarterly.get("current")     or {}
+    q_meta   = quarterly.get("meta")        or {}
+
+    have_ytd = bool(cur_ytd and pri_ytd)
+
+    ttm: dict = {}
+
+    # ── Flow metrics ─────────────────────────────────────────────────────────
+    FLOW = [
+        "Revenue", "CostOfRevenue", "GrossProfit",
+        "OperatingIncome", "NetIncome",
+        "OperatingCashFlow", "CapEx", "FreeCashFlow",
+        "DepreciationAmortization", "RnD",
+        "Dividends", "BuybacksCash",
+    ]
+    for m in FLOW:
+        fy_v  = last_fy.get(m)
+        cy_v  = cur_ytd.get(m)
+        py_v  = pri_ytd.get(m)
+        if fy_v is not None and have_ytd and cy_v is not None and py_v is not None:
+            ttm[m] = fy_v + cy_v - py_v
+        elif fy_v is not None:
+            # No quarterly bridge available — fall back to last FY
+            ttm[m] = fy_v
+
+    # ── Re-derive FCF if still missing (OCF available but CapEx wasn't bridged)
+    if "FreeCashFlow" not in ttm and ttm.get("OperatingCashFlow") is not None:
+        ttm["FreeCashFlow"] = ttm["OperatingCashFlow"] - (ttm.get("CapEx") or 0)
+
+    # ── EBITDA = OpInc + D&A (non-GAAP, always re-derived) ───────────────────
+    if ttm.get("OperatingIncome") is not None and ttm.get("DepreciationAmortization"):
+        ttm["EBITDA"] = ttm["OperatingIncome"] + ttm["DepreciationAmortization"]
+
+    # ── Margins ───────────────────────────────────────────────────────────────
+    rev = ttm.get("Revenue")
+    if rev:
+        for metric, key in [
+            ("GrossProfit",    "GrossMargin"),
+            ("OperatingIncome","OperatingMargin"),
+            ("NetIncome",      "NetMargin"),
+            ("EBITDA",         "EBITDAMargin"),
+        ]:
+            if ttm.get(metric) is not None:
+                ttm[key] = ttm[metric] / rev
+
+    # ── Point-in-time / balance sheet ────────────────────────────────────────
+    POINT = [
+        "Cash", "ShortTermInvestments", "TotalAssets", "TotalLiabilities",
+        "StockholdersEquity", "LongTermDebt", "ShortTermDebt", "TotalDebt",
+        "DilutedShares", "SharesOutstanding",
+    ]
+    for m in POINT:
+        val = cur_q.get(m) if cur_q.get(m) is not None else last_fy.get(m)
+        if val is not None:
+            ttm[m] = val
+
+    # ── EPS = TTM Net Income / TTM Diluted Shares ─────────────────────────────
+    ni  = ttm.get("NetIncome")
+    shr = ttm.get("DilutedShares") or ttm.get("SharesOutstanding")
+    if ni is not None and shr and shr != 0:
+        ttm["DilutedEPS"] = ni / shr
+
+    # ── Net Debt ──────────────────────────────────────────────────────────────
+    td = ttm.get("TotalDebt")
+    cash = ttm.get("Cash")
+    if td is not None and cash is not None:
+        ttm["NetDebt"] = td - cash
+
+    # ── Period label ──────────────────────────────────────────────────────────
+    ttm["end"]    = q_meta.get("reportDate") or last_fy.get("end", "")
+    ttm["method"] = (
+        f"bridge: FY{last_fy.get('fy','')} + {q_meta.get('fp','YTD')} YTD delta"
+        if have_ytd else f"FY{last_fy.get('fy','')} annual (no 10-Q bridge)"
+    )
+
+    return ttm
 
 
 # ---------------------------------------------------------------------------
@@ -718,6 +839,33 @@ def format_verified_block(data: dict) -> str:
               "NetInc", "NetMargin%", "DilEPS", "OCF", "CapEx", "FCF",
               "Cash", "TotalDebt", "TotalAssets", "Equity"]
     lines.append(" | ".join(header))
+
+    # ── TTM row at the top (pre-computed bridge; Grok must use these directly) ──
+    ttm = data.get("ttm", {})
+    if ttm:
+        lines.append(" | ".join([
+            f"TTM ({ttm.get('method','bridge')})",
+            str(ttm.get("end", "")),
+            _fmt_money(ttm.get("Revenue")),
+            _fmt_money(ttm.get("GrossProfit")),
+            _fmt_pct(ttm.get("GrossMargin")),
+            _fmt_money(ttm.get("EBITDA")),
+            _fmt_pct(ttm.get("EBITDAMargin")),
+            _fmt_money(ttm.get("OperatingIncome")),
+            _fmt_pct(ttm.get("OperatingMargin")),
+            _fmt_money(ttm.get("NetIncome")),
+            _fmt_pct(ttm.get("NetMargin")),
+            _fmt_eps(ttm.get("DilutedEPS")),
+            _fmt_money(ttm.get("OperatingCashFlow")),
+            _fmt_money(ttm.get("CapEx")),
+            _fmt_money(ttm.get("FreeCashFlow")),
+            _fmt_money(ttm.get("Cash")),
+            _fmt_money(ttm.get("TotalDebt")),
+            _fmt_money(ttm.get("TotalAssets")),
+            _fmt_money(ttm.get("StockholdersEquity")),
+        ]))
+
+    # ── Historical annual rows ────────────────────────────────────────────────
     for row in data.get("annuals", []):
         lines.append(" | ".join([
             f"FY{row.get('fy','')}",
@@ -779,7 +927,8 @@ def format_verified_block(data: dict) -> str:
             ]))
         lines.append(
             "Note: 10-Q Cash Flow statements report YTD only (no 3-month breakdown), "
-            "so 'Latest Quarter' OCF/FCF may be blank. Use the YTD rows for cash metrics."
+            "so 'Latest Quarter' OCF/FCF will be blank — this is expected. "
+            "TTM cash metrics are pre-computed above using the bridge formula and must be used directly."
         )
 
     if data.get("errors"):
@@ -791,8 +940,11 @@ def format_verified_block(data: dict) -> str:
     lines.append("")
     lines.append(
         "Instruction: use ONLY these numbers for all tables and calculations. "
+        "The TTM row is pre-computed via the bridge formula (last FY + current YTD delta) — "
+        "use it directly for the TTM column; do NOT attempt to recompute it. "
         "GrossProfit may be derived (Revenue - CostOfRevenue) if not directly tagged. "
         "EBITDA is always derived (OperatingIncome + D&A) and is non-GAAP. "
+        "If CapEx tag was absent for a period, FCF = OCF (CapEx treated as 0). "
         "If a cell is 'N/A', write 'N/A' — do NOT write a long disclaimer phrase."
     )
     return "\n".join(lines)
