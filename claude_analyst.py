@@ -892,12 +892,23 @@ def load_system_prompt() -> str:
 # Fallback: Yahoo Finance chart API via raw requests
 # ============================================================================
 def fetch_market_snapshot(ticker: str) -> dict:
-    """Best-effort current price + previous close.
+    """Best-effort current price + previous close + pct_change.
 
-    Uses yfinance fast_info as the primary source (reliable previous_close)
-    and falls back to the Yahoo chart JSON endpoint when yfinance is absent.
+    Uses yfinance fast_info as the primary source (reliable previous_close =
+    prior trading day's close) and falls back to the Yahoo chart JSON endpoint
+    when yfinance is absent.
+
+    Returns:
+        {
+            "price":          float | None  — latest trade / current session price
+            "previous_close": float | None  — prior trading day's official close
+            "pct_change":     float | None  — (price − prev_close) / prev_close × 100
+            "market_cap":     float | None
+            "source":         str
+        }
     """
-    out = {"price": None, "previous_close": None, "market_cap": None, "source": ""}
+    out = {"price": None, "previous_close": None, "pct_change": None,
+           "market_cap": None, "source": ""}
 
     # ── Primary: yfinance fast_info ──────────────────────────────────────────
     try:
@@ -915,6 +926,7 @@ def fetch_market_snapshot(ticker: str) -> dict:
             out["market_cap"] = mcap
         # If we have both price and previous_close, we're done.
         if out["price"] is not None and out["previous_close"] is not None:
+            _attach_pct_change(out)
             return out
     except Exception as exc:  # noqa: BLE001
         print(f"   ⚠️  yfinance fast_info failed for {ticker}: {exc}")
@@ -942,7 +954,16 @@ def fetch_market_snapshot(ticker: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         print(f"   ⚠️  Market snapshot chart fallback failed for {ticker}: {exc}")
 
+    _attach_pct_change(out)
     return out
+
+
+def _attach_pct_change(snapshot: dict) -> None:
+    """Compute and attach pct_change in-place if price and previous_close are available."""
+    price = snapshot.get("price")
+    prev  = snapshot.get("previous_close")
+    if price is not None and prev and float(prev) != 0:
+        snapshot["pct_change"] = round((float(price) - float(prev)) / float(prev) * 100, 2)
 
 
 # ============================================================================

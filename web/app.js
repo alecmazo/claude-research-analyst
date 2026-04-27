@@ -819,6 +819,9 @@ function renderScanPanel(ticker, result) {
   const sentiment = result.sentiment || 'UNKNOWN';
   const wasOpen = panel.classList.contains('open');
 
+  // Apply sentiment class to panel for left-border colour
+  panel.className = `scan-result-panel ${sentiment}`;
+
   // Full detail — open the scan detail view.
   const mdHtml = result.ok && result.markdown
     ? `<div class="report-content">${marked.parse(result.markdown)}</div>`

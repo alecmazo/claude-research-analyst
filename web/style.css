@@ -934,34 +934,46 @@ body {
   letter-spacing: 0.3px;
 }
 
-/* Scan results — collapsible panels */
+/* ── Scan results — collapsible panels ─────────────────────────────────────
+   Visually distinct from Saved Reports:
+   • Dark navy header background (vs white report cards)
+   • 4px left accent border coloured by sentiment
+   • Monospace price + stacked layout
+   • No chevron-forward → expand chevron (rotate on open)
+   ──────────────────────────────────────────────────────────────────────── */
 .scan-result-panel {
-  background: var(--white);
+  background: var(--navy);           /* dark navy — clearly NOT a report card */
   border-radius: 10px;
   margin: 0 16px 8px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 8px rgba(10,22,40,0.18);
   overflow: hidden;
-  border: 1px solid var(--light-gray);
-  transition: box-shadow 0.2s;
+  border-left: 4px solid var(--gold); /* default accent = gold */
+  transition: box-shadow 0.2s, border-color 0.2s;
 }
-.scan-result-panel:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.08); }
+.scan-result-panel:hover { box-shadow: 0 4px 16px rgba(10,22,40,0.28); }
+
+/* Sentiment-driven left-border colour */
+.scan-result-panel.BULLISH { border-left-color: var(--green); }
+.scan-result-panel.BEARISH { border-left-color: var(--red); }
+.scan-result-panel.NEUTRAL,
+.scan-result-panel.UNKNOWN { border-left-color: var(--gold); }
 
 .scan-result-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 16px;
+  padding: 12px 14px;
   cursor: pointer;
   user-select: none;
   transition: background 0.15s;
 }
-.scan-result-header:hover { background: var(--off-white); }
+.scan-result-header:hover { background: rgba(255,255,255,0.06); }
 
 .scan-ticker-label {
   font-size: 15px;
   font-weight: 800;
-  color: var(--navy);
-  letter-spacing: 1px;
+  color: #FFFFFF;               /* white on navy */
+  letter-spacing: 1.2px;
   flex: 0 0 auto;
   min-width: 52px;
 }
@@ -974,7 +986,7 @@ body {
 .scan-price-num {
   font-size: 13px;
   font-weight: 700;
-  color: var(--dark-gray);
+  color: rgba(255,255,255,0.80);
   font-family: "SF Mono", Menlo, Courier, monospace;
 }
 .scan-price-chg {
@@ -982,9 +994,9 @@ body {
   font-weight: 700;
   font-family: "SF Mono", Menlo, Courier, monospace;
 }
-.scan-price-chg.up   { color: var(--green); }
-.scan-price-chg.down { color: var(--red); }
-.scan-price-chg.flat { color: var(--mid-gray); }
+.scan-price-chg.up   { color: #4ADE80; }   /* bright green on dark bg */
+.scan-price-chg.down { color: #F87171; }   /* bright red on dark bg */
+.scan-price-chg.flat { color: rgba(255,255,255,0.45); }
 
 .scan-sentiment-badge {
   font-size: 10px;
@@ -995,23 +1007,23 @@ body {
   flex: 0 0 auto;
 }
 .scan-sentiment-badge.BULLISH {
-  background: rgba(34,197,94,0.12);
-  color: #16A34A;
-  border: 1px solid rgba(34,197,94,0.3);
+  background: rgba(74,222,128,0.20);
+  color: #4ADE80;
+  border: 1px solid rgba(74,222,128,0.45);
 }
 .scan-sentiment-badge.BEARISH {
-  background: rgba(239,68,68,0.1);
-  color: #DC2626;
-  border: 1px solid rgba(239,68,68,0.3);
+  background: rgba(248,113,113,0.18);
+  color: #F87171;
+  border: 1px solid rgba(248,113,113,0.45);
 }
 .scan-sentiment-badge.NEUTRAL, .scan-sentiment-badge.UNKNOWN {
-  background: var(--off-white);
-  color: var(--mid-gray);
-  border: 1px solid var(--light-gray);
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.50);
+  border: 1px solid rgba(255,255,255,0.15);
 }
 
 .scan-chevron {
-  color: var(--mid-gray);
+  color: rgba(255,255,255,0.40);
   font-size: 18px;
   transition: transform 0.2s;
   flex: 0 0 auto;
@@ -1021,7 +1033,8 @@ body {
 .scan-result-body {
   display: none;
   padding: 0 16px 16px;
-  border-top: 1px solid var(--light-gray);
+  background: #F8F9FB;           /* light body pops against the dark header */
+  border-top: 1px solid rgba(255,255,255,0.10);
 }
 .scan-result-panel.open .scan-result-body { display: block; }
 

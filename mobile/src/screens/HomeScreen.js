@@ -86,7 +86,13 @@ export default function HomeScreen({ navigation }) {
 
   const renderReport = ({ item }) => {
     const q   = prices[item.ticker];
-    const pct = q?.pct_change;
+    // pct_change is now returned by the server; fall back to client-side compute
+    // if the server is older or previous_close is available but pct_change is not.
+    let pct = q?.pct_change ?? null;
+    if (pct == null && q?.price != null && q?.previous_close) {
+      const p = Number(q.price), pr = Number(q.previous_close);
+      if (pr > 0) pct = parseFloat(((p - pr) / pr * 100).toFixed(2));
+    }
     const priceStr = q?.price != null ? `$${Number(q.price).toFixed(2)}` : null;
     const pctStr   = pct != null ? `${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%` : null;
     const isUp     = pct != null && pct >= 0;
