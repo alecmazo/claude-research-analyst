@@ -118,6 +118,10 @@ const api = {
   }),
   getScanJob: (id) => apiGet(`/api/scan/${id}`),
   getLatestScan: () => apiGet('/api/scan/latest'),
+  // Intelligence
+  startIntelligence: (days) => apiPost('/api/intelligence', { days }),
+  getIntelligenceJob: (id) => apiGet(`/api/intelligence/${id}`),
+  getLatestIntelligence: () => apiGet('/api/intelligence/latest'),
 };
 
 // ---------- View switching ----------
@@ -892,6 +896,7 @@ async function boot() {
   rehydratePortfolioLastCard();
   loadWatchlist();
   loadLatestScan();
+  initIntelligence();
 }
 
 // On load: if we have a stored token, validate it; otherwise show login.
@@ -910,3 +915,142 @@ async function boot() {
 })();
 
 setInterval(checkServer, 30000);
+
+// ============================================================================
+// INTELLIGENCE — macro → sector → company idea generation
+// ============================================================================
+
+let _intelDays = 30;
+let _intelPollTimer = null;
+
+function initIntelligence() {
+  // Horizon pill wiring
+  document.querySelectorAll('.intel-horizon-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.intel-horizon-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _intelDays = parseInt(btn.dataset.days, 10);
+    });
+  });
+
+  // Run button
+  document.getElementById('intel-run-btn')?.addEventListener('click', runIntelligence);
+
+  // Load latest persisted brief
+  loadLatestIntelligence();
+}
+
+async function loadLatestIntelligence() {
+  try {
+    const data = await api.getLatestIntelligence();
+    if (data?.exists && data?.markdown) {
+      renderIntelResult(data);
+    }
+  } catch { /* server offline — silent */ }
+}
+
+async function runIntelligence() {
+  const btn = document.getElementById('intel-run-btn');
+  const statusEl = document.getElementById('intel-status');
+  const errEl = document.getElementById('intel-error');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Queued — starting shortly…';
+  errEl.style.display = 'none';
+  document.getElementById('intel-empty').style.display = 'none';
+
+  clearInterval(_intelPollTimer);
+
+  try {
+    const job = await api.startIntelligence(_intelDays);
+    _intelPollTimer = setInterval(async () => {
+      try {
+        const j = await api.getIntelligenceJob(job.job_id);
+        if (j.status === 'done') {
+          clearInterval(_intelPollTimer);
+          btn.disabled = false;
+          btn.textContent = '💡 Run Intelligence';
+          statusEl.style.display = 'none';
+          if (j.result?.ok) {
+            renderIntelResult(j.result);
+          } else {
+            showIntelError(j.result?.error || j.error || 'Unknown error');
+          }
+        } else if (j.status === 'failed') {
+          clearInterval(_intelPollTimer);
+          btn.disabled = false;
+          btn.textContent = '💡 Run Intelligence';
+          statusEl.style.display = 'none';
+          showIntelError(j.error || 'Intelligence run failed');
+        } else {
+          statusEl.textContent = j.status === 'running'
+            ? 'Scanning X and web for market signals…'
+            : 'Queued — starting shortly…';
+        }
+      } catch (err) {
+        clearInterval(_intelPollTimer);
+        btn.disabled = false;
+        btn.textContent = '💡 Run Intelligence';
+        statusEl.style.display = 'none';
+        showIntelError(err.message);
+      }
+    }, 3000);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '💡 Run Intelligence';
+    statusEl.style.display = 'none';
+    showIntelError(err.message);
+  }
+}
+
+function showIntelError(msg) {
+  const el = document.getElementById('intel-error');
+  el.style.display = 'block';
+  el.textContent = `⚠ ${msg}`;
+}
+
+function renderIntelResult(data) {
+  // Hide empty state
+  document.getElementById('intel-empty').style.display = 'none';
+
+  // Meta
+  const card = document.getElementById('intel-result-card');
+  card.style.display = 'block';
+  document.getElementById('intel-days-label').textContent = `${data.days}-day lookback`;
+  document.getElementById('intel-generated-at').textContent =
+    data.generated_at ? formatDate(data.generated_at) : '';
+
+  // Ticker chips — each one navigates to the Research tab with that ticker
+  const chipsWrap = document.getElementById('intel-tickers');
+  const chipsEl   = document.getElementById('intel-ticker-chips');
+  const tickers = data.tickers || [];
+  if (tickers.length) {
+    chipsEl.innerHTML = tickers.map(t =>
+      `<button class="intel-chip" onclick="intelOpenTicker('${t}')">
+        ${t}<span class="intel-chip-arrow"> →</span>
+       </button>`
+    ).join('');
+    chipsWrap.style.display = 'block';
+  } else {
+    chipsWrap.style.display = 'none';
+  }
+
+  // Markdown body
+  const mdEl = document.getElementById('intel-markdown');
+  mdEl.innerHTML = data.markdown ? marked.parse(data.markdown) : '<p>No content.</p>';
+}
+
+function intelOpenTicker(ticker) {
+  // Switch to Research tab and pre-fill the ticker input
+  showView('view-home');
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.target === 'view-home');
+  });
+  const input = document.getElementById('ticker-input');
+  if (input) {
+    input.value = ticker.toUpperCase();
+    input.focus();
+  }
+}

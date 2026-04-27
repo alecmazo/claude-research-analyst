@@ -186,4 +186,11 @@ export const api = {
   }),
   getScanJob:    (jobId) => request(`/api/scan/${jobId}`),
   getLatestScan: ()      => request('/api/scan/latest'),
+
+  // ---------- Market Intelligence ----------
+  startIntelligence: (days = 30) => request('/api/intelligence', {
+    method: 'POST', body: JSON.stringify({ days }),
+  }),
+  getIntelligenceJob:    (jobId) => request(`/api/intelligence/${jobId}`),
+  getLatestIntelligence: ()      => request('/api/intelligence/latest'),
 };

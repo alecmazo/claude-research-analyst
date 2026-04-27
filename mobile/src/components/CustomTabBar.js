@@ -24,6 +24,11 @@ const TAB_CONFIG = {
     inactive: { family: 'mci', name: 'chart-areaspline-variant' },
     active:   { family: 'mci', name: 'chart-areaspline' },
   },
+  Intelligence: {
+    // Lightbulb — idea generation / market intelligence
+    inactive: { family: 'mci', name: 'lightbulb-outline' },
+    active:   { family: 'mci', name: 'lightbulb' },
+  },
   Scan: {
     // Radar sweep — high-tech, immediately reads as "scanning"
     inactive: { family: 'mci', name: 'radar' },

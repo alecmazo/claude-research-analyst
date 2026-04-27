@@ -65,6 +65,7 @@ STOCKS_FOLDER.mkdir(parents=True, exist_ok=True)
 # Watchlist & scan persistence
 WATCHLIST_FILE = STOCKS_FOLDER / "watchlist.json"
 SCAN_RESULTS_FILE = STOCKS_FOLDER / "scan_results.json"
+INTEL_FILE = STOCKS_FOLDER / "intelligence.json"
 
 # Default recipient for portfolio-analysis emails (override via PORTFOLIO_EMAIL_TO env var).
 DEFAULT_PORTFOLIO_EMAIL_TO = "alecmazo1@gmail.com"
@@ -1197,6 +1198,150 @@ def run_portfolio_scan(
             print(f"✅ Market scan complete — {len(results)} tickers. Saved to {SCAN_RESULTS_FILE.name}")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist scan results: {exc}")
+
+    return payload
+
+
+# ============================================================================
+# Market Intelligence — macro → sector → company idea generation via Grok
+# ============================================================================
+
+INTEL_SYSTEM_PROMPT = """You are DGA Capital's chief investment strategist. Your role is to synthesize macro conditions, sector momentum, and individual company catalysts into actionable investment ideas for a long-only U.S. equity portfolio with a 3–5 year investment horizon.
+
+Use your live web and X (Twitter) search access to ground every section in recent, verifiable facts. Be specific: name exact figures, dates, and sources. Do not be generic.
+
+Output format rules:
+- Use clean Markdown with the EXACT section headers below
+- Under SPECIFIC NAMES, each company must have its ticker in the format **TICKER** on a new line — this is parsed by the app to create tappable links
+- Be direct and investment-focused; no disclaimers, no generic risk language
+- Aim for the highest expected-value ideas — bold contrarian calls are welcome if grounded in data
+- Every section must be populated; if a sector has no genuine opportunity, name a different one"""
+
+_INTEL_USER_TEMPLATE = """\
+DATE: {today}
+LOOKBACK_WINDOW: Past {days} days
+INVESTMENT_HORIZON: 3–5 years
+
+You are generating a market intelligence brief for DGA Capital's portfolio team. Use live web and X search to find what has actually happened in the past {days} days, then synthesize it into the highest-conviction investment ideas.
+
+Use EXACTLY this format:
+
+---
+
+## MACRO ENVIRONMENT
+
+*What the dominant macro forces are right now and how they affect U.S. equities.*
+
+- [THEME 1]: [1–2 sentences. Specific figures, dates, Fed language, data releases.]
+- [THEME 2]: [1–2 sentences.]
+- [THEME 3 — Geopolitical / Trade / FX if relevant]: [1–2 sentences.]
+
+---
+
+## SECTOR OPPORTUNITIES
+
+*Three sectors with the best risk-adjusted setup over the next 12–24 months based on what has changed in the past {days} days.*
+
+### 1. [SECTOR NAME]
+**Thesis:** [2–3 sentences — why now, what changed, what the catalyst is]
+**Risk:** [1 sentence]
+
+### 2. [SECTOR NAME]
+**Thesis:** [2–3 sentences]
+**Risk:** [1 sentence]
+
+### 3. [SECTOR NAME]
+**Thesis:** [2–3 sentences]
+**Risk:** [1 sentence]
+
+---
+
+## SPECIFIC NAMES TO RESEARCH
+
+*5–8 individual companies where the macro + sector setup converges with a company-specific catalyst. Each must have a clear reason it is actionable NOW (i.e., something has changed in the past {days} days or is about to).*
+
+**TICKER**
+**Company:** [Full name]
+**Why now:** [2–3 sentences — what changed recently, why the market may be mispricing it, what the catalyst is]
+**Expected value driver:** [1 sentence — what drives 3–5 year upside]
+**Key risk:** [1 sentence]
+
+[Repeat for each company — always start the block with **TICKER** on its own line]
+
+---
+
+## CONTRARIAN WATCH
+
+*1–2 unloved or heavily-shorted names where the negative narrative may be overdone. Include only if you have genuine conviction from recent data.*
+
+**TICKER**
+**Company:** [Full name]
+**Contrarian case:** [2 sentences — what the market is wrong about and why]
+"""
+
+
+def run_market_intelligence(days: int = 30) -> dict:
+    """Run a macro→sector→company intelligence scan via Grok live search.
+
+    Returns:
+        {
+            "ok": bool,
+            "days": int,
+            "generated_at": str (ISO),
+            "markdown": str,
+            "tickers": list[str],   # parsed from **TICKER** tokens
+            "error": str | None,
+        }
+    """
+    days = max(7, min(90, int(days)))
+    today = datetime.now().strftime("%Y-%m-%d")
+    now_iso = datetime.utcnow().isoformat()
+
+    user_msg = _INTEL_USER_TEMPLATE.format(today=today, days=days)
+
+    print(f"🧠 Running market intelligence (lookback {days} days)…")
+
+    try:
+        markdown = call_grok(
+            INTEL_SYSTEM_PROMPT,
+            user_msg,
+            live_search=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Intelligence scan failed: {exc}")
+        return {
+            "ok": False,
+            "days": days,
+            "generated_at": now_iso,
+            "markdown": "",
+            "tickers": [],
+            "error": str(exc),
+        }
+
+    # Parse out **TICKER** tokens so the UI can make them tappable.
+    import re as _re
+    tickers = list(dict.fromkeys(
+        m.group(1).upper()
+        for m in _re.finditer(r'^\*\*([A-Z]{1,6})\*\*\s*$', markdown, _re.MULTILINE)
+    ))
+
+    payload = {
+        "ok": True,
+        "days": days,
+        "generated_at": now_iso,
+        "markdown": markdown,
+        "tickers": tickers,
+        "error": None,
+    }
+
+    # Persist to disk so the result survives server restarts / Railway redeploys.
+    try:
+        tmp = INTEL_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str, indent=2))
+        tmp.replace(INTEL_FILE)
+        print(f"✅ Market intelligence complete — {len(tickers)} tickers identified.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not persist intelligence results: {exc}")
 
     return payload
 

@@ -117,6 +117,10 @@ class PortfolioJobStatus(BaseModel):
     result: dict | None = None
 
 
+class IntelligenceRequest(BaseModel):
+    days: int = 30   # lookback window in days: 30 | 60 | 90
+
+
 # ---------------------------------------------------------------------------
 # Auth route
 # ---------------------------------------------------------------------------
@@ -176,6 +180,10 @@ _pjobs_lock = threading.Lock()
 # In-memory scan job store.
 _sjobs: dict[str, dict[str, Any]] = {}
 _sjobs_lock = threading.Lock()
+
+# In-memory intelligence job store.
+_ijobs: dict[str, dict[str, Any]] = {}
+_ijobs_lock = threading.Lock()
 
 
 def _run_portfolio(
@@ -570,6 +578,71 @@ def get_scan_status(job_id: str):
         job = _sjobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Scan job not found")
+    return job
+
+
+# ---------------------------------------------------------------------------
+# Intelligence — macro → sector → company idea generation
+# ---------------------------------------------------------------------------
+
+def _run_intelligence(job_id: str, days: int) -> None:
+    with _ijobs_lock:
+        _ijobs[job_id]["status"] = "running"
+    try:
+        result = analyst.run_market_intelligence(days)
+        with _ijobs_lock:
+            _ijobs[job_id]["status"] = "done" if result.get("ok") else "failed"
+            _ijobs[job_id]["result"] = result
+            if not result.get("ok"):
+                _ijobs[job_id]["error"] = result.get("error", "Unknown error")
+    except BaseException as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        print(f"\n❌ Intelligence job {job_id} CRASHED:\n{tb}", flush=True)
+        with _ijobs_lock:
+            _ijobs[job_id]["status"] = "failed"
+            _ijobs[job_id]["error"] = str(exc)
+
+
+@app.post("/api/intelligence")
+def start_intelligence(req: IntelligenceRequest, background_tasks: BackgroundTasks):
+    """Start a market intelligence run for the given lookback window (days)."""
+    days = max(7, min(90, req.days))
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _ijobs_lock:
+        _ijobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "days": days,
+            "result": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_intelligence, job_id, days)
+    return _ijobs[job_id]
+
+
+@app.get("/api/intelligence/latest")
+def get_latest_intelligence():
+    """Return the most-recently-completed intelligence run (persisted to disk)."""
+    path = analyst.INTEL_FILE
+    if not path.exists():
+        return {"exists": False}
+    try:
+        data = json.loads(path.read_text())
+        data["exists"] = True
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read intelligence: {exc}")
+
+
+@app.get("/api/intelligence/{job_id}")
+def get_intelligence_status(job_id: str):
+    """Poll a running or completed intelligence job."""
+    with _ijobs_lock:
+        job = _ijobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Intelligence job not found")
     return job
 
 

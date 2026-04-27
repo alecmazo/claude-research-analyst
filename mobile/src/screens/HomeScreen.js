@@ -9,7 +9,7 @@ import { api, getGammaEnabled, setGammaEnabled as saveGamma } from '../api/clien
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const [ticker, setTicker]       = useState('');
   const [loading, setLoading]     = useState(false);
   const [reports, setReports]     = useState([]);
@@ -52,7 +52,14 @@ export default function HomeScreen({ navigation }) {
       checkServer();
       loadReports();
       getGammaEnabled().then(setGammaEnabled);
-    }, [])
+      // Pre-fill ticker if navigated here from Intelligence screen
+      const prefill = route?.params?.prefillTicker;
+      if (prefill) {
+        setTicker(prefill.toUpperCase());
+        // Clear the param so it doesn't re-fire on next focus
+        navigation.setParams({ prefillTicker: undefined });
+      }
+    }, [route?.params?.prefillTicker])
   );
 
   const onRefresh = async () => {

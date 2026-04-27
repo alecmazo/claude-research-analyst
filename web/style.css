@@ -1203,3 +1203,120 @@ body {
   text-align: center;
   text-transform: uppercase;
 }
+
+/* ============================================================================
+   INTELLIGENCE VIEW
+   ============================================================================ */
+
+/* ── Horizon pill toggle ── */
+.intel-horizon-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+.intel-horizon-pill {
+  flex: 1;
+  height: 40px;
+  border-radius: 8px;
+  border: 1.5px solid var(--light-gray);
+  background: var(--off-white);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mid-gray);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.intel-horizon-pill:hover {
+  border-color: var(--gold);
+  color: var(--dark-gray);
+}
+.intel-horizon-pill.active {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--navy);
+  font-weight: 800;
+}
+
+/* ── Status text while running ── */
+.intel-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--mid-gray);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Result card ── */
+.intel-result-card { padding: 16px; }
+
+.intel-result-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--light-gray);
+  margin-bottom: 14px;
+}
+.intel-result-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.intel-live-badge {
+  background: var(--navy);
+  color: var(--gold);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.intel-days-label {
+  font-size: 11px;
+  color: var(--mid-gray);
+  font-weight: 600;
+}
+.intel-gen-date {
+  font-size: 11px;
+  color: var(--mid-gray);
+}
+
+/* ── Tappable ticker chips ── */
+.intel-tickers {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--light-gray);
+}
+.intel-ticker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.intel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--gold);
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.intel-chip:hover  { opacity: 0.85; transform: translateY(-1px); }
+.intel-chip:active { transform: translateY(0); opacity: 0.7; }
+.intel-chip-arrow  { font-size: 11px; opacity: 0.7; }
+
+/* ── Empty state ── */
+.intel-empty {
+  text-align: center;
+  padding: 60px 32px 40px;
+  color: var(--mid-gray);
+}
+.intel-empty-icon  { font-size: 48px; margin-bottom: 16px; }
+.intel-empty-title { font-size: 18px; font-weight: 700; color: var(--dark-gray); margin-bottom: 10px; }
+.intel-empty-sub   { font-size: 13px; line-height: 1.7; color: var(--mid-gray); }

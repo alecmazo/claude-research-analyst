@@ -10,6 +10,7 @@ import ReportScreen           from './src/screens/ReportScreen';
 import ScanScreen             from './src/screens/ScanScreen';
 import PortfolioScreen        from './src/screens/PortfolioScreen';
 import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
+import IntelligenceScreen     from './src/screens/IntelligenceScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
@@ -43,10 +44,11 @@ export default function App() {
         tabBar={(props) => <CustomTabBar {...props} />}
         screenOptions={{ headerShown: false }}
       >
-        <Tab.Screen name="Research"  component={HomeStack} />
-        <Tab.Screen name="Scan"      component={ScanScreen} />
-        <Tab.Screen name="Portfolio" component={PortfolioStack} />
-        <Tab.Screen name="Settings"  component={SettingsScreen} />
+        <Tab.Screen name="Research"     component={HomeStack} />
+        <Tab.Screen name="Intelligence" component={IntelligenceScreen} />
+        <Tab.Screen name="Scan"         component={ScanScreen} />
+        <Tab.Screen name="Portfolio"    component={PortfolioStack} />
+        <Tab.Screen name="Settings"     component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>
   );
