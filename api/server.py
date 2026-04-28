@@ -210,6 +210,13 @@ def _run_portfolio(
             _pjobs[job_id]["result"] = result
             if not result.get("ok"):
                 _pjobs[job_id]["error"] = "No tickers could be analyzed."
+        # Auto-promote the input holdings as the new "live portfolio" benchmark
+        # so the Paper Tracker can compare idea baskets against your real book.
+        if result.get("ok"):
+            try:
+                analyst.promote_live_portfolio(portfolio_records)
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️  Live-portfolio promotion failed: {exc}")
     except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
         with _pjobs_lock:
             _pjobs[job_id]["status"] = "failed"
@@ -646,6 +653,79 @@ def get_intelligence_status(job_id: str):
     return job
 
 
+# ---------------------------------------------------------------------------
+# Paper Portfolio Tracker
+# ---------------------------------------------------------------------------
+
+class TrackerHolding(BaseModel):
+    ticker: str
+    weight: float   # 0..1 (or 0..100; coerced server-side)
+
+
+class TrackerCreateRequest(BaseModel):
+    name: str
+    holdings: list[TrackerHolding]
+    source: dict | None = None
+
+
+@app.post("/api/track")
+def create_tracker(req: TrackerCreateRequest):
+    """Lock in a new paper portfolio (idea basket) for forward tracking."""
+    try:
+        portfolio = analyst.create_idea_portfolio(
+            name=req.name,
+            holdings_input=[h.model_dump() for h in req.holdings],
+            source=req.source or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return portfolio
+
+
+@app.get("/api/track")
+def list_trackers():
+    """List all paper portfolios with computed performance metrics."""
+    return {"portfolios": analyst.list_idea_portfolios()}
+
+
+@app.get("/api/track/live")
+def get_tracker_live():
+    """Return the auto-promoted live portfolio (the benchmark)."""
+    state = analyst._load_tracker_state()
+    return {"live_portfolio": state.get("live_portfolio")}
+
+
+@app.post("/api/track/snapshot")
+def trigger_tracker_snapshot():
+    """Manually trigger a daily snapshot (admin / debug)."""
+    return analyst.take_daily_snapshot(force=True)
+
+
+@app.get("/api/track/{portfolio_id}")
+def get_tracker(portfolio_id: str):
+    """Return one portfolio with full daily series + benchmark series for charting."""
+    p = analyst.get_idea_portfolio(portfolio_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+    return p
+
+
+@app.post("/api/track/{portfolio_id}/close")
+def close_tracker(portfolio_id: str):
+    """Mark a paper portfolio as closed (stops daily snapshotting)."""
+    if not analyst.close_idea_portfolio(portfolio_id):
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+    return {"ok": True}
+
+
+@app.delete("/api/track/{portfolio_id}")
+def delete_tracker(portfolio_id: str):
+    """Permanently delete a paper portfolio."""
+    if not analyst.delete_idea_portfolio(portfolio_id):
+        raise HTTPException(status_code=404, detail="Paper portfolio not found")
+    return {"ok": True}
+
+
 @app.get("/api/portfolio/last")
 def get_last_portfolio():
     """Return metadata about the most recent portfolio run (for the Research page link).
@@ -730,7 +810,11 @@ def _hydrate_from_dropbox() -> None:
         name = getattr(entry, "name", "")
         # Hydrate per-ticker reports AND the last Portfolio_Summary so the
         # Research page's "Last Portfolio Summary" card survives redeploys.
-        if not (name.endswith("_DGA_Report.md") or name == "Portfolio_Summary.md"):
+        # Also hydrate tracker.json so paper portfolios + snapshots survive.
+        if not (name.endswith("_DGA_Report.md")
+                or name == "Portfolio_Summary.md"
+                or name == "tracker.json"
+                or name == "intelligence.json"):
             continue
         local = analyst.STOCKS_FOLDER / name
         if local.exists():
@@ -745,10 +829,13 @@ def _hydrate_from_dropbox() -> None:
         except Exception:
             pass
     if downloaded:
-        print(f"☁️  Hydrated {downloaded} report(s) from Dropbox into /stocks")
+        print(f"☁️  Hydrated {downloaded} file(s) from Dropbox into /stocks")
 
 
 threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()
+
+# Start the daily snapshot worker (runs once per day after market close)
+analyst._start_tracker_snapshot_worker()
 
 
 # ---------------------------------------------------------------------------

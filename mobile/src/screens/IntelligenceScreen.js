@@ -115,13 +115,77 @@ export default function IntelligenceScreen({ navigation }) {
     });
   };
 
+  // ── Track-this-brief: lock in equal-weight paper portfolio ────────────────
+  const [tracking, setTracking] = useState(false);
+  const handleTrackBrief = () => {
+    if (!result?.tickers?.length) return;
+    const tickers = result.tickers.slice(0, 20);  // clamp at 20
+    Alert.alert(
+      'Lock in paper portfolio?',
+      `Equal-weight ${tickers.length} tickers from this ${result.days}-day brief. Today's closing prices become cost basis. You can adjust weights on the web.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Lock In', onPress: async () => {
+            setTracking(true);
+            try {
+              const eq = +(1 / tickers.length).toFixed(6);
+              const today = new Date().toLocaleDateString('en-US',
+                { month: 'short', day: 'numeric' });
+              await api.createTracker({
+                name: `Brief — ${today}, ${result.days}D`,
+                holdings: tickers.map(t => ({ ticker: t, weight: eq })),
+                source: {
+                  lookback_days: result.days,
+                  brief_generated_at: result.generated_at,
+                },
+              });
+              Alert.alert(
+                'Locked in',
+                'Paper portfolio created. View it on Portfolio → Tracker.',
+                [
+                  { text: 'OK' },
+                  { text: 'View Now', onPress: () => {
+                      navigation.getParent()?.navigate('Portfolio', {
+                        screen: 'PaperTracker',
+                      });
+                  }},
+                ]
+              );
+            } catch (e) {
+              Alert.alert('Could not lock in', e.message);
+            } finally {
+              setTracking(false);
+            }
+          }
+        },
+      ]
+    );
+  };
+
   // ── Result sections for tappable tickers ──────────────────────────────────
   // Parse **TICKER** tokens in the markdown and render them as tappable gold chips.
   const renderTickerChips = (tickers) => {
     if (!tickers?.length) return null;
     return (
       <View style={styles.chipsSection}>
-        <Text style={styles.chipsLabel}>TICKERS IN THIS BRIEF</Text>
+        <View style={styles.chipsHeader}>
+          <Text style={styles.chipsLabel}>TICKERS IN THIS BRIEF</Text>
+          <TouchableOpacity
+            style={[styles.trackBtn, tracking && { opacity: 0.5 }]}
+            onPress={handleTrackBrief}
+            disabled={tracking}
+            activeOpacity={0.8}
+          >
+            {tracking ? (
+              <ActivityIndicator size="small" color={colors.gold} />
+            ) : (
+              <>
+                <Ionicons name="bookmark" size={12} color={colors.gold} />
+                <Text style={styles.trackBtnText}>Track Brief</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
         <View style={styles.chipsRow}>
           {tickers.map(t => (
             <TouchableOpacity
@@ -361,12 +425,35 @@ const styles = StyleSheet.create({
 
   // ── Ticker chips ──
   chipsSection: { marginBottom: 14 },
+  chipsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   chipsLabel: {
     fontSize: 10,
     fontWeight: '700',
     color: colors.midGray,
     letterSpacing: 1.2,
-    marginBottom: 8,
+  },
+  trackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.navy,
+    borderColor: colors.gold,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    minHeight: 26,
+  },
+  trackBtnText: {
+    color: colors.gold,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {

@@ -152,7 +152,19 @@ export default function PortfolioScreen({ navigation }) {
 
   return (
     <View style={styles.wrapper}>
-      <AppHeader title="Portfolio Rebalance" />
+      <AppHeader
+        title="Portfolio"
+        right={
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PaperTracker')}
+            style={styles.trackerHeaderBtn}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="trending-up" size={14} color={colors.navy} />
+            <Text style={styles.trackerHeaderBtnText}>Tracker</Text>
+          </TouchableOpacity>
+        }
+      />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
       {/* File picker card */}
@@ -354,6 +366,15 @@ const styles = StyleSheet.create({
   wrapper:   { flex: 1, backgroundColor: colors.offWhite },
   container: { flex: 1 },
   content: { paddingBottom: 40 },
+  trackerHeaderBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.gold,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 6,
+  },
+  trackerHeaderBtnText: {
+    color: colors.navy, fontSize: 11, fontWeight: '800', letterSpacing: 0.5,
+  },
   card: {
     backgroundColor: colors.white,
     margin: 16,

@@ -122,6 +122,15 @@ const api = {
   startIntelligence: (days) => apiPost('/api/intelligence', { days }),
   getIntelligenceJob: (id) => apiGet(`/api/intelligence/${id}`),
   getLatestIntelligence: () => apiGet('/api/intelligence/latest'),
+  // Paper Tracker
+  createTracker: (body) => apiPost('/api/track', body),
+  listTrackers: () => apiGet('/api/track'),
+  getTracker: (id) => apiGet(`/api/track/${id}`),
+  closeTracker: (id) => apiPost(`/api/track/${id}/close`, {}),
+  deleteTracker: (id) => fetch(`${API_BASE}/api/track/${id}`, {
+    method: 'DELETE', headers: { 'x-auth-token': getToken() }
+  }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); })),
+  getLiveBenchmark: () => apiGet('/api/track/live'),
 };
 
 // ---------- View switching ----------
@@ -897,6 +906,7 @@ async function boot() {
   loadWatchlist();
   loadLatestScan();
   initIntelligence();
+  initTracker();
 }
 
 // On load: if we have a stored token, validate it; otherwise show login.
@@ -1011,7 +1021,12 @@ function showIntelError(msg) {
   el.textContent = `⚠ ${msg}`;
 }
 
+// Stash the latest brief so the "Track this brief" button knows what to lock in.
+let _latestBrief = null;
+
 function renderIntelResult(data) {
+  _latestBrief = data;
+
   // Hide empty state
   document.getElementById('intel-empty').style.display = 'none';
 
@@ -1052,5 +1067,435 @@ function intelOpenTicker(ticker) {
   if (input) {
     input.value = ticker.toUpperCase();
     input.focus();
+  }
+}
+
+// ============================================================================
+// PAPER PORTFOLIO TRACKER
+// ============================================================================
+
+let _trackerCache = [];
+let _trackerExpandedId = null;
+
+function initTracker() {
+  // Mode toggle on Portfolio tab
+  document.querySelectorAll('.port-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.portMode;
+      document.querySelectorAll('.port-mode-btn').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      document.getElementById('port-mode-rebalance').style.display =
+        mode === 'rebalance' ? '' : 'none';
+      document.getElementById('port-mode-tracker').style.display =
+        mode === 'tracker' ? '' : 'none';
+      if (mode === 'tracker') {
+        loadTrackers();
+        loadLiveBenchmark();
+      }
+    });
+  });
+
+  // "Track this brief" button on Intelligence view
+  document.getElementById('intel-track-btn')?.addEventListener('click', openTrackModal);
+
+  // Modal close handlers
+  document.getElementById('track-modal-cancel')?.addEventListener('click', closeTrackModal);
+  document.getElementById('track-modal-cancel-btn')?.addEventListener('click', closeTrackModal);
+  document.getElementById('track-modal-lock-btn')?.addEventListener('click', submitTrack);
+  document.getElementById('track-equal-btn')?.addEventListener('click', resetEqualWeights);
+
+  // Detail card close
+  document.getElementById('tracker-detail-close')?.addEventListener('click', closeTrackerDetail);
+  document.getElementById('tracker-detail-close-portfolio')?.addEventListener('click', closeTrackerCurrent);
+  document.getElementById('tracker-detail-delete')?.addEventListener('click', deleteTrackerCurrent);
+}
+
+// ── Live benchmark card ────────────────────────────────────────────────────
+async function loadLiveBenchmark() {
+  const wrap = document.getElementById('tracker-live-info');
+  if (!wrap) return;
+  try {
+    const data = await api.getLiveBenchmark();
+    const live = data?.live_portfolio;
+    if (!live) {
+      wrap.innerHTML = `<div class="tracker-live-empty">
+        No live portfolio yet. Upload your portfolio on the Live Rebalance tab to set a benchmark.
+      </div>`;
+      return;
+    }
+    const n = (live.holdings || []).length;
+    const top = (live.holdings || [])
+      .slice().sort((a, b) => b.weight - a.weight).slice(0, 5)
+      .map(h => `${h.ticker} ${(h.weight * 100).toFixed(1)}%`).join(' · ');
+    wrap.innerHTML = `
+      <div class="tracker-live-line">
+        <span class="tracker-live-key">ANCHOR DATE</span>
+        <span class="tracker-live-value">${live.anchor_date || '—'}</span>
+      </div>
+      <div class="tracker-live-line">
+        <span class="tracker-live-key">HOLDINGS</span>
+        <span class="tracker-live-value">${n} positions</span>
+      </div>
+      <div class="tracker-live-line">
+        <span class="tracker-live-key">TOP 5</span>
+        <span class="tracker-live-value" style="font-size:11px;font-family:'SF Mono',Menlo,monospace;">${top}</span>
+      </div>`;
+  } catch {
+    wrap.innerHTML = `<div class="tracker-live-empty">Could not load live benchmark.</div>`;
+  }
+}
+
+// ── List load + render ─────────────────────────────────────────────────────
+async function loadTrackers() {
+  const list = document.getElementById('tracker-list');
+  if (!list) return;
+  list.innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    const data = await api.listTrackers();
+    _trackerCache = data.portfolios || [];
+    renderTrackerList();
+  } catch (err) {
+    list.innerHTML = `<div class="empty">Could not load: ${err.message}</div>`;
+  }
+}
+
+function renderTrackerList() {
+  const list = document.getElementById('tracker-list');
+  if (!_trackerCache.length) {
+    list.innerHTML = `<div class="empty">No paper portfolios yet. Generate an Intelligence brief, then tap <strong>📌 Track This Brief</strong>.</div>`;
+    return;
+  }
+  list.innerHTML = _trackerCache.map(p => trackerRowHtml(p)).join('');
+  list.querySelectorAll('.tracker-row').forEach(el => {
+    el.addEventListener('click', () => openTrackerDetail(el.dataset.id));
+  });
+}
+
+function trackerRowHtml(p) {
+  const ret    = p.current_return_pct ?? 0;
+  const vsSpy  = p.vs_spy_pct;
+  const vsLive = p.vs_live_pct;
+  const dd     = p.max_drawdown_pct ?? 0;
+  const ms     = p.milestones || {};
+  const fmtPct = (x) => x == null ? '—' : `${x >= 0 ? '+' : ''}${x.toFixed(2)}%`;
+  const cls    = (x) => x == null ? 'flat' : x > 0 ? 'up' : x < 0 ? 'down' : 'flat';
+  const status = p.status === 'closed' ? 'closed' : '';
+
+  return `
+    <div class="tracker-row ${status}" data-id="${p.id}">
+      <div class="tracker-row-top">
+        <div>
+          <div class="tracker-row-name">${escapeHtml(p.name)}</div>
+          <div class="tracker-row-sub">
+            <span>${p.n_tickers} tickers</span>
+            <span class="dot">·</span>
+            <span>Day ${p.days_tracked}</span>
+            <span class="dot">·</span>
+            <span>Locked ${p.entry_date}</span>
+          </div>
+        </div>
+        <span class="tracker-status-pill ${status}">${(p.status || 'tracking').toUpperCase()}</span>
+      </div>
+
+      <div class="tracker-metrics">
+        <div class="tracker-metric">
+          <div class="tracker-metric-key">RETURN</div>
+          <div class="tracker-metric-val ${cls(ret)}">${fmtPct(ret)}</div>
+        </div>
+        <div class="tracker-metric">
+          <div class="tracker-metric-key">VS SPY</div>
+          <div class="tracker-metric-val ${cls(vsSpy)}">${fmtPct(vsSpy)}</div>
+        </div>
+        <div class="tracker-metric">
+          <div class="tracker-metric-key">VS LIVE</div>
+          <div class="tracker-metric-val ${cls(vsLive)}">${fmtPct(vsLive)}</div>
+        </div>
+        <div class="tracker-metric">
+          <div class="tracker-metric-key">MAX DD</div>
+          <div class="tracker-metric-val flat">-${(dd ?? 0).toFixed(2)}%</div>
+        </div>
+      </div>
+
+      <div class="tracker-milestones">
+        <span class="tracker-milestone ${ms.d30 ? 'reached' : ''}">30D</span>
+        <span class="tracker-milestone ${ms.d60 ? 'reached' : ''}">60D</span>
+        <span class="tracker-milestone ${ms.d90 ? 'reached' : ''}">90D</span>
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+// ── Detail / chart ─────────────────────────────────────────────────────────
+async function openTrackerDetail(id) {
+  _trackerExpandedId = id;
+  const card = document.getElementById('tracker-detail-card');
+  card.style.display = 'block';
+  document.getElementById('tracker-detail-name').textContent = 'Loading…';
+  document.getElementById('tracker-detail-meta').textContent = '';
+  document.getElementById('tracker-chart').innerHTML = '';
+  document.getElementById('tracker-holdings-table').innerHTML = '';
+  // Scroll into view
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const p = await api.getTracker(id);
+    document.getElementById('tracker-detail-name').textContent = p.name;
+    document.getElementById('tracker-detail-meta').textContent =
+      `${p.n_tickers} tickers · Locked ${p.entry_date} · Day ${p.days_tracked} · ${p.status}`;
+    drawTrackerChart(p);
+    drawTrackerHoldings(p);
+  } catch (err) {
+    document.getElementById('tracker-detail-name').textContent = 'Error';
+    document.getElementById('tracker-detail-meta').textContent = err.message;
+  }
+}
+
+function closeTrackerDetail() {
+  document.getElementById('tracker-detail-card').style.display = 'none';
+  _trackerExpandedId = null;
+}
+
+async function closeTrackerCurrent() {
+  if (!_trackerExpandedId) return;
+  if (!confirm('Stop tracking this paper portfolio? You can still view its history.')) return;
+  await api.closeTracker(_trackerExpandedId);
+  closeTrackerDetail();
+  loadTrackers();
+}
+
+async function deleteTrackerCurrent() {
+  if (!_trackerExpandedId) return;
+  if (!confirm('Permanently delete this paper portfolio and all its history? This cannot be undone.')) return;
+  await api.deleteTracker(_trackerExpandedId);
+  closeTrackerDetail();
+  loadTrackers();
+}
+
+// ── Chart (simple inline SVG, no library needed) ──────────────────────────
+function drawTrackerChart(p) {
+  const wrap = document.getElementById('tracker-chart');
+  const W = 560, H = 200, padL = 36, padR = 8, padT = 12, padB = 22;
+
+  const series = [
+    { key: 'paper', label: 'Paper', color: '#C9A84C', data: p.series || [] },
+    { key: 'spy',   label: 'SPY',   color: '#2563EB', data: p.spy_series || [] },
+    { key: 'live',  label: 'Live',  color: '#16A34A', data: p.live_series || [] },
+  ].filter(s => s.data.length > 0);
+
+  if (!series.length) {
+    wrap.innerHTML = `<div style="text-align:center;color:var(--mid-gray);padding:40px 0;font-size:13px;">No data points yet — first daily snapshot lands after market close.</div>`;
+    return;
+  }
+
+  // X axis: union of all dates, sorted
+  const allDates = Array.from(new Set(series.flatMap(s => s.data.map(d => d.date)))).sort();
+  const xIdx = Object.fromEntries(allDates.map((d, i) => [d, i]));
+  const xMax = Math.max(allDates.length - 1, 1);
+
+  // Y axis: min/max across all series values
+  const allVals = series.flatMap(s => s.data.map(d => d.value));
+  const yMin = Math.min(100, ...allVals);
+  const yMax = Math.max(100, ...allVals);
+  const yPad = (yMax - yMin) * 0.10 || 2;
+  const Y0 = yMin - yPad, Y1 = yMax + yPad;
+
+  const xPos = (i) => padL + (i / xMax) * (W - padL - padR);
+  const yPos = (v) => padT + (1 - (v - Y0) / (Y1 - Y0)) * (H - padT - padB);
+
+  // Build the polylines
+  const lines = series.map(s => {
+    const points = s.data.map(d => `${xPos(xIdx[d.date])},${yPos(d.value)}`).join(' ');
+    return `<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="2.2"
+                       stroke-linecap="round" stroke-linejoin="round"/>`;
+  }).join('');
+
+  // Y-axis labels (3 ticks)
+  const yLabels = [Y0, (Y0 + Y1) / 2, Y1].map(v => {
+    const ret = v - 100;
+    const sign = ret >= 0 ? '+' : '';
+    return `<text x="${padL - 4}" y="${yPos(v) + 3}" text-anchor="end">${sign}${ret.toFixed(1)}%</text>`;
+  }).join('');
+
+  // X-axis labels — first / mid / last
+  const xLabels = [
+    [0,                    allDates[0]],
+    [Math.floor(xMax / 2), allDates[Math.floor(xMax / 2)]],
+    [xMax,                 allDates[xMax]],
+  ].map(([i, d]) =>
+    `<text x="${xPos(i)}" y="${H - 6}" text-anchor="middle">${d.slice(5)}</text>`
+  ).join('');
+
+  // 100-baseline
+  const baseY = yPos(100);
+  const baseLine = `<line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"
+                          stroke="#C0C7D2" stroke-dasharray="2,3" stroke-width="1"/>`;
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      ${baseLine}
+      ${lines}
+      ${yLabels}
+      ${xLabels}
+    </svg>`;
+}
+
+function drawTrackerHoldings(p) {
+  const t = document.getElementById('tracker-holdings-table');
+  if (!p.holdings?.length) { t.innerHTML = ''; return; }
+
+  // Fetch current prices in parallel
+  Promise.allSettled(p.holdings.map(h => api.getQuote(h.ticker))).then(quotes => {
+    const rows = p.holdings.map((h, i) => {
+      const q = quotes[i].status === 'fulfilled' ? quotes[i].value : null;
+      const cur = q?.price;
+      const ret = (cur && h.entry_price) ? ((cur / h.entry_price - 1) * 100) : null;
+      const cls = ret == null ? '' : ret > 0 ? 'pct-up' : ret < 0 ? 'pct-down' : '';
+      return `<tr>
+        <td class="ticker-cell">${h.ticker}</td>
+        <td class="num-cell">${(h.weight * 100).toFixed(1)}%</td>
+        <td class="num-cell">$${h.entry_price.toFixed(2)}</td>
+        <td class="num-cell">${cur ? '$' + cur.toFixed(2) : '—'}</td>
+        <td class="num-cell ${cls}">${ret == null ? '—' : (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%'}</td>
+      </tr>`;
+    }).join('');
+    t.innerHTML = `
+      <thead><tr>
+        <th>Ticker</th><th>Weight</th><th>Entry</th><th>Current</th><th>Return</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>`;
+  });
+}
+
+// ── Track-this-brief modal ─────────────────────────────────────────────────
+function openTrackModal() {
+  if (!_latestBrief?.tickers?.length) {
+    alert('No tickers in the current brief. Generate a brief first.');
+    return;
+  }
+  // Default name
+  const days = _latestBrief.days || 30;
+  const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  document.getElementById('track-name-input').value = `Brief — ${today}, ${days}D`;
+
+  // Equal weights to start
+  const tickers = _latestBrief.tickers.slice(0, 20);  // clamp at 20
+  const eq = Math.floor(100 / tickers.length);
+  const remainder = 100 - eq * tickers.length;
+  const weights = tickers.map((t, i) => i === 0 ? eq + remainder : eq);
+  renderTrackWeights(tickers, weights);
+
+  document.getElementById('track-modal-error').style.display = 'none';
+  document.getElementById('track-modal').style.display = 'flex';
+}
+
+function closeTrackModal() {
+  document.getElementById('track-modal').style.display = 'none';
+}
+
+function renderTrackWeights(tickers, weights) {
+  const list = document.getElementById('track-weights-list');
+  list.innerHTML = tickers.map((t, i) => `
+    <div class="track-weight-row" data-ticker="${t}">
+      <span class="track-weight-ticker">${t}</span>
+      <input type="number" class="track-weight-input" value="${weights[i]}" min="0" max="100" step="1">
+      <span class="track-weight-pct">%</span>
+      <button class="track-weight-remove" title="Remove">×</button>
+    </div>`).join('');
+  // Wire input change
+  list.querySelectorAll('.track-weight-input').forEach(inp => {
+    inp.addEventListener('input', updateTrackTotal);
+  });
+  // Wire remove
+  list.querySelectorAll('.track-weight-remove').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.target.closest('.track-weight-row').remove();
+      updateTrackTotal();
+    });
+  });
+  updateTrackTotal();
+}
+
+function updateTrackTotal() {
+  let total = 0;
+  document.querySelectorAll('.track-weight-input').forEach(inp => {
+    total += parseFloat(inp.value) || 0;
+  });
+  const el = document.getElementById('track-total');
+  el.textContent = `${total.toFixed(0)}%`;
+  el.className = 'track-total';
+  if (Math.abs(total - 100) < 0.5) el.classList.add('good');
+  else el.classList.add('bad');
+}
+
+function resetEqualWeights() {
+  const rows = document.querySelectorAll('.track-weight-row');
+  if (!rows.length) return;
+  const eq = Math.floor(100 / rows.length);
+  const remainder = 100 - eq * rows.length;
+  rows.forEach((row, i) => {
+    const inp = row.querySelector('.track-weight-input');
+    inp.value = i === 0 ? eq + remainder : eq;
+  });
+  updateTrackTotal();
+}
+
+async function submitTrack() {
+  const name = document.getElementById('track-name-input').value.trim();
+  const errEl = document.getElementById('track-modal-error');
+  errEl.style.display = 'none';
+
+  const holdings = [];
+  let total = 0;
+  document.querySelectorAll('.track-weight-row').forEach(row => {
+    const ticker = row.dataset.ticker;
+    const w = parseFloat(row.querySelector('.track-weight-input').value) || 0;
+    if (ticker && w > 0) {
+      holdings.push({ ticker, weight: w });
+      total += w;
+    }
+  });
+
+  if (!holdings.length) {
+    errEl.textContent = 'Need at least 1 ticker with positive weight.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (Math.abs(total - 100) > 0.5) {
+    errEl.textContent = `Weights must sum to 100% (currently ${total.toFixed(1)}%).`;
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('track-modal-lock-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Locking…';
+
+  try {
+    await api.createTracker({
+      name,
+      holdings,
+      source: {
+        lookback_days: _latestBrief?.days,
+        brief_generated_at: _latestBrief?.generated_at,
+      },
+    });
+    closeTrackModal();
+    // Switch to Portfolio → Tracker mode and refresh
+    showView('view-portfolio');
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.target === 'view-portfolio');
+    });
+    document.querySelector('.port-mode-btn[data-port-mode="tracker"]')?.click();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📌 Lock In Portfolio';
   }
 }

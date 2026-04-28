@@ -66,6 +66,7 @@ STOCKS_FOLDER.mkdir(parents=True, exist_ok=True)
 WATCHLIST_FILE = STOCKS_FOLDER / "watchlist.json"
 SCAN_RESULTS_FILE = STOCKS_FOLDER / "scan_results.json"
 INTEL_FILE = STOCKS_FOLDER / "intelligence.json"
+TRACKER_FILE = STOCKS_FOLDER / "tracker.json"   # paper portfolios + live + SPY series
 
 # Default recipient for portfolio-analysis emails (override via PORTFOLIO_EMAIL_TO env var).
 DEFAULT_PORTFOLIO_EMAIL_TO = "alecmazo1@gmail.com"
@@ -1344,6 +1345,535 @@ def run_market_intelligence(days: int = 30) -> dict:
         print(f"⚠️  Could not persist intelligence results: {exc}")
 
     return payload
+
+
+# ============================================================================
+# Paper Portfolio Tracker — forward-track ideas vs SPY and live portfolio
+# ----------------------------------------------------------------------------
+# Single-file persistence (TRACKER_FILE) holds:
+#   - portfolios:    list of paper portfolios (idea baskets)
+#   - live_portfolio: auto-promoted from the most recent xlsx upload
+#   - spy_series:    daily SPY closes shared across all portfolios
+#
+# A daily snapshot worker takes end-of-day closes for every tracking
+# portfolio + SPY + live and appends them to each series. Snapshots happen
+# opportunistically (whenever any tracker endpoint is called and today's
+# snapshot hasn't been recorded after market close) plus a once-per-hour
+# background thread.
+# ============================================================================
+
+import uuid as _uuid
+
+_TRACKER_LOCK = None  # initialised lazily; threading is imported by callers
+
+
+def _tracker_lock():
+    """Lazy module-level lock so we don't depend on threading at import time."""
+    global _TRACKER_LOCK
+    if _TRACKER_LOCK is None:
+        import threading as _threading
+        _TRACKER_LOCK = _threading.Lock()
+    return _TRACKER_LOCK
+
+
+def _empty_tracker_state() -> dict:
+    return {
+        "portfolios":     [],
+        "live_portfolio": None,
+        "spy_series":     [],   # [{"date": "YYYY-MM-DD", "close": float}, ...]
+    }
+
+
+def _load_tracker_state() -> dict:
+    """Read tracker.json (or return empty state)."""
+    if not TRACKER_FILE.exists():
+        return _empty_tracker_state()
+    try:
+        data = json.loads(TRACKER_FILE.read_text())
+        if not isinstance(data, dict):
+            return _empty_tracker_state()
+        for k, default in _empty_tracker_state().items():
+            data.setdefault(k, default)
+        return data
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not read tracker.json: {exc}")
+        return _empty_tracker_state()
+
+
+def _save_tracker_state(state: dict) -> None:
+    """Atomic write + best-effort Dropbox sync."""
+    try:
+        TRACKER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = TRACKER_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, default=str, indent=2))
+        tmp.replace(TRACKER_FILE)
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not write tracker.json: {exc}")
+        return
+    # Dropbox sync — fire-and-forget, never blocks
+    try:
+        upload_to_dropbox([str(TRACKER_FILE)])
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _is_after_market_close() -> bool:
+    """Return True if it's safely past 4:30pm ET (using a generous 21:00 UTC cutoff
+    that works for both EST and EDT). On weekends, returns True so we fold any
+    pending Friday close in."""
+    now = datetime.utcnow()
+    if now.weekday() >= 5:   # Sat/Sun
+        return True
+    return now.hour >= 21    # 4pm ET (DST) / 5pm ET (standard)
+
+
+def _fetch_close_price(ticker: str) -> float | None:
+    """Return the latest available daily close for *ticker* via yfinance."""
+    try:
+        import yfinance as yf  # type: ignore
+        hist = yf.Ticker(ticker).history(period="5d", auto_adjust=False)
+        if hist is None or hist.empty:
+            return None
+        return float(hist["Close"].dropna().iloc[-1])
+    except Exception:  # noqa: BLE001
+        # Fallback to fast_info / chart API
+        snap = fetch_market_snapshot(ticker)
+        return snap.get("price")
+
+
+def _fetch_history_closes(ticker: str, days: int = 200) -> list[dict]:
+    """Return [{"date": "YYYY-MM-DD", "close": float}, ...] going back *days*."""
+    try:
+        import yfinance as yf  # type: ignore
+        hist = yf.Ticker(ticker).history(period=f"{days}d", auto_adjust=False)
+        if hist is None or hist.empty:
+            return []
+        out = []
+        for ts, row in hist.iterrows():
+            close = row.get("Close")
+            if close is None or pd.isna(close):
+                continue
+            out.append({
+                "date":  ts.strftime("%Y-%m-%d"),
+                "close": float(close),
+            })
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _ensure_spy_back_to(state: dict, anchor_date: str) -> None:
+    """Make sure spy_series goes back at least to *anchor_date*. Fills via yfinance."""
+    series = state.get("spy_series") or []
+    earliest = series[0]["date"] if series else None
+    if earliest and earliest <= anchor_date:
+        return
+    # Backfill — pull enough history to cover the anchor
+    today = datetime.now().date()
+    try:
+        anchor_dt = datetime.strptime(anchor_date, "%Y-%m-%d").date()
+        days_needed = max(30, (today - anchor_dt).days + 10)
+    except Exception:  # noqa: BLE001
+        days_needed = 200
+    fresh = _fetch_history_closes("SPY", days=days_needed)
+    if not fresh:
+        return
+    # Merge by date (latest wins)
+    by_date = {p["date"]: p for p in series}
+    for p in fresh:
+        by_date[p["date"]] = p
+    state["spy_series"] = sorted(by_date.values(), key=lambda r: r["date"])
+
+
+def _portfolio_value_today(holdings: list[dict]) -> float:
+    """Compute weighted return value (base 100) using current prices vs entry."""
+    total_weight = sum(h.get("weight", 0) for h in holdings) or 1.0
+    cum = 0.0
+    for h in holdings:
+        entry = h.get("entry_price") or h.get("anchor_price")
+        cur   = _fetch_close_price(h["ticker"])
+        if not entry or not cur or entry <= 0:
+            continue
+        w = h.get("weight", 0) / total_weight
+        cum += w * (cur / entry)
+    return round(cum * 100.0, 4) if cum else 100.0
+
+
+def _spy_value_at(state: dict, target_date: str) -> float | None:
+    """Return SPY close on or just before *target_date*."""
+    series = state.get("spy_series") or []
+    eligible = [r for r in series if r["date"] <= target_date]
+    if not eligible:
+        return None
+    return float(eligible[-1]["close"])
+
+
+def create_idea_portfolio(name: str, holdings_input: list[dict],
+                          source: dict | None = None) -> dict:
+    """Lock in a new paper portfolio.
+
+    holdings_input items: {"ticker": str, "weight": float (0..1 or 0..100)}
+    Returns the persisted portfolio dict.
+    """
+    cleaned: list[dict] = []
+    today = _today_str()
+    seen = set()
+    for h in holdings_input:
+        t = (h.get("ticker") or "").strip().upper()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        w = float(h.get("weight") or 0)
+        if w > 1.5:        # caller used percentages
+            w = w / 100.0
+        if w <= 0:
+            continue
+        entry = _fetch_close_price(t)
+        if entry is None or entry <= 0:
+            print(f"   ⚠️  No price for {t} — skipping")
+            continue
+        cleaned.append({
+            "ticker":      t,
+            "weight":      round(w, 6),
+            "entry_price": round(entry, 4),
+            "entry_date":  today,
+        })
+    if not cleaned:
+        raise ValueError("No valid tickers with prices could be locked in.")
+
+    # Normalise weights to sum to 1.0 (in case caller dropped some)
+    total_w = sum(h["weight"] for h in cleaned) or 1.0
+    for h in cleaned:
+        h["weight"] = round(h["weight"] / total_w, 6)
+
+    portfolio = {
+        "id":         str(_uuid.uuid4()),
+        "name":       (name or f"Brief — {today}").strip(),
+        "created_at": datetime.utcnow().isoformat(),
+        "source":     source or {},
+        "status":     "tracking",
+        "holdings":   cleaned,
+        "series":     [{
+            "date":       today,
+            "value":      100.0,
+            "return_pct": 0.0,
+        }],
+        "notes": "",
+    }
+
+    with _tracker_lock():
+        state = _load_tracker_state()
+        state["portfolios"].append(portfolio)
+        _ensure_spy_back_to(state, today)
+        _save_tracker_state(state)
+    print(f"📌 Locked in paper portfolio '{portfolio['name']}' "
+          f"({len(cleaned)} tickers) — id={portfolio['id'][:8]}")
+    return portfolio
+
+
+def list_idea_portfolios() -> list[dict]:
+    """Return all portfolios with computed performance metrics (no series)."""
+    state = _load_tracker_state()
+    out = []
+    for p in state.get("portfolios", []):
+        out.append(_with_metrics(p, state, include_series=False))
+    # Sort: tracking first, then by created_at desc
+    out.sort(key=lambda r: (r.get("status") != "tracking", -_to_ts(r.get("created_at"))))
+    return out
+
+
+def get_idea_portfolio(portfolio_id: str) -> dict | None:
+    """Return one portfolio with full series + benchmarks for charting."""
+    state = _load_tracker_state()
+    for p in state.get("portfolios", []):
+        if p.get("id") == portfolio_id:
+            return _with_metrics(p, state, include_series=True)
+    return None
+
+
+def close_idea_portfolio(portfolio_id: str) -> bool:
+    with _tracker_lock():
+        state = _load_tracker_state()
+        for p in state.get("portfolios", []):
+            if p.get("id") == portfolio_id:
+                p["status"] = "closed"
+                p["closed_at"] = datetime.utcnow().isoformat()
+                _save_tracker_state(state)
+                return True
+    return False
+
+
+def delete_idea_portfolio(portfolio_id: str) -> bool:
+    with _tracker_lock():
+        state = _load_tracker_state()
+        before = len(state.get("portfolios", []))
+        state["portfolios"] = [p for p in state.get("portfolios", [])
+                               if p.get("id") != portfolio_id]
+        if len(state["portfolios"]) == before:
+            return False
+        _save_tracker_state(state)
+        return True
+
+
+def _to_ts(iso_str: str | None) -> float:
+    if not iso_str:
+        return 0.0
+    try:
+        return datetime.fromisoformat(iso_str.replace("Z", "")).timestamp()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _with_metrics(p: dict, state: dict, include_series: bool = False) -> dict:
+    """Decorate a portfolio dict with current return + benchmark deltas."""
+    series = p.get("series", []) or []
+    entry_date = p.get("holdings", [{}])[0].get("entry_date") or p.get("created_at", "")[:10]
+    cur_value = _portfolio_value_today(p.get("holdings", []))
+    return_pct = round(cur_value - 100.0, 4)
+
+    # Max drawdown from series
+    peak = -1e9
+    max_dd = 0.0
+    for pt in series:
+        v = float(pt.get("value", 100.0))
+        if v > peak:
+            peak = v
+        dd = (peak - v) / peak * 100.0 if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+
+    # SPY benchmark
+    spy_anchor = _spy_value_at(state, entry_date)
+    spy_today  = _fetch_close_price("SPY")
+    spy_return = None
+    if spy_anchor and spy_today:
+        spy_return = round((spy_today / spy_anchor - 1) * 100.0, 4)
+
+    # Live portfolio benchmark
+    live_return = None
+    live = state.get("live_portfolio")
+    if live and live.get("anchor_date") and live.get("anchor_date") <= entry_date:
+        # Live anchor must predate the paper portfolio, otherwise apples-to-oranges
+        live_value = _portfolio_value_today(live.get("holdings", []))
+        # We compare the live's *return since paper portfolio's entry date* — i.e.
+        # we re-anchor live to entry_date by looking up its series at that date.
+        live_series = live.get("series", []) or []
+        eligible = [r for r in live_series if r["date"] <= entry_date]
+        if eligible:
+            base_v = eligible[-1].get("value", 100.0)
+            if base_v > 0:
+                live_return = round((live_value / base_v - 1) * 100.0, 4)
+        else:
+            # No series back to entry_date — fall back to live's all-time return
+            live_return = round(live_value - 100.0, 4)
+
+    days_tracked = 0
+    try:
+        if entry_date:
+            d0 = datetime.strptime(entry_date, "%Y-%m-%d")
+            days_tracked = (datetime.utcnow() - d0).days
+    except Exception:  # noqa: BLE001
+        pass
+
+    out = {
+        "id":           p.get("id"),
+        "name":         p.get("name"),
+        "created_at":   p.get("created_at"),
+        "closed_at":    p.get("closed_at"),
+        "status":       p.get("status", "tracking"),
+        "source":       p.get("source", {}),
+        "n_tickers":    len(p.get("holdings", [])),
+        "entry_date":   entry_date,
+        "days_tracked": days_tracked,
+        "current_return_pct": return_pct,
+        "max_drawdown_pct":   round(max_dd, 4),
+        "vs_spy_pct":   None if spy_return is None else round(return_pct - spy_return, 4),
+        "vs_live_pct":  None if live_return is None else round(return_pct - live_return, 4),
+        "spy_return_pct":   spy_return,
+        "live_return_pct":  live_return,
+        "milestones": {
+            "d30": days_tracked >= 30,
+            "d60": days_tracked >= 60,
+            "d90": days_tracked >= 90,
+        },
+    }
+    if include_series:
+        out["holdings"] = p.get("holdings", [])
+        out["series"]   = series
+        out["spy_series"] = _spy_aligned_series(state, entry_date)
+        out["live_series"] = _live_aligned_series(state, entry_date)
+    return out
+
+
+def _spy_aligned_series(state: dict, anchor_date: str) -> list[dict]:
+    """Return SPY's value series rebased to 100 on anchor_date."""
+    series = state.get("spy_series") or []
+    eligible = [r for r in series if r["date"] >= anchor_date]
+    if not eligible:
+        return []
+    base = float(eligible[0]["close"])
+    if base <= 0:
+        return []
+    return [{
+        "date":       r["date"],
+        "value":      round(float(r["close"]) / base * 100.0, 4),
+        "return_pct": round((float(r["close"]) / base - 1) * 100.0, 4),
+    } for r in eligible]
+
+
+def _live_aligned_series(state: dict, anchor_date: str) -> list[dict]:
+    """Return live portfolio's value series rebased to 100 on anchor_date."""
+    live = state.get("live_portfolio")
+    if not live:
+        return []
+    series = live.get("series", []) or []
+    eligible = [r for r in series if r["date"] >= anchor_date]
+    if not eligible:
+        return []
+    base = float(eligible[0]["value"])
+    if base <= 0:
+        return []
+    return [{
+        "date":       r["date"],
+        "value":      round(float(r["value"]) / base * 100.0, 4),
+        "return_pct": round((float(r["value"]) / base - 1) * 100.0, 4),
+    } for r in eligible]
+
+
+def promote_live_portfolio(holdings_input: list[dict]) -> dict:
+    """Persist *holdings_input* as the auto-promoted live portfolio.
+
+    Called automatically after a successful portfolio rebalance. Captures
+    today's close as anchor_price for each ticker.
+
+    holdings_input items: {"ticker": str, "weight": float (0..1 or 0..100)}
+    """
+    cleaned: list[dict] = []
+    today = _today_str()
+    for h in holdings_input or []:
+        t = (h.get("ticker") or h.get("Ticker") or "").strip().upper()
+        if not t:
+            continue
+        w = h.get("weight") if h.get("weight") is not None else h.get("Weight")
+        try:
+            w = float(w)
+        except Exception:  # noqa: BLE001
+            continue
+        if w > 1.5:
+            w = w / 100.0
+        if w <= 0:
+            continue
+        anchor = _fetch_close_price(t)
+        if not anchor or anchor <= 0:
+            continue
+        cleaned.append({
+            "ticker":       t,
+            "weight":       round(w, 6),
+            "anchor_price": round(anchor, 4),
+        })
+    if not cleaned:
+        return {"ok": False, "error": "No valid tickers with prices."}
+
+    total_w = sum(h["weight"] for h in cleaned) or 1.0
+    for h in cleaned:
+        h["weight"] = round(h["weight"] / total_w, 6)
+
+    live = {
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "anchor_date": today,
+        "holdings":    cleaned,
+        "series":      [{"date": today, "value": 100.0, "return_pct": 0.0}],
+    }
+
+    with _tracker_lock():
+        state = _load_tracker_state()
+        state["live_portfolio"] = live
+        _ensure_spy_back_to(state, today)
+        _save_tracker_state(state)
+
+    print(f"📊 Live portfolio promoted ({len(cleaned)} tickers, anchored {today})")
+    return {"ok": True, "live_portfolio": live}
+
+
+def take_daily_snapshot(force: bool = False) -> dict:
+    """Append today's closing values to every tracking portfolio + SPY + live.
+
+    Idempotent: if today's snapshot already exists for a portfolio, skip it
+    unless *force=True*. Safe to call multiple times per day.
+    """
+    if not force and not _is_after_market_close():
+        return {"ok": True, "skipped": True, "reason": "before market close"}
+
+    today = _today_str()
+    updated_portfolios = 0
+
+    with _tracker_lock():
+        state = _load_tracker_state()
+        # 1. SPY series — append today's close if not present
+        spy_series = state.get("spy_series") or []
+        if not any(r["date"] == today for r in spy_series):
+            spy_close = _fetch_close_price("SPY")
+            if spy_close:
+                spy_series.append({"date": today, "close": round(spy_close, 4)})
+                spy_series.sort(key=lambda r: r["date"])
+                state["spy_series"] = spy_series
+
+        # 2. Each tracking portfolio
+        for p in state.get("portfolios", []):
+            if p.get("status") != "tracking":
+                continue
+            series = p.get("series", []) or []
+            if any(r["date"] == today for r in series):
+                continue
+            value = _portfolio_value_today(p.get("holdings", []))
+            series.append({
+                "date":       today,
+                "value":      value,
+                "return_pct": round(value - 100.0, 4),
+            })
+            p["series"] = sorted(series, key=lambda r: r["date"])
+            updated_portfolios += 1
+
+        # 3. Live portfolio
+        live = state.get("live_portfolio")
+        if live:
+            live_series = live.get("series", []) or []
+            if not any(r["date"] == today for r in live_series):
+                value = _portfolio_value_today(live.get("holdings", []))
+                live_series.append({
+                    "date":       today,
+                    "value":      value,
+                    "return_pct": round(value - 100.0, 4),
+                })
+                live["series"] = sorted(live_series, key=lambda r: r["date"])
+
+        _save_tracker_state(state)
+
+    print(f"📸 Daily snapshot: {updated_portfolios} portfolio(s) updated for {today}")
+    return {"ok": True, "date": today, "portfolios_updated": updated_portfolios}
+
+
+def _start_tracker_snapshot_worker() -> None:
+    """Background thread: take a daily snapshot once after market close."""
+    import threading as _threading
+
+    def loop():
+        last_snapshot_date = None
+        while True:
+            try:
+                today = _today_str()
+                if last_snapshot_date != today and _is_after_market_close():
+                    take_daily_snapshot()
+                    last_snapshot_date = today
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️  Snapshot worker error: {exc}")
+            time.sleep(3600)  # check hourly
+
+    _threading.Thread(target=loop, daemon=True).start()
 
 
 # ============================================================================

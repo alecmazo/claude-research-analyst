@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DGA Research</title>
-  <link rel="stylesheet" href="/app/style.css?v=intel1">
+  <link rel="stylesheet" href="/app/style.css?v=track1">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -151,11 +151,19 @@
   <header class="header">
     <div class="header-brand">
       <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
-      <h1>Portfolio Rebalance</h1>
+      <h1>Portfolio</h1>
     </div>
     <span></span>
   </header>
 
+  <!-- Mode toggle: Live Rebalance ↔ Paper Tracker -->
+  <div class="port-mode-toggle">
+    <button class="port-mode-btn active" data-port-mode="rebalance">Live Rebalance</button>
+    <button class="port-mode-btn" data-port-mode="tracker">Paper Tracker</button>
+  </div>
+
+  <!-- ── REBALANCE MODE ──────────────────────────────────────────── -->
+  <div id="port-mode-rebalance">
   <div class="card">
     <div class="label">UPLOAD PORTFOLIO</div>
     <p class="hint">
@@ -234,6 +242,66 @@
       <button id="portfolio-last-download-btn" class="btn-primary">Download xlsx</button>
     </div>
   </div>
+  </div><!-- /port-mode-rebalance -->
+
+  <!-- ── TRACKER MODE ────────────────────────────────────────────── -->
+  <div id="port-mode-tracker" style="display:none;">
+
+    <!-- Live benchmark info -->
+    <div class="card" id="tracker-live-card">
+      <div class="label">LIVE BENCHMARK</div>
+      <div id="tracker-live-info" class="tracker-live-info">
+        <div class="tracker-live-empty">
+          No live portfolio yet. Upload your portfolio on the Live Rebalance tab to set a benchmark.
+        </div>
+      </div>
+    </div>
+
+    <!-- Paper portfolio list -->
+    <div class="card">
+      <div class="label">PAPER PORTFOLIOS</div>
+      <p class="hint">
+        Forward-tracked baskets locked in from Intelligence briefs. Each one is benchmarked against
+        SPY and your live portfolio from the day it was created.
+      </p>
+      <div id="tracker-list">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Detail view (inline expansion) -->
+    <div class="card" id="tracker-detail-card" style="display:none;">
+      <div class="tracker-detail-header">
+        <div>
+          <div class="label" style="margin-bottom:4px;">PAPER PORTFOLIO DETAIL</div>
+          <h2 id="tracker-detail-name" class="tracker-detail-name"></h2>
+          <div class="tracker-detail-meta" id="tracker-detail-meta"></div>
+        </div>
+        <button id="tracker-detail-close" class="btn-secondary">✕ Close</button>
+      </div>
+
+      <!-- Performance chart (SVG) -->
+      <div class="tracker-chart-wrap">
+        <div class="tracker-chart-legend">
+          <span class="tracker-legend-item"><span class="tracker-legend-dot gold"></span>Paper</span>
+          <span class="tracker-legend-item"><span class="tracker-legend-dot blue"></span>SPY</span>
+          <span class="tracker-legend-item"><span class="tracker-legend-dot green"></span>Live</span>
+        </div>
+        <div id="tracker-chart"></div>
+      </div>
+
+      <!-- Holdings table -->
+      <div class="tracker-holdings-wrap">
+        <div class="label" style="margin-top:16px;margin-bottom:8px;">HOLDINGS</div>
+        <table id="tracker-holdings-table" class="tracker-table"></table>
+      </div>
+
+      <div class="tracker-detail-actions">
+        <button id="tracker-detail-close-portfolio" class="btn-secondary">Stop Tracking</button>
+        <button id="tracker-detail-delete" class="btn-danger">Delete Portfolio</button>
+      </div>
+    </div>
+  </div><!-- /port-mode-tracker -->
 </section>
 
 <!-- ============ PORTFOLIO SUMMARY VIEW (last Grok roll-up) ============ -->
@@ -355,10 +423,42 @@
     </div>
     <!-- Tappable ticker chips -->
     <div id="intel-tickers" class="intel-tickers" style="display:none;">
-      <div class="label" style="margin-bottom:8px;">TICKERS IN THIS BRIEF</div>
+      <div class="intel-tickers-header">
+        <div class="label" style="margin-bottom:0;">TICKERS IN THIS BRIEF</div>
+        <button id="intel-track-btn" class="btn-track">📌 Track This Brief</button>
+      </div>
       <div id="intel-ticker-chips" class="intel-ticker-chips"></div>
     </div>
     <article id="intel-markdown" class="report-content"></article>
+  </div>
+
+  <!-- Track-this-brief modal -->
+  <div id="track-modal" class="track-modal" style="display:none;">
+    <div class="track-modal-card">
+      <div class="track-modal-header">
+        <h2>Lock in Paper Portfolio</h2>
+        <button class="track-modal-close" id="track-modal-cancel">✕</button>
+      </div>
+      <p class="hint" style="margin:0 0 12px;">
+        Equal-weighted by default. Adjust below — total must equal 100%. Today's
+        closing prices will be captured as cost basis.
+      </p>
+      <div class="track-name-row">
+        <label class="track-label">PORTFOLIO NAME</label>
+        <input type="text" id="track-name-input" class="track-name-input" placeholder="Brief — Apr 28, 30D">
+      </div>
+      <div class="track-weights-list" id="track-weights-list"></div>
+      <div class="track-weights-footer">
+        <span class="track-total-label">Total weight:</span>
+        <span id="track-total" class="track-total">100%</span>
+        <button id="track-equal-btn" class="btn-secondary track-equal-btn">🔄 Equal Weight</button>
+      </div>
+      <div id="track-modal-error" class="error-box" style="display:none;margin-top:10px;"></div>
+      <div class="track-modal-actions">
+        <button id="track-modal-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="track-modal-lock-btn" class="btn-primary">📌 Lock In Portfolio</button>
+      </div>
+    </div>
   </div>
 
   <!-- Empty state -->
@@ -404,6 +504,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=intel1"></script>
+<script src="/app/app.js?v=track1"></script>
 </body>
 </html>

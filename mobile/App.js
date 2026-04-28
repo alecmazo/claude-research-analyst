@@ -10,6 +10,7 @@ import ReportScreen           from './src/screens/ReportScreen';
 import ScanScreen             from './src/screens/ScanScreen';
 import PortfolioScreen        from './src/screens/PortfolioScreen';
 import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
+import PaperTrackerScreen     from './src/screens/PaperTrackerScreen';
 import IntelligenceScreen     from './src/screens/IntelligenceScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
@@ -32,6 +33,7 @@ function PortfolioStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Portfolio"        component={PortfolioScreen} />
       <Stack.Screen name="PortfolioSummary" component={PortfolioSummaryScreen} />
+      <Stack.Screen name="PaperTracker"     component={PaperTrackerScreen} />
     </Stack.Navigator>
   );
 }

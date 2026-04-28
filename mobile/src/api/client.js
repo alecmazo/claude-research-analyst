@@ -193,4 +193,14 @@ export const api = {
   }),
   getIntelligenceJob:    (jobId) => request(`/api/intelligence/${jobId}`),
   getLatestIntelligence: ()      => request('/api/intelligence/latest'),
+
+  // ---------- Paper Portfolio Tracker ----------
+  createTracker: (body) => request('/api/track', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  listTrackers:     ()    => request('/api/track'),
+  getTracker:       (id)  => request(`/api/track/${id}`),
+  closeTracker:     (id)  => request(`/api/track/${id}/close`, { method: 'POST' }),
+  deleteTracker:    (id)  => request(`/api/track/${id}`, { method: 'DELETE' }),
+  getLiveBenchmark: ()    => request('/api/track/live'),
 };
