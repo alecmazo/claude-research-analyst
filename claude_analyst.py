@@ -1503,6 +1503,51 @@ def _portfolio_value_today(holdings: list[dict]) -> float:
     return round(cum * 100.0, 4) if cum else 100.0
 
 
+def _portfolio_breakdown(holdings: list[dict]) -> dict:
+    """Compute per-holding return + contribution + vs-portfolio-avg.
+
+    contribution_pct = weight × return_pct  → these sum to the portfolio's
+    total weighted return, so a glance shows where the alpha actually came from.
+    """
+    total_weight = sum(h.get("weight", 0) for h in holdings) or 1.0
+    breakdown: list[dict] = []
+    weighted_return = 0.0
+
+    for h in holdings:
+        entry = h.get("entry_price") or h.get("anchor_price")
+        cur   = _fetch_close_price(h["ticker"])
+        norm_w = h.get("weight", 0) / total_weight
+        if entry and cur and entry > 0:
+            ret = (cur / entry - 1) * 100
+            contribution = norm_w * ret
+            weighted_return += contribution
+        else:
+            ret = None
+            contribution = None
+        breakdown.append({
+            "ticker":           h["ticker"],
+            "weight":           round(norm_w, 6),
+            "entry_price":      entry,
+            "current_price":    round(cur, 4) if cur else None,
+            "return_pct":       round(ret, 4) if ret is not None else None,
+            "contribution_pct": round(contribution, 4) if contribution is not None else None,
+            "entry_date":       h.get("entry_date"),
+        })
+
+    # Each holding's deviation from portfolio's weighted-average return
+    for b in breakdown:
+        if b["return_pct"] is not None:
+            b["vs_avg_pct"] = round(b["return_pct"] - weighted_return, 4)
+        else:
+            b["vs_avg_pct"] = None
+
+    return {
+        "value":           round(weighted_return + 100.0, 4),
+        "weighted_return": round(weighted_return, 4),
+        "breakdown":       breakdown,
+    }
+
+
 def _spy_value_at(state: dict, target_date: str) -> float | None:
     """Return SPY close on or just before *target_date*."""
     series = state.get("spy_series") or []
@@ -1630,9 +1675,18 @@ def _to_ts(iso_str: str | None) -> float:
 
 def _with_metrics(p: dict, state: dict, include_series: bool = False) -> dict:
     """Decorate a portfolio dict with current return + benchmark deltas."""
+    raw_holdings = p.get("holdings", []) or []
     series = p.get("series", []) or []
-    entry_date = p.get("holdings", [{}])[0].get("entry_date") or p.get("created_at", "")[:10]
-    cur_value = _portfolio_value_today(p.get("holdings", []))
+    entry_date = (raw_holdings[0].get("entry_date") if raw_holdings
+                  else p.get("created_at", "")[:10])
+
+    # Sort holdings by weight desc for display (consistent ordering everywhere)
+    sorted_h = sorted(raw_holdings, key=lambda h: h.get("weight", 0), reverse=True)
+    holdings_summary = [
+        {"ticker": h["ticker"], "weight": h.get("weight", 0)} for h in sorted_h
+    ]
+
+    cur_value = _portfolio_value_today(raw_holdings)
     return_pct = round(cur_value - 100.0, 4)
 
     # Max drawdown from series
@@ -1686,7 +1740,7 @@ def _with_metrics(p: dict, state: dict, include_series: bool = False) -> dict:
         "closed_at":    p.get("closed_at"),
         "status":       p.get("status", "tracking"),
         "source":       p.get("source", {}),
-        "n_tickers":    len(p.get("holdings", [])),
+        "n_tickers":    len(raw_holdings),
         "entry_date":   entry_date,
         "days_tracked": days_tracked,
         "current_return_pct": return_pct,
@@ -1700,12 +1754,24 @@ def _with_metrics(p: dict, state: dict, include_series: bool = False) -> dict:
             "d60": days_tracked >= 60,
             "d90": days_tracked >= 90,
         },
+        # Lightweight ticker info (always available — used by list view chips)
+        "tickers":          [h["ticker"] for h in sorted_h],
+        "holdings_summary": holdings_summary,
     }
     if include_series:
-        out["holdings"] = p.get("holdings", [])
-        out["series"]   = series
-        out["spy_series"] = _spy_aligned_series(state, entry_date)
-        out["live_series"] = _live_aligned_series(state, entry_date)
+        bd = _portfolio_breakdown(raw_holdings)
+        # Sort holdings by contribution desc — winners on top, detractors at bottom.
+        sorted_breakdown = sorted(
+            bd["breakdown"],
+            key=lambda h: (h.get("contribution_pct")
+                           if h.get("contribution_pct") is not None else -1e9),
+            reverse=True,
+        )
+        out["holdings"]            = sorted_breakdown
+        out["weighted_avg_return"] = bd["weighted_return"]
+        out["series"]              = series
+        out["spy_series"]          = _spy_aligned_series(state, entry_date)
+        out["live_series"]         = _live_aligned_series(state, entry_date)
     return out
 
 

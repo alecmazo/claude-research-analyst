@@ -106,7 +106,7 @@ export default function PaperTrackerScreen({ navigation }) {
     </View>
   );
 
-  // ── Live benchmark card ────────────────────────────────────────────────────
+  // ── Live benchmark card — all positions sorted by weight desc ─────────────
   const renderLiveCard = () => {
     if (!live) {
       return (
@@ -118,9 +118,8 @@ export default function PaperTrackerScreen({ navigation }) {
         </View>
       );
     }
-    const top = (live.holdings || [])
-      .slice().sort((a, b) => b.weight - a.weight).slice(0, 5)
-      .map(h => `${h.ticker} ${(h.weight * 100).toFixed(1)}%`).join(' · ');
+    const sorted = (live.holdings || [])
+      .slice().sort((a, b) => b.weight - a.weight);
     return (
       <View style={styles.card}>
         <Text style={styles.cardLabel}>LIVE BENCHMARK</Text>
@@ -130,9 +129,16 @@ export default function PaperTrackerScreen({ navigation }) {
         </View>
         <View style={styles.liveLine}>
           <Text style={styles.liveKey}>HOLDINGS</Text>
-          <Text style={styles.liveVal}>{(live.holdings || []).length} positions</Text>
+          <Text style={styles.liveVal}>{sorted.length} positions</Text>
         </View>
-        <Text style={styles.liveTop} numberOfLines={2}>{top}</Text>
+        <View style={styles.liveChipsWrap}>
+          {sorted.map(h => (
+            <View key={h.ticker} style={styles.liveChip}>
+              <Text style={styles.liveChipTicker}>{h.ticker}</Text>
+              <Text style={styles.liveChipWeight}>{(h.weight * 100).toFixed(1)}%</Text>
+            </View>
+          ))}
+        </View>
       </View>
     );
   };
@@ -169,6 +175,18 @@ export default function PaperTrackerScreen({ navigation }) {
             </View>
           </View>
 
+          {/* Ticker chips — see what's actually in the basket at a glance */}
+          {(p.holdings_summary || []).length > 0 && (
+            <View style={styles.rowTickers}>
+              {(p.holdings_summary || []).map(h => (
+                <View key={h.ticker} style={styles.rowTickerChip}>
+                  <Text style={styles.rowTickerSym}>{h.ticker}</Text>
+                  <Text style={styles.rowTickerWt}>{(h.weight * 100).toFixed(1)}%</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
           <View style={styles.metricsRow}>
             <Metric label="RETURN"  value={fmtPct(p.current_return_pct)}  color={pctColor(p.current_return_pct)} />
             <Metric label="VS SPY"  value={fmtPct(p.vs_spy_pct)}          color={pctColor(p.vs_spy_pct)} />
@@ -195,15 +213,22 @@ export default function PaperTrackerScreen({ navigation }) {
               <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
             ) : (
               <>
-                <Text style={styles.detailLabel}>HOLDINGS</Text>
+                {/* Attribution: tornado bars */}
+                <AttributionView holdings={detail.holdings || []}
+                                 portfolioReturn={detail.weighted_avg_return || 0} />
+
+                {/* Holdings table */}
+                <Text style={[styles.detailLabel, { marginTop: 14 }]}>
+                  HOLDINGS · sorted by contribution
+                </Text>
                 <View style={styles.tableHeader}>
-                  <Text style={[styles.thCell, { flex: 1.2 }]}>Ticker</Text>
-                  <Text style={styles.thCell}>Weight</Text>
-                  <Text style={styles.thCell}>Entry</Text>
-                  <Text style={styles.thCell}>Return</Text>
+                  <Text style={[styles.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
+                  <Text style={styles.thCell}>Wt</Text>
+                  <Text style={styles.thCell}>Ret</Text>
+                  <Text style={styles.thCell}>Contrib</Text>
                 </View>
-                {(detail.holdings || []).map(h => (
-                  <HoldingRow key={h.ticker} h={h} />
+                {(detail.holdings || []).map((h, i, arr) => (
+                  <HoldingRow key={h.ticker} h={h} idx={i} arr={arr} />
                 ))}
 
                 {p.status === 'tracking' && (
@@ -279,21 +304,97 @@ function Milestone({ label, reached }) {
   );
 }
 
-function HoldingRow({ h }) {
-  const [cur, setCur] = useState(null);
-  React.useEffect(() => {
-    api.getQuote(h.ticker).then(q => setCur(q?.price ?? null)).catch(() => {});
-  }, [h.ticker]);
-  const ret = (cur && h.entry_price) ? ((cur / h.entry_price - 1) * 100) : null;
-  const color = ret == null ? colors.midGray : ret > 0 ? '#16A34A' : ret < 0 ? '#DC2626' : colors.midGray;
+function HoldingRow({ h, idx, arr }) {
+  // Server-computed return + contribution + vs_avg now arrive in the holding object.
+  const ret    = h.return_pct;
+  const contrib = h.contribution_pct;
+  const colorRet     = ret     == null ? colors.midGray : ret     > 0 ? '#16A34A' : ret     < 0 ? '#DC2626' : colors.midGray;
+  const colorContrib = contrib == null ? colors.midGray : contrib > 0 ? '#16A34A' : contrib < 0 ? '#DC2626' : colors.midGray;
+
+  // Mark top 3 contributors and bottom 3 detractors for visual scanning
+  const sorted = [...(arr || [])].sort((a, b) => (b.contribution_pct ?? -1e9) - (a.contribution_pct ?? -1e9));
+  const top3 = sorted.filter(x => (x.contribution_pct ?? 0) > 0).slice(0, 3).map(x => x.ticker);
+  const bot3 = sorted.slice().reverse().filter(x => (x.contribution_pct ?? 0) < 0).slice(0, 3).map(x => x.ticker);
+  const tag = top3.includes(h.ticker) ? '★ ' : bot3.includes(h.ticker) ? '▼ ' : '';
+  const tagColor = top3.includes(h.ticker) ? colors.gold : bot3.includes(h.ticker) ? '#DC2626' : colors.midGray;
+
   return (
     <View style={styles.tableRow}>
-      <Text style={[styles.tdCell, { flex: 1.2, fontWeight: '800', color: colors.navy }]}>{h.ticker}</Text>
+      <Text style={[styles.tdCell, { flex: 1.2, textAlign: 'left' }]}>
+        <Text style={{ color: tagColor, fontSize: 10 }}>{tag}</Text>
+        <Text style={{ fontWeight: '800', color: colors.navy }}>{h.ticker}</Text>
+      </Text>
       <Text style={styles.tdCell}>{(h.weight * 100).toFixed(1)}%</Text>
-      <Text style={styles.tdCell}>${h.entry_price.toFixed(2)}</Text>
-      <Text style={[styles.tdCell, { color, fontWeight: '700' }]}>
+      <Text style={[styles.tdCell, { color: colorRet, fontWeight: '700' }]}>
         {ret == null ? '—' : `${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%`}
       </Text>
+      <Text style={[styles.tdCell, { color: colorContrib, fontWeight: '700' }]}>
+        {contrib == null ? '—' : `${contrib >= 0 ? '+' : ''}${contrib.toFixed(2)}%`}
+      </Text>
+    </View>
+  );
+}
+
+// ── Attribution view: tornado-style bars showing contribution to total return
+function AttributionView({ holdings, portfolioReturn }) {
+  if (!holdings.length) return null;
+  const haveContrib = holdings.some(h => h.contribution_pct != null);
+  if (!haveContrib) return null;
+
+  const maxAbs = Math.max(...holdings.map(h => Math.abs(h.contribution_pct ?? 0)), 0.01);
+
+  return (
+    <View>
+      <View style={styles.attrSummary}>
+        <View style={[
+          styles.attrTotalPill,
+          { backgroundColor: portfolioReturn >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)' },
+        ]}>
+          <Text style={[
+            styles.attrTotalText,
+            { color: portfolioReturn >= 0 ? '#16A34A' : '#DC2626' },
+          ]}>
+            Portfolio: {portfolioReturn >= 0 ? '+' : ''}{portfolioReturn.toFixed(2)}%
+          </Text>
+        </View>
+        <Text style={styles.attrHint}>Where the alpha is coming from</Text>
+      </View>
+
+      {/* Tornado bars centered on a vertical axis */}
+      <View style={styles.attrBars}>
+        {holdings.map(h => {
+          const v = h.contribution_pct ?? 0;
+          const isPos = v >= 0;
+          const widthPct = Math.abs(v) / maxAbs * 50; // each side gets up to 50%
+          const ret = h.return_pct;
+          return (
+            <View key={h.ticker} style={styles.attrRow}>
+              <Text style={styles.attrTicker} numberOfLines={1}>{h.ticker}</Text>
+              <View style={styles.attrBarTrack}>
+                <View style={styles.attrAxis} />
+                {isPos ? (
+                  <View style={[styles.attrBarPos, { width: `${widthPct}%` }]} />
+                ) : (
+                  <View style={[styles.attrBarNeg, { width: `${widthPct}%`, right: '50%' }]} />
+                )}
+              </View>
+              <View style={styles.attrValBlock}>
+                <Text style={[
+                  styles.attrVal,
+                  { color: isPos ? '#16A34A' : '#DC2626' },
+                ]}>
+                  {isPos ? '+' : ''}{v.toFixed(2)}%
+                </Text>
+                {ret != null && (
+                  <Text style={styles.attrRet}>
+                    ret {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%
+                  </Text>
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -340,6 +441,113 @@ const styles = StyleSheet.create({
   liveTop: {
     fontSize: 11, color: colors.darkGray, fontFamily: 'Courier New',
     marginTop: 8, lineHeight: 16,
+  },
+
+  // ── Live benchmark chips (all positions) ──
+  liveChipsWrap: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+    marginTop: 12, paddingTop: 10,
+    borderTopWidth: 1, borderTopColor: colors.lightGray,
+  },
+  liveChip: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: colors.offWhite,
+    borderWidth: 1, borderColor: colors.lightGray,
+    borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3,
+    gap: 4,
+  },
+  liveChipTicker: {
+    fontFamily: 'Courier New', fontWeight: '800',
+    fontSize: 11, color: colors.navy, letterSpacing: 0.4,
+  },
+  liveChipWeight: {
+    fontFamily: 'Courier New', fontWeight: '600',
+    fontSize: 11, color: colors.midGray,
+  },
+
+  // ── Tracker row tickers ──
+  rowTickers: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 4,
+    marginTop: 10, padding: 7,
+    backgroundColor: colors.white,
+    borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray,
+  },
+  rowTickerChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: colors.offWhite,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 4,
+  },
+  rowTickerSym: {
+    fontFamily: 'Courier New', fontWeight: '800',
+    fontSize: 10, color: colors.navy, letterSpacing: 0.3,
+  },
+  rowTickerWt: {
+    fontFamily: 'Courier New', fontWeight: '600',
+    fontSize: 10, color: colors.midGray,
+  },
+
+  // ── Attribution ──
+  attrSummary: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  attrTotalPill: {
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 5,
+  },
+  attrTotalText: {
+    fontFamily: 'Courier New', fontSize: 12, fontWeight: '800',
+  },
+  attrHint: {
+    fontSize: 10, color: colors.midGray, fontStyle: 'italic',
+    flexShrink: 1, marginLeft: 8, textAlign: 'right',
+  },
+  attrBars: {
+    paddingVertical: 4,
+  },
+  attrRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 4, gap: 6,
+  },
+  attrTicker: {
+    width: 50,
+    fontFamily: 'Courier New', fontSize: 11, fontWeight: '800',
+    color: colors.navy, letterSpacing: 0.3,
+  },
+  attrBarTrack: {
+    flex: 1, height: 14,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  attrAxis: {
+    position: 'absolute',
+    left: '50%',
+    top: 0, bottom: 0,
+    width: 1, backgroundColor: colors.lightGray,
+  },
+  attrBarPos: {
+    position: 'absolute',
+    left: '50%',
+    height: 12,
+    backgroundColor: 'rgba(22,163,74,0.85)',
+    borderRadius: 2,
+  },
+  attrBarNeg: {
+    position: 'absolute',
+    height: 12,
+    backgroundColor: 'rgba(220,38,38,0.85)',
+    borderRadius: 2,
+  },
+  attrValBlock: {
+    width: 64,
+    alignItems: 'flex-end',
+  },
+  attrVal: {
+    fontFamily: 'Courier New', fontSize: 11, fontWeight: '800',
+  },
+  attrRet: {
+    fontFamily: 'Courier New', fontSize: 9,
+    color: colors.midGray, marginTop: 1,
   },
 
   // Portfolio row

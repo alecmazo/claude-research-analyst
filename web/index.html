@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DGA Research</title>
-  <link rel="stylesheet" href="/app/style.css?v=track1">
+  <link rel="stylesheet" href="/app/style.css?v=track2">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -290,9 +290,15 @@
         <div id="tracker-chart"></div>
       </div>
 
+      <!-- Attribution: where the alpha is coming from -->
+      <div class="tracker-attribution-wrap">
+        <div class="label" style="margin-top:16px;margin-bottom:6px;">PERFORMANCE ATTRIBUTION</div>
+        <div id="tracker-attribution"></div>
+      </div>
+
       <!-- Holdings table -->
       <div class="tracker-holdings-wrap">
-        <div class="label" style="margin-top:16px;margin-bottom:8px;">HOLDINGS</div>
+        <div class="label" style="margin-top:16px;margin-bottom:8px;">HOLDINGS · sorted by contribution</div>
         <table id="tracker-holdings-table" class="tracker-table"></table>
       </div>
 
@@ -504,6 +510,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=track1"></script>
+<script src="/app/app.js?v=track2"></script>
 </body>
 </html>

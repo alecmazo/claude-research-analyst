@@ -1124,9 +1124,15 @@ async function loadLiveBenchmark() {
       return;
     }
     const n = (live.holdings || []).length;
-    const top = (live.holdings || [])
-      .slice().sort((a, b) => b.weight - a.weight).slice(0, 5)
-      .map(h => `${h.ticker} ${(h.weight * 100).toFixed(1)}%`).join(' · ');
+    // ALL holdings sorted by weight desc, rendered as chips
+    const sorted = (live.holdings || [])
+      .slice().sort((a, b) => b.weight - a.weight);
+    const chipsHtml = sorted.map(h =>
+      `<span class="live-chip">
+         <span class="live-chip-ticker">${h.ticker}</span>
+         <span class="live-chip-weight">${(h.weight * 100).toFixed(1)}%</span>
+       </span>`
+    ).join('');
     wrap.innerHTML = `
       <div class="tracker-live-line">
         <span class="tracker-live-key">ANCHOR DATE</span>
@@ -1136,10 +1142,7 @@ async function loadLiveBenchmark() {
         <span class="tracker-live-key">HOLDINGS</span>
         <span class="tracker-live-value">${n} positions</span>
       </div>
-      <div class="tracker-live-line">
-        <span class="tracker-live-key">TOP 5</span>
-        <span class="tracker-live-value" style="font-size:11px;font-family:'SF Mono',Menlo,monospace;">${top}</span>
-      </div>`;
+      <div class="live-chips-wrap">${chipsHtml}</div>`;
   } catch {
     wrap.innerHTML = `<div class="tracker-live-empty">Could not load live benchmark.</div>`;
   }
@@ -1181,6 +1184,11 @@ function trackerRowHtml(p) {
   const cls    = (x) => x == null ? 'flat' : x > 0 ? 'up' : x < 0 ? 'down' : 'flat';
   const status = p.status === 'closed' ? 'closed' : '';
 
+  // Ticker chips — sorted server-side by weight desc
+  const tickerChips = (p.holdings_summary || []).map(h =>
+    `<span class="tracker-row-chip">${h.ticker}<span class="tracker-row-chip-w">${(h.weight * 100).toFixed(1)}%</span></span>`
+  ).join('');
+
   return `
     <div class="tracker-row ${status}" data-id="${p.id}">
       <div class="tracker-row-top">
@@ -1196,6 +1204,8 @@ function trackerRowHtml(p) {
         </div>
         <span class="tracker-status-pill ${status}">${(p.status || 'tracking').toUpperCase()}</span>
       </div>
+
+      ${tickerChips ? `<div class="tracker-row-tickers">${tickerChips}</div>` : ''}
 
       <div class="tracker-metrics">
         <div class="tracker-metric">
@@ -1238,6 +1248,8 @@ async function openTrackerDetail(id) {
   document.getElementById('tracker-detail-name').textContent = 'Loading…';
   document.getElementById('tracker-detail-meta').textContent = '';
   document.getElementById('tracker-chart').innerHTML = '';
+  const attrEl = document.getElementById('tracker-attribution');
+  if (attrEl) attrEl.innerHTML = '';
   document.getElementById('tracker-holdings-table').innerHTML = '';
   // Scroll into view
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1248,6 +1260,7 @@ async function openTrackerDetail(id) {
     document.getElementById('tracker-detail-meta').textContent =
       `${p.n_tickers} tickers · Locked ${p.entry_date} · Day ${p.days_tracked} · ${p.status}`;
     drawTrackerChart(p);
+    drawTrackerAttribution(p);
     drawTrackerHoldings(p);
   } catch (err) {
     document.getElementById('tracker-detail-name').textContent = 'Error';
@@ -1279,7 +1292,7 @@ async function deleteTrackerCurrent() {
 // ── Chart (simple inline SVG, no library needed) ──────────────────────────
 function drawTrackerChart(p) {
   const wrap = document.getElementById('tracker-chart');
-  const W = 560, H = 200, padL = 36, padR = 8, padT = 12, padB = 22;
+  const W = 560, H = 200, padL = 38, padR = 8, padT = 12, padB = 24;
 
   const series = [
     { key: 'paper', label: 'Paper', color: '#C9A84C', data: p.series || [] },
@@ -1288,14 +1301,24 @@ function drawTrackerChart(p) {
   ].filter(s => s.data.length > 0);
 
   if (!series.length) {
-    wrap.innerHTML = `<div style="text-align:center;color:var(--mid-gray);padding:40px 0;font-size:13px;">No data points yet — first daily snapshot lands after market close.</div>`;
+    wrap.innerHTML = `<div class="tracker-chart-empty">No data points yet — first daily snapshot lands after market close.</div>`;
     return;
   }
 
   // X axis: union of all dates, sorted
   const allDates = Array.from(new Set(series.flatMap(s => s.data.map(d => d.date)))).sort();
-  const xIdx = Object.fromEntries(allDates.map((d, i) => [d, i]));
-  const xMax = Math.max(allDates.length - 1, 1);
+
+  // Need at least 2 distinct dates to draw a line — otherwise show "waiting" state.
+  if (allDates.length < 2) {
+    wrap.innerHTML = `<div class="tracker-chart-empty">
+      📈 Chart populates as daily snapshots are recorded — one per market close.<br>
+      <span class="tracker-chart-empty-sub">Locked today · ${allDates[0] || '—'}</span>
+    </div>`;
+    return;
+  }
+
+  const xIdx  = Object.fromEntries(allDates.map((d, i) => [d, i]));
+  const xMax  = allDates.length - 1;
 
   // Y axis: min/max across all series values
   const allVals = series.flatMap(s => s.data.map(d => d.value));
@@ -1321,16 +1344,14 @@ function drawTrackerChart(p) {
     return `<text x="${padL - 4}" y="${yPos(v) + 3}" text-anchor="end">${sign}${ret.toFixed(1)}%</text>`;
   }).join('');
 
-  // X-axis labels — first / mid / last
-  const xLabels = [
-    [0,                    allDates[0]],
-    [Math.floor(xMax / 2), allDates[Math.floor(xMax / 2)]],
-    [xMax,                 allDates[xMax]],
-  ].map(([i, d]) =>
-    `<text x="${xPos(i)}" y="${H - 6}" text-anchor="middle">${d.slice(5)}</text>`
-  ).join('');
+  // X-axis labels — first / mid / last (with bounds-checking)
+  const labelIdx = Array.from(new Set([0, Math.floor(xMax / 2), xMax]));
+  const xLabels = labelIdx
+    .filter(i => i >= 0 && i < allDates.length)
+    .map(i => `<text x="${xPos(i)}" y="${H - 6}" text-anchor="middle">${allDates[i].slice(5)}</text>`)
+    .join('');
 
-  // 100-baseline
+  // 100-baseline (entry value)
   const baseY = yPos(100);
   const baseLine = `<line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"
                           stroke="#C0C7D2" stroke-dasharray="2,3" stroke-width="1"/>`;
@@ -1344,31 +1365,128 @@ function drawTrackerChart(p) {
     </svg>`;
 }
 
+// ── Performance Attribution: tornado chart of contributions ────────────────
+function drawTrackerAttribution(p) {
+  const wrap = document.getElementById('tracker-attribution');
+  const holdings = p.holdings || [];
+  const haveContrib = holdings.some(h => h.contribution_pct != null);
+  if (!holdings.length || !haveContrib) {
+    wrap.innerHTML = `<div class="tracker-chart-empty">Attribution available once prices are fetched.</div>`;
+    return;
+  }
+
+  const W = 560;
+  const rowH = 26;
+  const labelW = 74;     // ticker label column
+  const valW = 80;       // value label column
+  const cx = labelW + (W - labelW - valW) / 2 + labelW * 0;  // we use a centered axis
+  const barAreaW = W - labelW - valW - 8;
+  const axisX = labelW + barAreaW / 2;   // center axis x-position
+
+  const maxAbs = Math.max(...holdings.map(h => Math.abs(h.contribution_pct ?? 0)), 0.01);
+  const maxBarHalf = barAreaW / 2 - 4;
+
+  const total = (p.weighted_avg_return ?? 0);
+  const totalSign = total >= 0 ? '+' : '';
+
+  const H = rowH * holdings.length + 20;
+
+  const rows = holdings.map((h, i) => {
+    const y = i * rowH + 8;
+    const val = h.contribution_pct ?? 0;
+    const len = Math.abs(val) / maxAbs * maxBarHalf;
+    const isPos = val >= 0;
+    const fill = isPos ? '#16A34A' : '#DC2626';
+    const barX = isPos ? axisX : axisX - len;
+    const valLabel = `${isPos ? '+' : ''}${val.toFixed(2)}%`;
+    const tickerColor = isPos ? '#0A1628' : '#0A1628';
+    const retText = h.return_pct != null
+      ? `${h.return_pct >= 0 ? '+' : ''}${h.return_pct.toFixed(1)}%`
+      : '';
+
+    return `
+      <g>
+        <text x="${labelW - 6}" y="${y + 16}" text-anchor="end"
+              class="attr-ticker">${h.ticker}</text>
+        <rect x="${barX}" y="${y + 6}" width="${len}" height="14"
+              rx="2" fill="${fill}" fill-opacity="0.85"/>
+        <text x="${isPos ? barX + len + 6 : barX - 6}"
+              y="${y + 16}" text-anchor="${isPos ? 'start' : 'end'}"
+              class="attr-value ${isPos ? 'attr-pos' : 'attr-neg'}">
+          ${valLabel}
+        </text>
+        <text x="${labelW + 4}" y="${y + 16}" text-anchor="start"
+              class="attr-return">${retText}</text>
+      </g>`;
+  }).join('');
+
+  // Center axis
+  const axis = `<line x1="${axisX}" y1="0" x2="${axisX}" y2="${H - 8}"
+                      stroke="#C0C7D2" stroke-width="1"/>`;
+
+  wrap.innerHTML = `
+    <div class="tracker-attr-summary">
+      <span class="tracker-attr-total ${total >= 0 ? 'pos' : 'neg'}">
+        Portfolio: ${totalSign}${total.toFixed(2)}%
+      </span>
+      <span class="tracker-attr-hint">Each position's contribution = weight × return. Bars sum to portfolio total.</span>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMinYMin meet"
+         xmlns="http://www.w3.org/2000/svg" class="tracker-attr-svg">
+      ${axis}
+      ${rows}
+    </svg>`;
+}
+
+// ── Enriched holdings table ────────────────────────────────────────────────
 function drawTrackerHoldings(p) {
   const t = document.getElementById('tracker-holdings-table');
-  if (!p.holdings?.length) { t.innerHTML = ''; return; }
+  const holdings = p.holdings || [];
+  if (!holdings.length) { t.innerHTML = ''; return; }
 
-  // Fetch current prices in parallel
-  Promise.allSettled(p.holdings.map(h => api.getQuote(h.ticker))).then(quotes => {
-    const rows = p.holdings.map((h, i) => {
-      const q = quotes[i].status === 'fulfilled' ? quotes[i].value : null;
-      const cur = q?.price;
-      const ret = (cur && h.entry_price) ? ((cur / h.entry_price - 1) * 100) : null;
-      const cls = ret == null ? '' : ret > 0 ? 'pct-up' : ret < 0 ? 'pct-down' : '';
-      return `<tr>
-        <td class="ticker-cell">${h.ticker}</td>
-        <td class="num-cell">${(h.weight * 100).toFixed(1)}%</td>
-        <td class="num-cell">$${h.entry_price.toFixed(2)}</td>
-        <td class="num-cell">${cur ? '$' + cur.toFixed(2) : '—'}</td>
-        <td class="num-cell ${cls}">${ret == null ? '—' : (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%'}</td>
-      </tr>`;
-    }).join('');
-    t.innerHTML = `
-      <thead><tr>
-        <th>Ticker</th><th>Weight</th><th>Entry</th><th>Current</th><th>Return</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>`;
-  });
+  const fmtPct = (x, signed = true) => {
+    if (x == null) return '—';
+    const sign = signed && x >= 0 ? '+' : '';
+    return `${sign}${x.toFixed(2)}%`;
+  };
+  const cls = (x) => x == null ? '' : x > 0 ? 'pct-up' : x < 0 ? 'pct-down' : '';
+
+  // Top 3 contributors / bottom 3 detractors get a star marker
+  const top3 = new Set(
+    holdings.slice().sort((a, b) => (b.contribution_pct ?? -1e9) - (a.contribution_pct ?? -1e9))
+      .filter(h => (h.contribution_pct ?? 0) > 0).slice(0, 3).map(h => h.ticker)
+  );
+  const bot3 = new Set(
+    holdings.slice().sort((a, b) => (a.contribution_pct ?? 1e9) - (b.contribution_pct ?? 1e9))
+      .filter(h => (h.contribution_pct ?? 0) < 0).slice(0, 3).map(h => h.ticker)
+  );
+
+  const rows = holdings.map(h => {
+    const tag = top3.has(h.ticker) ? '<span class="row-tag winner">★</span>'
+              : bot3.has(h.ticker) ? '<span class="row-tag loser">▼</span>'
+              : '';
+    return `<tr>
+      <td class="ticker-cell">${tag}${h.ticker}</td>
+      <td class="num-cell">${(h.weight * 100).toFixed(1)}%</td>
+      <td class="num-cell">${h.entry_price != null ? '$' + Number(h.entry_price).toFixed(2) : '—'}</td>
+      <td class="num-cell">${h.current_price != null ? '$' + Number(h.current_price).toFixed(2) : '—'}</td>
+      <td class="num-cell ${cls(h.return_pct)}">${fmtPct(h.return_pct)}</td>
+      <td class="num-cell ${cls(h.contribution_pct)}">${fmtPct(h.contribution_pct)}</td>
+      <td class="num-cell ${cls(h.vs_avg_pct)}">${fmtPct(h.vs_avg_pct)}</td>
+    </tr>`;
+  }).join('');
+
+  t.innerHTML = `
+    <thead><tr>
+      <th>Ticker</th>
+      <th>Weight</th>
+      <th>Entry</th>
+      <th>Current</th>
+      <th>Return</th>
+      <th title="Weight × Return — what this position contributed to the portfolio's total return">Contrib</th>
+      <th title="This position's return minus the portfolio's weighted average return">vs Avg</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>`;
 }
 
 // ── Track-this-brief modal ─────────────────────────────────────────────────
