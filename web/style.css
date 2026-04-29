@@ -1658,6 +1658,27 @@ body {
   margin-top: 14px;
 }
 
+/* ── Live benchmark — clickable card → drills into YTD detail ── */
+.card.clickable {
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.1s, border-color 0.15s;
+}
+.card.clickable:hover {
+  box-shadow: 0 6px 20px rgba(10,22,40,0.10);
+  transform: translateY(-1px);
+}
+.card.clickable:active { transform: translateY(0); }
+.live-drill-hint {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 0.6px;
+  margin-left: 8px;
+  background: rgba(201,168,76,0.12);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
 /* ── Live benchmark — full ticker chips ── */
 .live-chips-wrap {
   display: flex; flex-wrap: wrap; gap: 6px;

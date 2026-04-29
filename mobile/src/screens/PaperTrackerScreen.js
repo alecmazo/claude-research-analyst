@@ -25,6 +25,9 @@ export default function PaperTrackerScreen({ navigation }) {
   const [expandedId, setExpandedId]   = useState(null);
   const [detailCache, setDetailCache] = useState({});  // {id: full detail}
   const [live, setLive]               = useState(null);
+  const [liveExpanded, setLiveExpanded] = useState(false);
+  const [liveDetail, setLiveDetail]   = useState(null);
+  const [liveLoading, setLiveLoading] = useState(false);
 
   const load = async () => {
     try {
@@ -106,7 +109,24 @@ export default function PaperTrackerScreen({ navigation }) {
     </View>
   );
 
-  // ── Live benchmark card — all positions sorted by weight desc ─────────────
+  // ── Live benchmark card — tappable, expands to YTD detail ─────────────────
+  const toggleLiveDetail = async () => {
+    const willExpand = !liveExpanded;
+    setLiveExpanded(willExpand);
+    if (willExpand && !liveDetail) {
+      setLiveLoading(true);
+      try {
+        const d = await api.getLiveBenchmarkDetail();
+        if (d?.ok) setLiveDetail(d);
+        else Alert.alert('Could not load', d?.error || 'Live YTD detail unavailable.');
+      } catch (e) {
+        Alert.alert('Error', e.message);
+      } finally {
+        setLiveLoading(false);
+      }
+    }
+  };
+
   const renderLiveCard = () => {
     if (!live) {
       return (
@@ -120,25 +140,97 @@ export default function PaperTrackerScreen({ navigation }) {
     }
     const sorted = (live.holdings || [])
       .slice().sort((a, b) => b.weight - a.weight);
+
     return (
       <View style={styles.card}>
-        <Text style={styles.cardLabel}>LIVE BENCHMARK</Text>
-        <View style={styles.liveLine}>
-          <Text style={styles.liveKey}>ANCHOR DATE</Text>
-          <Text style={styles.liveVal}>{live.anchor_date || '—'}</Text>
-        </View>
-        <View style={styles.liveLine}>
-          <Text style={styles.liveKey}>HOLDINGS</Text>
-          <Text style={styles.liveVal}>{sorted.length} positions</Text>
-        </View>
-        <View style={styles.liveChipsWrap}>
-          {sorted.map(h => (
-            <View key={h.ticker} style={styles.liveChip}>
-              <Text style={styles.liveChipTicker}>{h.ticker}</Text>
-              <Text style={styles.liveChipWeight}>{(h.weight * 100).toFixed(1)}%</Text>
+        <TouchableOpacity onPress={toggleLiveDetail} activeOpacity={0.85}>
+          <View style={styles.liveHeaderRow}>
+            <Text style={styles.cardLabel}>LIVE BENCHMARK</Text>
+            <View style={styles.liveDrillHint}>
+              <Text style={styles.liveDrillHintText}>
+                {liveExpanded ? 'HIDE YTD' : 'YTD DETAIL →'}
+              </Text>
             </View>
-          ))}
-        </View>
+          </View>
+          <View style={styles.liveLine}>
+            <Text style={styles.liveKey}>ANCHOR DATE</Text>
+            <Text style={styles.liveVal}>{live.anchor_date || '—'}</Text>
+          </View>
+          <View style={styles.liveLine}>
+            <Text style={styles.liveKey}>HOLDINGS</Text>
+            <Text style={styles.liveVal}>{sorted.length} positions</Text>
+          </View>
+          <View style={styles.liveChipsWrap}>
+            {sorted.map(h => (
+              <View key={h.ticker} style={styles.liveChip}>
+                <Text style={styles.liveChipTicker}>{h.ticker}</Text>
+                <Text style={styles.liveChipWeight}>{(h.weight * 100).toFixed(1)}%</Text>
+              </View>
+            ))}
+          </View>
+        </TouchableOpacity>
+
+        {liveExpanded && (
+          <View style={styles.liveDetailWrap}>
+            {liveLoading || !liveDetail ? (
+              <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
+            ) : (
+              <>
+                {/* Top metrics row — YTD vs SPY */}
+                <View style={styles.liveYtdMetrics}>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricKey}>YTD RETURN</Text>
+                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.current_return_pct) }]}>
+                      {fmtPct(liveDetail.current_return_pct)}
+                    </Text>
+                  </View>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricKey}>SPY YTD</Text>
+                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.spy_return_pct) }]}>
+                      {fmtPct(liveDetail.spy_return_pct)}
+                    </Text>
+                  </View>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricKey}>VS SPY</Text>
+                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.vs_spy_pct) }]}>
+                      {fmtPct(liveDetail.vs_spy_pct)}
+                    </Text>
+                  </View>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricKey}>MAX DD</Text>
+                    <Text style={[styles.metricVal, { color: colors.midGray }]}>
+                      -{(liveDetail.max_drawdown_pct || 0).toFixed(1)}%
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.liveYtdSub}>
+                  Year-start baseline: {liveDetail.year_start_date} · Day {liveDetail.days_tracked}
+                </Text>
+
+                {/* Attribution: where the alpha is coming from */}
+                <AttributionView
+                  holdings={liveDetail.holdings || []}
+                  portfolioReturn={liveDetail.weighted_avg_return || 0}
+                />
+
+                {/* Holdings table */}
+                <Text style={[styles.detailLabel, { marginTop: 14 }]}>
+                  HOLDINGS · sorted by contribution
+                </Text>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
+                  <Text style={styles.thCell}>Wt</Text>
+                  <Text style={styles.thCell}>Ret</Text>
+                  <Text style={styles.thCell}>Contrib</Text>
+                </View>
+                {(liveDetail.holdings || []).map((h, i, arr) => (
+                  <HoldingRow key={h.ticker} h={h} idx={i} arr={arr} />
+                ))}
+              </>
+            )}
+          </View>
+        )}
       </View>
     );
   };
@@ -441,6 +533,30 @@ const styles = StyleSheet.create({
   liveTop: {
     fontSize: 11, color: colors.darkGray, fontFamily: 'Courier New',
     marginTop: 8, lineHeight: 16,
+  },
+
+  // ── Live benchmark expansion ──
+  liveHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  liveDrillHint: {
+    backgroundColor: 'rgba(201,168,76,0.12)',
+    borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2,
+  },
+  liveDrillHintText: {
+    color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.6,
+  },
+  liveDetailWrap: {
+    marginTop: 14, paddingTop: 14,
+    borderTopWidth: 1, borderTopColor: colors.lightGray,
+  },
+  liveYtdMetrics: {
+    flexDirection: 'row', gap: 6, marginBottom: 8,
+  },
+  liveYtdSub: {
+    fontSize: 10, color: colors.midGray, fontStyle: 'italic',
+    marginBottom: 12,
   },
 
   // ── Live benchmark chips (all positions) ──

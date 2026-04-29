@@ -695,6 +695,17 @@ def get_tracker_live():
     return {"live_portfolio": state.get("live_portfolio")}
 
 
+@app.get("/api/track/live/detail")
+def get_tracker_live_detail():
+    """YTD attribution for the live portfolio (year-start baseline + SPY benchmark).
+
+    Per-holding return uses each ticker's first close of the calendar year as
+    the entry baseline, so this surfaces who is driving annual outperformance
+    versus the SPY YTD constant.
+    """
+    return analyst.compute_live_ytd_detail()
+
+
 @app.post("/api/track/snapshot")
 def trigger_tracker_snapshot():
     """Manually trigger a daily snapshot (admin / debug)."""

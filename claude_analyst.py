@@ -1503,6 +1503,205 @@ def _portfolio_value_today(holdings: list[dict]) -> float:
     return round(cum * 100.0, 4) if cum else 100.0
 
 
+# In-memory cache: year-start close price per (year, ticker). Doesn't change
+# during the year, so a single fetch per ticker per session is plenty.
+_YEAR_START_CACHE: dict[tuple[int, str], float] = {}
+
+
+def _year_start_close(ticker: str, year: int | None = None) -> float | None:
+    """Return the closing price on the first trading day of *year* (default: this year)."""
+    year = year or datetime.now().year
+    key = (year, ticker.upper())
+    if key in _YEAR_START_CACHE:
+        return _YEAR_START_CACHE[key]
+    try:
+        import yfinance as yf  # type: ignore
+        # First two weeks of January is always enough to find the first trading day
+        end = datetime(year, 1, 15)
+        start = datetime(year, 1, 1)
+        hist = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=False)
+        if hist is None or hist.empty:
+            return None
+        first_close = hist["Close"].dropna()
+        if first_close.empty:
+            return None
+        price = float(first_close.iloc[0])
+        _YEAR_START_CACHE[key] = price
+        return price
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ytd_history_closes(ticker: str) -> list[dict]:
+    """Return [{date, close}, ...] from Jan 1 of the current year through today."""
+    year = datetime.now().year
+    today = datetime.now()
+    days_to_pull = (today.date() - datetime(year, 1, 1).date()).days + 7
+    history = _fetch_history_closes(ticker, days=days_to_pull)
+    return [p for p in history if p["date"] >= f"{year}-01-01"]
+
+
+def _build_ytd_series_for_holdings(holdings: list[dict]) -> list[dict]:
+    """Daily YTD value series for a basket of weighted holdings.
+
+    Each ticker's "year-start" baseline is its first close on or after Jan 1.
+    Forward-fills missing dates so the series is dense across all trading days.
+    Returns [{"date", "value", "return_pct"}, ...] rebased so day-1 ≈ 100.
+    """
+    if not holdings:
+        return []
+
+    total_weight = sum(h.get("weight", 0) for h in holdings) or 1.0
+    ticker_data: dict[str, dict] = {}
+    for h in holdings:
+        ytd = _ytd_history_closes(h["ticker"])
+        if not ytd:
+            continue
+        closes = {p["date"]: p["close"] for p in ytd}
+        first_price = ytd[0]["close"]
+        if first_price <= 0:
+            continue
+        ticker_data[h["ticker"]] = {
+            "weight":      h.get("weight", 0) / total_weight,
+            "closes":      closes,
+            "first_price": first_price,
+        }
+
+    if not ticker_data:
+        return []
+
+    all_dates = sorted(set().union(*[set(t["closes"].keys()) for t in ticker_data.values()]))
+    last_price = {ticker: None for ticker in ticker_data}
+
+    series: list[dict] = []
+    for date in all_dates:
+        # Update last-known price for each ticker that traded today
+        for ticker, t in ticker_data.items():
+            if date in t["closes"]:
+                last_price[ticker] = t["closes"][date]
+        # Weighted sum (only tickers with at least one close so far contribute)
+        cum_value, cum_weight = 0.0, 0.0
+        for ticker, t in ticker_data.items():
+            if last_price[ticker] is not None:
+                cum_value  += t["weight"] * (last_price[ticker] / t["first_price"])
+                cum_weight += t["weight"]
+        if cum_weight > 0:
+            normalized = cum_value / cum_weight  # rescale for any tickers not yet trading
+            series.append({
+                "date":       date,
+                "value":      round(normalized * 100.0, 4),
+                "return_pct": round((normalized - 1) * 100.0, 4),
+            })
+    return series
+
+
+def _spy_ytd_series() -> list[dict]:
+    """SPY's YTD series rebased to 100 on the first trading day of the year."""
+    ytd = _ytd_history_closes("SPY")
+    if not ytd:
+        return []
+    base = ytd[0]["close"]
+    if base <= 0:
+        return []
+    return [{
+        "date":       p["date"],
+        "value":      round(p["close"] / base * 100.0, 4),
+        "return_pct": round((p["close"] / base - 1) * 100.0, 4),
+    } for p in ytd]
+
+
+def compute_live_ytd_detail() -> dict:
+    """YTD attribution detail for the auto-promoted live portfolio.
+
+    Uses *year-start prices* as the per-holding baseline (instead of the
+    upload-day anchor price) — answers "how is the live book doing YTD?"
+    Compares the portfolio against SPY YTD only (vs-live makes no sense
+    since this *is* live).
+
+    Response shape mirrors get_idea_portfolio() so the same renderers work,
+    with one extra `mode: "live"` field plus `year_start_date`.
+    """
+    state = _load_tracker_state()
+    live = state.get("live_portfolio")
+    if not live or not (live.get("holdings") or []):
+        return {"ok": False, "error": "No live portfolio yet — run a portfolio rebalance first."}
+
+    today = datetime.now()
+    year = today.year
+
+    # Build a "virtual" holdings list using year-start prices as entry_price
+    virtual: list[dict] = []
+    skipped: list[str] = []
+    for h in live["holdings"]:
+        ys = _year_start_close(h["ticker"], year=year)
+        if not ys or ys <= 0:
+            skipped.append(h["ticker"])
+            continue
+        virtual.append({
+            "ticker":      h["ticker"],
+            "weight":      h.get("weight", 0),
+            "entry_price": round(ys, 4),
+            "entry_date":  f"{year}-01-02",
+        })
+
+    if not virtual:
+        return {"ok": False, "error": "Could not resolve year-start prices for any holdings."}
+
+    bd = _portfolio_breakdown(virtual)
+    sorted_holdings = sorted(
+        bd["breakdown"],
+        key=lambda h: (h.get("contribution_pct") if h.get("contribution_pct") is not None else -1e9),
+        reverse=True,
+    )
+
+    # Daily series for the chart
+    portfolio_series = _build_ytd_series_for_holdings(virtual)
+    spy_series       = _spy_ytd_series()
+
+    spy_ytd = spy_series[-1]["return_pct"] if spy_series else None
+    port_ret = bd["weighted_return"]
+
+    # Days tracked = number of calendar days since year start
+    try:
+        ys_dt = datetime(year, 1, 2)
+        days_tracked = max(0, (today - ys_dt).days)
+    except Exception:  # noqa: BLE001
+        days_tracked = 0
+
+    # Max drawdown from the portfolio series
+    peak = -1e9
+    max_dd = 0.0
+    for pt in portfolio_series:
+        v = float(pt["value"])
+        if v > peak:
+            peak = v
+        dd = (peak - v) / peak * 100.0 if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+
+    return {
+        "ok":                  True,
+        "mode":                "live",
+        "name":                "Live Portfolio · YTD",
+        "year_start_date":     f"{year}-01-02",
+        "entry_date":          f"{year}-01-02",
+        "days_tracked":        days_tracked,
+        "n_tickers":           len(sorted_holdings),
+        "current_return_pct":  port_ret,
+        "weighted_avg_return": port_ret,
+        "max_drawdown_pct":    round(max_dd, 4),
+        "spy_return_pct":      spy_ytd,
+        "vs_spy_pct":          round(port_ret - spy_ytd, 4) if spy_ytd is not None else None,
+        "holdings":            sorted_holdings,
+        "series":              portfolio_series,
+        "spy_series":          spy_series,
+        "live_series":         [],   # this IS live — no separate live benchmark
+        "skipped_tickers":     skipped,
+        "anchor_date":         live.get("anchor_date"),
+        "uploaded_at":         live.get("uploaded_at"),
+    }
+
+
 def _portfolio_breakdown(holdings: list[dict]) -> dict:
     """Compute per-holding return + contribution + vs-portfolio-avg.
 

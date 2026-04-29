@@ -131,6 +131,7 @@ const api = {
     method: 'DELETE', headers: { 'x-auth-token': getToken() }
   }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); })),
   getLiveBenchmark: () => apiGet('/api/track/live'),
+  getLiveBenchmarkDetail: () => apiGet('/api/track/live/detail'),
 };
 
 // ---------- View switching ----------
@@ -1110,9 +1111,10 @@ function initTracker() {
   document.getElementById('tracker-detail-delete')?.addEventListener('click', deleteTrackerCurrent);
 }
 
-// ── Live benchmark card ────────────────────────────────────────────────────
+// ── Live benchmark card (clickable → YTD detail) ──────────────────────────
 async function loadLiveBenchmark() {
   const wrap = document.getElementById('tracker-live-info');
+  const card = document.getElementById('tracker-live-card');
   if (!wrap) return;
   try {
     const data = await api.getLiveBenchmark();
@@ -1121,10 +1123,11 @@ async function loadLiveBenchmark() {
       wrap.innerHTML = `<div class="tracker-live-empty">
         No live portfolio yet. Upload your portfolio on the Live Rebalance tab to set a benchmark.
       </div>`;
+      card?.classList.remove('clickable');
+      card?.removeAttribute('role');
       return;
     }
     const n = (live.holdings || []).length;
-    // ALL holdings sorted by weight desc, rendered as chips
     const sorted = (live.holdings || [])
       .slice().sort((a, b) => b.weight - a.weight);
     const chipsHtml = sorted.map(h =>
@@ -1140,11 +1143,20 @@ async function loadLiveBenchmark() {
       </div>
       <div class="tracker-live-line">
         <span class="tracker-live-key">HOLDINGS</span>
-        <span class="tracker-live-value">${n} positions</span>
+        <span class="tracker-live-value">
+          ${n} positions
+          <span class="live-drill-hint">View YTD detail →</span>
+        </span>
       </div>
       <div class="live-chips-wrap">${chipsHtml}</div>`;
+    // Make the entire card clickable (drill into YTD detail)
+    card?.classList.add('clickable');
+    card?.setAttribute('role', 'button');
+    card.onclick = () => openLiveBenchmarkDetail();
   } catch {
     wrap.innerHTML = `<div class="tracker-live-empty">Could not load live benchmark.</div>`;
+    card?.classList.remove('clickable');
+    if (card) card.onclick = null;
   }
 }
 
@@ -1244,6 +1256,7 @@ function escapeHtml(s) {
 async function openTrackerDetail(id) {
   _trackerExpandedId = id;
   const card = document.getElementById('tracker-detail-card');
+  card.dataset.mode = 'paper';
   card.style.display = 'block';
   document.getElementById('tracker-detail-name').textContent = 'Loading…';
   document.getElementById('tracker-detail-meta').textContent = '';
@@ -1251,7 +1264,6 @@ async function openTrackerDetail(id) {
   const attrEl = document.getElementById('tracker-attribution');
   if (attrEl) attrEl.innerHTML = '';
   document.getElementById('tracker-holdings-table').innerHTML = '';
-  // Scroll into view
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
@@ -1259,13 +1271,80 @@ async function openTrackerDetail(id) {
     document.getElementById('tracker-detail-name').textContent = p.name;
     document.getElementById('tracker-detail-meta').textContent =
       `${p.n_tickers} tickers · Locked ${p.entry_date} · Day ${p.days_tracked} · ${p.status}`;
+    applyDetailMode('paper');
     drawTrackerChart(p);
     drawTrackerAttribution(p);
-    drawTrackerHoldings(p);
+    drawTrackerHoldings(p, 'paper');
   } catch (err) {
     document.getElementById('tracker-detail-name').textContent = 'Error';
     document.getElementById('tracker-detail-meta').textContent = err.message;
   }
+}
+
+// ── Live Benchmark YTD detail (clicked from the Live Benchmark card) ──────
+async function openLiveBenchmarkDetail() {
+  _trackerExpandedId = null;
+  const card = document.getElementById('tracker-detail-card');
+  card.dataset.mode = 'live';
+  card.style.display = 'block';
+  document.getElementById('tracker-detail-name').textContent = 'Loading…';
+  document.getElementById('tracker-detail-meta').textContent = '';
+  document.getElementById('tracker-chart').innerHTML = '';
+  const attrEl = document.getElementById('tracker-attribution');
+  if (attrEl) attrEl.innerHTML = '';
+  document.getElementById('tracker-holdings-table').innerHTML = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const p = await api.getLiveBenchmarkDetail();
+    if (!p?.ok) {
+      document.getElementById('tracker-detail-name').textContent = 'Live YTD';
+      document.getElementById('tracker-detail-meta').textContent = p?.error || 'Unavailable';
+      return;
+    }
+    const ytdSign = (p.current_return_pct ?? 0) >= 0 ? '+' : '';
+    const vsSpyStr = p.vs_spy_pct == null ? '—'
+      : `${p.vs_spy_pct >= 0 ? '+' : ''}${p.vs_spy_pct.toFixed(2)}% vs SPY`;
+    document.getElementById('tracker-detail-name').textContent = '📊 ' + p.name;
+    document.getElementById('tracker-detail-meta').textContent =
+      `${p.n_tickers} positions · Year-start ${p.year_start_date} · ` +
+      `YTD ${ytdSign}${(p.current_return_pct ?? 0).toFixed(2)}% (${vsSpyStr})`;
+    applyDetailMode('live');
+    drawTrackerChart(p);
+    drawTrackerAttribution(p);
+    drawTrackerHoldings(p, 'live');
+  } catch (err) {
+    document.getElementById('tracker-detail-name').textContent = 'Error';
+    document.getElementById('tracker-detail-meta').textContent = err.message;
+  }
+}
+
+// Adjust labels / legend / actions based on which mode the detail card is in
+function applyDetailMode(mode) {
+  // Hide live-line and Stop/Delete actions when in live mode
+  const isLive = mode === 'live';
+  const card = document.getElementById('tracker-detail-card');
+
+  // Detail label header and holdings header label
+  const detailLabel = card.querySelector('.tracker-detail-header .label');
+  if (detailLabel) {
+    detailLabel.textContent = isLive ? 'LIVE PORTFOLIO · YTD DETAIL' : 'PAPER PORTFOLIO DETAIL';
+  }
+
+  // Hide / show legend dots — live mode has no live_series, paper has all three
+  const legend = card.querySelector('.tracker-chart-legend');
+  if (legend) {
+    legend.innerHTML = isLive
+      ? `<span class="tracker-legend-item"><span class="tracker-legend-dot gold"></span>Live YTD</span>
+         <span class="tracker-legend-item"><span class="tracker-legend-dot blue"></span>SPY YTD</span>`
+      : `<span class="tracker-legend-item"><span class="tracker-legend-dot gold"></span>Paper</span>
+         <span class="tracker-legend-item"><span class="tracker-legend-dot blue"></span>SPY</span>
+         <span class="tracker-legend-item"><span class="tracker-legend-dot green"></span>Live</span>`;
+  }
+
+  // Hide Stop Tracking / Delete buttons in live mode (it's not a paper portfolio)
+  const actionRow = card.querySelector('.tracker-detail-actions');
+  if (actionRow) actionRow.style.display = isLive ? 'none' : 'flex';
 }
 
 function closeTrackerDetail() {
@@ -1439,10 +1518,11 @@ function drawTrackerAttribution(p) {
 }
 
 // ── Enriched holdings table ────────────────────────────────────────────────
-function drawTrackerHoldings(p) {
+function drawTrackerHoldings(p, mode = 'paper') {
   const t = document.getElementById('tracker-holdings-table');
   const holdings = p.holdings || [];
   if (!holdings.length) { t.innerHTML = ''; return; }
+  const entryLabel = mode === 'live' ? 'Year Start' : 'Entry';
 
   const fmtPct = (x, signed = true) => {
     if (x == null) return '—';
@@ -1480,7 +1560,7 @@ function drawTrackerHoldings(p) {
     <thead><tr>
       <th>Ticker</th>
       <th>Weight</th>
-      <th>Entry</th>
+      <th>${entryLabel}</th>
       <th>Current</th>
       <th>Return</th>
       <th title="Weight × Return — what this position contributed to the portfolio's total return">Contrib</th>
