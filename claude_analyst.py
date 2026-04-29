@@ -3308,14 +3308,79 @@ _SECTOR_OVERRIDES = {
 }
 
 
-def fetch_sector_and_industry(ticker: str) -> tuple[str, str]:
-    """Return (sector, industry) for a ticker via Yahoo Finance assetProfile.
+# SEC SIC codes that classify a company as biotech / pharma. Authoritative
+# fallback when Yahoo Finance returns "Unknown" — SEC classifications don't
+# change with API throttling.
+#   2833 = Medicinal Chemicals & Botanical Products
+#   2834 = Pharmaceutical Preparations
+#   2835 = In Vitro & In Vivo Diagnostic Substances
+#   2836 = Biological Products, Except Diagnostic
+#   8731 = Commercial Physical & Biological Research
+_BIOTECH_SIC_CODES: set[int] = {2833, 2834, 2835, 2836, 8731}
 
-    Both fields are returned in the same API call, so there is no extra cost
-    vs. the old fetch_sector() call.  Falls back to ("Unknown", "Unknown").
+# Module-level cache of resolved (sector, industry). Yahoo throttles burst
+# requests in a portfolio rebalance, so caching successful resolutions
+# means we hit each ticker at most once per process. Failed resolutions are
+# NOT cached so we retry on the next call.
+_SECTOR_INDUSTRY_CACHE: dict[str, tuple[str, str]] = {}
+
+
+def _industry_from_sec_sic(ticker: str) -> tuple[str, str] | None:
+    """Authoritative fallback: derive (sector, industry) from SEC SIC code.
+
+    SEC classifications never get throttled or return empty like Yahoo does.
+    For biotech/pharma SIC codes, returns ("Healthcare", "Biotechnology")
+    so the existing _is_biotech() string-match rule fires correctly.
+    """
+    try:
+        from edgar import Company  # type: ignore
+        c = Company(ticker)
+        sic = c.sic
+        if sic is None:
+            return None
+        sic_int = int(sic)
+        if sic_int in _BIOTECH_SIC_CODES:
+            return ("Healthcare", "Biotechnology")
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def fetch_sector_and_industry(ticker: str) -> tuple[str, str]:
+    """Return (sector, industry) for *ticker*.
+
+    Resolution order (each step is tried only if the previous fails):
+      1. In-memory cache (most rebalance runs hit each ticker repeatedly)
+      2. yfinance.info — usually reliable, but Yahoo throttles bursts
+      3. raw quoteSummary endpoint — often returns empty; legacy fallback
+      4. SEC SIC code via edgartools — authoritative, never throttled,
+         catches biotech/pharma even when Yahoo is fully blocked
+
+    Returning "Unknown" for industry causes the biotech 7% hard-cap to be
+    silently skipped — the SIC fallback prevents that regression.
     """
     t = ticker.strip().upper()
+
+    # ── 1. Cache ───────────────────────────────────────────────────────────
+    if t in _SECTOR_INDUSTRY_CACHE:
+        return _SECTOR_INDUSTRY_CACHE[t]
+
     sector_override = _SECTOR_OVERRIDES.get(t)
+
+    # ── 2. yfinance.info ───────────────────────────────────────────────────
+    try:
+        import yfinance as yf  # type: ignore
+        info = yf.Ticker(t).info or {}
+        industry = (info.get("industry") or info.get("industryDisp") or "").strip()
+        sector   = (info.get("sector")   or "").strip()
+        if industry:   # only cache if we got real industry data
+            result = (sector_override or sector or "Unknown", industry)
+            _SECTOR_INDUSTRY_CACHE[t] = result
+            return result
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── 3. Raw quoteSummary endpoint (legacy fallback) ─────────────────────
     try:
         url = (
             f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{t}"
@@ -3328,11 +3393,24 @@ def fetch_sector_and_industry(ticker: str) -> tuple[str, str]:
         results = data.get("quoteSummary", {}).get("result", []) or []
         if results:
             profile = results[0].get("assetProfile") or results[0].get("summaryProfile") or {}
-            sector   = sector_override or profile.get("sector",   "Unknown") or "Unknown"
-            industry = profile.get("industry", "Unknown") or "Unknown"
-            return sector, industry
-    except Exception:
+            sector_raw   = profile.get("sector",   "") or ""
+            industry_raw = profile.get("industry", "") or ""
+            if industry_raw:
+                result = (sector_override or sector_raw or "Unknown", industry_raw)
+                _SECTOR_INDUSTRY_CACHE[t] = result
+                return result
+    except Exception:  # noqa: BLE001
         pass
+
+    # ── 4. SEC SIC code (authoritative biotech/pharma classification) ──────
+    sic_result = _industry_from_sec_sic(t)
+    if sic_result is not None:
+        # SIC says biotech → use its sector unless the user has an override
+        result = (sector_override or sic_result[0], sic_result[1])
+        _SECTOR_INDUSTRY_CACHE[t] = result
+        return result
+
+    # ── 5. Last resort — don't cache so we retry on the next call ──────────
     return (sector_override or "Unknown"), "Unknown"
 
 
