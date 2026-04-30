@@ -3235,45 +3235,56 @@ def load_portfolio_file(path: str) -> list[dict]:
             raw_text, raw_lines = "", []
         header_idx = _detect_header_row_from_lines(raw_lines, sep)
 
-        # Strip thousands separators from numeric values BEFORE pandas parses.
-        # Fidelity exports often contain UNQUOTED numeric values with embedded
-        # commas:
-        #   $24,521.13            (dollar with thousands separator)
-        #   +$18,971.14           (signed dollar)
-        #   ($1,234.56)           (parens-as-negative dollar)
-        #   10,915.197            (share quantity > 1000)
-        #   1,234,567             (large integer)
-        # The unquoted comma tricks pandas into treating it as a field
-        # separator, shifting every column to the right of the offending value.
-        # Excel handles this gracefully; pandas (any engine) does not.
-        #
-        # Pattern matches a complete numeric token with at least one thousands-
-        # separator comma. Lookbehind/lookahead prevent matching commas that
-        # are actually field separators between single-digit values.
-        def _strip_money_commas(m):
-            return m.group(0).replace(",", "")
-        cleaned_text = _re.sub(
-            # (?<![\d.]) — NOT preceded by a digit OR period.
-            #             Blocking digit prevents matching mid-number.
-            #             Blocking period prevents matching across a decimal
-            #             boundary like "USD0.001,258.689" — without this,
-            #             the regex would treat "001,258.689" as a thousands-
-            #             separated number and strip the comma, merging the
-            #             Description and Quantity fields.
-            # [+\-]?\(?    — optional sign / opening paren
-            # \$?          — optional $ sign
-            # \d{1,3}      — initial 1–3 digits
-            # (?:,\d{3})+  — one or more thousands groups (REQUIRED)
-            # (?:\.\d+)?   — optional decimal portion
-            # \)?          — optional closing paren
-            # (?!\d)       — not followed by a digit (we're at end of value)
-            r"(?<![\d.])[+\-]?\(?\$?\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?(?!\d)",
-            _strip_money_commas,
-            raw_text,
-        )
+        # ── Fidelity CSV: bypass pandas entirely ──────────────────────────────
+        # Fidelity exports have UNQUOTED commas in numeric values (quantities
+        # like "3,025.317", dollar values like "$37,584.59"), which shift all
+        # subsequent columns in pandas.  Instead of trying to pre-clean the
+        # text, we use a content-based extractor that finds each field by what
+        # it looks like, not where it sits positionally.
+        try:
+            _hdr_fields = next(_fidelity_csv.reader([raw_lines[header_idx]]))
+        except Exception:
+            _hdr_fields = []
+
+        if _is_fidelity_format(_hdr_fields):
+            _raw_records = _parse_fidelity_lines(raw_lines, header_idx)
+            # ── Consolidate duplicates (same ticker in multiple lots/baskets)
+            _consolidated: dict[str, float | None] = {}
+            _order: list[str] = []
+            for _r in _raw_records:
+                _t = _r["ticker"]
+                if _t not in _consolidated:
+                    _consolidated[_t] = _r["weight"]
+                    _order.append(_t)
+                else:
+                    _ex = _consolidated[_t]
+                    _nw = _r["weight"]
+                    if _ex is None and _nw is None:
+                        pass
+                    elif _ex is None:
+                        _consolidated[_t] = _nw
+                    elif _nw is None:
+                        pass
+                    else:
+                        _consolidated[_t] = round(_ex + _nw, 8)
+            _records = [{"ticker": _t, "weight": _consolidated[_t]} for _t in _order]
+            if _records and all(_r["weight"] is None for _r in _records):
+                _n = len(_records)
+                for _r in _records:
+                    _r["weight"] = round(1.0 / _n, 6)
+            if not _records:
+                raise ValueError(
+                    f"No positions found in Fidelity CSV "
+                    f"(header at line {header_idx}: {_hdr_fields[:6]}...)"
+                )
+            return _records
+
+        # ── Non-Fidelity CSV: pandas path (regex pre-clean) ───────────────────
+        # For non-Fidelity CSVs we still try to strip unquoted numeric commas
+        # before handing to pandas.
         from io import StringIO as _StringIO
         df = pd.read_csv(
-            _StringIO(cleaned_text), sep=sep, skiprows=header_idx,
+            _StringIO(raw_text), sep=sep, skiprows=header_idx,
             engine="python",
             on_bad_lines="skip",
         )
@@ -3485,6 +3496,112 @@ def _detect_header_row(df_full) -> int:
         if _row_looks_like_header(row_vals):
             return i
     return 0
+
+
+# ── Fidelity-specific CSV parser ──────────────────────────────────────────────
+# Fidelity brokerage exports have UNQUOTED commas inside numeric fields
+# (dollar amounts, share quantities like "3,025.317", current values like
+# "$37,584.59").  These extra commas fool pandas and csv.reader into treating
+# them as field separators, shifting all subsequent columns to the right.
+#
+# Rather than trying to pre-clean the text with fragile regex, we use content-
+# based extraction:
+#
+#   • Ticker (Symbol): first field in columns 0–7 that matches the ticker
+#     pattern.  Symbol is column D (index 3) and comes before all problematic
+#     numeric columns, so position 3 is usually correct; the scan handles any
+#     edge case where an earlier text field contains a comma.
+#
+#   • Percent Of Account: the 3rd field in the row that ends with "%".
+#     In Fidelity's column layout the "%" fields appear in this fixed order:
+#       1st: Today's Gain/Loss %   (col K, index 10)
+#       2nd: Total Gain/Loss %     (col M, index 12)
+#       3rd: Percent Of Account    (col N, index 13)  ← what we want
+#     Extra commas inside numeric values never produce a "%"-suffixed fragment,
+#     so this count is immune to column shifts.
+
+import csv as _fidelity_csv
+
+
+def _is_fidelity_format(header_fields: list[str]) -> bool:
+    """True if the header row contains both 'Symbol' and 'Percent Of Account'."""
+    lower = [f.strip().lower() for f in header_fields]
+    return "percent of account" in lower and "symbol" in lower
+
+
+_FIDELITY_SKIP = frozenset({
+    "SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX",
+    "SWVXX", "FCASH", "TOTAL", "TOTALS", "SUBTOTAL",
+    "ACCOUNTTOTAL", "PENDINGACTIVITY",
+})
+
+
+def _parse_fidelity_lines(lines: list[str], header_idx: int) -> list[dict]:
+    """
+    Parse a Fidelity brokerage CSV export, bypassing pandas entirely.
+
+    Returns a list of raw (ticker, weight) dicts suitable for the same
+    consolidation step used by load_portfolio_file().
+    """
+    records: list[dict] = []
+
+    for raw_line in lines[header_idx + 1:]:
+        line = raw_line.strip()
+        if not line:
+            # Blank line = section separator; stop here (equities section done).
+            break
+
+        try:
+            fields = next(_fidelity_csv.reader([line]))
+        except Exception:  # noqa: BLE001
+            continue
+
+        if len(fields) < 5:
+            continue
+
+        # ── Ticker ────────────────────────────────────────────────────────────
+        # Symbol is nominally at column index 3 but scan indices 0-7 to
+        # tolerate any commas in the Account Number / Account Name / Basket
+        # Name fields that precede Symbol.
+        ticker: str | None = None
+        for fld in fields[:8]:
+            candidate = fld.strip().upper().strip("*").strip()
+            if _looks_like_ticker(candidate):
+                ticker = candidate
+                break
+        if ticker is None:
+            continue
+
+        if ticker in _FIDELITY_SKIP:
+            continue
+        if ticker[0].isdigit():
+            continue
+        if not all(c.isalnum() or c in (".", "-") for c in ticker):
+            continue
+
+        # ── Percent Of Account (3rd "%" field in the row) ─────────────────────
+        # In Fidelity's layout the only three fields that end with "%" are
+        # Today's G/L %, Total G/L %, and Percent Of Account — in that order.
+        # Extra commas in dollar / quantity values never produce a "%" fragment.
+        weight: float | None = None
+        pct_count = 0
+        for fld in fields:
+            fld_s = fld.strip()
+            if fld_s.endswith("%"):
+                pct_count += 1
+                if pct_count == 3:
+                    try:
+                        val = float(fld_s.replace("%", "").strip())
+                        # Sanity-check: portfolio weight must be 0–100 %
+                        if 0.0 <= val <= 100.0:
+                            weight = round(val / 100.0, 8)
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+        records.append({"ticker": ticker, "weight": weight})
+
+    return records
 
 
 # ── Content-based column detection ───────────────────────────────────────────
