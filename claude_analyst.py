@@ -3232,10 +3232,18 @@ def load_portfolio_file(path: str) -> list[dict]:
     if ticker_col is None:
         ticker_col = df.columns[0]
 
-    # Weight column: Weight / Allocation / Weight %
+    # Weight column: Weight / Allocation / Weight % / Fidelity's "Percent Of Account"
+    # / Schwab's "% of Account" / E*Trade's "Percent of Portfolio" — all map to weight.
+    # The dollar columns (Current Value, Cost Basis, etc.) are ignored — only weight
+    # leaves the upload, never the dollar amounts.
     weight_col = None
-    for key in ("weight", "weights", "allocation", "alloc", "weight %", "weight (%)",
-                "allocation %", "allocation (%)"):
+    for key in ("weight", "weights", "allocation", "alloc",
+                "weight %", "weight (%)",
+                "allocation %", "allocation (%)",
+                # Fidelity / Schwab / Vanguard / E*Trade weight column variants
+                "percent of account", "% of account", "% account",
+                "percent of portfolio", "% of portfolio",
+                "percent", "%"):
         if key in cols_lower:
             weight_col = cols_lower[key]
             break
@@ -3249,17 +3257,27 @@ def load_portfolio_file(path: str) -> list[dict]:
         ticker = str(raw_t).strip().upper()
         if not ticker or ticker in ("NAN", "NONE"):
             continue
-        # Skip summary/footer rows that DGA-portfolio.xlsx writes at the bottom
-        # (so the output file is safe to re-use as input).
-        if ticker in ("TOTAL", "TOTALS", "SUBTOTAL", "CASH"):
+        # Skip summary/footer rows that DGA-portfolio.xlsx and brokerage exports
+        # add at the bottom (totals, account summary, cash, pending activity).
+        if ticker in ("TOTAL", "TOTALS", "SUBTOTAL", "CASH",
+                      "ACCOUNTTOTAL", "ACCOUNT", "PENDINGACTIVITY"):
             continue
         # Tickers are alphanumeric (dots/dashes allowed). Anything else is noise.
         if not all(c.isalnum() or c in (".", "-") for c in ticker):
             continue
         weight: float | None = None
         if weight_col is not None and pd.notna(row[weight_col]):
+            raw = row[weight_col]
             try:
-                weight = float(row[weight_col])
+                # Fidelity / Schwab format: "5.32%" or "$1,234.56" or "(1.23)" for negatives
+                if isinstance(raw, str):
+                    cleaned = raw.replace("%", "").replace("$", "").replace(",", "").strip()
+                    # Parens convention for negatives
+                    if cleaned.startswith("(") and cleaned.endswith(")"):
+                        cleaned = "-" + cleaned[1:-1]
+                    weight = float(cleaned)
+                else:
+                    weight = float(raw)
                 # If it looks like a whole-number percent, convert to decimal.
                 if weight > 1.5:
                     weight = weight / 100.0
