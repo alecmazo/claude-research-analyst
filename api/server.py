@@ -710,12 +710,15 @@ def get_tracker_live_detail():
 async def upload_live_history(
     file: UploadFile = File(...),
     begin_value: float = Form(...),
+    end_value: float = Form(0.0),
 ):
     """Upload a Fidelity account activity/history CSV to compute Modified Dietz YTD return.
 
     Accepts multipart/form-data with:
       - file:        Fidelity account history CSV (from History tab → Export)
       - begin_value: Portfolio market value on January 1 (number, no $ sign)
+      - end_value:   Today's total account value — includes money-market & all positions
+                     (number, no $ sign). If provided, this is used directly as EMV.
 
     Returns the Modified Dietz return plus cash flow summary.  The result is
     persisted with the live portfolio and used as the authoritative YTD figure
@@ -733,7 +736,7 @@ async def upload_live_history(
         raise HTTPException(status_code=422, detail=f"Could not read file: {exc}")
 
     try:
-        result = analyst.upload_account_history(raw_text, begin_value)
+        result = analyst.upload_account_history(raw_text, begin_value, end_value=end_value)
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         raise HTTPException(

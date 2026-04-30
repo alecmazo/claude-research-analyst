@@ -1181,14 +1181,16 @@ async function loadLiveBenchmark() {
 
 // ── Account history upload (Modified Dietz YTD) ───────────────────────────
 async function uploadAccountHistory() {
-  const fileInput   = document.getElementById('history-file');
-  const beginInput  = document.getElementById('history-begin-value');
-  const statusEl    = document.getElementById('history-upload-status');
-  const resultBox   = document.getElementById('history-result-box');
-  const btn         = document.getElementById('history-upload-btn');
+  const fileInput  = document.getElementById('history-file');
+  const beginInput = document.getElementById('history-begin-value');
+  const endInput   = document.getElementById('history-end-value');
+  const statusEl   = document.getElementById('history-upload-status');
+  const resultBox  = document.getElementById('history-result-box');
+  const btn        = document.getElementById('history-upload-btn');
 
   const file       = fileInput?.files?.[0];
   const beginValue = parseFloat(beginInput?.value);
+  const endValue   = parseFloat(endInput?.value) || 0;
 
   if (!file) {
     alert('Please select your Fidelity account activity CSV file.');
@@ -1196,6 +1198,10 @@ async function uploadAccountHistory() {
   }
   if (!beginValue || beginValue <= 0) {
     alert('Please enter your January 1 portfolio value (dollar amount).');
+    return;
+  }
+  if (!endValue || endValue <= 0) {
+    alert('Please enter today\'s portfolio value — the full account total from Fidelity (including money market and all positions).');
     return;
   }
 
@@ -1207,6 +1213,7 @@ async function uploadAccountHistory() {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('begin_value', beginValue);
+    fd.append('end_value', endValue);
     fd.append('token', getToken());
     const res = await fetch(`${API_BASE}/api/track/live/history`, {
       method: 'POST',
@@ -1266,7 +1273,12 @@ function _renderHistoryResult(data, preloaded) {
       <span class="history-result-val">${fmtUSD(data.begin_value)}</span>
     </div>
     <div class="history-result-row">
-      <span class="history-result-key">Est. Current Value</span>
+      <span class="history-result-key">
+        Today's Portfolio Value
+        ${data.emv_source === 'user_provided'
+          ? '<span class="history-emv-badge">✓ exact</span>'
+          : '<span class="history-emv-badge estimate">~ estimated</span>'}
+      </span>
       <span class="history-result-val">${fmtUSD(data.end_value)}</span>
     </div>
     <div class="history-result-row">

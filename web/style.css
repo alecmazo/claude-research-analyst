@@ -1468,6 +1468,21 @@ body {
   padding: 2px 7px; border-radius: 4px; margin-left: 8px;
   vertical-align: middle; text-transform: uppercase;
 }
+/* "Today's value" exact/estimated badge */
+.history-emv-badge {
+  display: inline-block; font-size: 8px; font-weight: 800; letter-spacing: 0.6px;
+  text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-left: 5px;
+  vertical-align: middle;
+  background: rgba(74,222,128,0.18); color: #4ADE80;
+}
+.history-emv-badge.estimate {
+  background: rgba(251,191,36,0.15); color: #FBBF24;
+}
+/* Sub-label hint below field label */
+.history-field-hint {
+  display: block; font-size: 10px; font-weight: 400;
+  color: rgba(255,255,255,0.4); margin-top: 2px; line-height: 1.4;
+}
 /* Diagnostics panel inside history result box */
 .history-diag-section {
   margin-top: 12px; padding-top: 10px;

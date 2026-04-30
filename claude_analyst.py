@@ -2222,6 +2222,7 @@ def parse_fidelity_history(raw_text: str) -> dict:
 def upload_account_history(
     raw_text: str,
     begin_value: float,
+    end_value: float = 0.0,
 ) -> dict:
     """Attach a Fidelity account history to the live portfolio and compute
     a Modified Dietz YTD return.
@@ -2230,16 +2231,22 @@ def upload_account_history(
         R = (EMV − BMV − CF) / (BMV + Σ(CFᵢ × Wᵢ))
 
     Where:
-        BMV = begin_value (portfolio value on Jan 1)
-        EMV = current portfolio market value (sum of live holdings × live prices)
-        CF  = net external cash flows (deposits − withdrawals)
+        BMV = begin_value   — portfolio value on Jan 1 (user-supplied)
+        EMV = end_value     — today's TOTAL account value, user-supplied from
+                              Fidelity's account summary (includes money market,
+                              all positions, pending activity, etc.)
+        CF  = net external cash flows (deposits − withdrawals) from the CSV
         Wᵢ  = (CD − Dᵢ) / CD  — fraction of period remaining after flow date
         CD  = total calendar days from Jan 1 to today
         Dᵢ  = calendar days from Jan 1 to the flow date
 
     Parameters:
         raw_text:    Raw text of the Fidelity activity/history CSV
-        begin_value: Portfolio market value on January 1 of the current year
+        begin_value: Portfolio total value on January 1 of the current year ($)
+        end_value:   Portfolio total value TODAY — the full account balance as
+                     shown by Fidelity, including ALL positions and money-market.
+                     If 0 or not provided, falls back to the stored holdings
+                     estimate (less accurate).
     """
     if not raw_text:
         return {"ok": False, "error": "No history CSV content provided."}
@@ -2250,63 +2257,77 @@ def upload_account_history(
     if not parsed.get("ok"):
         return parsed
 
-    flows = parsed["flows"]
+    flows    = parsed["flows"]
     net_flow = parsed["net_flow"]
 
-    # ── Compute EMV: current market value of live holdings ────────────────────
-    try:
-        state = _load_tracker_state()
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"Could not load tracker state: {exc}"}
-
-    live = state.get("live_portfolio")
-    if not live or not live.get("holdings"):
-        return {"ok": False, "error": "No live portfolio found — upload your positions CSV first."}
-
-    emv = 0.0
-    for h in (live.get("holdings") or []):
+    # ── Determine EMV (End Market Value) ─────────────────────────────────────
+    # Preferred: user provides today's actual account total from Fidelity.
+    # This includes money-market funds, unrecognized tickers, pending cash, etc.
+    # that the live-holdings snapshot cannot see.
+    emv_source = "user_provided"
+    if end_value and end_value > 0:
+        emv = float(end_value)
+    else:
+        # Fallback: estimate from stored live holdings × price ratios.
+        # NOTE: this is unreliable — it misses money market, partial sales, and
+        # any position not in the uploaded positions CSV.
+        emv_source = "holdings_estimate"
         try:
-            ticker = h.get("ticker") or ""
-            if not ticker:
-                continue
-            price = _fetch_close_price(ticker)
-            w = float(h.get("weight") or 0)
-            if price and price > 0 and w > 0:
-                anchor = h.get("anchor_price") or h.get("entry_price")
-                anchor = float(anchor) if anchor else 0.0
-                if anchor > 0:
-                    # Scale each holding's anchor-price return against begin_value
-                    emv += begin_value * w * (price / anchor)
-                else:
-                    emv += begin_value * w
-        except Exception:  # noqa: BLE001
-            continue  # skip bad holding, don't abort whole calculation
+            state = _load_tracker_state()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"Could not load tracker state: {exc}"}
 
-    if emv <= 0:
-        # Fall back to a raw estimate if anchor prices are missing or all failed
-        emv = begin_value
+        live = state.get("live_portfolio")
+        if not live or not live.get("holdings"):
+            return {
+                "ok": False,
+                "error": (
+                    "No current portfolio value provided and no live portfolio found. "
+                    "Please enter today's total account value from Fidelity."
+                ),
+            }
+
+        emv = 0.0
+        for h in (live.get("holdings") or []):
+            try:
+                ticker = h.get("ticker") or ""
+                if not ticker:
+                    continue
+                price  = _fetch_close_price(ticker)
+                w      = float(h.get("weight") or 0)
+                if price and price > 0 and w > 0:
+                    anchor = float(h.get("anchor_price") or h.get("entry_price") or 0)
+                    if anchor > 0:
+                        emv += begin_value * w * (price / anchor)
+                    else:
+                        emv += begin_value * w
+            except Exception:  # noqa: BLE001
+                continue
+
+        if emv <= 0:
+            emv = begin_value  # last-resort: assume flat
 
     # ── Modified Dietz calculation ────────────────────────────────────────────
-    year = datetime.now().year
+    year         = datetime.now().year
     period_start = datetime(year, 1, 1)
-    today_dt = datetime.now()
-    cd = max(1, (today_dt - period_start).days)
+    today_dt     = datetime.now()
+    cd           = max(1, (today_dt - period_start).days)
 
     weighted_flows = 0.0
     for f in flows:
         try:
-            flow_dt = datetime.strptime(f["date"], "%Y-%m-%d")
-            di = max(0, (flow_dt - period_start).days)
-            wi = (cd - di) / cd
+            flow_dt         = datetime.strptime(f["date"], "%Y-%m-%d")
+            di              = max(0, (flow_dt - period_start).days)
+            wi              = (cd - di) / cd
             weighted_flows += f["amount"] * wi
         except Exception:  # noqa: BLE001
             continue
 
     denominator = begin_value + weighted_flows
     if denominator <= 0:
-        return {"ok": False, "error": "Denominator is zero or negative — check your beginning value."}
+        return {"ok": False, "error": "Denominator ≤ 0 — check your beginning value and cash flows."}
 
-    md_return = (emv - begin_value - net_flow) / denominator
+    md_return     = (emv - begin_value - net_flow) / denominator
     md_return_pct = round(md_return * 100.0, 4)
 
     # ── Persist history metadata with the live portfolio ─────────────────────
@@ -2318,6 +2339,7 @@ def upload_account_history(
                     "uploaded_at":       datetime.utcnow().isoformat(),
                     "begin_value":       round(float(begin_value), 2),
                     "end_value":         round(float(emv), 2),
+                    "emv_source":        emv_source,
                     "net_flow":          round(float(net_flow), 2),
                     "flow_count":        int(len(flows)),
                     "transaction_count": int(parsed.get("transaction_count", 0)),
@@ -2325,20 +2347,20 @@ def upload_account_history(
                 }
                 _save_tracker_state(state)
     except Exception as exc:  # noqa: BLE001
-        # Non-fatal — return results even if persist fails
-        print(f"⚠️  Could not persist account history: {exc}")
+        print(f"⚠️  Could not persist account history: {exc}")  # non-fatal
 
     return {
         "ok":                True,
         "md_return_pct":     md_return_pct,
-        "begin_value":       round(begin_value, 2),
-        "end_value":         round(emv, 2),
-        "net_flow":          round(net_flow, 2),
+        "begin_value":       round(float(begin_value), 2),
+        "end_value":         round(float(emv), 2),
+        "emv_source":        emv_source,
+        "net_flow":          round(float(net_flow), 2),
         "flow_count":        len(flows),
-        "transaction_count": parsed["transaction_count"],
+        "transaction_count": int(parsed.get("transaction_count", 0)),
         "flows":             flows,
         "all_transactions":  parsed.get("all_transactions", []),
-        # ── Diagnostics so the UI can show what was detected ─────────────────
+        # ── Diagnostics ──────────────────────────────────────────────────────
         "columns_detected":  parsed.get("columns_detected", []),
         "unique_actions":    parsed.get("unique_actions", []),
         "skipped_no_amount": parsed.get("skipped_no_amount", 0),
