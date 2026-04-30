@@ -1454,10 +1454,10 @@ function drawTrackerAttribution(p) {
     return;
   }
 
-  const W = 560;
-  const rowH = 26;
-  const labelW = 74;     // ticker label column
-  const valW = 80;       // value label column
+  const W = 720;
+  const rowH = 18;
+  const labelW = 80;     // ticker label column
+  const valW = 90;       // value label column
   const cx = labelW + (W - labelW - valW) / 2 + labelW * 0;  // we use a centered axis
   const barAreaW = W - labelW - valW - 8;
   const axisX = labelW + barAreaW / 2;   // center axis x-position
@@ -1485,16 +1485,16 @@ function drawTrackerAttribution(p) {
 
     return `
       <g>
-        <text x="${labelW - 6}" y="${y + 16}" text-anchor="end"
+        <text x="${labelW - 5}" y="${y + 12}" text-anchor="end"
               class="attr-ticker">${h.ticker}</text>
-        <rect x="${barX}" y="${y + 6}" width="${len}" height="14"
+        <rect x="${barX}" y="${y + 4}" width="${len}" height="10"
               rx="2" fill="${fill}" fill-opacity="0.85"/>
-        <text x="${isPos ? barX + len + 6 : barX - 6}"
-              y="${y + 16}" text-anchor="${isPos ? 'start' : 'end'}"
+        <text x="${isPos ? barX + len + 5 : barX - 5}"
+              y="${y + 12}" text-anchor="${isPos ? 'start' : 'end'}"
               class="attr-value ${isPos ? 'attr-pos' : 'attr-neg'}">
           ${valLabel}
         </text>
-        <text x="${labelW + 4}" y="${y + 16}" text-anchor="start"
+        <text x="${labelW + 4}" y="${y + 12}" text-anchor="start"
               class="attr-return">${retText}</text>
       </g>`;
   }).join('');

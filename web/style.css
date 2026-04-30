@@ -1740,20 +1740,20 @@ body {
   background: var(--off-white);
   border: 1px solid var(--light-gray);
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   margin-top: 4px;
 }
 .tracker-attr-summary {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-bottom: 8px;
-  padding-bottom: 8px;
+  gap: 10px; margin-bottom: 6px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--light-gray);
 }
 .tracker-attr-total {
   font-family: "SF Mono", Menlo, monospace;
-  font-size: 13px; font-weight: 800;
-  padding: 4px 10px;
-  border-radius: 5px;
+  font-size: 11px; font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 4px;
 }
 .tracker-attr-total.pos {
   color: #16A34A;
@@ -1764,24 +1764,30 @@ body {
   background: rgba(220,38,38,0.10);
 }
 .tracker-attr-hint {
-  font-size: 11px; color: var(--mid-gray); font-style: italic;
+  font-size: 10px; color: var(--mid-gray); font-style: italic;
 }
+/* Cap the SVG width so the internal font sizes don't get scaled up
+   massively when the parent card is wide on a desktop. */
 .tracker-attr-svg {
-  width: 100%; height: auto; display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
 }
 .tracker-attr-svg .attr-ticker {
   font-family: "SF Mono", Menlo, monospace;
-  font-size: 11px; font-weight: 800;
+  font-size: 10px; font-weight: 800;
   fill: var(--navy);
 }
 .tracker-attr-svg .attr-return {
   font-family: "SF Mono", Menlo, monospace;
-  font-size: 9px;
+  font-size: 8px;
   fill: rgba(10,22,40,0.55);
 }
 .tracker-attr-svg .attr-value {
   font-family: "SF Mono", Menlo, monospace;
-  font-size: 10px; font-weight: 700;
+  font-size: 9px; font-weight: 700;
 }
 .tracker-attr-svg .attr-pos { fill: #16A34A; }
 .tracker-attr-svg .attr-neg { fill: #DC2626; }

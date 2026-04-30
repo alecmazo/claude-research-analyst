@@ -1705,27 +1705,28 @@ def compute_live_ytd_detail() -> dict:
 def _portfolio_breakdown(holdings: list[dict]) -> dict:
     """Compute per-holding return + contribution + vs-portfolio-avg.
 
-    contribution_pct = weight × return_pct  → these sum to the portfolio's
-    total weighted return, so a glance shows where the alpha actually came from.
+    contribution_pct = weight × return_pct  using RAW weights (never normalized).
+    A 3.35% IBRX position with +254% YTD return contributes 3.35% × 254% = 8.5%
+    to the portfolio's total return — NOT a re-normalized figure that would
+    overstate the position's actual impact.
     """
-    total_weight = sum(h.get("weight", 0) for h in holdings) or 1.0
     breakdown: list[dict] = []
     weighted_return = 0.0
 
     for h in holdings:
         entry = h.get("entry_price") or h.get("anchor_price")
         cur   = _fetch_close_price(h["ticker"])
-        norm_w = h.get("weight", 0) / total_weight
+        raw_w = h.get("weight", 0) or 0
         if entry and cur and entry > 0:
             ret = (cur / entry - 1) * 100
-            contribution = norm_w * ret
+            contribution = raw_w * ret    # raw weight × return — no normalization
             weighted_return += contribution
         else:
             ret = None
             contribution = None
         breakdown.append({
             "ticker":           h["ticker"],
-            "weight":           round(norm_w, 6),
+            "weight":           round(raw_w, 6),
             "entry_price":      entry,
             "current_price":    round(cur, 4) if cur else None,
             "return_pct":       round(ret, 4) if ret is not None else None,
@@ -3278,82 +3279,62 @@ def load_portfolio_file(path: str) -> list[dict]:
 
     cols_lower = {str(c).strip().lower(): c for c in df.columns}
 
-    # ── Ticker column resolution ─────────────────────────────────────────────
-    # First try header name; then validate by content.  Some Fidelity exports
-    # put the security description (e.g. "INTEL CORP COM USD0.001") under the
-    # column literally named "Symbol", with the actual ticker buried elsewhere.
-    # If the header-named column doesn't contain content that *looks* like
-    # tickers, scan all columns for one that does.
+    # ── Ticker column: header-name match (validated by content) ──────────────
     ticker_col = None
     for key in ("ticker", "tickers", "symbol", "symbols"):
         if key in cols_lower and _column_contains_tickers(df[cols_lower[key]]):
             ticker_col = cols_lower[key]
             break
     if ticker_col is None:
-        # Content-based fallback: scan every column for ticker-shaped values
         for col in df.columns:
             if _column_contains_tickers(df[col]):
                 ticker_col = col
                 break
     if ticker_col is None:
-        ticker_col = df.columns[0]   # last-resort default
+        ticker_col = df.columns[0]
 
-    # ── Weight column resolution ─────────────────────────────────────────────
-    # Strategy: only accept named percent columns whose VALUES actually look
-    # like percentages. If Fidelity's "Percent Of Account" header is mislabeled
-    # (the data underneath turns out to be dollar values, which happens with
-    # some account types), skip percent-matching entirely and compute weights
-    # from a dollar column (Current Value / Market Value). Never scan unnamed
-    # columns for percent-shaped values — too easy to false-positive on
-    # Quantity / Last Price / Gain-Loss Percent / etc.
+    # ── Weight column: ONLY use the brokerage's explicit "Percent Of Account"
+    # column. Take values directly. No dollar-fallback, no normalization, no
+    # equal-weight default. The user's brokerage already tells us the weight
+    # in a single authoritative column — that's the truth, use it.
     weight_col = None
     for key in ("weight", "weights", "allocation", "alloc",
                 "weight %", "weight (%)",
                 "allocation %", "allocation (%)",
                 "percent of account", "% of account", "% account",
                 "percent of portfolio", "% of portfolio"):
-        if key in cols_lower and _column_contains_percentages(df[cols_lower[key]]):
+        if key in cols_lower:
             weight_col = cols_lower[key]
             break
 
-    # Fallback: compute weight from a dollar-value column.
-    # Prefer well-known names (Current Value > Market Value > Value) and
-    # require the column NAME to suggest "value" — never scan random columns
-    # by content (Cost Basis Total looks like dollars too but isn't position size).
-    weight_from_dollars_col: str | None = None
-    if weight_col is None:
-        for key in ("current value", "market value", "mkt value", "current val",
-                    "value"):
-            if key in cols_lower and _column_contains_dollars(df[cols_lower[key]]):
-                weight_from_dollars_col = cols_lower[key]
-                break
-
-    # If using dollar fallback, pre-compute the total so we can derive weights.
-    dollar_total = 0.0
-    if weight_from_dollars_col is not None:
-        for v in df[weight_from_dollars_col].dropna():
-            try:
-                dollar_total += _parse_money(v)
-            except Exception:  # noqa: BLE001
-                pass
-
-    # Optimized column is deliberately ignored (we will OVERWRITE it on the way out).
-    records: list[dict] = []
+    # ── Iterate rows, collect (ticker, weight) pairs ─────────────────────────
+    raw_records: list[dict] = []
     for _, row in df.iterrows():
         raw_t = row[ticker_col]
         if pd.isna(raw_t):
             continue
-        ticker = str(raw_t).strip().upper()
+        ticker = str(raw_t).strip().upper().strip("*").strip()
         if not ticker or ticker in ("NAN", "NONE"):
             continue
-        # Skip summary/footer rows that DGA-portfolio.xlsx and brokerage exports
-        # add at the bottom (totals, account summary, cash, pending activity).
+        # Skip footer rows
         if ticker in ("TOTAL", "TOTALS", "SUBTOTAL", "CASH",
                       "ACCOUNTTOTAL", "ACCOUNT", "PENDINGACTIVITY"):
             continue
-        # Tickers are alphanumeric (dots/dashes allowed). Anything else is noise.
+        # Skip CUSIPs (start with a digit — these are bonds like 36966TKX9)
+        if ticker[0].isdigit():
+            continue
+        # Skip money market funds (Fidelity marks them with **; common MM tickers)
+        if ticker in ("SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX",
+                      "SWVXX", "FCASH"):
+            continue
+        # Tickers are alphanumeric (dots/dashes allowed)
         if not all(c.isalnum() or c in (".", "-") for c in ticker):
             continue
+
+        # Weight: read directly from the brokerage's percent column.
+        # No dollar fallback, no equal-weight default — if the column is
+        # missing or unparseable, we keep the row with weight=None and the
+        # downstream optimizer can decide what to do.
         weight: float | None = None
         if weight_col is not None and pd.notna(row[weight_col]):
             raw = row[weight_col]
@@ -3366,26 +3347,41 @@ def load_portfolio_file(path: str) -> list[dict]:
                     weight = float(cleaned)
                 else:
                     weight = float(raw)
-                # If the value had an explicit % symbol, ALWAYS divide by 100
-                # (regardless of magnitude — "0.62%" means 0.0062, not 0.62).
-                # Otherwise, fall back to the magnitude heuristic: values > 1.5
-                # are treated as whole-number percents (5 → 0.05).
+                # An explicit % sign means "this number is already a percent".
+                # 0.62% → 0.0062 ; 10.07% → 0.1007.
                 if had_percent_sign:
                     weight = weight / 100.0
                 elif weight > 1.5:
                     weight = weight / 100.0
             except (TypeError, ValueError):
                 weight = None
-        elif weight_from_dollars_col is not None and dollar_total > 0:
-            # Compute weight = position dollar value / total dollar value.
-            try:
-                v = _parse_money(row[weight_from_dollars_col])
-                weight = round(v / dollar_total, 6) if v > 0 else None
-            except Exception:  # noqa: BLE001
-                weight = None
-        records.append({"ticker": ticker, "weight": weight})
+        raw_records.append({"ticker": ticker, "weight": weight})
 
-    # If no weights were provided, assign equal-weight across all positions.
+    # ── Consolidate duplicates: same ticker (e.g. INTC bought directly +
+    # INTC held inside a basket) → sum their percentages into ONE position.
+    consolidated: dict[str, float | None] = {}
+    order: list[str] = []
+    for r in raw_records:
+        t = r["ticker"]
+        if t not in consolidated:
+            consolidated[t] = r["weight"]
+            order.append(t)
+        else:
+            existing = consolidated[t]
+            new = r["weight"]
+            if existing is None and new is None:
+                consolidated[t] = None
+            elif existing is None:
+                consolidated[t] = new
+            elif new is None:
+                pass  # keep existing
+            else:
+                consolidated[t] = round(existing + new, 8)
+
+    records: list[dict] = [{"ticker": t, "weight": consolidated[t]} for t in order]
+
+    # If absolutely no weights were provided ANYWHERE, fall back to equal-weight.
+    # (Only applies when the file truly has no Percent Of Account column.)
     if records and all(r["weight"] is None for r in records):
         n = len(records)
         for r in records:
