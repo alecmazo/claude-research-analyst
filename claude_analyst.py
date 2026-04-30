@@ -3213,11 +3213,39 @@ def load_portfolio_file(path: str) -> list[dict]:
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(path)
+
+    # ── Header-row detection ──────────────────────────────────────────────────
+    # Fidelity / Schwab exports often prepend metadata rows ("Brokerage Services",
+    # "As of <date>", blank lines, account header) before the real CSV table.
+    # Scan for the first row that looks like an actual portfolio header and tell
+    # pandas to skip everything above it.
     if p.suffix.lower() in (".xlsx", ".xls", ".xlsm"):
-        df = pd.read_excel(p)
+        # Excel: detect a header row that contains a recognisable column.
+        df_full = pd.read_excel(p, header=None)
+        header_idx = _detect_header_row(df_full)
+        df = pd.read_excel(p, header=header_idx)
     elif p.suffix.lower() in (".csv", ".tsv"):
         sep = "\t" if p.suffix.lower() == ".tsv" else ","
-        df = pd.read_csv(p, sep=sep)
+        # Pre-scan the raw text for the header row
+        try:
+            raw_lines = p.read_text(errors="replace").splitlines()
+        except Exception:  # noqa: BLE001
+            raw_lines = []
+        header_idx = _detect_header_row_from_lines(raw_lines, sep)
+        df = pd.read_csv(p, sep=sep, skiprows=header_idx)
+        # Drop completely empty rows (Fidelity sometimes has blank separators
+        # between Stocks / Options / Mutual Funds tables — we keep rows up to
+        # the first all-NaN row, which corresponds to the end of the equities table).
+        if df.notna().any(axis=1).any():
+            # Find the first all-NaN row after at least one valid row.
+            valid_mask = df.notna().any(axis=1)
+            first_valid_idx = valid_mask.idxmax()
+            after_first = valid_mask.loc[first_valid_idx:]
+            if (~after_first).any():
+                end_idx = (~after_first).idxmax()
+                df = df.loc[first_valid_idx:end_idx - 1] if end_idx > first_valid_idx else df.loc[first_valid_idx:]
+            else:
+                df = df.loc[first_valid_idx:]
     else:
         raise ValueError(f"Unsupported portfolio file: {p.suffix}")
 
@@ -3291,11 +3319,74 @@ def load_portfolio_file(path: str) -> list[dict]:
         for r in records:
             r["weight"] = round(1.0 / n, 6)
 
+    # Better diagnostics if zero rows were extracted — surface the columns we
+    # actually saw so the user (or a maintainer) can identify which broker
+    # variant we need to support next.
+    if not records:
+        cols_seen = list(df.columns)[:20]
+        raise ValueError(
+            "No portfolio positions could be parsed. "
+            f"Columns detected: {cols_seen}. "
+            f"Ticker column matched: {ticker_col!r}. "
+            f"Weight column matched: {weight_col!r}. "
+            "If this is a brokerage export, please share the column names "
+            "so the importer can be extended."
+        )
+
     return records
 
 
 def portfolio_tickers(records: list[dict]) -> list[str]:
     return [r["ticker"] for r in records]
+
+
+# Header-row detection helpers — handles Fidelity / Schwab metadata preambles
+_HEADER_HINTS = (
+    "ticker", "tickers", "symbol", "symbols",
+    "weight", "weights", "allocation",
+    "percent of account", "% of account", "percent of portfolio",
+)
+
+
+def _row_looks_like_header(values) -> bool:
+    """A row is a portfolio table header if any cell matches a known label."""
+    for v in values:
+        if v is None:
+            continue
+        try:
+            s = str(v).strip().lower()
+        except Exception:  # noqa: BLE001
+            continue
+        if not s or s == "nan":
+            continue
+        for hint in _HEADER_HINTS:
+            if s == hint or hint in s:
+                return True
+    return False
+
+
+def _detect_header_row_from_lines(lines: list[str], sep: str) -> int:
+    """Return the 0-indexed line that looks like the CSV header. Defaults to 0."""
+    import csv as _csv
+    for i, line in enumerate(lines[:30]):  # only scan first 30 lines
+        if not line.strip():
+            continue
+        try:
+            row = next(_csv.reader([line], delimiter=sep))
+        except Exception:  # noqa: BLE001
+            continue
+        if _row_looks_like_header(row):
+            return i
+    return 0
+
+
+def _detect_header_row(df_full) -> int:
+    """Excel-equivalent of _detect_header_row_from_lines."""
+    for i in range(min(30, len(df_full))):
+        row_vals = df_full.iloc[i].tolist()
+        if _row_looks_like_header(row_vals):
+            return i
+    return 0
 
 
 # ============================================================================
