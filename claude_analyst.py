@@ -3259,30 +3259,64 @@ def load_portfolio_file(path: str) -> list[dict]:
 
     cols_lower = {str(c).strip().lower(): c for c in df.columns}
 
-    # Ticker column: accept Ticker / ticker / symbol / TICKER
+    # ── Ticker column resolution ─────────────────────────────────────────────
+    # First try header name; then validate by content.  Some Fidelity exports
+    # put the security description (e.g. "INTEL CORP COM USD0.001") under the
+    # column literally named "Symbol", with the actual ticker buried elsewhere.
+    # If the header-named column doesn't contain content that *looks* like
+    # tickers, scan all columns for one that does.
     ticker_col = None
     for key in ("ticker", "tickers", "symbol", "symbols"):
-        if key in cols_lower:
+        if key in cols_lower and _column_contains_tickers(df[cols_lower[key]]):
             ticker_col = cols_lower[key]
             break
     if ticker_col is None:
-        ticker_col = df.columns[0]
+        # Content-based fallback: scan every column for ticker-shaped values
+        for col in df.columns:
+            if _column_contains_tickers(df[col]):
+                ticker_col = col
+                break
+    if ticker_col is None:
+        ticker_col = df.columns[0]   # last-resort default
 
-    # Weight column: Weight / Allocation / Weight % / Fidelity's "Percent Of Account"
-    # / Schwab's "% of Account" / E*Trade's "Percent of Portfolio" — all map to weight.
-    # The dollar columns (Current Value, Cost Basis, etc.) are ignored — only weight
-    # leaves the upload, never the dollar amounts.
+    # ── Weight column resolution ─────────────────────────────────────────────
+    # Strategy: only accept named percent columns whose VALUES actually look
+    # like percentages. If Fidelity's "Percent Of Account" header is mislabeled
+    # (the data underneath turns out to be dollar values, which happens with
+    # some account types), skip percent-matching entirely and compute weights
+    # from a dollar column (Current Value / Market Value). Never scan unnamed
+    # columns for percent-shaped values — too easy to false-positive on
+    # Quantity / Last Price / Gain-Loss Percent / etc.
     weight_col = None
     for key in ("weight", "weights", "allocation", "alloc",
                 "weight %", "weight (%)",
                 "allocation %", "allocation (%)",
-                # Fidelity / Schwab / Vanguard / E*Trade weight column variants
                 "percent of account", "% of account", "% account",
-                "percent of portfolio", "% of portfolio",
-                "percent", "%"):
-        if key in cols_lower:
+                "percent of portfolio", "% of portfolio"):
+        if key in cols_lower and _column_contains_percentages(df[cols_lower[key]]):
             weight_col = cols_lower[key]
             break
+
+    # Fallback: compute weight from a dollar-value column.
+    # Prefer well-known names (Current Value > Market Value > Value) and
+    # require the column NAME to suggest "value" — never scan random columns
+    # by content (Cost Basis Total looks like dollars too but isn't position size).
+    weight_from_dollars_col: str | None = None
+    if weight_col is None:
+        for key in ("current value", "market value", "mkt value", "current val",
+                    "value"):
+            if key in cols_lower and _column_contains_dollars(df[cols_lower[key]]):
+                weight_from_dollars_col = cols_lower[key]
+                break
+
+    # If using dollar fallback, pre-compute the total so we can derive weights.
+    dollar_total = 0.0
+    if weight_from_dollars_col is not None:
+        for v in df[weight_from_dollars_col].dropna():
+            try:
+                dollar_total += _parse_money(v)
+            except Exception:  # noqa: BLE001
+                pass
 
     # Optimized column is deliberately ignored (we will OVERWRITE it on the way out).
     records: list[dict] = []
@@ -3305,10 +3339,8 @@ def load_portfolio_file(path: str) -> list[dict]:
         if weight_col is not None and pd.notna(row[weight_col]):
             raw = row[weight_col]
             try:
-                # Fidelity / Schwab format: "5.32%" or "$1,234.56" or "(1.23)" for negatives
                 if isinstance(raw, str):
                     cleaned = raw.replace("%", "").replace("$", "").replace(",", "").strip()
-                    # Parens convention for negatives
                     if cleaned.startswith("(") and cleaned.endswith(")"):
                         cleaned = "-" + cleaned[1:-1]
                     weight = float(cleaned)
@@ -3318,6 +3350,13 @@ def load_portfolio_file(path: str) -> list[dict]:
                 if weight > 1.5:
                     weight = weight / 100.0
             except (TypeError, ValueError):
+                weight = None
+        elif weight_from_dollars_col is not None and dollar_total > 0:
+            # Compute weight = position dollar value / total dollar value.
+            try:
+                v = _parse_money(row[weight_from_dollars_col])
+                weight = round(v / dollar_total, 6) if v > 0 else None
+            except Exception:  # noqa: BLE001
                 weight = None
         records.append({"ticker": ticker, "weight": weight})
 
@@ -3409,6 +3448,108 @@ def _detect_header_row(df_full) -> int:
         if _row_looks_like_header(row_vals):
             return i
     return 0
+
+
+# ── Content-based column detection ───────────────────────────────────────────
+# When header names are unreliable (Fidelity sometimes puts security
+# descriptions under a "Symbol" header, or dollar values under a "Percent Of
+# Account" header), fall back to identifying columns by what their values
+# look like.
+
+import re as _re
+
+
+_TICKER_PATTERN = _re.compile(r"^[A-Z][A-Z0-9.\-]{0,5}$")
+
+
+def _looks_like_ticker(val) -> bool:
+    """A ticker is 1–6 chars, starts with a letter, all uppercase alphanumeric."""
+    if val is None:
+        return False
+    try:
+        s = str(val).strip().upper()
+    except Exception:  # noqa: BLE001
+        return False
+    if not s or s in ("NAN", "NONE"):
+        return False
+    if s in ("TOTAL", "TOTALS", "SUBTOTAL", "CASH", "ACCOUNT"):
+        return False
+    return bool(_TICKER_PATTERN.match(s))
+
+
+def _column_contains_tickers(series) -> bool:
+    """Return True if at least 50% of non-null values look like ticker symbols."""
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return False
+    matches = sum(1 for v in non_null.head(20) if _looks_like_ticker(v))
+    return matches >= max(2, int(0.5 * min(len(non_null), 20)))
+
+
+def _looks_like_percentage(val) -> bool:
+    """Numbers in [0, 100] range, optionally with a % suffix or whitespace."""
+    if val is None:
+        return False
+    try:
+        s = str(val).strip().replace("%", "").replace(",", "")
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+        f = float(s)
+        # Reject dollar-like values (anything with a leading $)
+        if "$" in str(val):
+            return False
+        return -50.0 <= f <= 100.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _column_contains_percentages(series) -> bool:
+    """Column likely holds percentages: most values are numeric 0..100, no $."""
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return False
+    matches = 0
+    for v in non_null.head(20):
+        s = str(v)
+        if "$" in s:           # any $ → not a percentage column
+            return False
+        if _looks_like_percentage(v):
+            matches += 1
+    return matches >= max(2, int(0.6 * min(len(non_null), 20)))
+
+
+def _looks_like_money(val) -> bool:
+    """Strings with $ prefix or a numeric value > 100 (likely dollars)."""
+    if val is None:
+        return False
+    try:
+        s = str(val).strip()
+        if s.startswith("$") or "$" in s:
+            return True
+        # Bare numbers: only if they're clearly larger than typical percentages
+        f = float(s.replace(",", ""))
+        return abs(f) >= 100.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _column_contains_dollars(series) -> bool:
+    """Most values look like dollar amounts (have $ or are numerically large)."""
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return False
+    matches = sum(1 for v in non_null.head(20) if _looks_like_money(v))
+    return matches >= max(2, int(0.6 * min(len(non_null), 20)))
+
+
+def _parse_money(val) -> float:
+    """Convert "$1,234.56" / "(123.45)" / "1234" to float."""
+    if val is None:
+        return 0.0
+    s = str(val).strip().replace("$", "").replace(",", "")
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    return float(s) if s else 0.0
 
 
 # ============================================================================
