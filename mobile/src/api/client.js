@@ -13,7 +13,12 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_BASE_URL   = 'http://localhost:8000';
+// Build-time-injected API base URL. Set via eas.json's `env` block per profile:
+//   • development → http://localhost:8000  (Mac running `npx expo start`)
+//   • preview     → https://<your>.up.railway.app
+//   • production  → https://<your>.up.railway.app  (LP-facing build)
+// Falls back to localhost when running via plain `npx expo start` with no env.
+const DEFAULT_BASE_URL   = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 const DEFAULT_PASSWORD   = 'dgacapital';           // server default
 
 const BASE_URL_KEY  = '@dga_api_base_url';

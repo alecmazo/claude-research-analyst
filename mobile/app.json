@@ -1,16 +1,41 @@
 {
   "expo": {
-    "name": "DGA Research Analyst",
-    "slug": "dga-research-analyst",
+    "name": "DGA Research",
+    "slug": "dga-research",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#0A1628"
+    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.dgacapital.researchanalyst"
+      "bundleIdentifier": "com.dgacapital.research",
+      "buildNumber": "1"
     },
     "android": {
-      "package": "com.dgacapital.researchanalyst"
+      "package": "com.dgacapital.research",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A1628"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-document-picker"
+    ],
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
     },
     "sdkVersion": "54.0.0"
   }
