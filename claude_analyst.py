@@ -3235,23 +3235,39 @@ def load_portfolio_file(path: str) -> list[dict]:
             raw_text, raw_lines = "", []
         header_idx = _detect_header_row_from_lines(raw_lines, sep)
 
-        # Quote dollar values with embedded thousands separators BEFORE pandas
-        # parses. Fidelity exports often contain unquoted values like
-        #   $24,521.13 / +$18,971.14 / ($1,234.56)
-        # — the unquoted comma tricks pandas into treating it as a field
+        # Strip thousands separators from numeric values BEFORE pandas parses.
+        # Fidelity exports often contain UNQUOTED numeric values with embedded
+        # commas:
+        #   $24,521.13            (dollar with thousands separator)
+        #   +$18,971.14           (signed dollar)
+        #   ($1,234.56)           (parens-as-negative dollar)
+        #   10,915.197            (share quantity > 1000)
+        #   1,234,567             (large integer)
+        # The unquoted comma tricks pandas into treating it as a field
         # separator, shifting every column to the right of the offending value.
         # Excel handles this gracefully; pandas (any engine) does not.
         #
-        # Strategy: find dollar values with thousands separators and remove
-        # ONLY the thousands-separator commas. Pattern matches the entire
-        # number form so we don't accidentally touch commas that are real
-        # field separators.
+        # Pattern matches a complete numeric token with at least one thousands-
+        # separator comma. Lookbehind/lookahead prevent matching commas that
+        # are actually field separators between single-digit values.
         def _strip_money_commas(m):
             return m.group(0).replace(",", "")
         cleaned_text = _re.sub(
-            # Match: optional sign / paren, $, digits, one+ groups of ",ddd",
-            # optional decimal, optional closing paren
-            r"[+\-]?\(?\$\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?",
+            # (?<![\d.]) — NOT preceded by a digit OR period.
+            #             Blocking digit prevents matching mid-number.
+            #             Blocking period prevents matching across a decimal
+            #             boundary like "USD0.001,258.689" — without this,
+            #             the regex would treat "001,258.689" as a thousands-
+            #             separated number and strip the comma, merging the
+            #             Description and Quantity fields.
+            # [+\-]?\(?    — optional sign / opening paren
+            # \$?          — optional $ sign
+            # \d{1,3}      — initial 1–3 digits
+            # (?:,\d{3})+  — one or more thousands groups (REQUIRED)
+            # (?:\.\d+)?   — optional decimal portion
+            # \)?          — optional closing paren
+            # (?!\d)       — not followed by a digit (we're at end of value)
+            r"(?<![\d.])[+\-]?\(?\$?\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?(?!\d)",
             _strip_money_commas,
             raw_text,
         )
