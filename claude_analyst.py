@@ -3228,16 +3228,35 @@ def load_portfolio_file(path: str) -> list[dict]:
         sep = "\t" if p.suffix.lower() == ".tsv" else ","
         # Pre-scan the raw text for the header row
         try:
-            raw_lines = p.read_text(errors="replace").splitlines()
+            raw_text = p.read_text(errors="replace")
+            raw_lines = raw_text.splitlines()
         except Exception:  # noqa: BLE001
-            raw_lines = []
+            raw_text, raw_lines = "", []
         header_idx = _detect_header_row_from_lines(raw_lines, sep)
-        # engine='python' + on_bad_lines='skip' is essential for brokerage CSVs:
-        # Fidelity's "Account Total" / "Pending Activity" / disclaimer footer
-        # rows often have a different column count than the equity table, and
-        # the default C engine raises a fatal ParserError on those.
+
+        # Quote dollar values with embedded thousands separators BEFORE pandas
+        # parses. Fidelity exports often contain unquoted values like
+        #   $24,521.13 / +$18,971.14 / ($1,234.56)
+        # — the unquoted comma tricks pandas into treating it as a field
+        # separator, shifting every column to the right of the offending value.
+        # Excel handles this gracefully; pandas (any engine) does not.
+        #
+        # Strategy: find dollar values with thousands separators and remove
+        # ONLY the thousands-separator commas. Pattern matches the entire
+        # number form so we don't accidentally touch commas that are real
+        # field separators.
+        def _strip_money_commas(m):
+            return m.group(0).replace(",", "")
+        cleaned_text = _re.sub(
+            # Match: optional sign / paren, $, digits, one+ groups of ",ddd",
+            # optional decimal, optional closing paren
+            r"[+\-]?\(?\$\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?",
+            _strip_money_commas,
+            raw_text,
+        )
+        from io import StringIO as _StringIO
         df = pd.read_csv(
-            p, sep=sep, skiprows=header_idx,
+            _StringIO(cleaned_text), sep=sep, skiprows=header_idx,
             engine="python",
             on_bad_lines="skip",
         )
@@ -3339,6 +3358,7 @@ def load_portfolio_file(path: str) -> list[dict]:
         if weight_col is not None and pd.notna(row[weight_col]):
             raw = row[weight_col]
             try:
+                had_percent_sign = isinstance(raw, str) and "%" in raw
                 if isinstance(raw, str):
                     cleaned = raw.replace("%", "").replace("$", "").replace(",", "").strip()
                     if cleaned.startswith("(") and cleaned.endswith(")"):
@@ -3346,8 +3366,13 @@ def load_portfolio_file(path: str) -> list[dict]:
                     weight = float(cleaned)
                 else:
                     weight = float(raw)
-                # If it looks like a whole-number percent, convert to decimal.
-                if weight > 1.5:
+                # If the value had an explicit % symbol, ALWAYS divide by 100
+                # (regardless of magnitude — "0.62%" means 0.0062, not 0.62).
+                # Otherwise, fall back to the magnitude heuristic: values > 1.5
+                # are treated as whole-number percents (5 → 0.05).
+                if had_percent_sign:
+                    weight = weight / 100.0
+                elif weight > 1.5:
                     weight = weight / 100.0
             except (TypeError, ValueError):
                 weight = None
