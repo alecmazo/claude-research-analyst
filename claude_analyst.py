@@ -3232,7 +3232,15 @@ def load_portfolio_file(path: str) -> list[dict]:
         except Exception:  # noqa: BLE001
             raw_lines = []
         header_idx = _detect_header_row_from_lines(raw_lines, sep)
-        df = pd.read_csv(p, sep=sep, skiprows=header_idx)
+        # engine='python' + on_bad_lines='skip' is essential for brokerage CSVs:
+        # Fidelity's "Account Total" / "Pending Activity" / disclaimer footer
+        # rows often have a different column count than the equity table, and
+        # the default C engine raises a fatal ParserError on those.
+        df = pd.read_csv(
+            p, sep=sep, skiprows=header_idx,
+            engine="python",
+            on_bad_lines="skip",
+        )
         # Drop completely empty rows (Fidelity sometimes has blank separators
         # between Stocks / Options / Mutual Funds tables — we keep rows up to
         # the first all-NaN row, which corresponds to the end of the equities table).
