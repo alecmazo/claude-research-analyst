@@ -19,14 +19,14 @@
         "simulator": true
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://CHANGE_ME.up.railway.app"
+        "EXPO_PUBLIC_API_BASE_URL": "https://dga-portfolio.up.railway.app"
       }
     },
     "production": {
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://CHANGE_ME.up.railway.app"
+        "EXPO_PUBLIC_API_BASE_URL": "https://dga-portfolio.up.railway.app"
       }
     }
   },
