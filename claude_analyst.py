@@ -3328,17 +3328,31 @@ def load_portfolio_file(path: str) -> list[dict]:
             r["weight"] = round(1.0 / n, 6)
 
     # Better diagnostics if zero rows were extracted — surface the columns we
-    # actually saw so the user (or a maintainer) can identify which broker
-    # variant we need to support next.
+    # actually saw plus a sample of the matched columns so the failure mode is
+    # diagnosable from the error message alone.
     if not records:
         cols_seen = list(df.columns)[:20]
+        n_rows = len(df)
+        # Sample first 3 raw values from the matched ticker / weight columns
+        sample: list[str] = []
+        if ticker_col is not None:
+            try:
+                vals = df[ticker_col].head(5).tolist()
+                sample.append(f"sample {ticker_col} values: {vals}")
+            except Exception:  # noqa: BLE001
+                pass
+        if weight_col is not None:
+            try:
+                vals = df[weight_col].head(5).tolist()
+                sample.append(f"sample {weight_col} values: {vals}")
+            except Exception:  # noqa: BLE001
+                pass
         raise ValueError(
-            "No portfolio positions could be parsed. "
+            f"No portfolio positions could be parsed from {n_rows} data rows. "
             f"Columns detected: {cols_seen}. "
             f"Ticker column matched: {ticker_col!r}. "
             f"Weight column matched: {weight_col!r}. "
-            "If this is a brokerage export, please share the column names "
-            "so the importer can be extended."
+            + (" | ".join(sample) if sample else "")
         )
 
     return records
