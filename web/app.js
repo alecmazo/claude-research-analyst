@@ -1109,12 +1109,16 @@ function initTracker() {
   document.getElementById('tracker-detail-close')?.addEventListener('click', closeTrackerDetail);
   document.getElementById('tracker-detail-close-portfolio')?.addEventListener('click', closeTrackerCurrent);
   document.getElementById('tracker-detail-delete')?.addEventListener('click', deleteTrackerCurrent);
+
+  // Account history upload — Modified Dietz YTD
+  document.getElementById('history-upload-btn')?.addEventListener('click', uploadAccountHistory);
 }
 
 // ── Live benchmark card (clickable → YTD detail) ──────────────────────────
 async function loadLiveBenchmark() {
   const wrap = document.getElementById('tracker-live-info');
   const card = document.getElementById('tracker-live-card');
+  const histCard = document.getElementById('history-upload-card');
   if (!wrap) return;
   try {
     const data = await api.getLiveBenchmark();
@@ -1125,8 +1129,18 @@ async function loadLiveBenchmark() {
       </div>`;
       card?.classList.remove('clickable');
       card?.removeAttribute('role');
+      if (histCard) histCard.style.display = 'none';
       return;
     }
+
+    // Show account history upload card once we have a live portfolio
+    if (histCard) {
+      histCard.style.display = '';
+      // If history already uploaded, show the existing MD return
+      const h = live.account_history;
+      if (h) _renderHistoryResult(h, /* preloaded */ true);
+    }
+
     const n = (live.holdings || []).length;
     const sorted = (live.holdings || [])
       .slice().sort((a, b) => b.weight - a.weight);
@@ -1136,6 +1150,11 @@ async function loadLiveBenchmark() {
          <span class="live-chip-weight">${(h.weight * 100).toFixed(1)}%</span>
        </span>`
     ).join('');
+
+    const mdBadge = live.account_history
+      ? `<span class="history-md-badge">MD</span>`
+      : '';
+
     wrap.innerHTML = `
       <div class="tracker-live-line">
         <span class="tracker-live-key">ANCHOR DATE</span>
@@ -1144,7 +1163,7 @@ async function loadLiveBenchmark() {
       <div class="tracker-live-line">
         <span class="tracker-live-key">HOLDINGS</span>
         <span class="tracker-live-value">
-          ${n} positions
+          ${n} positions${mdBadge}
           <span class="live-drill-hint">View YTD detail →</span>
         </span>
       </div>
@@ -1158,6 +1177,92 @@ async function loadLiveBenchmark() {
     card?.classList.remove('clickable');
     if (card) card.onclick = null;
   }
+}
+
+// ── Account history upload (Modified Dietz YTD) ───────────────────────────
+async function uploadAccountHistory() {
+  const fileInput   = document.getElementById('history-file');
+  const beginInput  = document.getElementById('history-begin-value');
+  const statusEl    = document.getElementById('history-upload-status');
+  const resultBox   = document.getElementById('history-result-box');
+  const btn         = document.getElementById('history-upload-btn');
+
+  const file       = fileInput?.files?.[0];
+  const beginValue = parseFloat(beginInput?.value);
+
+  if (!file) {
+    alert('Please select your Fidelity account activity CSV file.');
+    return;
+  }
+  if (!beginValue || beginValue <= 0) {
+    alert('Please enter your January 1 portfolio value (dollar amount).');
+    return;
+  }
+
+  btn.disabled = true;
+  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Uploading and calculating…'; }
+  if (resultBox) resultBox.style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('begin_value', beginValue);
+    const res = await fetch(`${API_BASE}/track/live/history`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${_authToken}` },
+      body: fd,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (statusEl) statusEl.style.display = 'none';
+    _renderHistoryResult(data, false);
+    // Refresh the live benchmark card to show the MD badge
+    await loadLiveBenchmark();
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = `Error: ${err.message}`; }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function _renderHistoryResult(data, preloaded) {
+  const box = document.getElementById('history-result-box');
+  if (!box) return;
+  const sign = (v) => v >= 0 ? '+' : '';
+  const cls  = (v) => v >= 0 ? 'green' : 'red';
+  const md   = data.md_return_pct ?? data.md_return_pct;
+  const netFlow = data.net_flow ?? 0;
+  const prefix = preloaded ? 'Last uploaded — ' : '';
+  box.style.display = '';
+  box.innerHTML = `
+    <div class="history-result-title">Modified Dietz YTD Return${preloaded ? ' (stored)' : ''}</div>
+    <div class="history-result-row">
+      <span class="history-result-key">YTD Return (cash-flow adjusted)</span>
+      <span class="history-result-val ${cls(md)}">${sign(md)}${md?.toFixed(2)}%</span>
+    </div>
+    <div class="history-result-row">
+      <span class="history-result-key">Jan 1 Portfolio Value</span>
+      <span class="history-result-val">$${(data.begin_value||0).toLocaleString()}</span>
+    </div>
+    <div class="history-result-row">
+      <span class="history-result-key">Est. Current Value</span>
+      <span class="history-result-val">$${(data.end_value||0).toLocaleString()}</span>
+    </div>
+    <div class="history-result-row">
+      <span class="history-result-key">Net External Flows (deposits − withdrawals)</span>
+      <span class="history-result-val ${cls(netFlow)}">${sign(netFlow)}$${Math.abs(netFlow).toLocaleString()}</span>
+    </div>
+    <div class="history-result-row">
+      <span class="history-result-key">External Flow Events</span>
+      <span class="history-result-val">${data.flow_count ?? 0}</span>
+    </div>
+    <div class="history-result-row">
+      <span class="history-result-key">Total Transactions Parsed</span>
+      <span class="history-result-val">${data.transaction_count ?? 0}</span>
+    </div>`;
 }
 
 // ── List load + render ─────────────────────────────────────────────────────
@@ -1305,10 +1410,17 @@ async function openLiveBenchmarkDetail() {
     const ytdSign = (p.current_return_pct ?? 0) >= 0 ? '+' : '';
     const vsSpyStr = p.vs_spy_pct == null ? '—'
       : `${p.vs_spy_pct >= 0 ? '+' : ''}${p.vs_spy_pct.toFixed(2)}% vs SPY`;
+    const mdTag = p.history_uploaded
+      ? ` <span class="history-md-badge">MD</span>`
+      : ` <span style="font-size:10px;color:#F59E0B;font-weight:600;">(snapshot est.)</span>`;
+    // If MD is available, show snapshot alongside it for comparison
+    const snapshotNote = p.history_uploaded && p.snapshot_return_pct != null
+      ? `  ·  snapshot ${(p.snapshot_return_pct ?? 0) >= 0 ? '+' : ''}${(p.snapshot_return_pct ?? 0).toFixed(2)}%`
+      : '';
     document.getElementById('tracker-detail-name').textContent = '📊 ' + p.name;
-    document.getElementById('tracker-detail-meta').textContent =
+    document.getElementById('tracker-detail-meta').innerHTML =
       `${p.n_tickers} positions · Year-start ${p.year_start_date} · ` +
-      `YTD ${ytdSign}${(p.current_return_pct ?? 0).toFixed(2)}% (${vsSpyStr})`;
+      `YTD ${ytdSign}${(p.current_return_pct ?? 0).toFixed(2)}%${mdTag} (${vsSpyStr})${snapshotNote}`;
     applyDetailMode('live');
     drawTrackerChart(p);
     drawTrackerAttribution(p);

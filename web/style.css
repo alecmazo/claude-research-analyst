@@ -1415,6 +1415,60 @@ body {
 
 /* ── Live benchmark info card ── */
 .tracker-live-info { font-size: 13px; color: var(--dark-gray); }
+/* ── Account History Upload ──────────────────────────────────────────────── */
+.history-upload-how {
+  font-size: 11px; color: var(--mid-gray);
+  background: var(--off-white); border-radius: 6px;
+  padding: 8px 12px; margin-bottom: 14px;
+  line-height: 1.5;
+}
+.history-upload-how-label {
+  font-weight: 700; color: var(--dark-gray); display: block; margin-bottom: 2px;
+}
+.history-fields { display: flex; flex-direction: column; gap: 0; }
+.history-field-row { display: flex; align-items: center; gap: 12px; }
+.history-field-label {
+  font-size: 11px; font-weight: 700; color: var(--mid-gray);
+  letter-spacing: 0.4px; text-transform: uppercase;
+  min-width: 160px; flex-shrink: 0;
+}
+.history-value-input {
+  flex: 1; height: 36px; border-radius: 8px;
+  border: 1.5px solid var(--light-gray); background: var(--white);
+  padding: 0 10px; font-size: 13px; color: var(--dark-gray);
+}
+.history-value-input:focus { border-color: var(--gold); outline: none; }
+.history-file-input { flex: 1; font-size: 12px; }
+.history-upload-status {
+  margin-top: 10px; font-size: 12px; color: var(--mid-gray);
+  font-style: italic; text-align: center;
+}
+.history-result-box {
+  margin-top: 14px; padding: 14px 16px;
+  background: var(--navy); color: var(--white);
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(10,22,40,0.18);
+}
+.history-result-title {
+  font-size: 10px; font-weight: 800; letter-spacing: 1px;
+  color: var(--gold); text-transform: uppercase; margin-bottom: 10px;
+}
+.history-result-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.history-result-row:last-child { border-bottom: none; }
+.history-result-key { font-size: 11px; color: rgba(255,255,255,0.55); }
+.history-result-val { font-size: 14px; font-weight: 700; font-family: "SF Mono", monospace; }
+.history-result-val.green { color: #4ADE80; }
+.history-result-val.red   { color: #F87171; }
+.history-md-badge {
+  display: inline-block; background: var(--gold); color: var(--navy);
+  font-size: 9px; font-weight: 800; letter-spacing: 0.8px;
+  padding: 2px 7px; border-radius: 4px; margin-left: 8px;
+  vertical-align: middle; text-transform: uppercase;
+}
+
 .tracker-live-empty { color: var(--mid-gray); font-style: italic; font-size: 13px; }
 .tracker-live-line {
   display: flex; align-items: center; justify-content: space-between;

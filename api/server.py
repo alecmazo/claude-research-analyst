@@ -706,6 +706,38 @@ def get_tracker_live_detail():
     return analyst.compute_live_ytd_detail()
 
 
+@app.post("/api/track/live/history")
+async def upload_live_history(
+    file: UploadFile = File(...),
+    begin_value: float = Form(...),
+):
+    """Upload a Fidelity account activity/history CSV to compute Modified Dietz YTD return.
+
+    Accepts multipart/form-data with:
+      - file:        Fidelity account history CSV (from History tab → Export)
+      - begin_value: Portfolio market value on January 1 (number, no $ sign)
+
+    Returns the Modified Dietz return plus cash flow summary.  The result is
+    persisted with the live portfolio and used as the authoritative YTD figure
+    in place of the snapshot-based estimate.
+    """
+    suffix = Path(file.filename or "history.csv").suffix.lower()
+    if suffix not in (".csv", ".txt", ""):
+        raise HTTPException(status_code=422, detail="File must be a .csv text file")
+    if begin_value <= 0:
+        raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
+    try:
+        content = await file.read()
+        raw_text = content.decode("utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not read file: {exc}")
+
+    result = analyst.upload_account_history(raw_text, begin_value)
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
+    return result
+
+
 @app.post("/api/track/snapshot")
 def trigger_tracker_snapshot():
     """Manually trigger a daily snapshot (admin / debug)."""

@@ -257,6 +257,36 @@
       </div>
     </div>
 
+    <!-- Account history upload — Modified Dietz YTD accuracy -->
+    <div class="card" id="history-upload-card" style="display:none;">
+      <div class="label">ACCOUNT HISTORY — ACCURATE YTD</div>
+      <p class="hint" style="margin-bottom:12px;">
+        Upload your Fidelity account activity CSV to compute a cash-flow-adjusted
+        YTD return (Modified Dietz). This accounts for deposits, withdrawals, and
+        partial position changes that the snapshot-based estimate cannot see.
+      </p>
+      <div class="history-upload-how">
+        <span class="history-upload-how-label">How to export from Fidelity:</span>
+        Accounts &amp; Trade → History → set date range Jan 1–today → Download CSV
+      </div>
+      <div class="history-fields">
+        <div class="history-field-row">
+          <label class="history-field-label" for="history-begin-value">Jan 1 Portfolio Value&nbsp;($)</label>
+          <input type="number" id="history-begin-value" class="history-value-input"
+                 placeholder="e.g. 250000" min="1" step="1">
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="history-file">Activity CSV</label>
+          <input type="file" id="history-file" accept=".csv,.txt" class="history-file-input">
+        </div>
+      </div>
+      <button id="history-upload-btn" class="btn-primary" style="margin-top:14px;width:100%;">
+        Upload &amp; Calculate Modified Dietz Return
+      </button>
+      <div id="history-upload-status" class="history-upload-status" style="display:none;"></div>
+      <div id="history-result-box" class="history-result-box" style="display:none;"></div>
+    </div>
+
     <!-- Paper portfolio list -->
     <div class="card">
       <div class="label">PAPER PORTFOLIOS</div>

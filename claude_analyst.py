@@ -1629,7 +1629,9 @@ def compute_live_ytd_detail() -> dict:
     today = datetime.now()
     year = today.year
 
-    # Build a "virtual" holdings list using year-start prices as entry_price
+    # Build a "virtual" holdings list using year-start prices as entry_price.
+    # Weights are taken directly from the stored live portfolio — they are the
+    # raw values from the uploaded CSV (e.g., INTC 0.0788 for 7.88%).
     virtual: list[dict] = []
     skipped: list[str] = []
     for h in live["holdings"]:
@@ -1647,6 +1649,15 @@ def compute_live_ytd_detail() -> dict:
     if not virtual:
         return {"ok": False, "error": "Could not resolve year-start prices for any holdings."}
 
+    # Normalize weights to the tracked universe so portfolio-level return is
+    # accurate even if some holdings were excluded (e.g., preferred shares with
+    # no yfinance price).  Individual contribution figures still use raw weights
+    # so "INTC 7.88% × +140% = 11.0%" reads correctly; we scale the total to
+    # the sum of tracked weights so they add up to the displayed portfolio %.
+    _tracked_total = sum(h["weight"] for h in virtual) or 1.0
+    for h in virtual:
+        h["weight"] = round(h["weight"] / _tracked_total, 8)
+
     bd = _portfolio_breakdown(virtual)
     sorted_holdings = sorted(
         bd["breakdown"],
@@ -1660,6 +1671,13 @@ def compute_live_ytd_detail() -> dict:
 
     spy_ytd = spy_series[-1]["return_pct"] if spy_series else None
     port_ret = bd["weighted_return"]
+
+    # ── If the user uploaded account history, use the Modified Dietz return ───
+    # as the authoritative YTD number. The snapshot-based return (above) is
+    # shown as an "estimate" alongside it.
+    history = live.get("account_history") or {}
+    md_return_pct = history.get("md_return_pct")
+    authoritative_return = md_return_pct if md_return_pct is not None else port_ret
 
     # Days tracked = number of calendar days since year start
     try:
@@ -1680,25 +1698,29 @@ def compute_live_ytd_detail() -> dict:
             max_dd = dd
 
     return {
-        "ok":                  True,
-        "mode":                "live",
-        "name":                "Live Portfolio · YTD",
-        "year_start_date":     f"{year}-01-02",
-        "entry_date":          f"{year}-01-02",
-        "days_tracked":        days_tracked,
-        "n_tickers":           len(sorted_holdings),
-        "current_return_pct":  port_ret,
-        "weighted_avg_return": port_ret,
-        "max_drawdown_pct":    round(max_dd, 4),
-        "spy_return_pct":      spy_ytd,
-        "vs_spy_pct":          round(port_ret - spy_ytd, 4) if spy_ytd is not None else None,
-        "holdings":            sorted_holdings,
-        "series":              portfolio_series,
-        "spy_series":          spy_series,
-        "live_series":         [],   # this IS live — no separate live benchmark
-        "skipped_tickers":     skipped,
-        "anchor_date":         live.get("anchor_date"),
-        "uploaded_at":         live.get("uploaded_at"),
+        "ok":                    True,
+        "mode":                  "live",
+        "name":                  "Live Portfolio · YTD",
+        "year_start_date":       f"{year}-01-02",
+        "entry_date":            f"{year}-01-02",
+        "days_tracked":          days_tracked,
+        "n_tickers":             len(sorted_holdings),
+        "current_return_pct":    authoritative_return,
+        "weighted_avg_return":   authoritative_return,
+        "snapshot_return_pct":   port_ret,            # snapshot estimate (always shown)
+        "md_return_pct":         md_return_pct,        # None if no history uploaded yet
+        "history_uploaded":      md_return_pct is not None,
+        "history_meta":          history if history else None,
+        "max_drawdown_pct":      round(max_dd, 4),
+        "spy_return_pct":        spy_ytd,
+        "vs_spy_pct":            round(authoritative_return - spy_ytd, 4) if spy_ytd is not None else None,
+        "holdings":              sorted_holdings,
+        "series":                portfolio_series,
+        "spy_series":            spy_series,
+        "live_series":           [],   # this IS live — no separate live benchmark
+        "skipped_tickers":       skipped,
+        "anchor_date":           live.get("anchor_date"),
+        "uploaded_at":           live.get("uploaded_at"),
     }
 
 
@@ -2010,6 +2032,252 @@ def _live_aligned_series(state: dict, anchor_date: str) -> list[dict]:
     } for r in eligible]
 
 
+# ── Account history / Modified Dietz YTD return ──────────────────────────────
+
+_FIDELITY_INFLOW_ACTIONS = frozenset({
+    "DEPOSITED FUNDS",
+    "ELECTRONIC FUNDS TRANSFER RECEIVED",
+    "ELECTRONIC FUNDS TRANSFER",   # can be inflow or outflow — sign of Amount decides
+    "CHECK RECEIVED",
+    "TRANSFER OF ASSETS",
+    "TRANSFERRED IN",
+    "JOURNALED SHARES",            # shares transferred in
+    "ACH RECEIVED",
+})
+
+_FIDELITY_OUTFLOW_KEYWORDS = frozenset({
+    "WITHDRAWAL",
+    "WIRE SENT",
+    "CHECK SENT",
+    "ACH DISBURSEMENT",
+    "TRANSFER OUT",
+    "TRANSFERRED OUT",
+})
+
+# These are investment activity — NOT external cash flows
+_FIDELITY_INTERNAL_ACTIONS = frozenset({
+    "YOU BOUGHT",
+    "YOU SOLD",
+    "DIVIDEND RECEIVED",
+    "REINVESTMENT",
+    "INTEREST EARNED",
+    "LONG-TERM CAP GAIN",
+    "SHORT-TERM CAP GAIN",
+    "RETURN OF CAPITAL",
+    "CAPITAL GAIN DISTRIBUTION",
+    "EXCHANGE",
+})
+
+
+def parse_fidelity_history(raw_text: str) -> dict:
+    """Parse a Fidelity account activity/history CSV export.
+
+    Returns:
+        {
+          "ok": True,
+          "flows": [{"date", "amount", "action"}, ...],   # external cash flows only
+          "transaction_count": int,   # total rows parsed
+          "net_flow": float,          # sum of external flows (+ = net deposit)
+        }
+
+    The CSV has a variable-length header preamble before the data table.
+    We scan for the header row containing 'Run Date' or 'Date' then read
+    data rows beneath it.
+    """
+    import csv as _csv_io
+    from io import StringIO as _StringIO
+
+    lines = raw_text.splitlines()
+
+    # ── Find the header row ───────────────────────────────────────────────────
+    header_idx = None
+    for i, line in enumerate(lines[:30]):
+        low = line.strip().lower()
+        if "run date" in low or ("date" in low and "action" in low):
+            header_idx = i
+            break
+    if header_idx is None:
+        return {"ok": False, "error": "Could not find header row with 'Run Date' / 'Action' in the CSV."}
+
+    data_lines = lines[header_idx:]
+    try:
+        reader = _csv_io.DictReader(_StringIO("\n".join(data_lines)))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"CSV parse error: {exc}"}
+
+    flows: list[dict] = []
+    transaction_count = 0
+    year = datetime.now().year
+    year_start = f"{year}-01-01"
+
+    for row in reader:
+        # Normalise column names (strip whitespace, lower)
+        row = {k.strip(): v.strip() for k, v in (row or {}).items() if k}
+        if not row:
+            continue
+
+        # Get date — Fidelity uses MM/DD/YYYY
+        raw_date = row.get("Run Date") or row.get("Date") or ""
+        try:
+            dt = datetime.strptime(raw_date.strip(), "%m/%d/%Y")
+            date_str = dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+        # Only care about transactions in the current calendar year
+        if date_str < year_start:
+            continue
+
+        action = (row.get("Action") or "").strip().upper()
+        if not action:
+            continue
+
+        transaction_count += 1
+
+        # Is this an external cash flow?  Internal trades and investment income
+        # are NOT external flows for the Modified Dietz calculation.
+        is_internal = any(kw in action for kw in _FIDELITY_INTERNAL_ACTIONS)
+        if is_internal:
+            continue
+
+        # Parse the Amount column (can be "$1,234.56" or "-$1,234.56" or "(1,234.56)")
+        raw_amt = (row.get("Amount") or "").replace("$", "").replace(",", "").strip()
+        if raw_amt.startswith("(") and raw_amt.endswith(")"):
+            raw_amt = "-" + raw_amt[1:-1]
+        try:
+            amount = float(raw_amt)
+        except ValueError:
+            continue
+
+        if amount == 0:
+            continue
+
+        flows.append({
+            "date":   date_str,
+            "amount": round(amount, 2),
+            "action": action,
+        })
+
+    net_flow = sum(f["amount"] for f in flows)
+    return {
+        "ok":                True,
+        "flows":             sorted(flows, key=lambda f: f["date"]),
+        "transaction_count": transaction_count,
+        "net_flow":          round(net_flow, 2),
+    }
+
+
+def upload_account_history(
+    raw_text: str,
+    begin_value: float,
+) -> dict:
+    """Attach a Fidelity account history to the live portfolio and compute
+    a Modified Dietz YTD return.
+
+    Modified Dietz formula:
+        R = (EMV − BMV − CF) / (BMV + Σ(CFᵢ × Wᵢ))
+
+    Where:
+        BMV = begin_value (portfolio value on Jan 1)
+        EMV = current portfolio market value (sum of live holdings × live prices)
+        CF  = net external cash flows (deposits − withdrawals)
+        Wᵢ  = (CD − Dᵢ) / CD  — fraction of period remaining after flow date
+        CD  = total calendar days from Jan 1 to today
+        Dᵢ  = calendar days from Jan 1 to the flow date
+
+    Parameters:
+        raw_text:    Raw text of the Fidelity activity/history CSV
+        begin_value: Portfolio market value on January 1 of the current year
+    """
+    if not raw_text:
+        return {"ok": False, "error": "No history CSV content provided."}
+    if not begin_value or begin_value <= 0:
+        return {"ok": False, "error": "Beginning of year portfolio value is required and must be positive."}
+
+    parsed = parse_fidelity_history(raw_text)
+    if not parsed.get("ok"):
+        return parsed
+
+    flows = parsed["flows"]
+    net_flow = parsed["net_flow"]
+
+    # ── Compute EMV: current market value of live holdings ────────────────────
+    state = _load_tracker_state()
+    live = state.get("live_portfolio")
+    if not live or not live.get("holdings"):
+        return {"ok": False, "error": "No live portfolio found — upload your positions CSV first."}
+
+    emv = 0.0
+    for h in live["holdings"]:
+        price = _fetch_close_price(h["ticker"])
+        if price and price > 0:
+            # holdings store weight as a fraction; we need number of shares or
+            # dollar exposure.  For Modified Dietz we just need EMV, which we
+            # approximate as begin_value × weight × (1 + return).  But we can
+            # do better: compute EMV by scaling each holding's anchor_price to
+            # current price.
+            anchor = h.get("anchor_price") or h.get("entry_price")
+            if anchor and anchor > 0:
+                w = h.get("weight", 0)
+                # Estimated current $ value of this holding (relative to BMV)
+                emv += begin_value * w * (price / anchor)
+            else:
+                emv += begin_value * h.get("weight", 0)
+
+    if emv <= 0:
+        # Fall back to a raw estimate if anchor prices are missing
+        emv = begin_value
+
+    # ── Modified Dietz calculation ────────────────────────────────────────────
+    year = datetime.now().year
+    period_start = datetime(year, 1, 1)
+    today_dt = datetime.now()
+    cd = max(1, (today_dt - period_start).days)
+
+    weighted_flows = 0.0
+    for f in flows:
+        try:
+            flow_dt = datetime.strptime(f["date"], "%Y-%m-%d")
+            di = max(0, (flow_dt - period_start).days)
+            wi = (cd - di) / cd
+            weighted_flows += f["amount"] * wi
+        except Exception:  # noqa: BLE001
+            continue
+
+    denominator = begin_value + weighted_flows
+    if denominator <= 0:
+        return {"ok": False, "error": "Denominator is zero or negative — check your beginning value."}
+
+    md_return = (emv - begin_value - net_flow) / denominator
+    md_return_pct = round(md_return * 100.0, 4)
+
+    # ── Persist history metadata with the live portfolio ─────────────────────
+    with _tracker_lock():
+        state = _load_tracker_state()
+        if state.get("live_portfolio"):
+            state["live_portfolio"]["account_history"] = {
+                "uploaded_at":       datetime.utcnow().isoformat(),
+                "begin_value":       round(begin_value, 2),
+                "end_value":         round(emv, 2),
+                "net_flow":          round(net_flow, 2),
+                "flow_count":        len(flows),
+                "transaction_count": parsed["transaction_count"],
+                "md_return_pct":     md_return_pct,
+            }
+            _save_tracker_state(state)
+
+    return {
+        "ok":                True,
+        "md_return_pct":     md_return_pct,
+        "begin_value":       round(begin_value, 2),
+        "end_value":         round(emv, 2),
+        "net_flow":          round(net_flow, 2),
+        "flow_count":        len(flows),
+        "transaction_count": parsed["transaction_count"],
+        "flows":             flows,
+    }
+
+
 def promote_live_portfolio(holdings_input: list[dict]) -> dict:
     """Persist *holdings_input* as the auto-promoted live portfolio.
 
@@ -2044,10 +2312,12 @@ def promote_live_portfolio(holdings_input: list[dict]) -> dict:
     if not cleaned:
         return {"ok": False, "error": "No valid tickers with prices."}
 
-    total_w = sum(h["weight"] for h in cleaned) or 1.0
-    for h in cleaned:
-        h["weight"] = round(h["weight"] / total_w, 6)
-
+    # ── Store raw weights exactly as in the input CSV ─────────────────────────
+    # Do NOT normalize here — the user's weights already reflect their actual
+    # portfolio fractions (e.g., INTC 7.88%).  Some tickers may be excluded
+    # because yfinance can't price them (preferred shares, etc.), but that is
+    # NOT a reason to inflate the remaining weights.  Calculations that need
+    # weights to sum to 1.0 (e.g., _portfolio_breakdown) normalize internally.
     live = {
         "uploaded_at": datetime.utcnow().isoformat(),
         "anchor_date": today,
