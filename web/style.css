@@ -53,6 +53,44 @@ body {
   .grid-2col > .card { margin: 16px 10px; }
 }
 
+/* ── Desktop-only compact action buttons & pills ──────────────────────────────
+   Mobile keeps full-size buttons for easy tap targets.
+   On tablet/desktop we shrink the primary action buttons (Run Rebalance,
+   Download Portfolio, Run Intelligence) to roughly ¼ their original footprint,
+   and the 30/60/90-day pills to roughly ⅓ their original height.
+   ID selectors override the .btn-primary.full-width class (higher specificity).
+*/
+@media (min-width: 720px) {
+  /* ── Run Rebalance · Download Portfolio · Run Intelligence ── */
+  #portfolio-run-btn,
+  #portfolio-download-btn,
+  #intel-run-btn {
+    width: auto !important;      /* remove full-width stretch */
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    min-height: 28px;
+    padding: 0 20px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    border-radius: 7px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.4),
+      0 2px 8px rgba(201,168,76,0.22),
+      0 1px 2px rgba(0,0,0,0.1);
+  }
+
+  /* ── 30 / 60 / 90 day horizon pills ── */
+  .intel-horizon-pill {
+    height: 26px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .intel-horizon-row {
+    gap: 6px;
+  }
+}
+
 /* ============ VIEWS ============ */
 .view { display: none; }
 .view.active { display: block; }
@@ -1478,34 +1516,41 @@ body {
 
 /* ── Chart ── */
 .tracker-chart-wrap {
-  background: var(--off-white);
-  border: 1px solid var(--light-gray);
-  border-radius: 8px;
-  padding: 14px;
+  /* Dark glass panel — Bloomberg-style chart housing */
+  background: linear-gradient(160deg, #0f1e3a 0%, #0a1628 100%);
+  border: 1px solid rgba(201,168,76,0.18);
+  border-radius: 12px;
+  padding: 12px 14px 10px;
   margin: 8px 0 0;
+  box-shadow:
+    0 4px 24px rgba(0,0,0,0.32),
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.18);
 }
 .tracker-chart-legend {
   display: flex; gap: 18px;
   margin-bottom: 8px; font-size: 11px; font-weight: 700;
-  color: var(--dark-gray); letter-spacing: 0.5px;
+  color: rgba(255,255,255,0.60); letter-spacing: 0.5px;
 }
 .tracker-legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .tracker-legend-dot {
-  width: 10px; height: 10px; border-radius: 5px;
+  width: 8px; height: 8px; border-radius: 4px;
   display: inline-block;
+  box-shadow: 0 0 4px currentColor;
 }
-.tracker-legend-dot.gold  { background: var(--gold); }
-.tracker-legend-dot.blue  { background: #2563EB; }
-.tracker-legend-dot.green { background: #16A34A; }
+.tracker-legend-dot.gold  { background: #C9A84C; }
+.tracker-legend-dot.blue  { background: #60A5FA; }
+.tracker-legend-dot.green { background: #4ADE80; }
 
 #tracker-chart { width: 100%; }
 #tracker-chart svg {
-  width: 100%; height: 200px;
+  width: 100%; height: 100px;
   display: block;
+  border-radius: 6px;
 }
 #tracker-chart text {
   font-family: "SF Mono", Menlo, monospace;
-  fill: var(--mid-gray);
+  fill: rgba(255,255,255,0.42);
   font-size: 9px;
 }
 

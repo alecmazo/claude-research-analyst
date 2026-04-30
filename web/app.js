@@ -1371,12 +1371,13 @@ async function deleteTrackerCurrent() {
 // ── Chart (simple inline SVG, no library needed) ──────────────────────────
 function drawTrackerChart(p) {
   const wrap = document.getElementById('tracker-chart');
-  const W = 560, H = 200, padL = 38, padR = 8, padT = 12, padB = 24;
+  // Compact chart: half the original height, dark-panel aesthetic
+  const W = 560, H = 130, padL = 40, padR = 12, padT = 10, padB = 24;
 
   const series = [
-    { key: 'paper', label: 'Paper', color: '#C9A84C', data: p.series || [] },
-    { key: 'spy',   label: 'SPY',   color: '#2563EB', data: p.spy_series || [] },
-    { key: 'live',  label: 'Live',  color: '#16A34A', data: p.live_series || [] },
+    { key: 'paper', label: 'Paper', color: '#C9A84C', grad: 'grad-paper', glow: 'glow-paper', data: p.series || [] },
+    { key: 'spy',   label: 'SPY',   color: '#60A5FA', grad: 'grad-spy',   glow: 'glow-spy',   data: p.spy_series || [] },
+    { key: 'live',  label: 'Live',  color: '#4ADE80', grad: 'grad-live',  glow: 'glow-live',  data: p.live_series || [] },
   ].filter(s => s.data.length > 0);
 
   if (!series.length) {
@@ -1403,42 +1404,109 @@ function drawTrackerChart(p) {
   const allVals = series.flatMap(s => s.data.map(d => d.value));
   const yMin = Math.min(100, ...allVals);
   const yMax = Math.max(100, ...allVals);
-  const yPad = (yMax - yMin) * 0.10 || 2;
+  const yPad = (yMax - yMin) * 0.12 || 2;
   const Y0 = yMin - yPad, Y1 = yMax + yPad;
 
   const xPos = (i) => padL + (i / xMax) * (W - padL - padR);
   const yPos = (v) => padT + (1 - (v - Y0) / (Y1 - Y0)) * (H - padT - padB);
 
-  // Build the polylines
-  const lines = series.map(s => {
-    const points = s.data.map(d => `${xPos(xIdx[d.date])},${yPos(d.value)}`).join(' ');
-    return `<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="2.2"
-                       stroke-linecap="round" stroke-linejoin="round"/>`;
+  // ── Smooth Catmull-Rom → cubic Bezier path generator ──────────────────────
+  // Converts a list of [x,y] points into a smooth SVG path string.
+  function smoothPath(pts) {
+    if (pts.length < 2) return '';
+    let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const p0 = pts[Math.max(0, i - 2)];
+      const p1 = pts[i - 1];
+      const p2 = pts[i];
+      const p3 = pts[Math.min(pts.length - 1, i + 1)];
+      const cp1x = (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1);
+      const cp1y = (p1[1] + (p2[1] - p0[1]) / 6).toFixed(1);
+      const cp2x = (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1);
+      const cp2y = (p2[1] - (p3[1] - p1[1]) / 6).toFixed(1);
+      d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+    }
+    return d;
+  }
+
+  // ── Build gradient-filled area + glowing line for each series ─────────────
+  const chartBottom = H - padB;
+  const seriesSvg = series.map(s => {
+    const pts = s.data.map(d => [xPos(xIdx[d.date]), yPos(d.value)]);
+    const linePath = smoothPath(pts);
+    // Area: follow the line, drop down to bottom, close back to start
+    const areaPath = pts.length >= 2
+      ? `${linePath} L ${pts[pts.length-1][0].toFixed(1)} ${chartBottom} L ${pts[0][0].toFixed(1)} ${chartBottom} Z`
+      : '';
+    return `
+      <path d="${areaPath}" fill="url(#${s.grad})"/>
+      <path d="${linePath}" fill="none" stroke="${s.color}" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round" filter="url(#${s.glow})"/>`;
   }).join('');
 
-  // Y-axis labels (3 ticks)
+  // ── Subtle horizontal grid lines ──────────────────────────────────────────
+  const gridLines = [0.25, 0.5, 0.75].map(t => {
+    const v = Y0 + (Y1 - Y0) * t;
+    const y = yPos(v).toFixed(1);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"
+                  stroke="rgba(255,255,255,0.05)" stroke-width="0.8"/>`;
+  }).join('');
+
+  // ── Y-axis labels ─────────────────────────────────────────────────────────
   const yLabels = [Y0, (Y0 + Y1) / 2, Y1].map(v => {
     const ret = v - 100;
     const sign = ret >= 0 ? '+' : '';
-    return `<text x="${padL - 4}" y="${yPos(v) + 3}" text-anchor="end">${sign}${ret.toFixed(1)}%</text>`;
+    return `<text x="${padL - 5}" y="${(yPos(v) + 3).toFixed(1)}" text-anchor="end">${sign}${ret.toFixed(1)}%</text>`;
   }).join('');
 
-  // X-axis labels — first / mid / last (with bounds-checking)
+  // ── X-axis date labels — first / mid / last ───────────────────────────────
   const labelIdx = Array.from(new Set([0, Math.floor(xMax / 2), xMax]));
   const xLabels = labelIdx
     .filter(i => i >= 0 && i < allDates.length)
-    .map(i => `<text x="${xPos(i)}" y="${H - 6}" text-anchor="middle">${allDates[i].slice(5)}</text>`)
+    .map(i => `<text x="${xPos(i).toFixed(1)}" y="${H - 5}" text-anchor="middle">${allDates[i].slice(5)}</text>`)
     .join('');
 
-  // 100-baseline (entry value)
-  const baseY = yPos(100);
+  // ── Zero-return baseline (dashed) ─────────────────────────────────────────
+  const baseY = yPos(100).toFixed(1);
   const baseLine = `<line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"
-                          stroke="#C0C7D2" stroke-dasharray="2,3" stroke-width="1"/>`;
+                          stroke="rgba(255,255,255,0.18)" stroke-dasharray="3,4" stroke-width="0.8"/>`;
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;overflow:visible;">
+      <defs>
+        <!-- Gradient area fills — each series gets a vertical fade -->
+        <linearGradient id="grad-paper" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="#C9A84C" stop-opacity="0.28"/>
+          <stop offset="100%" stop-color="#C9A84C" stop-opacity="0.01"/>
+        </linearGradient>
+        <linearGradient id="grad-spy" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="#60A5FA" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#60A5FA" stop-opacity="0.01"/>
+        </linearGradient>
+        <linearGradient id="grad-live" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="#4ADE80" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#4ADE80" stop-opacity="0.01"/>
+        </linearGradient>
+        <!-- Soft glow filter — blurred copy behind line creates depth -->
+        <filter id="glow-paper" x="-15%" y="-60%" width="130%" height="220%">
+          <feGaussianBlur stdDeviation="1.8" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="glow-spy" x="-15%" y="-60%" width="130%" height="220%">
+          <feGaussianBlur stdDeviation="1.8" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="glow-live" x="-15%" y="-60%" width="130%" height="220%">
+          <feGaussianBlur stdDeviation="1.8" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <!-- Dark panel background -->
+      <rect x="0" y="0" width="${W}" height="${H}" fill="#0B1B35" rx="0"/>
+      ${gridLines}
       ${baseLine}
-      ${lines}
+      ${seriesSvg}
       ${yLabels}
       ${xLabels}
     </svg>`;
