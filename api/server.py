@@ -732,7 +732,14 @@ async def upload_live_history(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Could not read file: {exc}")
 
-    result = analyst.upload_account_history(raw_text, begin_value)
+    try:
+        result = analyst.upload_account_history(raw_text, begin_value)
+    except Exception as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"upload_account_history raised: {exc}\n\nTraceback:\n{tb}",
+        )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
     return result

@@ -2133,8 +2133,9 @@ def parse_fidelity_history(raw_text: str) -> dict:
     for row in reader:
         if not row:
             continue
-        # Normalise column names (strip whitespace only — preserve original casing)
-        row = {k.strip(): v.strip() for k, v in row.items() if k and k.strip()}
+        # Normalise column names; guard against None values (DictReader fills
+        # short rows — e.g. footer text — with None for missing columns)
+        row = {k.strip(): (v or "").strip() for k, v in row.items() if k and k.strip()}
         if not row:
             continue
 
@@ -2253,30 +2254,36 @@ def upload_account_history(
     net_flow = parsed["net_flow"]
 
     # ── Compute EMV: current market value of live holdings ────────────────────
-    state = _load_tracker_state()
+    try:
+        state = _load_tracker_state()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Could not load tracker state: {exc}"}
+
     live = state.get("live_portfolio")
     if not live or not live.get("holdings"):
         return {"ok": False, "error": "No live portfolio found — upload your positions CSV first."}
 
     emv = 0.0
-    for h in live["holdings"]:
-        price = _fetch_close_price(h["ticker"])
-        if price and price > 0:
-            # holdings store weight as a fraction; we need number of shares or
-            # dollar exposure.  For Modified Dietz we just need EMV, which we
-            # approximate as begin_value × weight × (1 + return).  But we can
-            # do better: compute EMV by scaling each holding's anchor_price to
-            # current price.
-            anchor = h.get("anchor_price") or h.get("entry_price")
-            if anchor and anchor > 0:
-                w = h.get("weight", 0)
-                # Estimated current $ value of this holding (relative to BMV)
-                emv += begin_value * w * (price / anchor)
-            else:
-                emv += begin_value * h.get("weight", 0)
+    for h in (live.get("holdings") or []):
+        try:
+            ticker = h.get("ticker") or ""
+            if not ticker:
+                continue
+            price = _fetch_close_price(ticker)
+            w = float(h.get("weight") or 0)
+            if price and price > 0 and w > 0:
+                anchor = h.get("anchor_price") or h.get("entry_price")
+                anchor = float(anchor) if anchor else 0.0
+                if anchor > 0:
+                    # Scale each holding's anchor-price return against begin_value
+                    emv += begin_value * w * (price / anchor)
+                else:
+                    emv += begin_value * w
+        except Exception:  # noqa: BLE001
+            continue  # skip bad holding, don't abort whole calculation
 
     if emv <= 0:
-        # Fall back to a raw estimate if anchor prices are missing
+        # Fall back to a raw estimate if anchor prices are missing or all failed
         emv = begin_value
 
     # ── Modified Dietz calculation ────────────────────────────────────────────
@@ -2303,19 +2310,23 @@ def upload_account_history(
     md_return_pct = round(md_return * 100.0, 4)
 
     # ── Persist history metadata with the live portfolio ─────────────────────
-    with _tracker_lock():
-        state = _load_tracker_state()
-        if state.get("live_portfolio"):
-            state["live_portfolio"]["account_history"] = {
-                "uploaded_at":       datetime.utcnow().isoformat(),
-                "begin_value":       round(begin_value, 2),
-                "end_value":         round(emv, 2),
-                "net_flow":          round(net_flow, 2),
-                "flow_count":        len(flows),
-                "transaction_count": parsed["transaction_count"],
-                "md_return_pct":     md_return_pct,
-            }
-            _save_tracker_state(state)
+    try:
+        with _tracker_lock():
+            state = _load_tracker_state()
+            if state.get("live_portfolio"):
+                state["live_portfolio"]["account_history"] = {
+                    "uploaded_at":       datetime.utcnow().isoformat(),
+                    "begin_value":       round(float(begin_value), 2),
+                    "end_value":         round(float(emv), 2),
+                    "net_flow":          round(float(net_flow), 2),
+                    "flow_count":        int(len(flows)),
+                    "transaction_count": int(parsed.get("transaction_count", 0)),
+                    "md_return_pct":     float(md_return_pct),
+                }
+                _save_tracker_state(state)
+    except Exception as exc:  # noqa: BLE001
+        # Non-fatal — return results even if persist fails
+        print(f"⚠️  Could not persist account history: {exc}")
 
     return {
         "ok":                True,
