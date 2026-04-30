@@ -1207,9 +1207,10 @@ async function uploadAccountHistory() {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('begin_value', beginValue);
-    const res = await fetch(`${API_BASE}/track/live/history`, {
+    fd.append('token', getToken());
+    const res = await fetch(`${API_BASE}/api/track/live/history`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${_authToken}` },
+      headers: { 'x-auth-token': getToken() },
       body: fd,
     });
     if (!res.ok) {
@@ -1231,29 +1232,46 @@ async function uploadAccountHistory() {
 function _renderHistoryResult(data, preloaded) {
   const box = document.getElementById('history-result-box');
   if (!box) return;
-  const sign = (v) => v >= 0 ? '+' : '';
-  const cls  = (v) => v >= 0 ? 'green' : 'red';
-  const md   = data.md_return_pct ?? data.md_return_pct;
+  const sign    = (v) => v >= 0 ? '+' : '';
+  const cls     = (v) => v >= 0 ? 'green' : 'red';
+  const fmtUSD  = (v) => `$${Math.abs(v ?? 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+  const md      = data.md_return_pct ?? 0;
   const netFlow = data.net_flow ?? 0;
-  const prefix = preloaded ? 'Last uploaded — ' : '';
+
+  // External flows table
+  const flowRows = (data.flows || []).map(f => {
+    const isOut = f.amount < 0;
+    return `<tr>
+      <td>${f.date}</td>
+      <td style="max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.action}</td>
+      <td class="${isOut ? 'red' : 'green'}" style="text-align:right">${sign(f.amount)}${fmtUSD(f.amount)}</td>
+    </tr>`;
+  }).join('');
+
+  // Diagnostics block
+  const cols = (data.columns_detected || []).join(' · ');
+  const acts = (data.unique_actions || []).join(', ');
+  const skipped = data.skipped_no_amount ?? 0;
+
   box.style.display = '';
   box.innerHTML = `
     <div class="history-result-title">Modified Dietz YTD Return${preloaded ? ' (stored)' : ''}</div>
+
     <div class="history-result-row">
       <span class="history-result-key">YTD Return (cash-flow adjusted)</span>
-      <span class="history-result-val ${cls(md)}">${sign(md)}${md?.toFixed(2)}%</span>
+      <span class="history-result-val ${cls(md)}">${sign(md)}${md.toFixed(2)}%</span>
     </div>
     <div class="history-result-row">
       <span class="history-result-key">Jan 1 Portfolio Value</span>
-      <span class="history-result-val">$${(data.begin_value||0).toLocaleString()}</span>
+      <span class="history-result-val">${fmtUSD(data.begin_value)}</span>
     </div>
     <div class="history-result-row">
       <span class="history-result-key">Est. Current Value</span>
-      <span class="history-result-val">$${(data.end_value||0).toLocaleString()}</span>
+      <span class="history-result-val">${fmtUSD(data.end_value)}</span>
     </div>
     <div class="history-result-row">
       <span class="history-result-key">Net External Flows (deposits − withdrawals)</span>
-      <span class="history-result-val ${cls(netFlow)}">${sign(netFlow)}$${Math.abs(netFlow).toLocaleString()}</span>
+      <span class="history-result-val ${cls(netFlow)}">${sign(netFlow)}${fmtUSD(netFlow)}</span>
     </div>
     <div class="history-result-row">
       <span class="history-result-key">External Flow Events</span>
@@ -1262,7 +1280,29 @@ function _renderHistoryResult(data, preloaded) {
     <div class="history-result-row">
       <span class="history-result-key">Total Transactions Parsed</span>
       <span class="history-result-val">${data.transaction_count ?? 0}</span>
-    </div>`;
+    </div>
+
+    ${flowRows ? `
+    <div class="history-diag-section">
+      <div class="history-diag-title">External Cash Flows Identified</div>
+      <table class="history-flows-table">
+        <thead><tr><th>Date</th><th>Action</th><th>Amount</th></tr></thead>
+        <tbody>${flowRows}</tbody>
+      </table>
+    </div>` : '<div class="history-diag-section"><em>No external cash flows detected.</em></div>'}
+
+    <details class="history-diag-details">
+      <summary>CSV Parse Diagnostics</summary>
+      <div class="history-diag-section">
+        <div class="history-diag-title">Columns Detected</div>
+        <div class="history-diag-mono">${cols || '(none)'}</div>
+      </div>
+      <div class="history-diag-section">
+        <div class="history-diag-title">Action Types Seen (first word)</div>
+        <div class="history-diag-mono">${acts || '(none)'}</div>
+      </div>
+      ${skipped > 0 ? `<div class="history-diag-section" style="color:#f87171">⚠ ${skipped} row(s) skipped — blank or unparseable Amount column</div>` : ''}
+    </details>`;
 }
 
 // ── List load + render ─────────────────────────────────────────────────────

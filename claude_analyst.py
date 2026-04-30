@@ -2061,11 +2061,17 @@ _FIDELITY_INTERNAL_ACTIONS = frozenset({
     "DIVIDEND RECEIVED",
     "REINVESTMENT",
     "INTEREST EARNED",
+    "INTEREST",                   # money-market / bond interest (shorter variant)
+    "FEE CHARGED",                # ADR fees, account fees — internal
+    "FOREIGN TAX PAID",           # ADR withholding tax — internal
     "LONG-TERM CAP GAIN",
     "SHORT-TERM CAP GAIN",
     "RETURN OF CAPITAL",
     "CAPITAL GAIN DISTRIBUTION",
     "EXCHANGE",
+    "MANDATORY REORGANIZATION",   # corporate action
+    "STOCK SPLIT",
+    "CONVERSION",
 })
 
 
@@ -2076,8 +2082,12 @@ def parse_fidelity_history(raw_text: str) -> dict:
         {
           "ok": True,
           "flows": [{"date", "amount", "action"}, ...],   # external cash flows only
+          "all_transactions": [{"date", "amount", "action", "symbol", "type"}, ...],
           "transaction_count": int,   # total rows parsed
           "net_flow": float,          # sum of external flows (+ = net deposit)
+          "columns_detected": [...],  # column names found — for diagnostics
+          "unique_actions": [...],    # all unique action prefixes seen — for diagnostics
+          "skipped_no_amount": int,   # rows where Amount was blank/unparseable
         }
 
     The CSV has a variable-length header preamble before the data table.
@@ -2097,7 +2107,13 @@ def parse_fidelity_history(raw_text: str) -> dict:
             header_idx = i
             break
     if header_idx is None:
-        return {"ok": False, "error": "Could not find header row with 'Run Date' / 'Action' in the CSV."}
+        return {
+            "ok":    False,
+            "error": (
+                "Could not find header row with 'Run Date' / 'Action' in the CSV. "
+                f"First 5 lines were: {lines[:5]}"
+            ),
+        }
 
     data_lines = lines[header_idx:]
     try:
@@ -2106,15 +2122,25 @@ def parse_fidelity_history(raw_text: str) -> dict:
         return {"ok": False, "error": f"CSV parse error: {exc}"}
 
     flows: list[dict] = []
+    all_transactions: list[dict] = []
     transaction_count = 0
+    skipped_no_amount = 0
+    unique_actions: set = set()
+    columns_detected: list[str] = []
     year = datetime.now().year
     year_start = f"{year}-01-01"
 
     for row in reader:
-        # Normalise column names (strip whitespace, lower)
-        row = {k.strip(): v.strip() for k, v in (row or {}).items() if k}
         if not row:
             continue
+        # Normalise column names (strip whitespace only — preserve original casing)
+        row = {k.strip(): v.strip() for k, v in row.items() if k and k.strip()}
+        if not row:
+            continue
+
+        # Capture column list from first real row
+        if not columns_detected:
+            columns_detected = list(row.keys())
 
         # Get date — Fidelity uses MM/DD/YYYY
         raw_date = row.get("Run Date") or row.get("Date") or ""
@@ -2132,24 +2158,45 @@ def parse_fidelity_history(raw_text: str) -> dict:
         if not action:
             continue
 
+        # Track first word of each action for diagnostics
+        unique_actions.add(action.split()[0] if action else "")
+
         transaction_count += 1
+
+        # Parse the Amount column
+        # Fidelity history CSVs name it "Amount ($)" — fall back to "Amount"
+        raw_amt_str = (
+            row.get("Amount ($)")
+            or row.get("Amount")
+            or ""
+        ).replace("$", "").replace(",", "").strip()
+        if raw_amt_str.startswith("(") and raw_amt_str.endswith(")"):
+            raw_amt_str = "-" + raw_amt_str[1:-1]
+        try:
+            amount = float(raw_amt_str)
+        except ValueError:
+            skipped_no_amount += 1
+            continue
+
+        symbol = (row.get("Symbol") or "").strip().upper()
+        tx_type = (row.get("Type") or "").strip()
+
+        # Record every transaction for full history
+        all_transactions.append({
+            "date":   date_str,
+            "amount": round(amount, 2),
+            "action": action,
+            "symbol": symbol,
+            "type":   tx_type,
+        })
+
+        if amount == 0:
+            continue
 
         # Is this an external cash flow?  Internal trades and investment income
         # are NOT external flows for the Modified Dietz calculation.
         is_internal = any(kw in action for kw in _FIDELITY_INTERNAL_ACTIONS)
         if is_internal:
-            continue
-
-        # Parse the Amount column (can be "$1,234.56" or "-$1,234.56" or "(1,234.56)")
-        raw_amt = (row.get("Amount") or "").replace("$", "").replace(",", "").strip()
-        if raw_amt.startswith("(") and raw_amt.endswith(")"):
-            raw_amt = "-" + raw_amt[1:-1]
-        try:
-            amount = float(raw_amt)
-        except ValueError:
-            continue
-
-        if amount == 0:
             continue
 
         flows.append({
@@ -2162,8 +2209,12 @@ def parse_fidelity_history(raw_text: str) -> dict:
     return {
         "ok":                True,
         "flows":             sorted(flows, key=lambda f: f["date"]),
+        "all_transactions":  sorted(all_transactions, key=lambda t: t["date"]),
         "transaction_count": transaction_count,
         "net_flow":          round(net_flow, 2),
+        "columns_detected":  columns_detected,
+        "unique_actions":    sorted(unique_actions),
+        "skipped_no_amount": skipped_no_amount,
     }
 
 
@@ -2275,6 +2326,11 @@ def upload_account_history(
         "flow_count":        len(flows),
         "transaction_count": parsed["transaction_count"],
         "flows":             flows,
+        "all_transactions":  parsed.get("all_transactions", []),
+        # ── Diagnostics so the UI can show what was detected ─────────────────
+        "columns_detected":  parsed.get("columns_detected", []),
+        "unique_actions":    parsed.get("unique_actions", []),
+        "skipped_no_amount": parsed.get("skipped_no_amount", 0),
     }
 
 

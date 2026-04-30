@@ -1468,6 +1468,45 @@ body {
   padding: 2px 7px; border-radius: 4px; margin-left: 8px;
   vertical-align: middle; text-transform: uppercase;
 }
+/* Diagnostics panel inside history result box */
+.history-diag-section {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.history-diag-title {
+  font-size: 9px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: rgba(255,255,255,0.4);
+  margin-bottom: 6px;
+}
+.history-diag-mono {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 10px; color: rgba(255,255,255,0.65);
+  word-break: break-all; line-height: 1.6;
+}
+.history-diag-details {
+  margin-top: 12px;
+}
+.history-diag-details summary {
+  font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.45);
+  cursor: pointer; user-select: none; letter-spacing: 0.5px;
+  padding: 4px 0;
+}
+.history-diag-details summary:hover { color: rgba(255,255,255,0.7); }
+.history-flows-table {
+  width: 100%; border-collapse: collapse; font-size: 10px;
+  margin-top: 6px;
+}
+.history-flows-table th {
+  text-align: left; font-size: 9px; font-weight: 700;
+  color: rgba(255,255,255,0.35); letter-spacing: 0.8px;
+  text-transform: uppercase; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.history-flows-table td {
+  padding: 4px 4px 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.8); vertical-align: middle;
+}
+.history-flows-table td.green { color: #4ADE80; font-weight: 700; }
+.history-flows-table td.red   { color: #F87171; font-weight: 700; }
 
 .tracker-live-empty { color: var(--mid-gray); font-style: italic; font-size: 13px; }
 .tracker-live-line {
