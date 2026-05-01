@@ -1452,13 +1452,50 @@ function _renderUnifiedYtdResult(data) {
   const totalGain = data.total_dollar_gain ?? 0;
   const totalPct  = data.explained_pct     ?? 0;
 
+  // ── Flows detail (collapsible) ─────────────────────────────────────────
+  const flowRows = (data.flows || []).map(f => {
+    const cls2 = f.amount >= 0 ? 'pos' : 'neg';
+    return `<tr>
+      <td class="flow-date">${f.date}</td>
+      <td class="flow-action">${f.action}</td>
+      <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : ''}$${Math.abs(f.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+    </tr>`;
+  }).join('');
+  const flowsHtml = flowRows ? `
+    <details class="flows-detail">
+      <summary>
+        ${(data.flows||[]).length} captured cash flows · net
+        <span class="${(data.net_flow||0)>=0?'pos':'neg'}">
+          ${(data.net_flow||0)>=0?'+':''}$${Math.abs(data.net_flow||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+        </span>
+        <span class="flows-detail-hint">· click to expand</span>
+      </summary>
+      <table class="flows-table">
+        <thead><tr><th>Date</th><th>Action</th><th>Amount</th></tr></thead>
+        <tbody>${flowRows}</tbody>
+      </table>
+    </details>` : '';
+
+  // ── Monthly chart ─────────────────────────────────────────────────────
+  const mc = data.monthly_chart;
+  const monthlyChartHtml = mc && mc.monthly && mc.monthly.length
+    ? `<div class="monthly-chart-wrap">
+         <div class="monthly-chart-header">
+           <span class="section-label">YTD BY MONTH</span>
+           <span class="monthly-chart-hint">Hover a month for attribution</span>
+         </div>
+         <canvas id="monthly-ytd-canvas" width="1060" height="220" style="width:100%;height:220px"></canvas>
+         <div id="monthly-hover-tooltip" class="monthly-tooltip" style="display:none"></div>
+       </div>`
+    : '';
+
   box.style.display = '';
   box.innerHTML = `
     <div class="ytd-result-grid">
       <div class="ytd-stat hero">
         <div class="ytd-stat-label">YTD Return</div>
         <div class="ytd-stat-val ${cls(md)}">${sign(md)}${md.toFixed(2)}%</div>
-        <div class="ytd-stat-sub">cash-flow adjusted (Modified Dietz)</div>
+        <div class="ytd-stat-sub">Modified Dietz · <span class="twrr-note" title="Fidelity's 6% figure uses Time-Weighted Return (TWRR) which chains sub-period returns. Modified Dietz is a dollar-weighted approximation that diverges from TWRR when large flows coincide with volatile markets. Both are valid — they measure different things.">differs from Fidelity's TWRR ⓘ</span></div>
       </div>
       <div class="ytd-stat">
         <div class="ytd-stat-label">Jan 1 Value</div>
@@ -1479,6 +1516,8 @@ function _renderUnifiedYtdResult(data) {
         <div class="ytd-stat-sub">${data.dividend_count ?? 0} dividends</div>
       </div>
     </div>
+    ${flowsHtml}
+    ${monthlyChartHtml}
 
     <div class="attr-table-title">PERFORMANCE ATTRIBUTION — by holding (transaction-aware)</div>
     <div class="attr-table-wrap">
@@ -1503,6 +1542,199 @@ function _renderUnifiedYtdResult(data) {
         </tfoot>
       </table>
     </div>`;
+
+  // Render monthly chart after DOM is updated
+  if (mc && mc.monthly && mc.monthly.length) {
+    requestAnimationFrame(() => _drawMonthlyChart(mc));
+  }
+}
+
+// ── Monthly YTD chart (Fidelity-style bar + balance line) ─────────────────
+function _drawMonthlyChart(mc) {
+  const canvas = document.getElementById('monthly-ytd-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const months = mc.monthly;
+  if (!months || !months.length) return;
+
+  const PAD = { top: 20, right: 60, bottom: 36, left: 70 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  // Scales
+  const maxAbs = Math.max(...months.map(m => Math.abs(m.return_pct)), 0.5);
+  const yScaleR = cH / 2 / (maxAbs * 1.15);   // bar scale (return %)
+  const midY = PAD.top + cH / 2;               // zero line for bars
+
+  const vals = months.map(m => m.end_value);
+  vals.unshift(mc.begin_value);
+  const minV = Math.min(...vals) * 0.98;
+  const maxV = Math.max(...vals) * 1.02;
+  const yScaleL = cH / (maxV - minV);          // balance line scale
+
+  const barW   = cW / months.length * 0.55;
+  const colW   = cW / months.length;
+
+  // Background
+  ctx.fillStyle = '#0e1e35';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines (horizontal, subtle)
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + (cH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+  }
+
+  // Zero line for bars
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD.left, midY); ctx.lineTo(W - PAD.right, midY); ctx.stroke();
+
+  // Bars (monthly return %)
+  months.forEach((m, i) => {
+    const x    = PAD.left + colW * i + (colW - barW) / 2;
+    const bH   = Math.abs(m.return_pct) * yScaleR;
+    const y    = m.return_pct >= 0 ? midY - bH : midY;
+    ctx.fillStyle = m.return_pct >= 0 ? 'rgba(34,197,94,0.85)' : 'rgba(239,68,68,0.85)';
+    ctx.fillRect(x, y, barW, bH);
+    // return % label inside bar
+    if (bH > 18) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '600 10px "SF Mono", monospace';
+      ctx.textAlign = 'center';
+      const label = (m.return_pct >= 0 ? '+' : '') + m.return_pct.toFixed(1) + '%';
+      ctx.fillText(label, x + barW / 2, m.return_pct >= 0 ? y + 13 : y + bH - 4);
+    }
+  });
+
+  // Balance line (gold)
+  ctx.strokeStyle = '#d4af37';
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  const x0 = PAD.left;
+  const y0 = PAD.top + cH - (mc.begin_value - minV) * yScaleL;
+  ctx.moveTo(x0, y0);
+  months.forEach((m, i) => {
+    const x = PAD.left + colW * i + colW / 2;
+    const y = PAD.top + cH - (m.end_value - minV) * yScaleL;
+    ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Balance line dots
+  ctx.fillStyle = '#d4af37';
+  months.forEach((m, i) => {
+    const x = PAD.left + colW * i + colW / 2;
+    const y = PAD.top + cH - (m.end_value - minV) * yScaleL;
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // Left Y-axis labels (balance)
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '10px "SF Mono", monospace';
+  ctx.textAlign = 'right';
+  const fmtM = v => '$' + (v / 1000000).toFixed(2) + 'M';
+  const nTicks = 4;
+  for (let i = 0; i <= nTicks; i++) {
+    const v = minV + (maxV - minV) * i / nTicks;
+    const y = PAD.top + cH - (v - minV) * yScaleL;
+    ctx.fillText(fmtM(v), PAD.left - 6, y + 4);
+  }
+
+  // Right Y-axis labels (return %)
+  ctx.textAlign = 'left';
+  [-maxAbs, 0, maxAbs].forEach(pct => {
+    const y = midY - pct * yScaleR;
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText((pct >= 0 ? '+' : '') + pct.toFixed(0) + '%', W - PAD.right + 6, y + 4);
+  });
+
+  // X-axis month labels
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '600 11px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  months.forEach((m, i) => {
+    const x = PAD.left + colW * i + colW / 2;
+    ctx.fillText(m.label, x, H - 8);
+  });
+
+  // Store layout for hover
+  canvas._monthLayout = { months, PAD, colW, W, H };
+
+  // Hover handler
+  canvas.onmousemove = (e) => {
+    const rect  = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx    = (e.clientX - rect.left) * scaleX;
+    const layout = canvas._monthLayout;
+    if (!layout) return;
+    const idx = Math.floor((mx - layout.PAD.left) / layout.colW);
+    if (idx < 0 || idx >= layout.months.length) {
+      document.getElementById('monthly-hover-tooltip').style.display = 'none';
+      return;
+    }
+    const mData = layout.months[idx];
+    _showMonthTooltip(mData, e.clientX, e.clientY, rect);
+  };
+  canvas.onmouseleave = () => {
+    document.getElementById('monthly-hover-tooltip').style.display = 'none';
+  };
+}
+
+function _showMonthTooltip(m, cx, cy, canvasRect) {
+  const tip = document.getElementById('monthly-hover-tooltip');
+  if (!tip) return;
+
+  const sign = v => v >= 0 ? '+' : '';
+  const fmtD = v => `${sign(v)}$${Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+  const fmtP = v => v == null ? '—' : `${sign(v)}${v.toFixed(2)}%`;
+
+  const moversHtml = (m.movers || []).slice(0, 6).map(mv =>
+    `<div class="mtt-row">
+       <span class="mtt-tk">${mv.ticker}</span>
+       <span class="mtt-ret ${mv.return_pct >= 0 ? 'pos' : 'neg'}">${fmtP(mv.return_pct)}</span>
+       <span class="mtt-gain ${mv.dollar_gain >= 0 ? 'pos' : 'neg'}">${fmtD(mv.dollar_gain)}</span>
+     </div>`
+  ).join('');
+
+  const tradesHtml = (m.trades || []).length
+    ? `<div class="mtt-section-label">Trades</div>` +
+      (m.trades || []).map(t =>
+        `<div class="mtt-row"><span class="mtt-tk">${t.ticker}</span>
+         <span class="attr-chip ${t.type === 'SELL' ? 'sell' : 'buy'}">${t.type === 'SELL' ? '▼' : '▲'} ${t.shares.toFixed(0)} @ $${t.price.toFixed(2)}</span></div>`
+      ).join('')
+    : '';
+
+  const divsHtml = (m.dividends || []).length
+    ? `<div class="mtt-section-label">Dividends</div>` +
+      (m.dividends || []).map(d =>
+        `<div class="mtt-row"><span class="mtt-tk">${d.ticker}</span><span class="pos">+$${d.amount.toFixed(0)}</span></div>`
+      ).join('')
+    : '';
+
+  tip.innerHTML = `
+    <div class="mtt-header">
+      <span class="mtt-month">${m.label}</span>
+      <span class="mtt-return ${m.return_pct >= 0 ? 'pos' : 'neg'}">${sign(m.return_pct)}${m.return_pct.toFixed(2)}%</span>
+      <span class="mtt-value">$${m.end_value.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</span>
+    </div>
+    ${m.movers && m.movers.length ? '<div class="mtt-section-label">Top Movers</div>' + moversHtml : ''}
+    ${tradesHtml}
+    ${divsHtml}`;
+
+  // Position tooltip
+  tip.style.display = 'block';
+  const tW = 260, tH = 300;
+  let left = cx + 12;
+  let top  = cy - 40;
+  if (left + tW > window.innerWidth - 10) left = cx - tW - 12;
+  if (top + tH > window.innerHeight - 10) top = window.innerHeight - tH - 10;
+  tip.style.left = left + 'px';
+  tip.style.top  = top + 'px';
 }
 
 // ── List load + render ─────────────────────────────────────────────────────

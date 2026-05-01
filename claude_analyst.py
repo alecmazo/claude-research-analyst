@@ -2745,6 +2745,267 @@ def compute_position_attribution(
     }
 
 
+def compute_monthly_ytd_chart(
+    positions_text: str,
+    activity_text: str,
+    begin_value: float,
+) -> dict:
+    """Compute month-by-month portfolio performance for the YTD chart.
+
+    Returns monthly portfolio values, returns, and top movers per month to
+    power the interactive hover chart on the Tracker page.
+
+    Algorithm:
+      • Reconstructs share counts at the start of each month by working
+        backward from current positions, undoing each month's trades.
+      • Fetches end-of-month closing prices via yfinance (interval=1mo).
+      • Computes portfolio value each month-end = Σ(shares × price) + cash.
+      • Current month is anchored to the actual positions-CSV total (authoritative).
+      • Monthly return = (end − start) / start.
+      • Top movers per month = per-ticker dollar gain ranked by abs value.
+    """
+    import yfinance as _yf_m
+    from collections import defaultdict
+
+    year         = datetime.now().year
+    today        = datetime.now()
+    curr_month   = today.month
+
+    # ── Parse positions ───────────────────────────────────────────────────────
+    pos_result = _parse_fidelity_positions_extended(positions_text)
+    if not pos_result.get("ok"):
+        return {"ok": False, "error": "Positions parse failed for monthly chart."}
+    holdings   = pos_result["holdings"]
+    csv_total  = pos_result["total_value"]   # authoritative end-value
+
+    # ── Parse activity ────────────────────────────────────────────────────────
+    act_result = parse_activity_for_attribution(activity_text)
+    if not act_result.get("ok"):
+        return {"ok": False, "error": "Activity parse failed for monthly chart."}
+    trades    = act_result["trades"]
+    dividends = act_result["dividends"]
+
+    def _mth(d: str) -> int:
+        return int(d[5:7])
+
+    trades_by_month: dict    = defaultdict(list)
+    divs_by_month: dict      = defaultdict(list)
+    for t in trades:
+        trades_by_month[_mth(t["date"])].append(t)
+    for d in dividends:
+        divs_by_month[_mth(d["date"])].append(d)
+
+    # ── Known MM tickers (excluded from equity reconstruction) ────────────────
+    _chart_mm = {"SPAXX","FZFXX","FZSXX","FDRXX","FZDXX",
+                 "VMFXX","VMRXX","SWVXX","FCASH","CASH"}
+
+    # ── Current equity share counts ───────────────────────────────────────────
+    equity_map: dict = {}                        # ticker → current shares
+    for h in holdings:
+        if not h.get("is_mm"):
+            equity_map[h["ticker"]] = h.get("quantity") or 0.0
+    for t in trades:                             # also add fully-sold tickers
+        if t["ticker"] not in equity_map and t["ticker"] not in _chart_mm:
+            equity_map[t["ticker"]] = 0.0
+    all_eq_tickers = set(equity_map.keys()) - _chart_mm
+
+    # ── Reconstruct shares at start of each month (backward from today) ───────
+    shares_month_start: dict = {}               # month → {ticker: shares}
+    running = dict(equity_map)
+    for m in range(curr_month, 0, -1):
+        pre: dict = dict(running)
+        for t in trades_by_month.get(m, []):
+            tk = t["ticker"]
+            if t["type"] == "SELL":
+                pre[tk] = pre.get(tk, 0.0) + t["shares"]
+            elif t["type"] in ("BUY", "REINVESTMENT"):
+                pre[tk] = max(0.0, pre.get(tk, 0.0) - t["shares"])
+        shares_month_start[m] = pre
+        running = pre
+
+    # ── Monthly end-of-month share counts ─────────────────────────────────────
+    def _shares_end(m: int) -> dict:
+        s = dict(shares_month_start.get(m, {}))
+        for t in trades_by_month.get(m, []):
+            tk = t["ticker"]
+            if t["type"] == "SELL":
+                s[tk] = max(0.0, s.get(tk, 0.0) - t["shares"])
+            elif t["type"] in ("BUY", "REINVESTMENT"):
+                s[tk] = s.get(tk, 0.0) + t["shares"]
+        return s
+
+    # ── Fetch monthly prices (Dec prev-year for Jan baseline + all YTD months) ─
+    _pref_re = __import__("re").compile(r"^([A-Z]{1,4})PR([A-Z])$")
+    def _yf_variants(tk: str) -> list:
+        v = [tk]
+        pm = _pref_re.match(tk)
+        if pm:
+            v.insert(0, f"{pm.group(1)}-P{pm.group(2)}")
+        return v
+
+    # month_px[ticker][key] where key=0 → Dec prev-year close, key=1..12 → Jan..Dec close
+    month_px: dict = defaultdict(dict)
+    p_start = f"{year - 1}-12-01"
+    p_end   = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+
+    tklist = list(all_eq_tickers) + ["SPY"]
+    if tklist:
+        try:
+            hist = _yf_m.download(
+                tklist, start=p_start, end=p_end,
+                interval="1mo", auto_adjust=False, progress=False,
+            )
+            if not hist.empty:
+                try:
+                    close = hist["Close"]
+                except Exception:
+                    close = hist
+                for tk in tklist:
+                    try:
+                        if hasattr(close, "columns") and tk in close.columns:
+                            s = close[tk].dropna()
+                        else:
+                            s = close.dropna()
+                        for idx, val in s.items():
+                            if hasattr(idx, "month") and val == val:  # not NaN
+                                if idx.year == year - 1 and idx.month == 12:
+                                    month_px[tk][0] = float(val)
+                                elif idx.year == year:
+                                    month_px[tk][idx.month] = float(val)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Per-ticker fallback: try yfinance variants for tickers with missing prices
+    for tk in list(all_eq_tickers):
+        if not month_px.get(tk):
+            for sym in _yf_variants(tk):
+                if sym == tk:
+                    continue
+                try:
+                    h2 = _yf_m.download(
+                        [sym], start=p_start, end=p_end,
+                        interval="1mo", auto_adjust=False, progress=False,
+                    )
+                    if not h2.empty:
+                        try:
+                            s = h2["Close"][sym].dropna() if sym in h2["Close"].columns else h2["Close"].dropna()
+                        except Exception:
+                            s = h2.dropna()
+                        for idx, val in s.items():
+                            if hasattr(idx, "month") and val == val:
+                                key = 0 if (idx.year == year - 1 and idx.month == 12) else (idx.month if idx.year == year else None)
+                                if key is not None:
+                                    month_px[tk][key] = float(val)
+                        if month_px.get(tk):
+                            break
+                except Exception:
+                    pass
+
+    # Current prices as fallback for months with no data
+    current_px: dict = {h["ticker"]: h.get("price") or 0.0
+                        for h in holdings if not h.get("is_mm")}
+
+    def _price(tk: str, key: int) -> float:
+        p = month_px.get(tk, {}).get(key)
+        if p and p > 0:
+            return p
+        # fallback: use current price (approximation)
+        return current_px.get(tk, 0.0)
+
+    # ── Cash balance (MM positions — held constant as approximation) ──────────
+    cash_bal = sum(h.get("current_value") or 0.0 for h in holdings if h.get("is_mm"))
+
+    # ── Portfolio value at end of each month ──────────────────────────────────
+    port_val: dict = {0: float(begin_value)}     # key=0 → Jan 1
+    for m in range(1, curr_month + 1):
+        if m == curr_month:
+            port_val[m] = float(csv_total)       # authoritative from CSV
+        else:
+            se = _shares_end(m)
+            eq = sum(sh * _price(tk, m) for tk, sh in se.items() if sh > 0)
+            port_val[m] = eq + cash_bal
+
+    # ── SPY monthly performance ───────────────────────────────────────────────
+    spy_start = month_px["SPY"].get(0) or month_px["SPY"].get(1)   # Dec-prev or Jan
+    spy_monthly: dict = {}
+    if spy_start:
+        for m in range(1, curr_month + 1):
+            sp = month_px["SPY"].get(m)
+            if sp and spy_start:
+                spy_monthly[m] = round((sp / spy_start - 1) * 100.0, 3)
+
+    # ── Build monthly data ────────────────────────────────────────────────────
+    months_out = []
+    for m in range(1, curr_month + 1):
+        sv = port_val[m - 1]
+        ev = port_val[m]
+        if sv <= 0:
+            continue
+
+        dg = ev - sv
+        rp = dg / sv * 100.0
+
+        # Per-ticker movers for this month
+        movers = []
+        active = set(all_eq_tickers)
+        for t in trades_by_month.get(m, []):
+            active.add(t["ticker"])
+
+        for tk in active:
+            if tk in _chart_mm:
+                continue
+            shs  = shares_month_start.get(m, {}).get(tk, 0.0)
+            she  = _shares_end(m).get(tk, 0.0)
+            ps   = _price(tk, m - 1 if m > 1 else 0)
+            pe   = _price(tk, m)
+            if not ps or not pe:
+                continue
+
+            tk_t = [t for t in trades_by_month.get(m, []) if t["ticker"] == tk]
+            sell_proc = sum(t["amount"] for t in tk_t if t["type"] == "SELL")
+            buy_cost  = sum(t["amount"] for t in tk_t if t["type"] in ("BUY","REINVESTMENT"))
+            tk_div    = sum(d["amount"] for d in divs_by_month.get(m, []) if d["ticker"] == tk)
+
+            gain = she * pe + sell_proc + tk_div - shs * ps - buy_cost
+            if abs(gain) < 1.0:
+                continue
+            ret = round((pe / ps - 1) * 100.0, 2) if ps > 0 else None
+            movers.append({
+                "ticker":          tk,
+                "dollar_gain":     round(gain, 2),
+                "contribution_pct": round(gain / sv * 100.0, 3),
+                "return_pct":      ret,
+            })
+
+        movers.sort(key=lambda x: abs(x["dollar_gain"]), reverse=True)
+
+        months_out.append({
+            "month":       m,
+            "label":       datetime(year, m, 1).strftime("%b"),
+            "start_value": round(sv, 2),
+            "end_value":   round(ev, 2),
+            "dollar_gain": round(dg, 2),
+            "return_pct":  round(rp, 4),
+            "spy_ytd_pct": spy_monthly.get(m),
+            "movers":      movers[:8],
+            "dividends":   [{"ticker": d["ticker"], "amount": d["amount"]}
+                            for d in divs_by_month.get(m, [])],
+            "trades":      [{"ticker": t["ticker"], "type": t["type"],
+                             "shares": t["shares"], "price": t["price"]}
+                            for t in trades_by_month.get(m, [])],
+        })
+
+    return {
+        "ok":          True,
+        "monthly":     months_out,
+        "begin_value": round(float(begin_value), 2),
+        "end_value":   round(float(csv_total), 2),
+        "year":        year,
+    }
+
+
 # ── Account history / Modified Dietz YTD return ──────────────────────────────
 
 _FIDELITY_INFLOW_ACTIONS = frozenset({
@@ -2912,6 +3173,15 @@ def parse_fidelity_history(raw_text: str) -> dict:
         is_internal = any(kw in action for kw in _FIDELITY_INTERNAL_ACTIONS)
         if is_internal:
             continue
+
+        # Allowlist: only capture explicitly recognised external flows.
+        # Unknown action types default to non-flow to avoid phantom entries
+        # (e.g. "IN LIEU OF FRACTIONAL SHARES", "IN KIND TRANSFER", etc.)
+        # that inflate the flow count and distort the Modified Dietz denominator.
+        is_known_inflow  = any(kw in action for kw in _FIDELITY_INFLOW_ACTIONS)
+        is_known_outflow = any(kw in action for kw in _FIDELITY_OUTFLOW_KEYWORDS)
+        if not is_known_inflow and not is_known_outflow:
+            continue  # unrecognised action → treat conservatively as internal
 
         flows.append({
             "date":   date_str,
@@ -3235,6 +3505,13 @@ def compute_unified_ytd(
 
             lp["account_history"] = snapshot
 
+            # ── Monthly chart data (non-fatal if it fails) ────────────────
+            try:
+                mc = compute_monthly_ytd_chart(positions_text, activity_text, begin_value)
+                snapshot["monthly_chart"] = mc if mc.get("ok") else None
+            except Exception:
+                snapshot["monthly_chart"] = None
+
             # Append-only snapshot history (capped at 50 most recent)
             snaps = lp.get("ytd_snapshots") or []
             snaps.append(snapshot)
@@ -3263,6 +3540,7 @@ def compute_unified_ytd(
         "total_dollar_gain": attr.get("total_dollar_gain"),
         "explained_pct":     attr.get("explained_pct"),
         "positions_parsed":  attr.get("positions_parsed"),
+        "monthly_chart":     snapshot.get("monthly_chart"),
     }
 
 
