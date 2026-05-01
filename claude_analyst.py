@@ -3168,7 +3168,17 @@ def email_ytd_report(to_email: str, snapshot_id: str | None = None) -> dict:
     else:
         snap = snaps[-1]
 
-    msg = _compose_ytd_report_email(to_email, snap, lp)
+    # Pull the full YTD detail (chart series, SPY benchmark, contribution-sorted
+    # holdings) so the email can render every section of the on-screen view.
+    try:
+        detail = compute_live_ytd_detail(snapshot_id=snap.get("id"))
+        if not detail.get("ok"):
+            detail = None
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  email_ytd_report: could not load YTD detail: {exc}")
+        detail = None
+
+    msg = _compose_ytd_report_email(to_email, snap, lp, detail)
     return send_portfolio_email(msg)
 
 
@@ -3176,6 +3186,7 @@ def _compose_ytd_report_email(
     to_email: str,
     snap: dict,
     live_portfolio: dict,
+    detail: dict | None = None,
 ) -> EmailMessage:
     """Build the HTML email for a YTD snapshot.
 
@@ -3344,6 +3355,223 @@ def _compose_ytd_report_email(
     total_gain = sum(a.get("dollar_gain") or 0.0 for a in attribution)
     total_contrib = (total_gain / begin_value * 100.0) if begin_value else 0.0
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sections that mirror the in-app YTD detail view (chart + bars + table)
+    # ─────────────────────────────────────────────────────────────────────────
+    detail = detail or {}
+    port_series = detail.get("series")     or []
+    spy_series  = detail.get("spy_series") or []
+    spy_ret     = detail.get("spy_return_pct")
+    vs_spy      = detail.get("vs_spy_pct")
+    max_dd      = detail.get("max_drawdown_pct") or 0.0
+    n_tickers   = detail.get("n_tickers") or len(holdings)
+    sorted_h    = detail.get("holdings") or []
+
+    # ── Section: Live Portfolio YTD vs SPY (inline SVG chart) ────────────────
+    chart_html = ""
+    if port_series and spy_series:
+        # SVG dimensions
+        W, H = 680, 220
+        L, R, T, B = 50, 18, 18, 28  # inner padding
+        iw, ih = W - L - R, H - T - B
+
+        # Combined Y range across both series (in % terms)
+        all_y = [float(p.get("return_pct") or 0.0) for p in port_series] \
+              + [float(p.get("return_pct") or 0.0) for p in spy_series]
+        if all_y:
+            y_min = min(all_y + [0.0])
+            y_max = max(all_y + [0.0])
+            if y_max - y_min < 0.5:
+                y_max = y_min + 1.0
+            y_pad = (y_max - y_min) * 0.10
+            y_min -= y_pad
+            y_max += y_pad
+        else:
+            y_min, y_max = -1.0, 1.0
+
+        # X over the longer of the two series (they share dates)
+        n_pts = max(len(port_series), len(spy_series))
+        if n_pts < 2:
+            n_pts = 2
+
+        def to_xy(idx, val, n):
+            x = L + (idx / (n - 1)) * iw if n > 1 else L
+            y = T + ih - ((float(val) - y_min) / (y_max - y_min)) * ih
+            return x, y
+
+        def build_path(series):
+            if not series:
+                return ""
+            pts = []
+            n = len(series)
+            for i, p in enumerate(series):
+                x, y = to_xy(i, p.get("return_pct") or 0.0, n)
+                pts.append((x, y))
+            d = f"M {pts[0][0]:.1f} {pts[0][1]:.1f}"
+            for x, y in pts[1:]:
+                d += f" L {x:.1f} {y:.1f}"
+            return d
+
+        port_path = build_path(port_series)
+        spy_path  = build_path(spy_series)
+
+        # Y-axis grid lines & labels at min, mid, max, and 0% if in range
+        ticks = sorted({y_min, (y_min + y_max) / 2, y_max, 0.0 if y_min <= 0 <= y_max else y_min})
+        ticks = [t for t in ticks if y_min <= t <= y_max]
+        grid_html = ""
+        for t in ticks:
+            ty = T + ih - ((t - y_min) / (y_max - y_min)) * ih
+            grid_html += (
+                f'<line x1="{L}" y1="{ty:.1f}" x2="{W-R}" y2="{ty:.1f}" '
+                f'stroke="rgba(255,255,255,0.06)" stroke-width="1"/>'
+                f'<text x="{L-6}" y="{ty+3:.1f}" fill="rgba(255,255,255,0.45)" '
+                f'font-size="9" font-family="Menlo,monospace" text-anchor="end">'
+                f'{("+" if t >= 0 else "")}{t:.1f}%</text>'
+            )
+
+        # X-axis date labels (start + end)
+        first_date = (port_series[0] if port_series else {}).get("date", "")
+        last_date  = (port_series[-1] if port_series else {}).get("date", "")
+        x_labels = (
+            f'<text x="{L}" y="{H-8}" fill="rgba(255,255,255,0.45)" '
+            f'font-size="9" font-family="Menlo,monospace">{first_date}</text>'
+            f'<text x="{W-R}" y="{H-8}" fill="rgba(255,255,255,0.45)" '
+            f'font-size="9" font-family="Menlo,monospace" text-anchor="end">{last_date}</text>'
+        )
+
+        port_ytd_str = pct(md_pct)
+        spy_ytd_str  = pct(spy_ret)
+        vs_str       = pct(vs_spy)
+
+        chart_html = f"""
+  <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:6px">
+      LIVE PORTFOLIO YTD vs SPY YTD
+    </div>
+    <div style="font-size:11px;color:#6B7280;margin-bottom:10px;font-family:Menlo,monospace">
+      Portfolio <strong style="color:{color(md_pct)}">{port_ytd_str}</strong> ·
+      SPY <strong style="color:{color(spy_ret)}">{spy_ytd_str}</strong> ·
+      vs SPY <strong style="color:{color(vs_spy)}">{vs_str}</strong> ·
+      Max DD <strong style="color:#6B7280">−{max_dd:.1f}%</strong>
+    </div>
+    <div style="background:#0A1628;border-radius:8px;padding:10px;text-align:center">
+      <svg width="100%" viewBox="0 0 {W} {H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        <rect x="{L}" y="{T}" width="{iw}" height="{ih}" fill="rgba(255,255,255,0.02)" rx="4"/>
+        {grid_html}
+        <path d="{spy_path}"  fill="none" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="{port_path}" fill="none" stroke="#C9A84C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        {x_labels}
+        <g transform="translate({L+8},{T+8})">
+          <rect x="-2" y="-10" width="124" height="22" fill="rgba(0,0,0,0.4)" rx="4"/>
+          <circle cx="6" cy="0" r="3" fill="#C9A84C"/>
+          <text x="14" y="3" fill="#fff" font-size="10" font-family="Helvetica,Arial">Live YTD</text>
+          <circle cx="64" cy="0" r="3" fill="#60A5FA"/>
+          <text x="72" y="3" fill="#fff" font-size="10" font-family="Helvetica,Arial">SPY YTD</text>
+        </g>
+      </svg>
+    </div>
+  </td></tr>"""
+
+    # ── Section: Performance Attribution bars (one row per stock) ────────────
+    bars_html = ""
+    if attribution:
+        max_abs = max((abs(a.get("contribution_pct") or 0.0) for a in attribution), default=0.01)
+        if max_abs <= 0:
+            max_abs = 0.01
+
+        bar_rows = ""
+        for a in attribution:
+            v   = float(a.get("contribution_pct") or 0.0)
+            ret = a.get("ticker_return_pct")
+            is_pos = v >= 0
+            width_pct = abs(v) / max_abs * 50.0  # each side gets up to 50% of bar track
+            bar_color = "#16A34A" if is_pos else "#DC2626"
+
+            # Tornado-style bar: positive grows right of center, negative grows left
+            if is_pos:
+                bar_inner = (
+                    f'<div style="position:absolute;left:50%;top:5px;height:18px;'
+                    f'width:{width_pct:.1f}%;background:{bar_color};border-radius:2px;"></div>'
+                )
+            else:
+                bar_inner = (
+                    f'<div style="position:absolute;right:50%;top:5px;height:18px;'
+                    f'width:{width_pct:.1f}%;background:{bar_color};border-radius:2px;"></div>'
+                )
+
+            ret_str = "" if ret is None else f"&nbsp;<span style='color:#9CA3AF;font-size:10px'>(ret {pct(ret, 1)})</span>"
+
+            bar_rows += (
+                f"<tr>"
+                f"<td style='padding:5px 8px;font-family:Menlo,monospace;font-size:11px;font-weight:700;color:#0A1628;width:60px;white-space:nowrap'>"
+                f"{a.get('ticker','?')}</td>"
+                f"<td style='padding:5px 4px;width:60%;'>"
+                f"<div style='position:relative;height:28px;background:rgba(0,0,0,0.02);border-radius:3px'>"
+                f"<div style='position:absolute;left:50%;top:0;width:1px;height:28px;background:rgba(0,0,0,0.15)'></div>"
+                f"{bar_inner}"
+                f"</div></td>"
+                f"<td style='padding:5px 8px;text-align:right;font-family:Menlo,monospace;font-size:11px;font-weight:800;color:{bar_color};white-space:nowrap'>"
+                f"{pct(v)}{ret_str}</td>"
+                f"</tr>"
+            )
+
+        bars_html = f"""
+  <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:4px">
+      PERFORMANCE ATTRIBUTION — BARS
+    </div>
+    <div style="font-size:10px;color:#9CA3AF;margin-bottom:10px;font-style:italic">
+      Each position's contribution to the portfolio total · sorted by absolute impact
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+      <tbody>{bar_rows}</tbody>
+    </table>
+  </td></tr>"""
+
+    # ── Section: Holdings sorted by contribution ─────────────────────────────
+    holdings_table_html = ""
+    if sorted_h:
+        rows_html = ""
+        for h in sorted_h:
+            ent = h.get("entry_price")
+            cur = h.get("current_price")
+            ret = h.get("return_pct")
+            con = h.get("contribution_pct")
+            wt  = (h.get("weight") or 0) * 100
+            ent_str = f"${ent:.2f}" if ent else "—"
+            cur_str = f"${cur:.2f}" if cur else "—"
+            tdbase = "padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;font-family:Menlo,monospace;font-size:11px"
+            rows_html += (
+                f"<tr>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;font-weight:800;color:#0A1628'>{h.get('ticker','?')}</td>"
+                f"<td style='{tdbase}'>{wt:.1f}%</td>"
+                f"<td style='{tdbase}'>{ent_str}</td>"
+                f"<td style='{tdbase}'>{cur_str}</td>"
+                f"<td style='{tdbase};font-weight:700;color:{color(ret)}'>{pct(ret, 1)}</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;font-family:Menlo,monospace;font-size:12px;font-weight:800;color:{color(con)}'>{pct(con)}</td>"
+                f"</tr>"
+            )
+
+        holdings_table_html = f"""
+  <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:10px">
+      HOLDINGS — SORTED BY CONTRIBUTION
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="background:#F4F6F8">
+          <th style="padding:8px;text-align:left;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">TICKER</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">WEIGHT</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">YEAR START</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">CURRENT</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">RETURN</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">CONTRIB</th>
+        </tr>
+      </thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+  </td></tr>"""
+
     # ── HTML body ────────────────────────────────────────────────────────────
     html_body = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -3435,6 +3663,10 @@ def _compose_ytd_report_email(
       </tfoot>
     </table>
   </td></tr>
+
+  {chart_html}
+  {bars_html}
+  {holdings_table_html}
 
   <!-- Footer -->
   <tr><td style="background:#0A1628;padding:14px 24px;border-radius:0 0 10px 10px;text-align:center;color:#94A3B8;font-size:10px">
