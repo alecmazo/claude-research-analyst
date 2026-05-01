@@ -2112,6 +2112,18 @@ body {
 }
 .live-chip-ticker { font-weight: 800; color: var(--navy); letter-spacing: 0.4px; }
 .live-chip-weight { color: var(--mid-gray); font-weight: 600; }
+/* Cash / money-market chip variant */
+.live-chip--cash {
+  background: #f0f9f4;
+  border-color: #a8d5b5;
+}
+.live-chip--cash .live-chip-ticker { color: #2e7d52; }
+.live-chip-mm {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+  color: #2e7d52; background: #d4edda;
+  border-radius: 3px; padding: 1px 4px;
+  text-transform: uppercase;
+}
 
 /* ── Tracker row tickers (the missing visibility user asked for) ── */
 .tracker-row-tickers {

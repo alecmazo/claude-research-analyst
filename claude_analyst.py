@@ -2153,8 +2153,20 @@ def _parse_fidelity_positions_extended(raw_text: str) -> dict:
     holdings: list[dict] = []
     total_value = 0.0
 
-    # Money-market tickers to include for total but not for attribution
-    _mm_set = {"SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX", "SWVXX", "FCASH"}
+    # Money-market / cash tickers — included as positions with is_mm=True.
+    # These maintain a ~$1.00 NAV; their "gain" is the interest/dividends they earn.
+    _mm_set = {
+        "SPAXX",  # Fidelity Government Money Market
+        "FZFXX",  # Fidelity Treasury Money Market
+        "FZSXX",  # Fidelity Tax-Exempt Money Market
+        "FDRXX",  # Fidelity Cash Reserves
+        "FZDXX",  # Fidelity Money Market Premium Class
+        "VMFXX",  # Vanguard Federal Money Market
+        "VMRXX",  # Vanguard Cash Reserves Federal MM
+        "SWVXX",  # Schwab Value Advantage Money Fund
+        "FCASH",  # Fidelity FCASH (core position cash)
+        "CASH",   # Generic cash designation
+    }
 
     for raw_line in lines[header_idx + 1:]:
         line = raw_line.strip()
@@ -2234,7 +2246,7 @@ def _parse_fidelity_positions_extended(raw_text: str) -> dict:
             "price":         round(price, 4)    if price    is not None else None,
             "current_value": current_value,
             "weight":        weight,
-            "is_mm":         is_mm,  # True = money-market / cash (exclude from attribution)
+            "is_mm":         is_mm,  # True = money-market / cash position
         })
 
     return {
@@ -2382,6 +2394,15 @@ def parse_activity_for_attribution(raw_text: str) -> dict:
                     "ticker": symbol,
                     "amount": round(abs(amount), 2),
                 })
+        elif "INTEREST EARNED" in action or action in ("INTEREST",):
+            # Money-market (SPAXX etc.) distributions appear as interest in Fidelity activity.
+            # Treat them as income for the ticker (same as a cash dividend).
+            if amount != 0 and symbol:
+                dividends.append({
+                    "date":   date_str,
+                    "ticker": symbol,
+                    "amount": round(abs(amount), 2),
+                })
 
     return {
         "ok":        True,
@@ -2435,11 +2456,10 @@ def compute_position_attribution(
     portfolio_end_value = pos_result["total_value"]  # sum of qty × price
 
     # Build lookup: ticker → {quantity, price, current_value}
-    # Exclude money-market from attribution rows
+    # Money-market (SPAXX etc.) included — their gain is the interest/dividends they earn.
+    # Jan-1 price falls back to end_price (~$1.00 stable NAV), which is correct.
     current_state: dict[str, dict] = {}
     for h in holdings:
-        if h.get("is_mm"):
-            continue  # SPAXX etc. → contributes to total value but not to attribution
         t = h["ticker"]
         current_state[t] = {
             "end_shares":    h["quantity"]      or 0.0,
@@ -2608,7 +2628,7 @@ def compute_position_attribution(
         "explained_pct":       explained_pct,
         "begin_value":         round(begin_value, 2),
         "portfolio_end_value": round(portfolio_end_value, 2),
-        "positions_parsed":    len([h for h in holdings if not h.get("is_mm")]),
+        "positions_parsed":    len(holdings),  # includes MM/cash positions
         "trades_parsed":       len(trades),
         "dividends_parsed":    len(dividends),
         "jan1_prices":         {k: round(v, 4) for k, v in jan1_prices.items()},
@@ -3064,14 +3084,13 @@ def compute_unified_ytd(
         _pos_again = _parse_fidelity_positions_extended(positions_text)
         if _pos_again.get("ok"):
             for h in _pos_again.get("holdings") or []:
-                if h.get("is_mm"):
-                    continue  # exclude SPAXX/cash from benchmark holdings
                 cv = h.get("current_value") or 0.0
                 w = (cv / pos_total) if pos_total > 0 else 0.0
                 pos_holdings_for_promote.append({
                     "ticker":       h.get("ticker"),
                     "weight":       round(w, 6),
                     "anchor_price": h.get("price"),
+                    "is_mm":        h.get("is_mm", False),
                 })
     except Exception:  # noqa: BLE001
         pos_holdings_for_promote = []
@@ -5077,9 +5096,9 @@ def load_portfolio_file(path: str) -> list[dict]:
         # Skip CUSIPs (start with a digit — these are bonds like 36966TKX9)
         if ticker[0].isdigit():
             continue
-        # Skip money market funds (Fidelity marks them with **; common MM tickers)
-        if ticker in ("SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX",
-                      "SWVXX", "FCASH"):
+        # Skip money market / cash (handled by extended parser; not rebalanceable)
+        if ticker in ("SPAXX", "FZFXX", "FZSXX", "FDRXX", "FZDXX",
+                      "VMFXX", "VMRXX", "SWVXX", "FCASH", "CASH"):
             continue
         # Tickers are alphanumeric (dots/dashes allowed)
         if not all(c.isalnum() or c in (".", "-") for c in ticker):
@@ -5257,9 +5276,9 @@ def _is_fidelity_format(header_fields: list[str]) -> bool:
 
 
 _FIDELITY_SKIP = frozenset({
-    "SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX",
-    "SWVXX", "FCASH", "TOTAL", "TOTALS", "SUBTOTAL",
-    "ACCOUNTTOTAL", "PENDINGACTIVITY",
+    "SPAXX", "FZFXX", "FZSXX", "FDRXX", "FZDXX",
+    "VMFXX", "VMRXX", "SWVXX", "FCASH", "CASH",
+    "TOTAL", "TOTALS", "SUBTOTAL", "ACCOUNTTOTAL", "PENDINGACTIVITY",
 })
 
 

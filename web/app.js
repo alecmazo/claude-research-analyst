@@ -1278,12 +1278,14 @@ async function loadLiveBenchmark() {
     const n = (live.holdings || []).length;
     const sorted = (live.holdings || [])
       .slice().sort((a, b) => b.weight - a.weight);
-    const chipsHtml = sorted.map(h =>
-      `<span class="live-chip">
-         <span class="live-chip-ticker">${h.ticker}</span>
+    const chipsHtml = sorted.map(h => {
+      const mmClass = h.is_mm ? ' live-chip--cash' : '';
+      const mmLabel = h.is_mm ? ' <span class="live-chip-mm">CASH</span>' : '';
+      return `<span class="live-chip${mmClass}">
+         <span class="live-chip-ticker">${h.ticker}</span>${mmLabel}
          <span class="live-chip-weight">${(h.weight * 100).toFixed(1)}%</span>
-       </span>`
-    ).join('');
+       </span>`;
+    }).join('');
 
     const mdBadge = live.account_history
       ? `<span class="history-md-badge">MD</span>`
