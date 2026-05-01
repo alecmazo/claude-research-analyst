@@ -2476,9 +2476,9 @@ def compute_position_attribution(
     holdings      = pos_result["holdings"]
     portfolio_end_value = pos_result["total_value"]  # sum of qty × price
 
-    # Build lookup: ticker → {quantity, price, current_value}
-    # Money-market (SPAXX etc.) included — their gain is the interest/dividends they earn.
-    # Jan-1 price falls back to end_price (~$1.00 stable NAV), which is correct.
+    # Build lookup: ticker → {quantity, price, current_value, is_mm}
+    # MM tickers are included so their current_value flows into portfolio_end_value,
+    # but they are handled separately in attribution (interest-only, no shares reconstruction).
     current_state: dict[str, dict] = {}
     for h in holdings:
         t = h["ticker"]
@@ -2486,6 +2486,7 @@ def compute_position_attribution(
             "end_shares":    h["quantity"]      or 0.0,
             "end_price":     h["price"]         or 0.0,
             "current_value": h["current_value"] or 0.0,
+            "is_mm":         h.get("is_mm", False),
         }
 
     # ── Step 2: Parse activity ────────────────────────────────────────────────
@@ -2505,8 +2506,14 @@ def compute_position_attribution(
     for d in dividends:
         dividends_by_ticker[d["ticker"]] = dividends_by_ticker.get(d["ticker"], 0.0) + d["amount"]
 
-    # All tickers we need to evaluate (positions + sold-out positions from activity)
-    all_tickers: set[str] = set(current_state.keys()) | set(trades_by_ticker.keys())
+    # MM tickers get interest-only treatment after the main loop — exclude from
+    # shares-reconstruction loop to avoid garbage numbers from cash sweeps.
+    mm_tickers: set[str] = {t for t, s in current_state.items() if s.get("is_mm")}
+
+    # All non-MM tickers (positions + sold-out positions from activity)
+    all_tickers: set[str] = (
+        (set(current_state.keys()) | set(trades_by_ticker.keys())) - mm_tickers
+    )
 
     # ── Step 3: Fetch Jan 1 prices in bulk ───────────────────────────────────
     year         = datetime.now().year
@@ -2635,6 +2642,45 @@ def compute_position_attribution(
             "trade_count":         len(ticker_trades),
             "trades":              ticker_trades,        # detail list
             "jan1_price_source":   "fetched" if ticker in jan1_prices else "fallback",
+        })
+
+    # ── MM tickers: interest/dividends-only attribution ─────────────────────
+    # Cash-sweep activity makes shares-reconstruction unreliable for MM funds.
+    # Their only real contribution is the interest they earn — $1.00 stable NAV
+    # means there is no capital gain to attribute.
+    for ticker in sorted(mm_tickers):
+        mm_state        = current_state.get(ticker, {})
+        end_shares      = mm_state.get("end_shares", 0.0)
+        end_price       = mm_state.get("end_price") or 1.0
+        end_value       = mm_state.get("current_value") or (end_shares * end_price)
+        dividends_cash  = dividends_by_ticker.get(ticker, 0.0)
+        dollar_gain     = dividends_cash   # interest earned = only real contribution
+        contribution_pct = round(dollar_gain / begin_value * 100.0, 4) if begin_value > 0 else 0.0
+        total_explained += dollar_gain
+        ticker_return_pct = round(dividends_cash / end_value * 100.0, 2) if end_value > 0 else None
+
+        attribution.append({
+            "ticker":              ticker,
+            "start_shares":        None,   # not meaningful for MM
+            "jan1_price":          1.0,
+            "start_value":         None,
+            "total_sold_shares":   0.0,
+            "total_sell_proceeds": 0.0,
+            "total_bought_shares": 0.0,
+            "total_buy_cost":      0.0,
+            "reinvestment_shares": 0.0,
+            "reinvestment_cost":   0.0,
+            "dividends_cash":      round(dividends_cash, 2),
+            "end_shares":          round(end_shares, 4),
+            "end_price":           round(end_price, 4),
+            "end_value":           round(end_value, 2),
+            "dollar_gain":         round(dollar_gain, 2),
+            "contribution_pct":    contribution_pct,
+            "ticker_return_pct":   ticker_return_pct,
+            "trade_count":         0,
+            "trades":              [],
+            "jan1_price_source":   "mm_stable_nav",
+            "is_mm":               True,
         })
 
     # Sort: biggest absolute contributors first

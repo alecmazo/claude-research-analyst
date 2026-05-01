@@ -1389,6 +1389,24 @@ function _renderUnifiedYtdResult(data) {
 
   // ── Per-ticker attribution rows (clean, summarized) ──────────────────────
   const attribRows = (data.attribution || []).map(a => {
+    // ── Money-market / cash row — interest-only, no shares reconstruction ──
+    if (a.is_mm) {
+      const divChip = a.dividends_cash > 0
+        ? `<span class="attr-chip div">int ${fmtUSD0(a.dividends_cash)}</span>`
+        : '<span class="attr-sub">—</span>';
+      const endCell = a.end_value > 0
+        ? `${fmtUSD0(a.end_value)}<br><span class="attr-sub">cash @ $1.00</span>`
+        : '<span class="attr-sub">—</span>';
+      return `<tr class="attr-row-mm">
+        <td class="attr-ticker">${a.ticker} <span class="live-chip-mm">CASH</span></td>
+        <td class="attr-pos"><span class="attr-sub">cash position</span></td>
+        <td class="attr-act">${divChip}</td>
+        <td class="attr-pos">${endCell}</td>
+        <td class="attr-num ${cls(a.dollar_gain)}">${sign(a.dollar_gain)}${fmtUSD0(a.dollar_gain)}</td>
+        <td class="attr-num attr-contrib ${cls(a.contribution_pct)}">${fmtPct(a.contribution_pct)}</td>
+      </tr>`;
+    }
+
     const sellChip = a.total_sold_shares > 0
       ? `<span class="attr-chip sell">▼ ${fmtSh(a.total_sold_shares)} @ $${(a.total_sell_proceeds / a.total_sold_shares).toFixed(2)}</span>` : '';
     const buyChip  = a.total_bought_shares > 0

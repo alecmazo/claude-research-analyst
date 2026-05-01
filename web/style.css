@@ -2112,6 +2112,10 @@ body {
 }
 .live-chip-ticker { font-weight: 800; color: var(--navy); letter-spacing: 0.4px; }
 .live-chip-weight { color: var(--mid-gray); font-weight: 600; }
+/* Money-market attribution row — muted, clearly a cash position */
+.attr-row-mm { opacity: 0.75; }
+.attr-row-mm .attr-ticker { color: #2e7d52; }
+
 /* Cash / money-market chip variant */
 .live-chip--cash {
   background: #f0f9f4;
