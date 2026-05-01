@@ -3694,8 +3694,8 @@ def _compose_ytd_report_email(
     plain_lines.append(f"  {'Ticker':<8} {'Jan 1 sh':>12} {'$ P&L':>14} {'% Contrib':>10}")
     for a in attribution:
         plain_lines.append(
-            f"  {a.get('ticker','?'):<8} {a.get('start_shares',0):>12,.2f} "
-            f"${a.get('dollar_gain',0):>13,.0f}  {a.get('contribution_pct',0):>9.2f}%"
+            f"  {a.get('ticker','?'):<8} {(a.get('start_shares') or 0):>12,.2f} "
+            f"${(a.get('dollar_gain') or 0):>13,.0f}  {(a.get('contribution_pct') or 0):>9.2f}%"
         )
 
     plain_body = "\n".join(plain_lines)
