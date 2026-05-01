@@ -2149,6 +2149,9 @@ def _parse_fidelity_positions_extended(raw_text: str) -> dict:
     qty_idx   = next((i for i, h in enumerate(hdr_lower) if h == "quantity"), None)
     price_idx = next((i for i, h in enumerate(hdr_lower)
                       if "last price" in h and "change" not in h), None)
+    # "Current Value" column — reliable direct fallback (Fidelity always populates it)
+    curval_idx = next((i for i, h in enumerate(hdr_lower)
+                       if h in ("current value", "value")), None)
 
     holdings: list[dict] = []
     total_value = 0.0
@@ -2214,10 +2217,13 @@ def _parse_fidelity_positions_extended(raw_text: str) -> dict:
         if price_idx is not None and price_idx < len(fields):
             try:
                 p_str = fields[price_idx].strip().replace("$", "").replace(",", "")
-                if p_str:
+                if p_str and p_str not in ("--", "-", "N/A", "n/a"):
                     price = float(p_str)
             except (ValueError, TypeError):
                 pass
+        # MM funds maintain a stable $1.00 NAV — use as fallback if price missing
+        if is_mm and (price is None or price <= 0):
+            price = 1.00
 
         # Percent Of Account (3rd "%" field — existing reliable approach)
         weight: float | None = None
@@ -2235,9 +2241,24 @@ def _parse_fidelity_positions_extended(raw_text: str) -> dict:
                         pass
                     break
 
+        # Current Value — try qty × price first, then read column directly
         current_value: float | None = None
         if quantity is not None and price is not None and quantity > 0 and price > 0:
             current_value = round(quantity * price, 2)
+        elif curval_idx is not None and curval_idx < len(fields):
+            # Direct "Current Value" column fallback (Fidelity always populates this)
+            try:
+                cv_str = fields[curval_idx].strip().replace("$", "").replace(",", "")
+                if cv_str and cv_str not in ("--", "-", "N/A"):
+                    cv_parsed = float(cv_str)
+                    if cv_parsed > 0:
+                        current_value = round(cv_parsed, 2)
+                        # Back-fill price from current value ÷ quantity if we have qty
+                        if quantity and quantity > 0 and price is None:
+                            price = round(current_value / quantity, 4)
+            except (ValueError, TypeError):
+                pass
+        if current_value is not None and current_value > 0:
             total_value += current_value
 
         holdings.append({
