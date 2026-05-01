@@ -209,4 +209,64 @@ export const api = {
   deleteTracker:          (id)  => request(`/api/track/${id}`, { method: 'DELETE' }),
   getLiveBenchmark:       ()    => request('/api/track/live'),
   getLiveBenchmarkDetail: ()    => request('/api/track/live/detail'),
+
+  // Modified Dietz YTD return — uploads activity CSV + total values
+  uploadAccountHistory: async ({ fileUri, fileName, mimeType, beginValue, endValue }) => {
+    const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
+    const fd = new FormData();
+    fd.append('file', {
+      uri:  fileUri,
+      name: fileName || 'history.csv',
+      type: mimeType || 'text/csv',
+    });
+    fd.append('begin_value', String(beginValue));
+    fd.append('end_value',   String(endValue || 0));
+    fd.append('token',       token || '');
+    const headers = {};
+    if (token) headers['x-auth-token'] = token;
+    const resp = await fetch(`${base}/api/track/live/history`, {
+      method:  'POST',
+      headers,
+      body:    fd,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(text || `${resp.status}`);
+    }
+    return resp.json();
+  },
+
+  // Per-ticker transaction-aware attribution — uploads BOTH positions and activity CSVs
+  computeAttribution: async ({
+    positionsUri, positionsName, positionsType,
+    activityUri,  activityName,  activityType,
+    beginValue,
+  }) => {
+    const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
+    const fd = new FormData();
+    fd.append('positions_file', {
+      uri:  positionsUri,
+      name: positionsName || 'positions.csv',
+      type: positionsType || 'text/csv',
+    });
+    fd.append('activity_file', {
+      uri:  activityUri,
+      name: activityName || 'activity.csv',
+      type: activityType || 'text/csv',
+    });
+    fd.append('begin_value', String(beginValue));
+    fd.append('token',       token || '');
+    const headers = {};
+    if (token) headers['x-auth-token'] = token;
+    const resp = await fetch(`${base}/api/track/live/attribution`, {
+      method:  'POST',
+      headers,
+      body:    fd,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(text || `${resp.status}`);
+    }
+    return resp.json();
+  },
 };
