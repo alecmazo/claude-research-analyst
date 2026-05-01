@@ -4003,6 +4003,8 @@ def _build_monthly_table_html(
         "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
         "color:#6B7280;border-bottom:1px solid #DCE3EB'>RETURN</th>"
         "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>SPY</th>"
+        "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
         "color:#6B7280;border-bottom:1px solid #DCE3EB'>VS SPY</th>"
         "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
         "color:#6B7280;border-bottom:1px solid #DCE3EB'>END VALUE</th>"
@@ -4011,12 +4013,31 @@ def _build_monthly_table_html(
         "</tr>"
     )
 
-    body_rows = ""
+    # Convert SPY YTD-end-of-month series → SPY MONTHLY return for apples-to-apples
+    # comparison with the portfolio's monthly return_pct.
+    spy_monthly_returns: list[float | None] = []
+    prev_spy_ytd_decimal = 0.0   # Jan 1 baseline = 0% YTD
     for mo in months:
-        rp      = mo.get("return_pct") or 0.0
-        rp_pct  = rp * 100.0
-        spy_ytd = mo.get("spy_ytd_pct")
-        vs_spy  = (rp_pct - spy_ytd) if spy_ytd is not None else None
+        sy = mo.get("spy_ytd_pct")
+        if sy is None:
+            spy_monthly_returns.append(None)
+            continue
+        cur_decimal = sy / 100.0
+        # SPY return for this month alone, derived from cumulative YTD chain
+        if (1.0 + prev_spy_ytd_decimal) > 0:
+            spy_m_pct = ((1.0 + cur_decimal) / (1.0 + prev_spy_ytd_decimal) - 1.0) * 100.0
+        else:
+            spy_m_pct = None
+        spy_monthly_returns.append(spy_m_pct)
+        prev_spy_ytd_decimal = cur_decimal
+
+    body_rows = ""
+    for idx, mo in enumerate(months):
+        # NOTE: mo["return_pct"] is ALREADY in percent form (e.g. 6.40 means +6.40%).
+        # Do NOT multiply by 100 again — that produced the 640% display bug.
+        rp_pct  = mo.get("return_pct") or 0.0
+        spy_m   = spy_monthly_returns[idx] if idx < len(spy_monthly_returns) else None
+        vs_spy  = (rp_pct - spy_m) if spy_m is not None else None
         ev      = mo.get("end_value")
         dg      = mo.get("dollar_gain")
         exact   = mo.get("exact", False)
@@ -4029,6 +4050,8 @@ def _build_monthly_table_html(
             if exact else ""
         )
 
+        spy_str = pct_fmt(spy_m) if spy_m is not None else "—"
+        spy_col = color_fmt(spy_m) if spy_m is not None else "#9CA3AF"
         vs_spy_str = pct_fmt(vs_spy) if vs_spy is not None else "—"
         vs_spy_col = color_fmt(vs_spy) if vs_spy is not None else "#9CA3AF"
 
@@ -4040,6 +4063,8 @@ def _build_monthly_table_html(
             f"color:{color_fmt(rp_pct)};font-weight:700;font-family:Menlo,monospace;"
             f"font-size:12px'>{pct_fmt(rp_pct)}</td>"
             f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
+            f"color:{spy_col};font-family:Menlo,monospace;font-size:11px'>{spy_str}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
             f"color:{vs_spy_col};font-family:Menlo,monospace;font-size:11px'>{vs_spy_str}</td>"
             f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
             f"font-family:Menlo,monospace;font-size:11px;color:#374151'>{usd0_fmt(ev) if ev is not None else '—'}</td>"
@@ -4049,17 +4074,32 @@ def _build_monthly_table_html(
             f"</tr>"
         )
 
-    # Totals row
+    # Totals row — md_return_pct is also already in percent form (do NOT × 100).
     total_rp   = (snap.get("md_return_pct") or 0.0)
     total_ev   = (snap.get("end_value") or 0.0)
     total_gain = sum((mo.get("dollar_gain") or 0.0) for mo in months)
+    # SPY YTD = last month's spy_ytd_pct (cumulative, already %)
+    total_spy_ytd = None
+    for mo in reversed(months):
+        sy = mo.get("spy_ytd_pct")
+        if sy is not None:
+            total_spy_ytd = sy
+            break
+    total_vs_spy = (total_rp - total_spy_ytd) if total_spy_ytd is not None else None
 
     tfoot = (
         f"<tr style='background:#F4F6F8'>"
         f"<td style='padding:8px;font-weight:800;font-size:11px;color:#0A1628'>YTD</td>"
         f"<td style='padding:8px;text-align:right;color:{color_fmt(total_rp)};"
         f"font-weight:800;font-family:Menlo,monospace'>{pct_fmt(total_rp)}</td>"
-        f"<td style='padding:8px'></td>"
+        f"<td style='padding:8px;text-align:right;"
+        f"color:{color_fmt(total_spy_ytd) if total_spy_ytd is not None else '#9CA3AF'};"
+        f"font-weight:700;font-family:Menlo,monospace;font-size:11px'>"
+        f"{pct_fmt(total_spy_ytd) if total_spy_ytd is not None else '—'}</td>"
+        f"<td style='padding:8px;text-align:right;"
+        f"color:{color_fmt(total_vs_spy) if total_vs_spy is not None else '#9CA3AF'};"
+        f"font-weight:800;font-family:Menlo,monospace;font-size:11px'>"
+        f"{pct_fmt(total_vs_spy) if total_vs_spy is not None else '—'}</td>"
         f"<td style='padding:8px;text-align:right;font-family:Menlo,monospace;"
         f"font-weight:700;color:#0A1628'>{usd0_fmt(total_ev)}</td>"
         f"<td style='padding:8px;text-align:right;color:{color_fmt(total_gain)};"

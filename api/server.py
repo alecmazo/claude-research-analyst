@@ -49,7 +49,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Auth — stateless HMAC token (survives restarts, no DB needed)
 # ---------------------------------------------------------------------------
-_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/"}
+_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/api/build", "/"}
 
 def _portfolio_password() -> str:
     return os.environ.get("PORTFOLIO_PASSWORD", "dgacapital").strip()
@@ -240,6 +240,23 @@ def root():
 @app.get("/info")
 def info():
     return {"service": "DGA Research Analyst API", "status": "ok"}
+
+
+# ── Build/version endpoint ────────────────────────────────────────────────────
+# The web client polls this to detect deploys and force a hard reload of
+# stale iOS PWA / Safari caches. Bumped on every UI deploy.
+WEB_BUILD_VERSION = "ui9-20260501-b"
+
+
+@app.get("/api/build")
+def build_version():
+    """Return the current web UI build identifier.
+
+    The web client compares this to its embedded BUILD constant; on mismatch
+    it forces a `location.reload(true)` with a cache-bust query param so even
+    home-screen PWAs see the latest UI without manual cache clearing.
+    """
+    return {"build": WEB_BUILD_VERSION}
 
 
 @app.get("/health")

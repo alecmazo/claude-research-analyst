@@ -5,16 +5,46 @@
 // ── Build version: bump this whenever a deployment has UI changes ─────────
 // Forces a hard reload the first time a device loads the new version,
 // evicting stale iOS PWA / Safari cache that ignores Cache-Control headers.
+//
+// Two-stage strategy:
+//   1) On load, IIFE compares LOCAL `BUILD` to the server's /api/build.
+//      Mismatch → force `location.reload(true)` with a cache-busting query
+//      param (`?_b=<timestamp>`). This works because fetch() bypasses the
+//      HTML / JS disk cache entirely — even an iOS standalone PWA will see
+//      the new server version.
+//   2) Stored localStorage compare ensures we don't reload-loop.
+const DGA_BUILD = 'ui9-20260501-b';
 ;(function(){
-  const BUILD = 'ui8-20260501';
   try {
     const stored = localStorage.getItem('_dga_build');
-    if (stored && stored !== BUILD) {
-      localStorage.setItem('_dga_build', BUILD);
-      location.reload(true);   // force from server, not disk cache
+    if (stored && stored !== DGA_BUILD) {
+      localStorage.setItem('_dga_build', DGA_BUILD);
+      // Force fetch from server, not disk cache
+      const u = new URL(window.location.href);
+      u.searchParams.set('_b', Date.now().toString());
+      window.location.replace(u.toString());
       return;
     }
-    localStorage.setItem('_dga_build', BUILD);
+    localStorage.setItem('_dga_build', DGA_BUILD);
+  } catch (_) {}
+
+  // Async: ask the server what the current build is. If it differs from our
+  // embedded constant, the cached HTML/JS are stale → hard reload.
+  try {
+    fetch('/api/build', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (!j || !j.build) return;
+        if (j.build !== DGA_BUILD) {
+          console.log('[DGA] Build mismatch — local:', DGA_BUILD, 'server:', j.build);
+          try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
+          const u = new URL(window.location.href);
+          u.searchParams.set('_b', Date.now().toString());
+          // Bypass the document cache by adding a fresh query param
+          window.location.replace(u.toString());
+        }
+      })
+      .catch(() => { /* offline — ignore */ });
   } catch (_) {}
 })();
 
