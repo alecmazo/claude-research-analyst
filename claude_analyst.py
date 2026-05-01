@@ -3979,6 +3979,118 @@ def email_ytd_report(to_email: str, snapshot_id: str | None = None) -> dict:
     return send_portfolio_email(msg)
 
 
+def _build_monthly_table_html(
+    snap: dict,
+    pct_fmt,   # callable: float -> "+X.XX%"
+    color_fmt, # callable: float -> hex color
+    usd0_fmt,  # callable: float -> "$X,XXX"
+) -> str:
+    """Return an HTML <tr><td> block with the YTD-by-month performance table.
+
+    Uses snap["monthly_chart"]["monthly"] when available; returns "" otherwise.
+    Rendered as an email-safe table with one row per completed month.
+    """
+    mc = snap.get("monthly_chart") or {}
+    months = mc.get("monthly") or []
+    if not months:
+        return ""
+
+    # Header row
+    header = (
+        "<tr style='background:#F4F6F8'>"
+        "<th style='padding:7px 8px;text-align:left;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>MONTH</th>"
+        "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>RETURN</th>"
+        "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>VS SPY</th>"
+        "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>END VALUE</th>"
+        "<th style='padding:7px 8px;text-align:right;font-size:9px;letter-spacing:0.8px;"
+        "color:#6B7280;border-bottom:1px solid #DCE3EB'>$ GAIN</th>"
+        "</tr>"
+    )
+
+    body_rows = ""
+    for mo in months:
+        rp      = mo.get("return_pct") or 0.0
+        rp_pct  = rp * 100.0
+        spy_ytd = mo.get("spy_ytd_pct")
+        vs_spy  = (rp_pct - spy_ytd) if spy_ytd is not None else None
+        ev      = mo.get("end_value")
+        dg      = mo.get("dollar_gain")
+        exact   = mo.get("exact", False)
+        label   = mo.get("label", "")
+
+        exact_dot = (
+            "<span style='display:inline-block;width:5px;height:5px;border-radius:50%;"
+            "background:#C9A84C;margin-left:3px;vertical-align:middle;' "
+            "title='Exact from Fidelity CSV'></span>"
+            if exact else ""
+        )
+
+        vs_spy_str = pct_fmt(vs_spy) if vs_spy is not None else "—"
+        vs_spy_col = color_fmt(vs_spy) if vs_spy is not None else "#9CA3AF"
+
+        body_rows += (
+            f"<tr>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;font-weight:700;"
+            f"font-family:Menlo,monospace;font-size:11px'>{label}{exact_dot}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
+            f"color:{color_fmt(rp_pct)};font-weight:700;font-family:Menlo,monospace;"
+            f"font-size:12px'>{pct_fmt(rp_pct)}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
+            f"color:{vs_spy_col};font-family:Menlo,monospace;font-size:11px'>{vs_spy_str}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
+            f"font-family:Menlo,monospace;font-size:11px;color:#374151'>{usd0_fmt(ev) if ev is not None else '—'}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;"
+            f"color:{color_fmt(dg) if dg is not None else '#9CA3AF'};"
+            f"font-family:Menlo,monospace;font-size:11px'>{usd0_fmt(dg) if dg is not None else '—'}</td>"
+            f"</tr>"
+        )
+
+    # Totals row
+    total_rp   = (snap.get("md_return_pct") or 0.0)
+    total_ev   = (snap.get("end_value") or 0.0)
+    total_gain = sum((mo.get("dollar_gain") or 0.0) for mo in months)
+
+    tfoot = (
+        f"<tr style='background:#F4F6F8'>"
+        f"<td style='padding:8px;font-weight:800;font-size:11px;color:#0A1628'>YTD</td>"
+        f"<td style='padding:8px;text-align:right;color:{color_fmt(total_rp)};"
+        f"font-weight:800;font-family:Menlo,monospace'>{pct_fmt(total_rp)}</td>"
+        f"<td style='padding:8px'></td>"
+        f"<td style='padding:8px;text-align:right;font-family:Menlo,monospace;"
+        f"font-weight:700;color:#0A1628'>{usd0_fmt(total_ev)}</td>"
+        f"<td style='padding:8px;text-align:right;color:{color_fmt(total_gain)};"
+        f"font-weight:800;font-family:Menlo,monospace'>{usd0_fmt(total_gain)}</td>"
+        f"</tr>"
+    )
+
+    exact_note = (
+        "<div style='font-size:9px;color:#9CA3AF;margin-top:6px'>"
+        "<span style='display:inline-block;width:5px;height:5px;border-radius:50%;"
+        "background:#C9A84C;vertical-align:middle;margin-right:3px'></span>"
+        "Gold dot = exact monthly return from Investment Income Balance CSV"
+        "</div>"
+        if any(mo.get("exact") for mo in months) else ""
+    )
+
+    return (
+        f"<tr><td style='background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB'>"
+        f"<div style='font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;"
+        f"margin-bottom:10px'>YTD PERFORMANCE BY MONTH</div>"
+        f"<table width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;font-size:12px'>"
+        f"<thead>{header}</thead>"
+        f"<tbody>{body_rows}</tbody>"
+        f"<tfoot>{tfoot}</tfoot>"
+        f"</table>"
+        f"{exact_note}"
+        f"</td></tr>"
+    )
+
+
 def _compose_ytd_report_email(
     to_email: str,
     snap: dict,
@@ -4434,7 +4546,14 @@ def _compose_ytd_report_email(
     <div>{chips_html}</div>
   </td></tr>
 
-  <!-- Attribution table -->
+  <!-- YTD by month table (right after positions) -->
+{_build_monthly_table_html(snap, pct, color, usd0)}
+
+  {chart_html}
+  {bars_html}
+  {holdings_table_html}
+
+  <!-- Attribution table (LAST) -->
   <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
     <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:10px">
       PERFORMANCE ATTRIBUTION — BY HOLDING (TRANSACTION-AWARE)
@@ -4460,10 +4579,6 @@ def _compose_ytd_report_email(
       </tfoot>
     </table>
   </td></tr>
-
-  {chart_html}
-  {bars_html}
-  {holdings_table_html}
 
   <!-- Footer -->
   <tr><td style="background:#0A1628;padding:14px 24px;border-radius:0 0 10px 10px;text-align:center;color:#94A3B8;font-size:10px">

@@ -1666,6 +1666,29 @@ body {
   margin: 4px 0 8px;
 }
 
+/* ── Attribution section — collapsible <details> ──────────────────────── */
+.attr-section {
+  margin: 14px 0 4px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.attr-section[open] { overflow: visible; }
+.attr-section-summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 14px;
+  font-size: 10px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer; user-select: none; list-style: none;
+}
+.attr-section-summary::-webkit-details-marker { display: none; }
+.attr-section-summary::marker { display: none; }
+.attr-section-summary:hover { background: rgba(255,255,255,0.055); }
+.attr-section[open] .flows-collapse-arrow { transform: rotate(180deg); }
+
 /* Compact attribution chips (used inside table rows) */
 .attr-chip {
   display: inline-block;

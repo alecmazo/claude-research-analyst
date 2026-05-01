@@ -1,6 +1,23 @@
 // ============================================================================
 // DGA Research Analyst — Web UI
 // ============================================================================
+
+// ── Build version: bump this whenever a deployment has UI changes ─────────
+// Forces a hard reload the first time a device loads the new version,
+// evicting stale iOS PWA / Safari cache that ignores Cache-Control headers.
+;(function(){
+  const BUILD = 'ui8-20260501';
+  try {
+    const stored = localStorage.getItem('_dga_build');
+    if (stored && stored !== BUILD) {
+      localStorage.setItem('_dga_build', BUILD);
+      location.reload(true);   // force from server, not disk cache
+      return;
+    }
+    localStorage.setItem('_dga_build', BUILD);
+  } catch (_) {}
+})();
+
 const API_BASE = window.location.origin;
 
 // ---------- Auth ----------
@@ -1386,8 +1403,10 @@ async function uploadAccountHistory() {
     const data = await res.json();
     if (statusEl) statusEl.style.display = 'none';
     _renderUnifiedYtdResult(data);
-    // Refresh the live benchmark card so the YTD detail picks up new attribution
+    // Refresh the live benchmark card then auto-open the YTD detail view
+    // so the user doesn't have to click the card to see results.
     await loadLiveBenchmark();
+    openLiveBenchmarkDetail(data.snapshot_id || null);
   } catch (err) {
     if (statusEl) { statusEl.textContent = `Error: ${err.message}`; }
   } finally {
@@ -1570,29 +1589,34 @@ function _renderUnifiedYtdResult(data) {
     ${flowsHtml}
     ${monthlyChartHtml}
 
-    <div class="attr-table-title">PERFORMANCE ATTRIBUTION — by holding (transaction-aware)</div>
-    <div class="attr-table-wrap">
-      <table class="attr-table">
-        <thead>
-          <tr>
-            <th>Ticker</th>
-            <th>Jan 1</th>
-            <th>YTD Activity</th>
-            <th>Now</th>
-            <th>$ P&amp;L</th>
-            <th>% Contrib</th>
-          </tr>
-        </thead>
-        <tbody>${attribRows}</tbody>
-        <tfoot>
-          <tr class="attr-total-row">
-            <td colspan="4" style="text-align:right;font-weight:700;">TOTAL</td>
-            <td class="attr-num ${cls(totalGain)}">${sign(totalGain)}${fmtUSD0(totalGain)}</td>
-            <td class="attr-num attr-contrib ${cls(totalPct)}">${fmtPct(totalPct)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>`;
+    <details class="attr-section" open>
+      <summary class="attr-section-summary">
+        <span>PERFORMANCE ATTRIBUTION <span class="flows-section-hint">by holding · transaction-aware · click to collapse</span></span>
+        <span class="flows-collapse-arrow">▼</span>
+      </summary>
+      <div class="attr-table-wrap">
+        <table class="attr-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Jan 1</th>
+              <th>YTD Activity</th>
+              <th>Now</th>
+              <th>$ P&amp;L</th>
+              <th>% Contrib</th>
+            </tr>
+          </thead>
+          <tbody>${attribRows}</tbody>
+          <tfoot>
+            <tr class="attr-total-row">
+              <td colspan="4" style="text-align:right;font-weight:700;">TOTAL</td>
+              <td class="attr-num ${cls(totalGain)}">${sign(totalGain)}${fmtUSD0(totalGain)}</td>
+              <td class="attr-num attr-contrib ${cls(totalPct)}">${fmtPct(totalPct)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </details>`;
 
   // Render monthly chart after DOM is updated
   if (mc && mc.monthly && mc.monthly.length) {
