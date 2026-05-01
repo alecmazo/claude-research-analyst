@@ -748,6 +748,55 @@ async def upload_live_history(
     return result
 
 
+@app.post("/api/track/live/attribution")
+async def compute_live_attribution(
+    positions_file: UploadFile = File(...),
+    activity_file:  UploadFile = File(...),
+    begin_value:    float = Form(...),
+):
+    """Compute transaction-aware per-ticker YTD performance attribution.
+
+    Accepts multipart/form-data with:
+      - positions_file: Fidelity positions/holdings CSV (Accounts → Positions → Download CSV)
+                        Provides current shares and current price for each holding.
+      - activity_file:  Fidelity activity/history CSV (Accounts & Trade → History → Download CSV)
+                        Provides all YTD trades (YOU BOUGHT/YOU SOLD) and dividends.
+      - begin_value:    Total portfolio value on January 1 ($).
+
+    For each ticker, reconstructs the Jan 1 position, accounts for all trades and
+    dividends, and returns the exact dollar P&L and portfolio contribution % for the year.
+    """
+    if begin_value <= 0:
+        raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
+
+    # Read both files
+    try:
+        pos_content  = await positions_file.read()
+        positions_text = pos_content.decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read positions file: {exc}")
+
+    try:
+        act_content  = await activity_file.read()
+        activity_text = act_content.decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read activity file: {exc}")
+
+    try:
+        result = analyst.compute_position_attribution(positions_text, activity_text, begin_value)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"compute_position_attribution raised: {exc}\n\nTraceback:\n{tb}",
+        )
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
+
+    return result
+
+
 @app.post("/api/track/snapshot")
 def trigger_tracker_snapshot():
     """Manually trigger a daily snapshot (admin / debug)."""

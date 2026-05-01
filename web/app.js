@@ -1112,6 +1112,9 @@ function initTracker() {
 
   // Account history upload — Modified Dietz YTD
   document.getElementById('history-upload-btn')?.addEventListener('click', uploadAccountHistory);
+
+  // Transaction attribution
+  document.getElementById('attr-calc-btn')?.addEventListener('click', computeAttribution);
 }
 
 // ── Live benchmark card (clickable → YTD detail) ──────────────────────────
@@ -1133,13 +1136,14 @@ async function loadLiveBenchmark() {
       return;
     }
 
-    // Show account history upload card once we have a live portfolio
+    // Show account history + attribution cards once we have a live portfolio
     if (histCard) {
       histCard.style.display = '';
-      // If history already uploaded, show the existing MD return
       const h = live.account_history;
       if (h) _renderHistoryResult(h, /* preloaded */ true);
     }
+    const attrCard = document.getElementById('attribution-card');
+    if (attrCard) attrCard.style.display = '';
 
     const n = (live.holdings || []).length;
     const sorted = (live.holdings || [])
@@ -1314,6 +1318,147 @@ function _renderHistoryResult(data, preloaded) {
         <div class="history-diag-mono">${acts || '(none)'}</div>
       </div>
       ${skipped > 0 ? `<div class="history-diag-section" style="color:#f87171">⚠ ${skipped} row(s) skipped — blank or unparseable Amount column</div>` : ''}
+    </details>`;
+}
+
+// ── Transaction Attribution ────────────────────────────────────────────────
+async function computeAttribution() {
+  const posFile   = document.getElementById('attr-positions-file')?.files?.[0];
+  const actFile   = document.getElementById('attr-activity-file')?.files?.[0];
+  const beginVal  = parseFloat(document.getElementById('attr-begin-value')?.value);
+  const statusEl  = document.getElementById('attr-status');
+  const resultEl  = document.getElementById('attr-result');
+  const btn       = document.getElementById('attr-calc-btn');
+
+  if (!posFile) { alert('Please select your Fidelity Positions CSV file.'); return; }
+  if (!actFile) { alert('Please select your Fidelity Activity CSV file.'); return; }
+  if (!beginVal || beginVal <= 0) { alert('Please enter your Jan 1 portfolio value.'); return; }
+
+  btn.disabled = true;
+  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Fetching Jan 1 prices and computing attribution…'; }
+  if (resultEl) resultEl.style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('positions_file', posFile);
+    fd.append('activity_file',  actFile);
+    fd.append('begin_value',    beginVal);
+    fd.append('token',          getToken());
+
+    const res = await fetch(`${API_BASE}/api/track/live/attribution`, {
+      method:  'POST',
+      headers: { 'x-auth-token': getToken() },
+      body:    fd,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (statusEl) statusEl.style.display = 'none';
+    _renderAttribution(data);
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = `Error: ${err.message}`; }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function _renderAttribution(data) {
+  const el = document.getElementById('attr-result');
+  if (!el) return;
+
+  const fmtUSD = (v) => {
+    const abs = Math.abs(v ?? 0);
+    return (v < 0 ? '−' : '') + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  };
+  const fmtPct  = (v, dec=2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(dec)}%`;
+  const fmtNum  = (v) => v == null ? '—' : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const gainCls = (v) => v >= 0 ? 'attr-gain' : 'attr-loss';
+
+  const rows = (data.attribution || []).map(a => {
+    const tradesBadge = a.trade_count > 0
+      ? `<span class="attr-trade-badge">${a.trade_count} trade${a.trade_count > 1 ? 's' : ''}</span>`
+      : '';
+    const activity = [];
+    if (a.total_sold_shares > 0)
+      activity.push(`<span class="attr-sell-chip">▼ ${fmtNum(a.total_sold_shares)} @ $${a.total_sell_proceeds > 0 ? (a.total_sell_proceeds / a.total_sold_shares).toFixed(2) : '—'}</span>`);
+    if (a.total_bought_shares > 0)
+      activity.push(`<span class="attr-buy-chip">▲ ${fmtNum(a.total_bought_shares)} @ $${a.total_buy_cost > 0 ? (a.total_buy_cost / a.total_bought_shares).toFixed(2) : '—'}</span>`);
+    if (a.dividends_cash > 0)
+      activity.push(`<span class="attr-div-chip">÷ $${a.dividends_cash.toLocaleString()}</span>`);
+
+    return `<tr class="attr-row">
+      <td class="attr-ticker">${a.ticker}${tradesBadge}</td>
+      <td class="attr-num">${fmtNum(a.start_shares)}<br><span class="attr-sub">@ $${a.jan1_price?.toFixed(2) ?? '—'}</span></td>
+      <td class="attr-num">${fmtUSD(a.start_value)}</td>
+      <td class="attr-activity">${activity.join(' ') || '<span class="attr-sub">—</span>'}</td>
+      <td class="attr-num">${a.end_shares > 0 ? fmtNum(a.end_shares) : '<span class="attr-sub">sold</span>'}<br><span class="attr-sub">@ $${a.end_price?.toFixed(2) ?? '—'}</span></td>
+      <td class="attr-num">${fmtUSD(a.end_value)}</td>
+      <td class="attr-num ${gainCls(a.dollar_gain)}">${fmtUSD(a.dollar_gain)}</td>
+      <td class="attr-num ${gainCls(a.contribution_pct)} attr-contrib">${fmtPct(a.contribution_pct, 2)}</td>
+    </tr>`;
+  }).join('');
+
+  const totalGain = data.total_dollar_gain ?? 0;
+  const totalPct  = data.explained_pct ?? 0;
+
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="attr-summary">
+      <div class="attr-summary-item">
+        <div class="attr-summary-label">Total Attributed Gain</div>
+        <div class="attr-summary-val ${gainCls(totalGain)}">${fmtUSD(totalGain)}</div>
+      </div>
+      <div class="attr-summary-item">
+        <div class="attr-summary-label">Contribution to Portfolio</div>
+        <div class="attr-summary-val ${gainCls(totalPct)}">${fmtPct(totalPct, 2)}</div>
+      </div>
+      <div class="attr-summary-item">
+        <div class="attr-summary-label">Positions Analysed</div>
+        <div class="attr-summary-val">${data.positions_parsed}</div>
+      </div>
+      <div class="attr-summary-item">
+        <div class="attr-summary-label">Trades Parsed</div>
+        <div class="attr-summary-val">${data.trades_parsed}</div>
+      </div>
+    </div>
+
+    <div class="attr-table-wrap">
+      <table class="attr-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Jan 1 Shares</th>
+            <th>Jan 1 Value</th>
+            <th>YTD Activity</th>
+            <th>Current Shares</th>
+            <th>Current Value</th>
+            <th>$ P&amp;L</th>
+            <th>% Contribution</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr class="attr-total-row">
+            <td colspan="6" style="text-align:right;font-weight:700;">TOTAL ATTRIBUTED</td>
+            <td class="attr-num ${gainCls(totalGain)}">${fmtUSD(totalGain)}</td>
+            <td class="attr-num ${gainCls(totalPct)} attr-contrib">${fmtPct(totalPct, 2)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <details class="history-diag-details" style="margin-top:8px;">
+      <summary>Parse diagnostics</summary>
+      <div class="history-diag-section">
+        <div class="history-diag-title">Positions CSV columns</div>
+        <div class="history-diag-mono">${(data.columns_positions || []).join(' · ')}</div>
+      </div>
+      <div class="history-diag-section">
+        <div class="history-diag-title">Jan 1 prices fetched</div>
+        <div class="history-diag-mono">${Object.entries(data.jan1_prices || {}).map(([k,v]) => `${k}: $${v}`).join(' · ')}</div>
+      </div>
     </details>`;
 }
 

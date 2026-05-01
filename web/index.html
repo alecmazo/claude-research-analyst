@@ -295,6 +295,40 @@
       <div id="history-result-box" class="history-result-box" style="display:none;"></div>
     </div>
 
+    <!-- Transaction attribution card -->
+    <div class="card" id="attribution-card" style="display:none;">
+      <div class="label">TRANSACTION ATTRIBUTION — ACCURATE YTD BY HOLDING</div>
+      <p class="hint" style="margin-bottom:12px;">
+        Upload both CSVs to see each stock's true YTD contribution — factoring in
+        partial sales, new purchases, dividends, and the actual Jan 1 position.
+      </p>
+      <div class="history-upload-how">
+        <span class="history-upload-how-label">Files needed:</span>
+        <strong>Positions CSV</strong> — Accounts → Positions → Download CSV &nbsp;|&nbsp;
+        <strong>Activity CSV</strong> — Accounts &amp; Trade → History → Jan 1–today → Download CSV
+      </div>
+      <div class="history-fields">
+        <div class="history-field-row">
+          <label class="history-field-label" for="attr-begin-value">Jan 1 Portfolio Value ($)</label>
+          <input type="number" id="attr-begin-value" class="history-value-input"
+                 placeholder="e.g. 3628719" min="1" step="1">
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="attr-positions-file">Positions CSV (current holdings)</label>
+          <input type="file" id="attr-positions-file" accept=".csv,.txt" class="history-file-input">
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="attr-activity-file">Activity CSV (YTD transactions)</label>
+          <input type="file" id="attr-activity-file" accept=".csv,.txt" class="history-file-input">
+        </div>
+      </div>
+      <button id="attr-calc-btn" class="btn-primary" style="margin-top:14px;width:100%;">
+        Calculate Transaction Attribution
+      </button>
+      <div id="attr-status" class="history-upload-status" style="display:none;"></div>
+      <div id="attr-result" style="display:none;"></div>
+    </div>
+
     <!-- Paper portfolio list -->
     <div class="card">
       <div class="label">PAPER PORTFOLIOS</div>

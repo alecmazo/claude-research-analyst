@@ -2032,6 +2032,521 @@ def _live_aligned_series(state: dict, anchor_date: str) -> list[dict]:
     } for r in eligible]
 
 
+# ── Transaction-aware performance attribution ────────────────────────────────
+
+def _parse_fidelity_positions_extended(raw_text: str) -> dict:
+    """Parse a Fidelity positions CSV and return per-holding quantities and prices.
+
+    Extends the basic weight-only parser to also capture:
+      - Quantity (number of shares)
+      - Last Price (current price per share)
+      - Computed Current Value (quantity × price)
+
+    Columns up through Last Price appear BEFORE the "Current Value" column that
+    has the unquoted-comma problem, so they parse cleanly via csv.reader.
+
+    Returns:
+        {
+          "ok": True,
+          "holdings": [{"ticker", "quantity", "price", "current_value", "weight"}],
+          "total_value": float,         # sum of all position values
+          "columns_detected": [str],
+        }
+    """
+    import csv as _csv_m
+    from io import StringIO as _StringIO_m
+
+    lines = raw_text.splitlines()
+
+    # Find header row (Symbol + Quantity + optional Percent Of Account)
+    header_idx = None
+    for i, line in enumerate(lines[:25]):
+        low = line.strip().lower()
+        if "symbol" in low and "quantity" in low:
+            header_idx = i
+            break
+    if header_idx is None:
+        return {"ok": False, "error": "Could not find positions CSV header row (need Symbol + Quantity columns)."}
+
+    # Parse header to locate Quantity and Last Price column indices
+    try:
+        hdr_fields = next(_csv_m.reader([lines[header_idx]]))
+    except Exception:
+        return {"ok": False, "error": "Could not parse positions CSV header row."}
+
+    hdr_lower = [h.strip().lower() for h in hdr_fields]
+    columns_detected = [h.strip() for h in hdr_fields]
+
+    qty_idx   = next((i for i, h in enumerate(hdr_lower) if h == "quantity"), None)
+    price_idx = next((i for i, h in enumerate(hdr_lower)
+                      if "last price" in h and "change" not in h), None)
+
+    holdings: list[dict] = []
+    total_value = 0.0
+
+    # Money-market tickers to include for total but not for attribution
+    _mm_set = {"SPAXX", "FZFXX", "FZSXX", "FDRXX", "VMFXX", "VMRXX", "SWVXX", "FCASH"}
+
+    for raw_line in lines[header_idx + 1:]:
+        line = raw_line.strip()
+        if not line:
+            break  # blank line = end of positions section
+
+        try:
+            fields = next(_csv_m.reader([line]))
+        except Exception:
+            continue
+        if len(fields) < 5:
+            continue
+
+        # Ticker: scan first 8 fields (tolerates account-info prefix columns)
+        ticker: str | None = None
+        is_mm = False
+        for fld in fields[:8]:
+            candidate = fld.strip().upper().strip("*").strip()
+            if candidate in _mm_set:
+                ticker = candidate
+                is_mm = True
+                break
+            if _looks_like_ticker(candidate) and candidate not in _FIDELITY_SKIP:
+                ticker = candidate
+                break
+        if not ticker:
+            continue
+
+        # Skip non-position pseudo-rows
+        if ticker in {"TOTAL", "TOTALS", "SUBTOTAL", "ACCOUNTTOTAL", "PENDINGACTIVITY"}:
+            continue
+
+        # Quantity
+        quantity: float | None = None
+        if qty_idx is not None and qty_idx < len(fields):
+            try:
+                q_str = fields[qty_idx].strip().replace(",", "")
+                if q_str:
+                    quantity = float(q_str)
+            except (ValueError, TypeError):
+                pass
+
+        # Last Price
+        price: float | None = None
+        if price_idx is not None and price_idx < len(fields):
+            try:
+                p_str = fields[price_idx].strip().replace("$", "").replace(",", "")
+                if p_str:
+                    price = float(p_str)
+            except (ValueError, TypeError):
+                pass
+
+        # Percent Of Account (3rd "%" field — existing reliable approach)
+        weight: float | None = None
+        pct_count = 0
+        for fld in fields:
+            fld_s = fld.strip()
+            if fld_s.endswith("%"):
+                pct_count += 1
+                if pct_count == 3:
+                    try:
+                        val = float(fld_s.replace("%", "").strip())
+                        if 0.0 <= val <= 100.0:
+                            weight = round(val / 100.0, 8)
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+        current_value: float | None = None
+        if quantity is not None and price is not None and quantity > 0 and price > 0:
+            current_value = round(quantity * price, 2)
+            total_value += current_value
+
+        holdings.append({
+            "ticker":        ticker,
+            "quantity":      round(quantity, 4) if quantity is not None else None,
+            "price":         round(price, 4)    if price    is not None else None,
+            "current_value": current_value,
+            "weight":        weight,
+            "is_mm":         is_mm,  # True = money-market / cash (exclude from attribution)
+        })
+
+    return {
+        "ok":               True,
+        "holdings":         holdings,
+        "total_value":      round(total_value, 2),
+        "columns_detected": columns_detected,
+    }
+
+
+def parse_activity_for_attribution(raw_text: str) -> dict:
+    """Parse Fidelity activity CSV to extract every trade and dividend event.
+
+    Returns:
+        {
+          "ok": True,
+          "trades":    [{"date", "ticker", "type" (BUY|SELL), "shares", "price", "amount"}],
+          "dividends": [{"date", "ticker", "amount"}],
+        }
+
+    Action parsing:
+      "YOU SOLD INTEL CORP COM USD0.001 (INTC) (Cash)"
+         → SELL, ticker from Symbol column or (INTC) parenthetical
+      "YOU BOUGHT APPLE INC (AAPL) (Cash)"
+         → BUY
+      "DIVIDEND RECEIVED"
+         → dividend using Symbol column
+      "REINVESTMENT" with a ticker
+         → treated as BUY (reinvested dividend buys more shares)
+    """
+    import csv as _csv_m2
+    import re as _re2
+    from io import StringIO as _StringIO2
+
+    lines = raw_text.splitlines()
+
+    header_idx = None
+    for i, line in enumerate(lines[:30]):
+        low = line.strip().lower()
+        if "run date" in low or ("date" in low and "action" in low):
+            header_idx = i
+            break
+    if header_idx is None:
+        return {"ok": False, "error": "Could not find activity CSV header row."}
+
+    data_lines = lines[header_idx:]
+    try:
+        reader = _csv_m2.DictReader(_StringIO2("\n".join(data_lines)))
+    except Exception as exc:
+        return {"ok": False, "error": f"CSV parse error: {exc}"}
+
+    trades: list[dict]    = []
+    dividends: list[dict] = []
+    year = datetime.now().year
+    year_start = f"{year}-01-01"
+
+    for row in reader:
+        if not row:
+            continue
+        row = {k.strip(): (v or "").strip() for k, v in row.items() if k and k.strip()}
+        if not row:
+            continue
+
+        raw_date = row.get("Run Date") or row.get("Date") or ""
+        try:
+            dt = datetime.strptime(raw_date.strip(), "%m/%d/%Y")
+            date_str = dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+        if date_str < year_start:
+            continue
+
+        action = (row.get("Action") or "").strip().upper()
+        if not action:
+            continue
+
+        # ── Ticker ──────────────────────────────────────────────────────────
+        symbol = (row.get("Symbol") or "").strip().upper()
+        if not symbol or not _looks_like_ticker(symbol):
+            # Try "(TICKER)" in the action string
+            m = _re2.search(r'\(([A-Z]{1,5})\)', action)
+            symbol = m.group(1) if m else ""
+        if not symbol:
+            continue
+
+        # ── Quantity ────────────────────────────────────────────────────────
+        raw_qty = (row.get("Quantity") or "").replace(",", "").strip()
+        try:
+            quantity = abs(float(raw_qty))
+        except ValueError:
+            quantity = 0.0
+
+        # ── Price ───────────────────────────────────────────────────────────
+        raw_price = (row.get("Price ($)") or row.get("Price") or "").replace("$", "").replace(",", "").strip()
+        try:
+            price = abs(float(raw_price))
+        except ValueError:
+            price = 0.0
+
+        # ── Amount ──────────────────────────────────────────────────────────
+        raw_amt = (row.get("Amount ($)") or row.get("Amount") or "").replace("$", "").replace(",", "").strip()
+        if raw_amt.startswith("(") and raw_amt.endswith(")"):
+            raw_amt = "-" + raw_amt[1:-1]
+        try:
+            amount = float(raw_amt)
+        except ValueError:
+            amount = 0.0
+
+        # ── Classify ────────────────────────────────────────────────────────
+        if "YOU SOLD" in action:
+            if quantity > 0 and price > 0:
+                trades.append({
+                    "date":   date_str,
+                    "ticker": symbol,
+                    "type":   "SELL",
+                    "shares": round(quantity, 4),
+                    "price":  round(price, 4),
+                    "amount": round(abs(amount), 2),  # proceeds received
+                })
+        elif "YOU BOUGHT" in action:
+            if quantity > 0 and price > 0:
+                trades.append({
+                    "date":   date_str,
+                    "ticker": symbol,
+                    "type":   "BUY",
+                    "shares": round(quantity, 4),
+                    "price":  round(price, 4),
+                    "amount": round(abs(amount), 2),  # cost paid
+                })
+        elif "REINVESTMENT" in action:
+            # Reinvested dividend buys more fractional shares
+            if quantity > 0 and price > 0:
+                trades.append({
+                    "date":   date_str,
+                    "ticker": symbol,
+                    "type":   "REINVESTMENT",
+                    "shares": round(quantity, 6),
+                    "price":  round(price, 4),
+                    "amount": round(abs(amount), 2),
+                })
+        elif "DIVIDEND RECEIVED" in action:
+            if amount != 0:
+                dividends.append({
+                    "date":   date_str,
+                    "ticker": symbol,
+                    "amount": round(abs(amount), 2),
+                })
+
+    return {
+        "ok":        True,
+        "trades":    sorted(trades,    key=lambda t: t["date"]),
+        "dividends": sorted(dividends, key=lambda d: d["date"]),
+    }
+
+
+def compute_position_attribution(
+    positions_text: str,
+    activity_text: str,
+    begin_value: float,
+) -> dict:
+    """Compute accurate per-stock YTD performance attribution.
+
+    Algorithm per ticker:
+        start_shares  = end_shares + Σ(sold_shares) − Σ(bought_shares) − Σ(reinvested_shares)
+        start_value   = start_shares × jan1_price
+        end_value     = end_shares × current_price   (from positions CSV)
+        dollar_gain   = end_value
+                      + Σ(sell_proceeds)
+                      + dividends_received
+                      − start_value
+                      − Σ(buy_costs)
+                      − Σ(reinvestment_costs)
+        contribution% = dollar_gain / begin_value × 100
+
+    This correctly handles:
+      • Partial sales: sold shares captured gain at the sale price
+      • New purchases: cost basis subtracted, current value included
+      • Dividend reinvestments: cash used treated as a buy
+      • Cash dividends: credited to that ticker's P&L
+      • Positions fully liquidated: end_shares = 0, only sale proceeds count
+
+    Parameters:
+        positions_text: Raw text of Fidelity positions CSV (same file uploaded
+                        for the live benchmark — provides current shares + prices)
+        activity_text:  Raw text of Fidelity activity/history CSV (provides all
+                        trades and dividends for the current calendar year)
+        begin_value:    Total portfolio value on Jan 1 (for contribution normalisation)
+    """
+    if begin_value <= 0:
+        return {"ok": False, "error": "begin_value must be a positive dollar amount."}
+
+    # ── Step 1: Parse current positions ──────────────────────────────────────
+    pos_result = _parse_fidelity_positions_extended(positions_text)
+    if not pos_result.get("ok"):
+        return pos_result
+
+    holdings      = pos_result["holdings"]
+    portfolio_end_value = pos_result["total_value"]  # sum of qty × price
+
+    # Build lookup: ticker → {quantity, price, current_value}
+    # Exclude money-market from attribution rows
+    current_state: dict[str, dict] = {}
+    for h in holdings:
+        if h.get("is_mm"):
+            continue  # SPAXX etc. → contributes to total value but not to attribution
+        t = h["ticker"]
+        current_state[t] = {
+            "end_shares":    h["quantity"]      or 0.0,
+            "end_price":     h["price"]         or 0.0,
+            "current_value": h["current_value"] or 0.0,
+        }
+
+    # ── Step 2: Parse activity ────────────────────────────────────────────────
+    act_result = parse_activity_for_attribution(activity_text)
+    if not act_result.get("ok"):
+        return act_result
+
+    trades    = act_result["trades"]
+    dividends = act_result["dividends"]
+
+    # Index trades and dividends by ticker
+    trades_by_ticker:    dict[str, list] = {}
+    dividends_by_ticker: dict[str, float] = {}
+
+    for t in trades:
+        trades_by_ticker.setdefault(t["ticker"], []).append(t)
+    for d in dividends:
+        dividends_by_ticker[d["ticker"]] = dividends_by_ticker.get(d["ticker"], 0.0) + d["amount"]
+
+    # All tickers we need to evaluate (positions + sold-out positions from activity)
+    all_tickers: set[str] = set(current_state.keys()) | set(trades_by_ticker.keys())
+
+    # ── Step 3: Fetch Jan 1 prices in bulk ───────────────────────────────────
+    year         = datetime.now().year
+    period_start = datetime(year, 1, 1)
+    price_start  = (period_start - timedelta(days=14)).strftime("%Y-%m-%d")
+    price_end    = (period_start + timedelta(days=5)).strftime("%Y-%m-%d")
+
+    jan1_prices: dict[str, float] = {}
+    try:
+        import yfinance as _yf
+        tickers_list = list(all_tickers)
+        if tickers_list:
+            hist = _yf.download(
+                tickers_list,
+                start=price_start,
+                end=price_end,
+                auto_adjust=False,
+                progress=False,
+            )
+            close_data = hist.get("Close") if isinstance(hist, dict) else (
+                hist["Close"] if "Close" in hist.columns.get_level_values(0) else hist
+            )
+            for ticker in tickers_list:
+                try:
+                    if hasattr(close_data, "columns"):
+                        series = close_data[ticker].dropna()
+                    else:
+                        series = close_data.dropna()
+                    if not series.empty:
+                        jan1_prices[ticker] = float(series.iloc[-1])
+                except Exception:
+                    pass
+    except Exception:
+        pass  # fall back to per-ticker below
+
+    # Per-ticker fallback for any that failed the bulk download
+    for ticker in all_tickers:
+        if ticker not in jan1_prices:
+            try:
+                import yfinance as _yf2
+                h = _yf2.Ticker(ticker).history(
+                    start=price_start, end=price_end, auto_adjust=False
+                )
+                if h is not None and not h.empty:
+                    jan1_prices[ticker] = float(h["Close"].dropna().iloc[-1])
+            except Exception:
+                pass
+
+    # ── Step 4: Compute attribution per ticker ───────────────────────────────
+    attribution: list[dict] = []
+    total_explained = 0.0
+
+    for ticker in all_tickers:
+        state  = current_state.get(ticker, {"end_shares": 0.0, "end_price": 0.0, "current_value": 0.0})
+        end_shares    = state["end_shares"]
+        end_price     = state["end_price"]
+        end_value     = state["current_value"] or (end_shares * end_price)
+        ticker_trades = trades_by_ticker.get(ticker, [])
+
+        # Aggregate sells, buys, reinvestments
+        sells        = [t for t in ticker_trades if t["type"] == "SELL"]
+        buys         = [t for t in ticker_trades if t["type"] == "BUY"]
+        reinvestments= [t for t in ticker_trades if t["type"] == "REINVESTMENT"]
+
+        total_sold_shares   = sum(t["shares"] for t in sells)
+        total_sell_proceeds = sum(t["amount"] for t in sells)
+        total_bought_shares = sum(t["shares"] for t in buys)
+        total_buy_cost      = sum(t["amount"] for t in buys)
+        total_reinv_shares  = sum(t["shares"] for t in reinvestments)
+        total_reinv_cost    = sum(t["amount"] for t in reinvestments)
+        dividends_cash      = dividends_by_ticker.get(ticker, 0.0)
+
+        # Reconstruct starting shares
+        start_shares = (
+            end_shares
+            + total_sold_shares
+            - total_bought_shares
+            - total_reinv_shares
+        )
+        start_shares = max(0.0, start_shares)  # guard against reconstruction errors
+
+        # Starting value: use Jan 1 price (fallback to end price if unavailable)
+        jan1_price  = jan1_prices.get(ticker, end_price)
+        start_value = start_shares * jan1_price
+
+        # Total dollar P&L for this ticker this year
+        dollar_gain = (
+            end_value
+            + total_sell_proceeds
+            + dividends_cash
+            - start_value
+            - total_buy_cost
+            - total_reinv_cost
+        )
+
+        contribution_pct = round(dollar_gain / begin_value * 100.0, 4) if begin_value > 0 else 0.0
+        total_explained += dollar_gain
+
+        # Ticker-level return (for reference, not used in portfolio attribution)
+        if start_value + total_buy_cost + total_reinv_cost > 0:
+            invested = start_value + total_buy_cost + total_reinv_cost
+            ticker_return_pct = round(
+                (end_value + total_sell_proceeds + dividends_cash - invested) / invested * 100.0, 2
+            )
+        else:
+            ticker_return_pct = None
+
+        attribution.append({
+            "ticker":              ticker,
+            "start_shares":        round(start_shares, 4),
+            "jan1_price":          round(jan1_price, 4),
+            "start_value":         round(start_value, 2),
+            "total_sold_shares":   round(total_sold_shares, 4),
+            "total_sell_proceeds": round(total_sell_proceeds, 2),
+            "total_bought_shares": round(total_bought_shares, 4),
+            "total_buy_cost":      round(total_buy_cost, 2),
+            "reinvestment_shares": round(total_reinv_shares, 6),
+            "reinvestment_cost":   round(total_reinv_cost, 2),
+            "dividends_cash":      round(dividends_cash, 2),
+            "end_shares":          round(end_shares, 4),
+            "end_price":           round(end_price, 4),
+            "end_value":           round(end_value, 2),
+            "dollar_gain":         round(dollar_gain, 2),
+            "contribution_pct":    contribution_pct,
+            "ticker_return_pct":   ticker_return_pct,
+            "trade_count":         len(ticker_trades),
+            "trades":              ticker_trades,        # detail list
+            "jan1_price_source":   "fetched" if ticker in jan1_prices else "fallback",
+        })
+
+    # Sort: biggest absolute contributors first
+    attribution.sort(key=lambda a: abs(a["dollar_gain"]), reverse=True)
+
+    explained_pct = round(total_explained / begin_value * 100.0, 4) if begin_value > 0 else 0.0
+
+    return {
+        "ok":                  True,
+        "attribution":         attribution,
+        "total_dollar_gain":   round(total_explained, 2),
+        "explained_pct":       explained_pct,
+        "begin_value":         round(begin_value, 2),
+        "portfolio_end_value": round(portfolio_end_value, 2),
+        "positions_parsed":    len([h for h in holdings if not h.get("is_mm")]),
+        "trades_parsed":       len(trades),
+        "dividends_parsed":    len(dividends),
+        "jan1_prices":         {k: round(v, 4) for k, v in jan1_prices.items()},
+        "columns_positions":   pos_result.get("columns_detected", []),
+    }
+
+
 # ── Account history / Modified Dietz YTD return ──────────────────────────────
 
 _FIDELITY_INFLOW_ACTIONS = frozenset({

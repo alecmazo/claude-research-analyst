@@ -1523,6 +1523,95 @@ body {
 .history-flows-table td.green { color: #4ADE80; font-weight: 700; }
 .history-flows-table td.red   { color: #F87171; font-weight: 700; }
 
+/* ── Transaction Attribution ──────────────────────────────────────────────── */
+.attr-summary {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+  margin-bottom: 14px;
+}
+.attr-summary-item {
+  background: rgba(255,255,255,0.04); border-radius: 8px;
+  padding: 8px 12px;
+}
+.attr-summary-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.8px;
+  text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 4px;
+}
+.attr-summary-val {
+  font-size: 18px; font-weight: 800; font-family: "SF Mono", monospace;
+  color: var(--white);
+}
+.attr-summary-val.attr-gain { color: #4ADE80; }
+.attr-summary-val.attr-loss { color: #F87171; }
+
+.attr-table-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);
+}
+.attr-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 11px; min-width: 680px;
+}
+.attr-table thead th {
+  background: rgba(255,255,255,0.06);
+  font-size: 8px; font-weight: 800; letter-spacing: 0.8px;
+  text-transform: uppercase; color: rgba(255,255,255,0.45);
+  padding: 7px 8px; text-align: left; white-space: nowrap;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.attr-row td {
+  padding: 6px 8px; vertical-align: middle;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.8);
+}
+.attr-row:last-child td { border-bottom: none; }
+.attr-row:hover td { background: rgba(255,255,255,0.03); }
+
+.attr-ticker {
+  font-weight: 800; font-size: 12px; color: var(--white);
+  white-space: nowrap;
+}
+.attr-num {
+  text-align: right; font-family: "SF Mono", monospace;
+  font-size: 11px; white-space: nowrap;
+}
+.attr-sub {
+  display: block; font-size: 9px; color: rgba(255,255,255,0.35);
+  font-family: inherit; font-weight: 400;
+}
+.attr-contrib {
+  font-size: 13px; font-weight: 800;
+}
+.attr-gain { color: #4ADE80; }
+.attr-loss { color: #F87171; }
+
+.attr-activity { font-size: 10px; white-space: nowrap; }
+.attr-sell-chip {
+  display: inline-block; background: rgba(248,113,113,0.15);
+  color: #F87171; border-radius: 4px;
+  padding: 2px 5px; margin: 1px 2px 1px 0; font-size: 9px; font-weight: 700;
+}
+.attr-buy-chip {
+  display: inline-block; background: rgba(74,222,128,0.12);
+  color: #4ADE80; border-radius: 4px;
+  padding: 2px 5px; margin: 1px 2px 1px 0; font-size: 9px; font-weight: 700;
+}
+.attr-div-chip {
+  display: inline-block; background: rgba(251,191,36,0.12);
+  color: #FBBF24; border-radius: 4px;
+  padding: 2px 5px; margin: 1px 2px 1px 0; font-size: 9px; font-weight: 700;
+}
+.attr-trade-badge {
+  display: inline-block; background: rgba(129,140,248,0.2);
+  color: #818CF8; border-radius: 3px;
+  padding: 1px 4px; margin-left: 4px; font-size: 8px; font-weight: 700;
+  vertical-align: middle;
+}
+.attr-total-row td {
+  padding: 8px; background: rgba(255,255,255,0.05);
+  border-top: 1px solid rgba(255,255,255,0.12);
+  color: var(--white); font-size: 12px;
+}
+
 .tracker-live-empty { color: var(--mid-gray); font-style: italic; font-size: 13px; }
 .tracker-live-line {
   display: flex; align-items: center; justify-content: space-between;
