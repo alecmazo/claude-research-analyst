@@ -818,6 +818,26 @@ def email_live_ytd_report(body: EmailYtdRequest):
     return result
 
 
+@app.post("/api/track/live/ytd/set-current/{snapshot_id}")
+def set_current_ytd_snapshot(snapshot_id: str):
+    """Promote a past snapshot to the current account_history (live benchmark view).
+
+    When the user selects a different run from the Past YTD Runs list, calling
+    this makes the Live Benchmark card and YTD detail reflect that run.
+    """
+    try:
+        result = analyst.set_current_ytd_snapshot(snapshot_id)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"set_current_ytd_snapshot raised: {exc}\n\nTraceback:\n{tb}",
+        )
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    return result
+
+
 @app.post("/api/track/snapshot")
 def trigger_tracker_snapshot():
     """Manually trigger a daily snapshot (admin / debug)."""

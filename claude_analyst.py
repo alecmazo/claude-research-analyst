@@ -602,10 +602,10 @@ def _send_via_resend(msg: EmailMessage) -> dict | None:
     if not api_key:
         return None
 
-    # Resend requires the From address to be on a verified domain OR use the
-    # test sender onboarding@resend.dev. Honor RESEND_FROM if set, otherwise
-    # fall back to the test sender (works out of the box).
-    from_override = _optional_env("RESEND_FROM", "") or "DGA Capital <onboarding@resend.dev>"
+    # Resend requires the From address to be on a verified domain.
+    # Use RESEND_FROM env var (Railway) if set; otherwise default to the
+    # verified dgacapital.com domain so emails reach any recipient.
+    from_override = _optional_env("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
     payload = _email_msg_to_resend_payload(msg, from_override=from_override)
 
     try:
@@ -649,10 +649,9 @@ def _send_via_resend(msg: EmailMessage) -> dict | None:
     )
     if is_test_only:
         err_msg = (
-            "Resend is in test mode and can only email your own account address. "
-            "To email anyone: (1) verify your domain at resend.com/domains "
-            "(e.g. dgacapital.com), then (2) set the Railway env var "
-            "RESEND_FROM=reports@dgacapital.com (or any verified address)."
+            "Resend rejected the send — the From address may not be verified. "
+            "Set the Railway env var RESEND_FROM to a verified sender "
+            "(e.g. RESEND_FROM=reports@dgacapital.com)."
         )
     return {
         "ok": False,
@@ -3660,13 +3659,14 @@ def compute_unified_ytd(
             ),
         }
 
-    # ── External cash flows from the activity CSV (for Modified Dietz) ───────
+    # ── External cash flows ───────────────────────────────────────────────────
+    # Always parse the activity CSV so we have individual transaction rows for
+    # the flows table display and fallback values.
     flows_parse = parse_fidelity_history(activity_text)
     if not flows_parse.get("ok"):
         return flows_parse
 
-    flows    = flows_parse["flows"]
-    net_flow = float(flows_parse["net_flow"])
+    flows = flows_parse["flows"]   # individual rows — used for display table
 
     # ── Modified Dietz: R = (EMV − BMV − CF) / (BMV + Σ(CFᵢ × Wᵢ)) ──────────
     year         = datetime.now().year
@@ -3674,15 +3674,42 @@ def compute_unified_ytd(
     today_dt     = datetime.now()
     cd           = max(1, (today_dt - period_start).days)
 
-    weighted_flows = 0.0
-    for f in flows:
-        try:
-            flow_dt         = datetime.strptime(f["date"], "%Y-%m-%d")
-            di              = max(0, (flow_dt - period_start).days)
-            wi              = (cd - di) / cd
-            weighted_flows += float(f["amount"]) * wi
-        except Exception:  # noqa: BLE001
-            continue
+    # Net flow & weighted flows for MD: use monthly-perf CSV when available
+    # (it contains Fidelity's exact deposit/withdrawal totals per month).
+    # Fall back to activity CSV parsing when no perf CSV is provided.
+    if monthly_perf_parsed and monthly_perf_parsed.get("months"):
+        perf_months = monthly_perf_parsed["months"]
+        net_flow    = round(sum(float(pm.get("net_flow") or 0.0) for pm in perf_months), 2)
+        # Weighted flows: treat each month's net flow as occurring mid-month
+        weighted_flows = 0.0
+        for pm in perf_months:
+            pmf = float(pm.get("net_flow") or 0.0)
+            if pmf == 0.0:
+                continue
+            try:
+                mid_month       = datetime(year, pm["month"], 15)
+                di              = max(0, (mid_month - period_start).days)
+                wi              = (cd - di) / cd
+                weighted_flows += pmf * wi
+            except Exception:  # noqa: BLE001
+                continue
+        # flow_count = months with a non-zero deposit or withdrawal
+        flow_count_display = sum(
+            1 for pm in perf_months
+            if (pm.get("deposits") or 0) != 0 or (pm.get("withdrawals") or 0) != 0
+        )
+    else:
+        net_flow       = float(flows_parse["net_flow"])
+        weighted_flows = 0.0
+        for f in flows:
+            try:
+                flow_dt         = datetime.strptime(f["date"], "%Y-%m-%d")
+                di              = max(0, (flow_dt - period_start).days)
+                wi              = (cd - di) / cd
+                weighted_flows += float(f["amount"]) * wi
+            except Exception:  # noqa: BLE001
+                continue
+        flow_count_display = len(flows)
 
     denominator = float(begin_value) + weighted_flows
     if denominator <= 0:
@@ -3721,7 +3748,7 @@ def compute_unified_ytd(
         "end_value":           round(end_value, 2),
         "emv_source":          "positions_csv",
         "net_flow":            round(net_flow, 2),
-        "flow_count":          len(flows),
+        "flow_count":          flow_count_display,
         "flows":               sorted(flows, key=lambda f: f["date"]),  # persisted for page-load render
         "unique_actions":      sorted(flows_parse.get("unique_actions") or []),
         "transaction_count":   int(flows_parse.get("transaction_count", 0)),
@@ -3775,6 +3802,10 @@ def compute_unified_ytd(
                     "auto_created": True,
                 }
                 state["live_portfolio"] = lp
+            elif pos_holdings_for_promote:
+                # Always refresh holdings from the latest positions CSV so the
+                # Live Benchmark card reflects the current upload, not a stale one.
+                lp["holdings"] = pos_holdings_for_promote
 
             # Capture holdings at upload time (deep copy via JSON round-trip
             # — primitives only, so json.loads(json.dumps(...)) is safe).
@@ -3810,7 +3841,7 @@ def compute_unified_ytd(
         "end_value":         round(end_value, 2),
         "emv_source":        "positions_csv",
         "net_flow":          round(net_flow, 2),
-        "flow_count":        len(flows),
+        "flow_count":        flow_count_display,
         "trade_count":       int(attr.get("trades_parsed", 0)),
         "dividend_count":    int(attr.get("dividends_parsed", 0)),
         "transaction_count": int(flows_parse.get("transaction_count", 0)),
@@ -3880,6 +3911,32 @@ def delete_ytd_snapshot(snapshot_id: str) -> dict:
             lp["account_history"] = new[-1] if new else None
         _save_tracker_state(state)
     return {"ok": True, "deleted": snapshot_id, "remaining": len(new)}
+
+
+def set_current_ytd_snapshot(snapshot_id: str) -> dict:
+    """Promote a past snapshot to live_portfolio.account_history.
+
+    This makes the Live Benchmark card and YTD detail view reflect a specific
+    past run rather than always showing the most-recently uploaded one.
+    Also refreshes live_portfolio.holdings from the snapshot's holdings_snapshot
+    so the Live Benchmark holdings chips update immediately.
+    """
+    with _tracker_lock():
+        state = _load_tracker_state()
+        lp = state.get("live_portfolio")
+        if not lp:
+            return {"ok": False, "error": "No live portfolio found."}
+        snaps = lp.get("ytd_snapshots") or []
+        snap = next((s for s in snaps if s.get("id") == snapshot_id), None)
+        if not snap:
+            return {"ok": False, "error": f"Snapshot {snapshot_id!r} not found."}
+        lp["account_history"] = snap
+        # Also update holdings from this snapshot so live benchmark chips update
+        snap_holdings = snap.get("holdings_snapshot")
+        if snap_holdings:
+            lp["holdings"] = snap_holdings
+        _save_tracker_state(state)
+    return {"ok": True, "snapshot_id": snapshot_id}
 
 
 def email_ytd_report(to_email: str, snapshot_id: str | None = None) -> dict:

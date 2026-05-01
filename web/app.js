@@ -139,6 +139,10 @@ const api = {
     method: 'DELETE',
     headers: { 'x-auth-token': getToken() },
   }).then(r => r.json()),
+  setCurrentYtdSnapshot: (id) => fetch(
+    `${API_BASE}/api/track/live/ytd/set-current/${encodeURIComponent(id)}`,
+    { method: 'POST', headers: { 'x-auth-token': getToken() } }
+  ).then(r => r.json()),
   emailYtdReport: (email, snapshotId) => fetch(`${API_BASE}/api/track/live/ytd/email`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
@@ -1136,15 +1140,25 @@ async function loadYtdSnapshots() {
   const list = document.getElementById('ytd-snapshots-list');
   if (!card || !list) return;
   try {
-    const data = await api.listYtdSnapshots();
-    const snaps = data?.snapshots || [];
+    const [snapData, liveData] = await Promise.all([
+      api.listYtdSnapshots(),
+      api.getLiveBenchmark().catch(() => null),
+    ]);
+    const snaps = snapData?.snapshots || [];
     if (!snaps.length) { card.style.display = 'none'; return; }
     card.style.display = '';
-    list.innerHTML = snaps.map(s => _ytdSnapshotRowHtml(s)).join('');
+    const currentId = liveData?.live_portfolio?.account_history?.id || null;
+    list.innerHTML = snaps.map(s => _ytdSnapshotRowHtml(s, s.id === currentId)).join('');
     list.querySelectorAll('.ytd-snap-row').forEach(el => {
-      el.addEventListener('click', (ev) => {
+      el.addEventListener('click', async (ev) => {
         if (ev.target.closest('.ytd-snap-delete')) return;  // ignore delete clicks
-        openLiveBenchmarkDetail(el.dataset.id);
+        const snapId = el.dataset.id;
+        // Promote this snapshot as the current run so the live benchmark
+        // card and all downstream views reflect the selected run.
+        try { await api.setCurrentYtdSnapshot(snapId); } catch (_) { /* non-fatal */ }
+        // Reload live benchmark card (chips + account_history update)
+        await loadLiveBenchmark();
+        openLiveBenchmarkDetail(snapId);
       });
     });
     list.querySelectorAll('.ytd-snap-delete').forEach(el => {
@@ -1163,7 +1177,7 @@ async function loadYtdSnapshots() {
   }
 }
 
-function _ytdSnapshotRowHtml(s) {
+function _ytdSnapshotRowHtml(s, isActive = false) {
   const md = s.md_return_pct ?? 0;
   const cls = md >= 0 ? 'green' : 'red';
   const sign = md >= 0 ? '+' : '';
@@ -1172,9 +1186,10 @@ function _ytdSnapshotRowHtml(s) {
     hour: 'numeric', minute: '2-digit',
   }) : '—';
   const usd0 = (v) => v == null ? '—' : (v < 0 ? '−' : '') + '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
-  return `<div class="ytd-snap-row" data-id="${s.id}">
+  const activeBadge = isActive ? `<span class="ytd-snap-active-badge">active</span>` : '';
+  return `<div class="ytd-snap-row${isActive ? ' ytd-snap-row--active' : ''}" data-id="${s.id}">
     <div class="ytd-snap-row-left">
-      <div class="ytd-snap-date">${dt}</div>
+      <div class="ytd-snap-date">${dt}${activeBadge}</div>
       <div class="ytd-snap-meta">
         ${usd0(s.begin_value)} → ${usd0(s.end_value)} ·
         ${s.positions_count} positions · ${s.trade_count} trades
