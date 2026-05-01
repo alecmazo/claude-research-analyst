@@ -1337,10 +1337,12 @@ async function uploadAccountHistory() {
   const perfFile   = perfInput?.files?.[0];   // optional
   const beginValue = parseFloat(beginInput?.value);
 
-  if (!posFile)             { alert('Please select your Fidelity Positions CSV.'); return; }
-  if (!actFile)             { alert('Please select your Fidelity Activity CSV.'); return; }
-  if (!beginValue || beginValue <= 0) {
-    alert('Please enter your Jan 1 portfolio value.'); return;
+  if (!posFile)  { alert('Please select your Fidelity Positions CSV.'); return; }
+  if (!actFile)  { alert('Please select your Fidelity Activity CSV.'); return; }
+  // begin_value is optional when a Monthly Performance CSV is supplied
+  // (the perf CSV contains the Jan 1 starting balance in its first row)
+  if ((!beginValue || beginValue <= 0) && !perfFile) {
+    alert('Please enter your Jan 1 portfolio value, or upload a Monthly Performance CSV (it contains the starting balance automatically).'); return;
   }
 
   btn.disabled = true;
@@ -1352,8 +1354,9 @@ async function uploadAccountHistory() {
     const fd = new FormData();
     fd.append('positions_file', posFile);
     fd.append('activity_file',  actFile);
-    fd.append('begin_value',    beginValue);
-    fd.append('token',          getToken());
+    // Only send begin_value when the user actually entered one
+    if (beginValue && beginValue > 0) fd.append('begin_value', beginValue);
+    fd.append('token', getToken());
     if (perfFile) fd.append('monthly_perf_file', perfFile);
 
     const res = await fetch(`${API_BASE}/api/track/live/ytd`, {

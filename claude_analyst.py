@@ -3594,37 +3594,55 @@ def _compute_twrr(
 def compute_unified_ytd(
     positions_text:      str,
     activity_text:       str,
-    begin_value:         float,
+    begin_value:         float | None = None,
     monthly_perf_text:   str | None = None,
 ) -> dict:
     """Single unified YTD computation: Modified Dietz return + per-stock attribution.
 
     Replaces the two separate flows (account_history + attribution). One call,
     one set of inputs:
-        • positions_text — Fidelity Positions CSV (current holdings + cash)
-        • activity_text  — Fidelity Activity/History CSV (YTD transactions)
-        • begin_value    — Jan 1 portfolio total ($)
+        • positions_text   — Fidelity Positions CSV (current holdings + cash)
+        • activity_text    — Fidelity Activity/History CSV (YTD transactions)
+        • begin_value      — Jan 1 portfolio total ($).  Optional when
+                             monthly_perf_text is supplied — the first month's
+                             beginning balance is used automatically.
+        • monthly_perf_text — (optional) Fidelity monthly performance summary CSV.
+                             When provided, begin_value can be omitted.
 
     The end portfolio value (EMV) is auto-derived as the sum of every position
     × current price PLUS money-market funds (SPAXX/FZFXX/etc.) — exactly what
     Fidelity shows as the account total. No manual end-value entry needed.
-
-    The result includes:
-        • md_return_pct     — Modified Dietz YTD return (cash-flow weighted)
-        • end_value         — auto-extracted from positions CSV
-        • net_flow          — net deposits − withdrawals from activity CSV
-        • attribution[]     — per-ticker dollar gain + contribution %, sorted
-                              by absolute impact, with trade summary baked in
-        • Persisted to live_portfolio.account_history so the YTD detail card
-          can render attribution from real per-ticker math instead of the
-          broken weight×snapshot-return approximation.
     """
     if not positions_text:
         return {"ok": False, "error": "Positions CSV content is required."}
     if not activity_text:
         return {"ok": False, "error": "Activity CSV content is required."}
+
+    # ── Parse monthly performance CSV early — we may need it for begin_value ──
+    monthly_perf_parsed = None
+    monthly_perf_error  = None
+    if monthly_perf_text and monthly_perf_text.strip():
+        try:
+            mp = parse_fidelity_monthly_perf(monthly_perf_text)
+            if mp.get("ok"):
+                monthly_perf_parsed = mp
+            else:
+                monthly_perf_error = mp.get("error", "monthly perf parse failed")
+        except Exception as mp_exc:  # noqa: BLE001
+            monthly_perf_error = str(mp_exc)
+
+    # ── Resolve begin_value: manual entry OR first month's start from perf CSV ──
     if not begin_value or begin_value <= 0:
-        return {"ok": False, "error": "Jan 1 portfolio value is required and must be positive."}
+        if monthly_perf_parsed and monthly_perf_parsed.get("months"):
+            begin_value = float(monthly_perf_parsed["months"][0]["start"])
+        else:
+            return {
+                "ok": False,
+                "error": (
+                    "Jan 1 portfolio value is required. "
+                    "Either enter it manually or upload a Monthly Performance CSV."
+                ),
+            }
 
     # ── Per-ticker attribution (also gives us positions_total_value as EMV) ──
     attr = compute_position_attribution(positions_text, activity_text, begin_value)
@@ -3672,19 +3690,6 @@ def compute_unified_ytd(
 
     md_return     = (end_value - float(begin_value) - net_flow) / denominator
     md_return_pct = round(md_return * 100.0, 4)
-
-    # ── Parse optional monthly performance CSV ───────────────────────────────
-    monthly_perf_parsed = None
-    monthly_perf_error  = None
-    if monthly_perf_text and monthly_perf_text.strip():
-        try:
-            mp = parse_fidelity_monthly_perf(monthly_perf_text)
-            if mp.get("ok"):
-                monthly_perf_parsed = mp
-            else:
-                monthly_perf_error = mp.get("error", "monthly perf parse failed")
-        except Exception as mp_exc:  # noqa: BLE001
-            monthly_perf_error = str(mp_exc)
 
     # ── Monthly chart + TWRR (computed before the lock — can be slow) ─────────
     monthly_chart      = None

@@ -714,23 +714,22 @@ def get_tracker_live_detail(snapshot_id: str | None = None):
 async def compute_live_ytd_unified(
     positions_file:     UploadFile = File(...),
     activity_file:      UploadFile = File(...),
-    begin_value:        float      = Form(...),
-    monthly_perf_file:  UploadFile = File(None),
+    begin_value:        float | None = Form(None),
+    monthly_perf_file:  UploadFile   = File(None),
 ):
     """Single unified YTD endpoint: Modified Dietz + TWRR + per-stock attribution.
 
     Multipart inputs:
       - positions_file:    Fidelity Positions CSV
       - activity_file:     Fidelity Activity / History CSV
-      - begin_value:       Jan 1 portfolio total ($)
-      - monthly_perf_file: (optional) Fidelity monthly performance summary CSV
+      - begin_value:       Jan 1 portfolio total ($).  Optional when
+                           monthly_perf_file is supplied — the first month's
+                           beginning balance is used automatically.
+      - monthly_perf_file: (optional) Fidelity monthly performance summary CSV.
                            Provides exact month-end balances + per-component breakdown.
-                           When supplied, the YTD-by-month chart uses Fidelity's exact
-                           values instead of yfinance estimates, and TWRR matches
-                           Fidelity's reported figure exactly.
+                           When supplied begin_value may be omitted; the YTD-by-month
+                           chart uses Fidelity's exact values and TWRR matches exactly.
     """
-    if begin_value <= 0:
-        raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
 
     try:
         pos_content    = await positions_file.read()
