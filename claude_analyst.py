@@ -2745,10 +2745,177 @@ def compute_position_attribution(
     }
 
 
+def parse_fidelity_monthly_perf(raw_text: str) -> dict:
+    """Parse a Fidelity monthly performance / account-summary CSV.
+
+    Expected layout (column names are matched loosely):
+      Month | Beginning Balance | Market Change | Dividends | Interest |
+      Deposits | Withdrawals | Advisory Fees | Ending Balance
+
+    Column matching uses keyword substring search so it works across Fidelity's
+    various export formats.
+
+    Returns:
+      {
+        "ok": True,
+        "months": [
+          {
+            "month":          int,    # 1–12
+            "label":          str,    # "Jan", "Feb", …
+            "start":          float,
+            "market_change":  float,
+            "dividends":      float,
+            "interest":       float,
+            "deposits":       float,  # positive
+            "withdrawals":    float,  # negative
+            "advisory_fees":  float,  # negative (fee charged)
+            "ending":         float,
+            "net_flow":       float,  # deposits + withdrawals (for TWRR)
+            "hpr":            float,  # HPR_m = ending / (start + net_flow)
+          }, ...
+        ],
+        "year": int,
+      }
+    """
+    import re as _re_mp
+    import csv as _csv_mp
+    from io import StringIO as _SIO
+
+    # ── Flexible column-keyword mapping ──────────────────────────────────────
+    _COL_MAP = {
+        "month_label":    ("month", "period", "date"),
+        "start":          ("beginning", "start", "opening"),
+        "market_change":  ("market", "appreciation", "depreciation",
+                           "investment gain", "gain/loss", "change"),
+        "dividends":      ("dividend",),
+        "interest":       ("interest",),
+        "deposits":       ("deposit", "contribution", "receipt",
+                          "transfer in", "inflow"),
+        "withdrawals":    ("withdrawal", "distribution", "disbursement",
+                         "transfer out", "outflow"),
+        "advisory_fees":  ("fee", "advisory"),
+        "ending":         ("ending", "end value", "closing", "end bal"),
+    }
+
+    def _match_col(header_lower: str) -> str | None:
+        for canonical, keywords in _COL_MAP.items():
+            if any(kw in header_lower for kw in keywords):
+                return canonical
+        return None
+
+    _MONTH_NAMES = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    }
+
+    def _parse_month_label(s: str) -> int | None:
+        s = s.strip().lower()
+        for abbr, num in _MONTH_NAMES.items():
+            if s.startswith(abbr):
+                return num
+        # numeric: 01/2026 or 1/2026 or 2026-01
+        m = _re_mp.search(r"(?:^|[-/])(\d{1,2})(?:[-/]\d{4})?$", s)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 12:
+                return n
+        return None
+
+    def _parse_dollar(s: str) -> float:
+        s = str(s or "").strip().replace("$", "").replace(",", "").replace(" ", "")
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    # ── Find header row ───────────────────────────────────────────────────────
+    lines = raw_text.splitlines()
+    header_idx = -1
+    for i, line in enumerate(lines):
+        lower = line.lower()
+        if ("beginning" in lower or "starting" in lower or "opening" in lower) and \
+           ("end" in lower or "closing" in lower):
+            header_idx = i
+            break
+        if "month" in lower and ("balance" in lower or "value" in lower):
+            header_idx = i
+            break
+
+    if header_idx < 0:
+        return {"ok": False, "error": "Could not find monthly performance header row. "
+                "Expected columns: Month, Beginning Balance, …, Ending Balance."}
+
+    data_lines = "\n".join(lines[header_idx:])
+    reader = _csv_mp.DictReader(_SIO(data_lines))
+
+    # Map CSV column names to canonical names
+    col_map: dict[str, str] = {}
+    if reader.fieldnames:
+        for raw_col in reader.fieldnames:
+            canonical = _match_col(raw_col.strip().lower()) if raw_col else None
+            if canonical:
+                col_map[raw_col] = canonical
+
+    year = datetime.now().year
+    months_out: list[dict] = []
+
+    for row in reader:
+        # Flatten row → canonical
+        r: dict = {}
+        for raw_col, canonical in col_map.items():
+            r[canonical] = (row.get(raw_col) or "").strip()
+
+        month_num = _parse_month_label(r.get("month_label", ""))
+        if month_num is None:
+            continue  # skip non-data rows
+
+        start         = _parse_dollar(r.get("start", ""))
+        market_change = _parse_dollar(r.get("market_change", ""))
+        dividends     = _parse_dollar(r.get("dividends", ""))
+        interest      = _parse_dollar(r.get("interest", ""))
+        deposits_raw  = _parse_dollar(r.get("deposits", ""))
+        withdraw_raw  = _parse_dollar(r.get("withdrawals", ""))
+        advisory_fees = _parse_dollar(r.get("advisory_fees", ""))
+        ending        = _parse_dollar(r.get("ending", ""))
+
+        # Normalise signs: deposits = positive, withdrawals = negative
+        deposits    = abs(deposits_raw)  if deposits_raw  != 0 else 0.0
+        withdrawals = -abs(withdraw_raw) if withdraw_raw  != 0 else 0.0
+        advisory    = -abs(advisory_fees) if advisory_fees != 0 else 0.0
+
+        net_flow = deposits + withdrawals   # advisory fees excluded from external flows
+        denom    = start + net_flow
+        hpr      = (ending / denom - 1.0) if denom > 0 else 0.0
+
+        months_out.append({
+            "month":          month_num,
+            "label":          datetime(year, month_num, 1).strftime("%b"),
+            "start":          round(start, 2),
+            "market_change":  round(market_change, 2),
+            "dividends":      round(dividends, 2),
+            "interest":       round(interest, 2),
+            "deposits":       round(deposits, 2),
+            "withdrawals":    round(withdrawals, 2),
+            "advisory_fees":  round(advisory, 2),
+            "ending":         round(ending, 2),
+            "net_flow":       round(net_flow, 2),
+            "hpr":            round(hpr, 6),
+        })
+
+    if not months_out:
+        return {"ok": False, "error": "No monthly data rows parsed from performance CSV."}
+
+    months_out.sort(key=lambda x: x["month"])
+    return {"ok": True, "months": months_out, "year": year}
+
+
 def compute_monthly_ytd_chart(
     positions_text: str,
     activity_text: str,
     begin_value: float,
+    monthly_perf: dict | None = None,
 ) -> dict:
     """Compute month-by-month portfolio performance for the YTD chart.
 
@@ -2918,10 +3085,24 @@ def compute_monthly_ytd_chart(
     cash_bal = sum(h.get("current_value") or 0.0 for h in holdings if h.get("is_mm"))
 
     # ── Portfolio value at end of each month ──────────────────────────────────
+    # Precedence (highest → lowest accuracy):
+    #   1. monthly_perf ending balance (exact Fidelity value)
+    #   2. current month → CSV total (authoritative)
+    #   3. yfinance estimated price × reconstructed shares + cash
+    perf_by_month: dict = {}
+    if monthly_perf and monthly_perf.get("months"):
+        perf_by_month = {p["month"]: p for p in monthly_perf["months"]}
+
     port_val: dict = {0: float(begin_value)}     # key=0 → Jan 1
+    # If monthly_perf provides a Jan start that differs from begin_value, trust it
+    if 1 in perf_by_month and perf_by_month[1].get("start", 0) > 0:
+        port_val[0] = perf_by_month[1]["start"]
+
     for m in range(1, curr_month + 1):
         if m == curr_month:
-            port_val[m] = float(csv_total)       # authoritative from CSV
+            port_val[m] = float(csv_total)       # authoritative: today's CSV
+        elif m in perf_by_month:
+            port_val[m] = perf_by_month[m]["ending"]   # exact Fidelity value
         else:
             se = _shares_end(m)
             eq = sum(sh * _price(tk, m) for tk, sh in se.items() if sh > 0)
@@ -2945,7 +3126,12 @@ def compute_monthly_ytd_chart(
             continue
 
         dg = ev - sv
-        rp = dg / sv * 100.0
+        perf = perf_by_month.get(m)
+        if perf:
+            # Use Fidelity's exact HPR — eliminates cash-flow distortion from bars
+            rp = round(perf["hpr"] * 100.0, 4)
+        else:
+            rp = dg / sv * 100.0
 
         # Per-ticker movers for this month
         movers = []
@@ -2989,6 +3175,16 @@ def compute_monthly_ytd_chart(
             "dollar_gain": round(dg, 2),
             "return_pct":  round(rp, 4),
             "spy_ytd_pct": spy_monthly.get(m),
+            "exact":       perf is not None,   # True = values from Fidelity CSV, not estimated
+            "perf_detail": {                   # from monthly performance CSV when available
+                "market_change":  perf["market_change"]  if perf else None,
+                "dividends":      perf["dividends"]      if perf else None,
+                "interest":       perf["interest"]       if perf else None,
+                "deposits":       perf["deposits"]       if perf else None,
+                "withdrawals":    perf["withdrawals"]    if perf else None,
+                "advisory_fees":  perf["advisory_fees"]  if perf else None,
+                "net_flow":       perf["net_flow"]       if perf else None,
+            } if perf else None,
             "movers":      movers[:8],
             "dividends":   [{"ticker": d["ticker"], "amount": d["amount"]}
                             for d in divs_by_month.get(m, [])],
@@ -2998,11 +3194,12 @@ def compute_monthly_ytd_chart(
         })
 
     return {
-        "ok":          True,
-        "monthly":     months_out,
-        "begin_value": round(float(begin_value), 2),
-        "end_value":   round(float(csv_total), 2),
-        "year":        year,
+        "ok":              True,
+        "monthly":         months_out,
+        "begin_value":     round(float(port_val[0]), 2),
+        "end_value":       round(float(csv_total), 2),
+        "year":            year,
+        "has_exact_perf":  len(perf_by_month) > 0,
     }
 
 
@@ -3349,14 +3546,13 @@ def _compute_twrr(
 ) -> float | None:
     """Compute Time-Weighted Rate of Return (TWRR) from monthly sub-periods.
 
-    Chains monthly holding-period returns:
-        HPR_m  = EMV_m / (BMV_m + CF_m)
+    When monthly_data rows have exact HPRs from the Fidelity monthly performance
+    CSV (mo["exact"] = True), those are used directly — giving a result that
+    exactly matches Fidelity's reported TWRR.
+
+    Otherwise chains estimated HPRs:
+        HPR_m  = EMV_m / (BMV_m + CF_m)   CF from activity CSV
         TWRR   = Π(HPR_m) − 1
-
-    CF_m = net external cash flow in month m (positive = deposit, negative = withdrawal).
-    Cash flows assumed at period start — consistent with how Fidelity approaches daily TWRR.
-
-    This gives a result very close to Fidelity's reported TWRR (which uses daily valuations).
     """
     from collections import defaultdict
 
@@ -3371,11 +3567,20 @@ def _compute_twrr(
     product       = 1.0
     valid_months  = 0
     for mo in monthly_data:
-        m    = mo["month"]
-        bmv  = float(mo.get("start_value") or 0.0)
-        emv  = float(mo.get("end_value")   or 0.0)
-        cf   = flows_by_month.get(m, 0.0)
-        denom = bmv + cf
+        m = mo["month"]
+        if mo.get("exact") and mo.get("perf_detail") and \
+                mo["perf_detail"].get("net_flow") is not None:
+            # Exact HPR from Fidelity monthly CSV
+            bmv      = float(mo.get("start_value") or 0.0)
+            emv      = float(mo.get("end_value")   or 0.0)
+            net_flow = float(mo["perf_detail"]["net_flow"])
+            denom    = bmv + net_flow
+        else:
+            bmv   = float(mo.get("start_value") or 0.0)
+            emv   = float(mo.get("end_value")   or 0.0)
+            cf    = flows_by_month.get(m, 0.0)
+            denom = bmv + cf
+
         if denom <= 0 or bmv <= 0:
             continue
         product      *= emv / denom
@@ -3387,9 +3592,10 @@ def _compute_twrr(
 
 
 def compute_unified_ytd(
-    positions_text: str,
-    activity_text:  str,
-    begin_value:    float,
+    positions_text:      str,
+    activity_text:       str,
+    begin_value:         float,
+    monthly_perf_text:   str | None = None,
 ) -> dict:
     """Single unified YTD computation: Modified Dietz return + per-stock attribution.
 
@@ -3467,12 +3673,28 @@ def compute_unified_ytd(
     md_return     = (end_value - float(begin_value) - net_flow) / denominator
     md_return_pct = round(md_return * 100.0, 4)
 
+    # ── Parse optional monthly performance CSV ───────────────────────────────
+    monthly_perf_parsed = None
+    monthly_perf_error  = None
+    if monthly_perf_text and monthly_perf_text.strip():
+        try:
+            mp = parse_fidelity_monthly_perf(monthly_perf_text)
+            if mp.get("ok"):
+                monthly_perf_parsed = mp
+            else:
+                monthly_perf_error = mp.get("error", "monthly perf parse failed")
+        except Exception as mp_exc:  # noqa: BLE001
+            monthly_perf_error = str(mp_exc)
+
     # ── Monthly chart + TWRR (computed before the lock — can be slow) ─────────
     monthly_chart      = None
     monthly_chart_error = None
     twrr_return_pct    = None
     try:
-        mc = compute_monthly_ytd_chart(positions_text, activity_text, begin_value)
+        mc = compute_monthly_ytd_chart(
+            positions_text, activity_text, begin_value,
+            monthly_perf=monthly_perf_parsed,
+        )
         if mc.get("ok"):
             monthly_chart   = mc
             twrr_return_pct = _compute_twrr(mc.get("monthly") or [], flows)
@@ -3505,6 +3727,8 @@ def compute_unified_ytd(
         "attribution":         attr.get("attribution", []),
         "monthly_chart":       monthly_chart,
         "monthly_chart_error": monthly_chart_error,
+        "monthly_perf_error":  monthly_perf_error,
+        "has_monthly_perf":    monthly_perf_parsed is not None,
         # Capture the live-portfolio holdings at upload time so the snapshot
         # remains a complete record even if the live book changes later.
         "holdings_snapshot":   None,  # filled below from live state
@@ -3591,8 +3815,10 @@ def compute_unified_ytd(
         "total_dollar_gain": attr.get("total_dollar_gain"),
         "explained_pct":     attr.get("explained_pct"),
         "positions_parsed":  attr.get("positions_parsed"),
-        "monthly_chart":     monthly_chart,
+        "monthly_chart":       monthly_chart,
         "monthly_chart_error": monthly_chart_error,
+        "monthly_perf_error":  monthly_perf_error,
+        "has_monthly_perf":    monthly_perf_parsed is not None,
     }
 
 

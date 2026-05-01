@@ -712,24 +712,22 @@ def get_tracker_live_detail(snapshot_id: str | None = None):
 
 @app.post("/api/track/live/ytd")
 async def compute_live_ytd_unified(
-    positions_file: UploadFile = File(...),
-    activity_file:  UploadFile = File(...),
-    begin_value:    float = Form(...),
+    positions_file:     UploadFile = File(...),
+    activity_file:      UploadFile = File(...),
+    begin_value:        float      = Form(...),
+    monthly_perf_file:  UploadFile = File(None),
 ):
-    """Single unified YTD endpoint: Modified Dietz return + per-stock attribution.
-
-    Replaces the previous separate /history and /attribution flows. The end
-    portfolio value (EMV) is auto-derived from the Positions CSV (sum of all
-    holdings × current price + money-market funds) — no manual entry needed.
+    """Single unified YTD endpoint: Modified Dietz + TWRR + per-stock attribution.
 
     Multipart inputs:
-      - positions_file: Fidelity Positions CSV (Accounts → Positions → Download CSV)
-      - activity_file:  Fidelity Activity CSV  (Accounts & Trade → History → Download CSV)
-      - begin_value:    Jan 1 portfolio total ($)
-
-    Returns merged result with md_return_pct, end_value, attribution[], etc.
-    The attribution is also persisted to live_portfolio.account_history so the
-    Live YTD detail card can render real per-ticker math.
+      - positions_file:    Fidelity Positions CSV
+      - activity_file:     Fidelity Activity / History CSV
+      - begin_value:       Jan 1 portfolio total ($)
+      - monthly_perf_file: (optional) Fidelity monthly performance summary CSV
+                           Provides exact month-end balances + per-component breakdown.
+                           When supplied, the YTD-by-month chart uses Fidelity's exact
+                           values instead of yfinance estimates, and TWRR matches
+                           Fidelity's reported figure exactly.
     """
     if begin_value <= 0:
         raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
@@ -746,8 +744,19 @@ async def compute_live_ytd_unified(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not read activity file: {exc}")
 
+    monthly_perf_text: str | None = None
+    if monthly_perf_file and monthly_perf_file.filename:
+        try:
+            mp_content        = await monthly_perf_file.read()
+            monthly_perf_text = mp_content.decode("utf-8", errors="replace")
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not read monthly performance file: {exc}")
+
     try:
-        result = analyst.compute_unified_ytd(positions_text, activity_text, begin_value)
+        result = analyst.compute_unified_ytd(
+            positions_text, activity_text, begin_value,
+            monthly_perf_text=monthly_perf_text,
+        )
     except Exception as exc:
         tb = traceback.format_exc()
         raise HTTPException(

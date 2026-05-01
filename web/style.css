@@ -1478,6 +1478,13 @@ body {
 .history-emv-badge.estimate {
   background: rgba(251,191,36,0.15); color: #FBBF24;
 }
+/* Optional badge on file input labels */
+.history-optional-badge {
+  display: inline-block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-left: 6px;
+  vertical-align: middle;
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.4);
+}
 /* Sub-label hint below field label */
 .history-field-hint {
   display: block; font-size: 10px; font-weight: 400;
@@ -2265,25 +2272,37 @@ body {
   cursor: help;
 }
 
-/* ── Flows section (always-visible) ──────────────────────────────────────── */
+/* ── Flows section (collapsible <details>) ────────────────────────────────── */
 .flows-section {
   margin: 14px 0 4px;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
   overflow: hidden;
 }
+.flows-section[open] { overflow: visible; }
 .flows-section-empty {
   padding: 8px 14px;
   font-size: 11px;
   color: rgba(255,255,255,0.35);
 }
+/* <summary> acts as the header row */
 .flows-section-label {
+  display: flex; align-items: center; justify-content: space-between;
   padding: 7px 14px;
   font-size: 10px; font-weight: 800; letter-spacing: .06em;
   color: rgba(255,255,255,0.45);
   background: rgba(255,255,255,0.03);
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer; user-select: none; list-style: none;
 }
+.flows-section-label::-webkit-details-marker { display: none; }
+.flows-section-label::marker { display: none; }
+.flows-section-label:hover { background: rgba(255,255,255,0.055); }
+.flows-collapse-arrow {
+  font-size: 9px; color: rgba(255,255,255,0.3);
+  transition: transform 0.18s ease;
+}
+.flows-section[open] .flows-collapse-arrow { transform: rotate(180deg); }
 .flows-section-hint { font-weight: 400; color: rgba(255,255,255,0.28); margin-left: 8px; }
 .flows-actions-seen {
   padding: 6px 14px 8px;
@@ -2314,6 +2333,26 @@ body {
 .ytd-stat-twrr {
   border-left: 2px solid rgba(212,175,55,0.4);
 }
+.twrr-exact-badge {
+  display: inline-block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-left: 5px;
+  vertical-align: middle;
+  background: rgba(212,175,55,0.2); color: #d4af37;
+}
+/* Tooltip perf detail section */
+.mtt-perf-detail {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.mtt-perf-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 2px 0; font-size: 10px;
+}
+.mtt-perf-key { color: rgba(255,255,255,0.45); }
+.mtt-perf-val { font-family: "SF Mono", Menlo, monospace; font-weight: 600; font-size: 10px; }
+.mtt-perf-val.pos { color: #4ade80; }
+.mtt-perf-val.neg { color: #f87171; }
+.mtt-perf-val.neu { color: rgba(255,255,255,0.7); }
 .monthly-chart-error {
   margin: 10px 0;
   padding: 8px 12px;
@@ -2338,6 +2377,7 @@ body {
   padding: 10px 16px 0;
 }
 .monthly-chart-hint { font-size: 11px; color: rgba(255,255,255,0.35); }
+.monthly-chart-estimated { color: rgba(251,191,36,0.6); font-size: 10px; }
 .monthly-chart-wrap canvas { display: block; }
 
 /* ── Monthly hover tooltip ────────────────────────────────────────────────── */
@@ -2374,3 +2414,30 @@ body {
 .mtt-gain { margin-left: auto; font-weight: 600; }
 .pos { color: #22c55e; }
 .neg { color: #ef4444; }
+
+/* ── Mobile overrides for monthly tooltip & chart ──────────────────────── */
+@media (max-width: 480px) {
+  .monthly-tooltip {
+    /* On small screens, pin to bottom-center so it never clips off-screen */
+    position: fixed !important;
+    left: 50% !important;
+    transform: translateX(-50%);
+    bottom: 10px !important;
+    top: auto !important;
+    min-width: 260px;
+    max-width: calc(100vw - 24px);
+    font-size: 11px;
+  }
+  .monthly-chart-header {
+    flex-wrap: wrap; gap: 4px;
+    padding: 8px 10px 0;
+  }
+  .monthly-chart-hint, .monthly-chart-estimated {
+    font-size: 9px;
+  }
+  /* Flows section on mobile: keep table scrollable horizontally */
+  .flows-table { min-width: 280px; }
+  .flows-section { overflow-x: auto; }
+  /* TWRR badge stays on one line */
+  .twrr-exact-badge { white-space: nowrap; }
+}

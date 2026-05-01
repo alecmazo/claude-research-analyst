@@ -1258,7 +1258,7 @@ async function loadLiveBenchmark() {
       if (h && h.attribution) {
         _renderUnifiedYtdResult({
           md_return_pct:       h.md_return_pct,
-          twrr_return_pct:     h.twrr_return_pct   ?? null,
+          twrr_return_pct:     h.twrr_return_pct    ?? null,
           begin_value:         h.begin_value,
           end_value:           h.end_value,
           emv_source:          h.emv_source || 'positions_csv',
@@ -1268,8 +1268,10 @@ async function loadLiveBenchmark() {
           dividend_count:      h.dividend_count,
           attribution:         h.attribution,
           flows:               h.flows               || [],
+          unique_actions:      h.unique_actions      || [],
           monthly_chart:       h.monthly_chart       || null,
           monthly_chart_error: h.monthly_chart_error || null,
+          has_monthly_perf:    h.has_monthly_perf    ?? false,
           // total / explained recomputed from rows so it matches even if not stored
           total_dollar_gain: (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0),
           explained_pct:     h.begin_value
@@ -1324,6 +1326,7 @@ async function loadLiveBenchmark() {
 async function uploadAccountHistory() {
   const posInput   = document.getElementById('history-positions-file');
   const actInput   = document.getElementById('history-file');
+  const perfInput  = document.getElementById('history-monthly-perf-file');
   const beginInput = document.getElementById('history-begin-value');
   const statusEl   = document.getElementById('history-upload-status');
   const resultBox  = document.getElementById('history-result-box');
@@ -1331,6 +1334,7 @@ async function uploadAccountHistory() {
 
   const posFile    = posInput?.files?.[0];
   const actFile    = actInput?.files?.[0];
+  const perfFile   = perfInput?.files?.[0];   // optional
   const beginValue = parseFloat(beginInput?.value);
 
   if (!posFile)             { alert('Please select your Fidelity Positions CSV.'); return; }
@@ -1340,7 +1344,8 @@ async function uploadAccountHistory() {
   }
 
   btn.disabled = true;
-  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Calculating YTD return + transaction attribution…'; }
+  const perfMsg = perfFile ? ' + monthly performance' : '';
+  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = `Calculating YTD return + transaction attribution${perfMsg}…`; }
   if (resultBox) resultBox.style.display = 'none';
 
   try {
@@ -1349,6 +1354,7 @@ async function uploadAccountHistory() {
     fd.append('activity_file',  actFile);
     fd.append('begin_value',    beginValue);
     fd.append('token',          getToken());
+    if (perfFile) fd.append('monthly_perf_file', perfFile);
 
     const res = await fetch(`${API_BASE}/api/track/live/ytd`, {
       method:  'POST',
@@ -1470,24 +1476,33 @@ function _renderUnifiedYtdResult(data) {
   const actionsDbg = (data.unique_actions || []).length
     ? `<div class="flows-actions-seen">All action types in CSV: ${(data.unique_actions || []).map(a => `<code>${a}</code>`).join(' · ')}</div>`
     : '';
+  const flowCount = (data.flows || []).length;
   const flowsHtml = flowRows ? `
-    <div class="flows-section">
-      <div class="flows-section-label">CAPTURED CASH FLOWS <span class="flows-section-hint">verify these match your actual deposits/withdrawals</span></div>
+    <details class="flows-section">
+      <summary class="flows-section-label">
+        <span>CAPTURED CASH FLOWS <span class="flows-section-hint">${flowCount} event${flowCount === 1 ? '' : 's'} · click to expand/collapse</span></span>
+        <span class="flows-collapse-arrow">▼</span>
+      </summary>
       <table class="flows-table">
         <thead><tr><th>Date</th><th>Action</th><th>Amount</th></tr></thead>
         <tbody>${flowRows}</tbody>
       </table>
       ${actionsDbg}
-    </div>` : `<div class="flows-section flows-section-empty">No external cash flows detected in activity CSV.${actionsDbg}</div>`;
+    </details>` : `<div class="flows-section flows-section-empty">No external cash flows detected in activity CSV.${actionsDbg}</div>`;
 
   // ── Monthly chart ─────────────────────────────────────────────────────────
   const mc = data.monthly_chart;
   const chartDbg = data.monthly_chart_error ? `<div class="monthly-chart-error">⚠ chart: ${data.monthly_chart_error}</div>` : '';
+  const chartAccuracy = (mc && mc.has_exact_perf) ? '' :
+    `<span class="monthly-chart-hint monthly-chart-estimated" title="Month-end balances estimated from yfinance prices. Upload a Fidelity monthly performance CSV for exact values.">⚠ balances estimated</span>`;
   const monthlyChartHtml = mc && mc.monthly && mc.monthly.length
     ? `<div class="monthly-chart-wrap">
          <div class="monthly-chart-header">
            <span class="section-label">YTD BY MONTH</span>
-           <span class="monthly-chart-hint">Hover a month for attribution breakdown</span>
+           <span style="display:flex;gap:8px;align-items:center">
+             ${chartAccuracy}
+             <span class="monthly-chart-hint">Hover a month for breakdown</span>
+           </span>
          </div>
          <canvas id="monthly-ytd-canvas" width="1060" height="240" style="width:100%;height:240px"></canvas>
          <div id="monthly-hover-tooltip" class="monthly-tooltip" style="display:none"></div>
@@ -1495,11 +1510,14 @@ function _renderUnifiedYtdResult(data) {
     : chartDbg;
 
   // ── TWRR stat box ─────────────────────────────────────────────────────────
+  const hasExactPerf = data.has_monthly_perf ?? false;
+  const twrrBadge    = hasExactPerf ? `<span class="twrr-exact-badge">exact</span>` : '';
+  const twrrSub      = hasExactPerf ? 'Fidelity monthly CSV · exact match' : 'monthly chained · estimated balances';
   const twrrBox = twrr != null
     ? `<div class="ytd-stat ytd-stat-twrr">
-        <div class="ytd-stat-label">TWRR <span class="twrr-note" title="Time-Weighted Rate of Return: chains monthly sub-period returns, isolating portfolio performance from the timing of your cash flows. This closely matches Fidelity's reported return.">ⓘ</span></div>
+        <div class="ytd-stat-label">TWRR${twrrBadge} <span class="twrr-note" title="Time-Weighted Rate of Return: chains monthly sub-period returns, isolating portfolio performance from the timing of your cash flows. This closely matches Fidelity's reported return.">ⓘ</span></div>
         <div class="ytd-stat-val ${cls(twrr)}">${sign(twrr)}${twrr.toFixed(2)}%</div>
-        <div class="ytd-stat-sub">monthly chained · Fidelity-comparable</div>
+        <div class="ytd-stat-sub">${twrrSub}</div>
       </div>`
     : '';
 
@@ -1680,24 +1698,47 @@ function _drawMonthlyChart(mc) {
   // Store layout for hover
   canvas._monthLayout = { months, PAD, colW, W, H };
 
-  // Hover handler
-  canvas.onmousemove = (e) => {
-    const rect  = canvas.getBoundingClientRect();
+  // ── Shared hit-test helper ──────────────────────────────────────────────
+  function _hitMonth(clientX, clientY) {
+    const rect   = canvas.getBoundingClientRect();
     const scaleX = W / rect.width;
-    const mx    = (e.clientX - rect.left) * scaleX;
+    const mx     = (clientX - rect.left) * scaleX;
     const layout = canvas._monthLayout;
-    if (!layout) return;
+    if (!layout) return null;
     const idx = Math.floor((mx - layout.PAD.left) / layout.colW);
-    if (idx < 0 || idx >= layout.months.length) {
-      document.getElementById('monthly-hover-tooltip').style.display = 'none';
-      return;
-    }
-    const mData = layout.months[idx];
-    _showMonthTooltip(mData, e.clientX, e.clientY, rect);
+    if (idx < 0 || idx >= layout.months.length) return null;
+    return { mData: layout.months[idx], cx: clientX, cy: clientY, rect };
+  }
+
+  // ── Mouse hover (desktop) ────────────────────────────────────────────────
+  canvas.onmousemove = (e) => {
+    const hit = _hitMonth(e.clientX, e.clientY);
+    if (!hit) { document.getElementById('monthly-hover-tooltip').style.display = 'none'; return; }
+    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect);
   };
   canvas.onmouseleave = () => {
     document.getElementById('monthly-hover-tooltip').style.display = 'none';
   };
+
+  // ── Touch tap (mobile) ───────────────────────────────────────────────────
+  canvas.ontouchstart = (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const hit = _hitMonth(t.clientX, t.clientY);
+    const tip = document.getElementById('monthly-hover-tooltip');
+    if (!hit) { if (tip) tip.style.display = 'none'; return; }
+    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect);
+  };
+  canvas.ontouchend = (e) => {
+    // Keep tooltip visible briefly so user can read it, then hide on next tap elsewhere
+  };
+  // Tap outside canvas hides tooltip on mobile
+  document.addEventListener('touchstart', (e) => {
+    if (e.target !== canvas) {
+      const tip = document.getElementById('monthly-hover-tooltip');
+      if (tip) tip.style.display = 'none';
+    }
+  }, { passive: true });
 }
 
 function _showMonthTooltip(m, cx, cy, canvasRect) {
@@ -1707,6 +1748,11 @@ function _showMonthTooltip(m, cx, cy, canvasRect) {
   const sign = v => v >= 0 ? '+' : '';
   const fmtD = v => `${sign(v)}$${Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}`;
   const fmtP = v => v == null ? '—' : `${sign(v)}${v.toFixed(2)}%`;
+  const fmtDSign = (v, posClass='pos', negClass='neg') => {
+    if (v == null) return `<span class="mtt-perf-val neu">—</span>`;
+    const cls = v > 0 ? posClass : v < 0 ? negClass : 'neu';
+    return `<span class="mtt-perf-val ${cls}">${fmtD(v)}</span>`;
+  };
 
   const moversHtml = (m.movers || []).slice(0, 6).map(mv =>
     `<div class="mtt-row">
@@ -1731,12 +1777,35 @@ function _showMonthTooltip(m, cx, cy, canvasRect) {
       ).join('')
     : '';
 
+  // Fidelity monthly performance breakdown (exact when perf CSV supplied)
+  let perfDetailHtml = '';
+  const pd = m.perf_detail;
+  if (pd && m.exact) {
+    const rows = [
+      { key: 'Market change',  val: pd.market_change,  posClass: 'pos', negClass: 'neg' },
+      { key: 'Dividends',      val: pd.dividends,      posClass: 'pos', negClass: 'neg' },
+      { key: 'Interest',       val: pd.interest,       posClass: 'pos', negClass: 'neg' },
+      { key: 'Deposits',       val: pd.deposits,       posClass: 'pos', negClass: 'neg' },
+      { key: 'Withdrawals',    val: pd.withdrawals,    posClass: 'neg', negClass: 'neg' },
+      { key: 'Advisory fees',  val: pd.advisory_fees,  posClass: 'neu', negClass: 'neg' },
+      { key: 'Net flow',       val: pd.net_flow,       posClass: 'pos', negClass: 'neg' },
+    ].filter(r => r.val != null && r.val !== 0);
+
+    if (rows.length) {
+      perfDetailHtml = `<div class="mtt-perf-detail">
+        <div class="mtt-section-label" style="margin-bottom:3px">Fidelity Breakdown</div>
+        ${rows.map(r => `<div class="mtt-perf-row"><span class="mtt-perf-key">${r.key}</span>${fmtDSign(r.val, r.posClass, r.negClass)}</div>`).join('')}
+      </div>`;
+    }
+  }
+
   tip.innerHTML = `
     <div class="mtt-header">
       <span class="mtt-month">${m.label}</span>
       <span class="mtt-return ${m.return_pct >= 0 ? 'pos' : 'neg'}">${sign(m.return_pct)}${m.return_pct.toFixed(2)}%</span>
       <span class="mtt-value">$${m.end_value.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</span>
     </div>
+    ${perfDetailHtml}
     ${m.movers && m.movers.length ? '<div class="mtt-section-label">Top Movers</div>' + moversHtml : ''}
     ${tradesHtml}
     ${divsHtml}`;
