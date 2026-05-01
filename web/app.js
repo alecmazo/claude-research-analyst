@@ -1353,15 +1353,15 @@ async function uploadAccountHistory() {
   const beginValue = parseFloat(beginInput?.value);
 
   if (!posFile)  { alert('Please select your Fidelity Positions CSV.'); return; }
-  if (!actFile)  { alert('Please select your Fidelity Activity CSV.'); return; }
-  // begin_value is optional when a Monthly Performance CSV is supplied
-  // (the perf CSV contains the Jan 1 starting balance in its first row)
+  if (!actFile)  { alert('Please select your Fidelity Account History CSV.'); return; }
+  // begin_value is optional when an Investment Income Balance CSV is supplied
+  // (the CSV contains the Jan 1 starting balance in its first row)
   if ((!beginValue || beginValue <= 0) && !perfFile) {
-    alert('Please enter your Jan 1 portfolio value, or upload a Monthly Performance CSV (it contains the starting balance automatically).'); return;
+    alert('Please enter your Jan 1 portfolio value, or upload an Investment Income Balance CSV (it contains the starting balance automatically).'); return;
   }
 
   btn.disabled = true;
-  const perfMsg = perfFile ? ' + monthly performance' : '';
+  const perfMsg = perfFile ? ' + investment income balance' : '';
   if (statusEl) { statusEl.style.display = ''; statusEl.textContent = `Calculating YTD return + transaction attribution${perfMsg}…`; }
   if (resultBox) resultBox.style.display = 'none';
 
@@ -1512,7 +1512,7 @@ function _renderUnifiedYtdResult(data) {
   const mc = data.monthly_chart;
   const chartDbg = data.monthly_chart_error ? `<div class="monthly-chart-error">⚠ chart: ${data.monthly_chart_error}</div>` : '';
   const chartAccuracy = (mc && mc.has_exact_perf) ? '' :
-    `<span class="monthly-chart-hint monthly-chart-estimated" title="Month-end balances estimated from yfinance prices. Upload a Fidelity monthly performance CSV for exact values.">⚠ balances estimated</span>`;
+    `<span class="monthly-chart-hint monthly-chart-estimated" title="Month-end balances estimated from yfinance prices. Upload a Fidelity Investment Income Balance CSV for exact values.">⚠ balances estimated</span>`;
   const monthlyChartHtml = mc && mc.monthly && mc.monthly.length
     ? `<div class="monthly-chart-wrap">
          <div class="monthly-chart-header">
