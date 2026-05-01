@@ -3008,46 +3008,45 @@ def compute_monthly_ytd_chart(
 
 # ── Account history / Modified Dietz YTD return ──────────────────────────────
 
-_FIDELITY_INFLOW_ACTIONS = frozenset({
-    "DEPOSITED FUNDS",
-    "ELECTRONIC FUNDS TRANSFER RECEIVED",
-    "ELECTRONIC FUNDS TRANSFER",   # can be inflow or outflow — sign of Amount decides
-    "CHECK RECEIVED",
-    "WIRE RECEIVED",
-    "ACH RECEIVED",
-    # ── Intentionally excluded (too ambiguous — often internal Fidelity transfers) ──
-    # "TRANSFER OF ASSETS"  — ACAT or internal account-to-account move
-    # "TRANSFERRED IN"      — intra-Fidelity; not always an external deposit
-    # "JOURNALED SHARES"    — internal journal / corporate-action entries
-})
-
-_FIDELITY_OUTFLOW_KEYWORDS = frozenset({
-    "WITHDRAWAL",
-    "WIRE SENT",
-    "CHECK SENT",
-    "ACH DISBURSEMENT",
-    "TRANSFER OUT",
-    "TRANSFERRED OUT",
-})
-
-# These are investment activity — NOT external cash flows
+# ── Blocklist: investment-activity action strings that are NEVER external flows ──
+# Everything NOT in this list (and not zero-amount) is treated as a potential
+# external cash flow (deposit or withdrawal).  This captures transfers in/out,
+# credit-card payments, ACH, wire, journal entries, etc. without needing an
+# explicit allowlist of every possible Fidelity action string.
 _FIDELITY_INTERNAL_ACTIONS = frozenset({
+    # ── Trades ──────────────────────────────────────────────────────────────
     "YOU BOUGHT",
     "YOU SOLD",
+    # ── Investment income ────────────────────────────────────────────────────
     "DIVIDEND RECEIVED",
     "REINVESTMENT",
     "INTEREST EARNED",
-    "INTEREST",                   # money-market / bond interest (shorter variant)
-    "FEE CHARGED",                # ADR fees, account fees — internal
-    "FOREIGN TAX PAID",           # ADR withholding tax — internal
+    "INTEREST",                      # money-market / bond interest (shorter variant)
     "LONG-TERM CAP GAIN",
     "SHORT-TERM CAP GAIN",
     "RETURN OF CAPITAL",
     "CAPITAL GAIN DISTRIBUTION",
-    "EXCHANGE",
-    "MANDATORY REORGANIZATION",   # corporate action
+    # ── Fees & taxes ────────────────────────────────────────────────────────
+    "FEE CHARGED",                   # ADR fees, account fees
+    "FOREIGN TAX PAID",              # ADR withholding tax
+    # ── Corporate actions ───────────────────────────────────────────────────
+    "MANDATORY REORGANIZATION",
     "STOCK SPLIT",
     "CONVERSION",
+    "EXCHANGE",
+    "TENDERED",
+    "MERGER",
+    "SPINOFF",
+    "RIGHTS",
+    # ── Fractional / in-lieu proceeds (corporate-action cash, not a deposit) ─
+    "IN LIEU",                       # "IN LIEU OF FRACTIONAL SHARES"
+    "CASH IN LIEU",
+    # ── Options activity ────────────────────────────────────────────────────
+    "EXPIRED",
+    "ASSIGNED",
+    "EXERCISED",
+    "OPENING TRANSACTION",
+    "CLOSING TRANSACTION",
 })
 
 
@@ -3062,7 +3061,7 @@ def parse_fidelity_history(raw_text: str) -> dict:
           "transaction_count": int,   # total rows parsed
           "net_flow": float,          # sum of external flows (+ = net deposit)
           "columns_detected": [...],  # column names found — for diagnostics
-          "unique_actions": [...],    # all unique action prefixes seen — for diagnostics
+          "unique_actions": [...],    # all unique full action strings seen — for diagnostics
           "skipped_no_amount": int,   # rows where Amount was blank/unparseable
         }
 
@@ -3135,8 +3134,8 @@ def parse_fidelity_history(raw_text: str) -> dict:
         if not action:
             continue
 
-        # Track first word of each action for diagnostics
-        unique_actions.add(action.split()[0] if action else "")
+        # Track full action string for diagnostics (shown in UI flows section)
+        unique_actions.add(action)
 
         transaction_count += 1
 
@@ -3170,20 +3169,12 @@ def parse_fidelity_history(raw_text: str) -> dict:
         if amount == 0:
             continue
 
-        # Is this an external cash flow?  Internal trades and investment income
-        # are NOT external flows for the Modified Dietz calculation.
+        # ── Blocklist: skip known-internal investment activity ─────────────────
+        # Everything else (transfers, ACH, wire, journal entries, bill payments,
+        # etc.) is an external cash flow regardless of the exact action string.
         is_internal = any(kw in action for kw in _FIDELITY_INTERNAL_ACTIONS)
         if is_internal:
             continue
-
-        # Allowlist: only capture explicitly recognised external flows.
-        # Unknown action types default to non-flow to avoid phantom entries
-        # (e.g. "IN LIEU OF FRACTIONAL SHARES", "IN KIND TRANSFER", etc.)
-        # that inflate the flow count and distort the Modified Dietz denominator.
-        is_known_inflow  = any(kw in action for kw in _FIDELITY_INFLOW_ACTIONS)
-        is_known_outflow = any(kw in action for kw in _FIDELITY_OUTFLOW_KEYWORDS)
-        if not is_known_inflow and not is_known_outflow:
-            continue  # unrecognised action → treat conservatively as internal
 
         flows.append({
             "date":   date_str,
