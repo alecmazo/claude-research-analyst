@@ -208,7 +208,15 @@ export const api = {
   closeTracker:           (id)  => request(`/api/track/${id}/close`, { method: 'POST' }),
   deleteTracker:          (id)  => request(`/api/track/${id}`, { method: 'DELETE' }),
   getLiveBenchmark:       ()    => request('/api/track/live'),
-  getLiveBenchmarkDetail: ()    => request('/api/track/live/detail'),
+  getLiveBenchmarkDetail: (snapshotId) => request(
+    '/api/track/live/detail' + (snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : '')
+  ),
+  listYtdSnapshots:       ()    => request('/api/track/live/snapshots'),
+  deleteYtdSnapshot:      (id)  => request(`/api/track/live/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  emailYtdReport:         (email, snapshotId) => request('/api/track/live/ytd/email', {
+    method: 'POST',
+    body:   JSON.stringify({ email, snapshot_id: snapshotId || null }),
+  }),
 
   // Unified YTD: Modified Dietz return + per-stock attribution in ONE call.
   // Today's total value is auto-extracted from the Positions CSV (sum of all

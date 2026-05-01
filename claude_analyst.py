@@ -1610,13 +1610,17 @@ def _spy_ytd_series() -> list[dict]:
     } for p in ytd]
 
 
-def compute_live_ytd_detail() -> dict:
+def compute_live_ytd_detail(snapshot_id: str | None = None) -> dict:
     """YTD attribution detail for the auto-promoted live portfolio.
 
     Uses *year-start prices* as the per-holding baseline (instead of the
     upload-day anchor price) — answers "how is the live book doing YTD?"
     Compares the portfolio against SPY YTD only (vs-live makes no sense
     since this *is* live).
+
+    If `snapshot_id` is provided, opens the YTD detail using that historical
+    snapshot's holdings + attribution instead of the current live state.
+    This lets the UI re-open any past upload from the snapshot history.
 
     Response shape mirrors get_idea_portfolio() so the same renderers work,
     with one extra `mode: "live"` field plus `year_start_date`.
@@ -1629,12 +1633,26 @@ def compute_live_ytd_detail() -> dict:
     today = datetime.now()
     year = today.year
 
+    # If a snapshot_id was requested, swap in that snapshot's holdings + attribution
+    # for the rest of the calculation.  We only override what the snapshot stored.
+    pinned_snapshot: dict | None = None
+    if snapshot_id:
+        for s in (live.get("ytd_snapshots") or []):
+            if s.get("id") == snapshot_id:
+                pinned_snapshot = s
+                break
+        if pinned_snapshot is None:
+            return {"ok": False, "error": f"Snapshot {snapshot_id!r} not found."}
+        holdings_for_calc = pinned_snapshot.get("holdings_snapshot") or live["holdings"]
+    else:
+        holdings_for_calc = live["holdings"]
+
     # Build a "virtual" holdings list using year-start prices as entry_price.
     # Weights are taken directly from the stored live portfolio — they are the
     # raw values from the uploaded CSV (e.g., INTC 0.0788 for 7.88%).
     virtual: list[dict] = []
     skipped: list[str] = []
-    for h in live["holdings"]:
+    for h in holdings_for_calc:
         ys = _year_start_close(h["ticker"], year=year)
         if not ys or ys <= 0:
             skipped.append(h["ticker"])
@@ -1677,7 +1695,7 @@ def compute_live_ytd_detail() -> dict:
     #  - md_return_pct as the authoritative portfolio return
     #  - per-ticker attribution rows reflecting real partial sales / buys / divs
     #    (replacing the broken weight × snapshot-return approximation)
-    history       = live.get("account_history") or {}
+    history       = pinned_snapshot or live.get("account_history") or {}
     md_return_pct = history.get("md_return_pct")
     stored_attr   = history.get("attribution") or []
     authoritative_return = md_return_pct if md_return_pct is not None else port_ret
@@ -1745,6 +1763,8 @@ def compute_live_ytd_detail() -> dict:
         "md_return_pct":         md_return_pct,        # None if no history uploaded yet
         "history_uploaded":      md_return_pct is not None,
         "history_meta":          history if history else None,
+        "snapshot_id":           (pinned_snapshot or {}).get("id") or (history.get("id") if history else None),
+        "is_pinned":             pinned_snapshot is not None,
         "max_drawdown_pct":      round(max_dd, 4),
         "spy_return_pct":        spy_ytd,
         "vs_spy_pct":            round(authoritative_return - spy_ytd, 4) if spy_ytd is not None else None,
@@ -2997,32 +3017,59 @@ def compute_unified_ytd(
     md_return     = (end_value - float(begin_value) - net_flow) / denominator
     md_return_pct = round(md_return * 100.0, 4)
 
-    # ── Persist BOTH the MD result AND the attribution to tracker.json ───────
-    # The Live Portfolio YTD detail will read this back and render real
-    # attribution rows instead of the broken weight×snapshot math.
+    # ── Persist the MD result + attribution + a snapshot for history ─────────
+    # `account_history` always holds the most-recent run (used by the YTD
+    # detail view).  `ytd_snapshots` is an append-only list (cap 50) so the
+    # user can browse / re-open / email any past run.
+    snapshot_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    snapshot = {
+        "id":                snapshot_id,
+        "uploaded_at":       datetime.utcnow().isoformat(),
+        "begin_value":       round(float(begin_value), 2),
+        "end_value":         round(end_value, 2),
+        "emv_source":        "positions_csv",
+        "net_flow":          round(net_flow, 2),
+        "flow_count":        len(flows),
+        "transaction_count": int(flows_parse.get("transaction_count", 0)),
+        "trade_count":       int(attr.get("trades_parsed", 0)),
+        "dividend_count":    int(attr.get("dividends_parsed", 0)),
+        "md_return_pct":     float(md_return_pct),
+        "attribution":       attr.get("attribution", []),
+        # Capture the live-portfolio holdings at upload time so the snapshot
+        # remains a complete record even if the live book changes later.
+        "holdings_snapshot": None,  # filled below from live state
+    }
     try:
         with _tracker_lock():
             state = _load_tracker_state()
             if state.get("live_portfolio"):
-                state["live_portfolio"]["account_history"] = {
-                    "uploaded_at":       datetime.utcnow().isoformat(),
-                    "begin_value":       round(float(begin_value), 2),
-                    "end_value":         round(end_value, 2),
-                    "emv_source":        "positions_csv",
-                    "net_flow":          round(net_flow, 2),
-                    "flow_count":        len(flows),
-                    "transaction_count": int(flows_parse.get("transaction_count", 0)),
-                    "trade_count":       int(attr.get("trades_parsed", 0)),
-                    "dividend_count":    int(attr.get("dividends_parsed", 0)),
-                    "md_return_pct":     float(md_return_pct),
-                    "attribution":       attr.get("attribution", []),
-                }
+                lp = state["live_portfolio"]
+                # Capture holdings at upload time (deep copy via JSON round-trip
+                # — primitives only, so json.loads(json.dumps(...)) is safe)
+                try:
+                    snapshot["holdings_snapshot"] = json.loads(
+                        json.dumps(lp.get("holdings") or [], default=str)
+                    )
+                    snapshot["anchor_date"] = lp.get("anchor_date")
+                except Exception:  # noqa: BLE001
+                    snapshot["holdings_snapshot"] = lp.get("holdings") or []
+
+                lp["account_history"] = snapshot
+
+                # Append-only snapshot history (capped at 50 most recent)
+                snaps = lp.get("ytd_snapshots") or []
+                snaps.append(snapshot)
+                if len(snaps) > 50:
+                    snaps = snaps[-50:]
+                lp["ytd_snapshots"] = snaps
+
                 _save_tracker_state(state)
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist unified YTD: {exc}")  # non-fatal
 
     return {
         "ok":                True,
+        "snapshot_id":       snapshot_id,
         "md_return_pct":     md_return_pct,
         "begin_value":       round(float(begin_value), 2),
         "end_value":         round(end_value, 2),
@@ -3038,6 +3085,371 @@ def compute_unified_ytd(
         "explained_pct":     attr.get("explained_pct"),
         "positions_parsed":  attr.get("positions_parsed"),
     }
+
+
+# ── YTD snapshot history + email ────────────────────────────────────────────
+
+def list_ytd_snapshots() -> dict:
+    """Return all stored YTD snapshots with summary metadata, newest first."""
+    state = _load_tracker_state()
+    lp = state.get("live_portfolio") or {}
+    snaps = lp.get("ytd_snapshots") or []
+    summaries = []
+    for s in reversed(snaps):  # newest first
+        attr = s.get("attribution") or []
+        summaries.append({
+            "id":              s.get("id"),
+            "uploaded_at":     s.get("uploaded_at"),
+            "begin_value":     s.get("begin_value"),
+            "end_value":       s.get("end_value"),
+            "md_return_pct":   s.get("md_return_pct"),
+            "net_flow":        s.get("net_flow"),
+            "trade_count":     s.get("trade_count", 0),
+            "dividend_count":  s.get("dividend_count", 0),
+            "positions_count": len(attr),
+            "anchor_date":     s.get("anchor_date"),
+        })
+    return {"ok": True, "snapshots": summaries}
+
+
+def get_ytd_snapshot(snapshot_id: str) -> dict:
+    """Return a full YTD snapshot by id, including attribution + holdings."""
+    state = _load_tracker_state()
+    lp = state.get("live_portfolio") or {}
+    for s in (lp.get("ytd_snapshots") or []):
+        if s.get("id") == snapshot_id:
+            return {"ok": True, "snapshot": s}
+    return {"ok": False, "error": f"Snapshot {snapshot_id!r} not found."}
+
+
+def delete_ytd_snapshot(snapshot_id: str) -> dict:
+    """Remove a snapshot from history (irreversible)."""
+    with _tracker_lock():
+        state = _load_tracker_state()
+        lp = state.get("live_portfolio")
+        if not lp:
+            return {"ok": False, "error": "No live portfolio."}
+        snaps = lp.get("ytd_snapshots") or []
+        new = [s for s in snaps if s.get("id") != snapshot_id]
+        if len(new) == len(snaps):
+            return {"ok": False, "error": f"Snapshot {snapshot_id!r} not found."}
+        lp["ytd_snapshots"] = new
+        # If we just deleted the most-recent snapshot, also reset
+        # account_history so the YTD detail view doesn't keep showing it.
+        if (lp.get("account_history") or {}).get("id") == snapshot_id:
+            lp["account_history"] = new[-1] if new else None
+        _save_tracker_state(state)
+    return {"ok": True, "deleted": snapshot_id, "remaining": len(new)}
+
+
+def email_ytd_report(to_email: str, snapshot_id: str | None = None) -> dict:
+    """Email the full YTD report (live benchmark + attribution + YTD detail).
+
+    If snapshot_id is None, uses the most recent stored snapshot.
+    Builds an HTML email styled to mirror the in-app YTD detail view.
+    """
+    if not to_email or "@" not in to_email:
+        return {"ok": False, "error": "A valid email address is required."}
+
+    state = _load_tracker_state()
+    lp = state.get("live_portfolio") or {}
+    snaps = lp.get("ytd_snapshots") or []
+    if not snaps:
+        return {"ok": False, "error": "No YTD snapshots found — run the YTD calculator first."}
+
+    snap = None
+    if snapshot_id:
+        for s in snaps:
+            if s.get("id") == snapshot_id:
+                snap = s
+                break
+        if snap is None:
+            return {"ok": False, "error": f"Snapshot {snapshot_id!r} not found."}
+    else:
+        snap = snaps[-1]
+
+    msg = _compose_ytd_report_email(to_email, snap, lp)
+    return send_portfolio_email(msg)
+
+
+def _compose_ytd_report_email(
+    to_email: str,
+    snap: dict,
+    live_portfolio: dict,
+) -> EmailMessage:
+    """Build the HTML email for a YTD snapshot.
+
+    Sections:
+      1. Live Benchmark positions (chips)
+      2. Modified Dietz YTD summary stats
+      3. Per-stock attribution table (ticker, jan1, activity, now, P&L, contrib)
+      4. SPY-vs-portfolio summary line + skipped tickers note
+    """
+    import base64 as _b64
+
+    from_addr = _optional_env("GMAIL_USER", to_email)
+    uploaded_dt = snap.get("uploaded_at", "")
+    try:
+        uploaded_human = datetime.fromisoformat(uploaded_dt.replace("Z","")).strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:  # noqa: BLE001
+        uploaded_human = uploaded_dt
+
+    md_pct      = snap.get("md_return_pct") or 0.0
+    begin_value = snap.get("begin_value")   or 0.0
+    end_value   = snap.get("end_value")     or 0.0
+    net_flow    = snap.get("net_flow")      or 0.0
+    attribution = snap.get("attribution") or []
+    holdings    = snap.get("holdings_snapshot") or live_portfolio.get("holdings") or []
+
+    subject = (
+        f"DGA Live Portfolio — YTD Report "
+        f"{md_pct:+.2f}% — {uploaded_human}"
+    )
+
+    # ── Plain-text fallback ──────────────────────────────────────────────────
+    plain_lines = [
+        "DGA Capital — Live Portfolio YTD Report",
+        f"Generated: {uploaded_human}",
+        "",
+        f"YTD Return (Modified Dietz): {md_pct:+.2f}%",
+        f"Jan 1 Value:  ${begin_value:,.0f}",
+        f"Today Value:  ${end_value:,.0f}",
+        f"Net Flows:    ${net_flow:+,.0f}",
+        f"Trades:       {snap.get('trade_count', 0)} ({snap.get('dividend_count', 0)} dividends)",
+        "",
+        "LIVE BENCHMARK POSITIONS",
+        "=" * 60,
+    ]
+    for h in sorted(holdings, key=lambda x: -(x.get("weight") or 0)):
+        plain_lines.append(f"  {h.get('ticker','?'):8s}  {(h.get('weight') or 0)*100:6.2f}%")
+    plain_lines += ["", "PER-STOCK ATTRIBUTION", "=" * 60]
+    plain_lines.append(f"  {'Ticker':<8} {'Jan 1 sh':>12} {'$ P&L':>14} {'% Contrib':>10}")
+    for a in attribution:
+        plain_lines.append(
+            f"  {a.get('ticker','?'):<8} {a.get('start_shares',0):>12,.2f} "
+            f"${a.get('dollar_gain',0):>13,.0f}  {a.get('contribution_pct',0):>9.2f}%"
+        )
+
+    plain_body = "\n".join(plain_lines)
+
+    # ── Logo (inline base64) ─────────────────────────────────────────────────
+    logo_img_tag = ""
+    for logo_name in ("DGAlogo-webFINAL-68.png", "dga_logo_small.png", "DGAlogo-web184.png", "dga_logo.png"):
+        logo_path = SCRIPT_DIR / "branding" / logo_name
+        if logo_path.exists():
+            logo_b64 = _b64.b64encode(logo_path.read_bytes()).decode()
+            logo_img_tag = (
+                "<div style='background:#ffffff;border-radius:8px;padding:6px 14px;"
+                "display:inline-block;line-height:0'>"
+                f"<img src='data:image/png;base64,{logo_b64}' "
+                f"alt='DGA Capital' style='height:36px;width:auto;display:block'>"
+                "</div>"
+            )
+            break
+
+    # ── HTML helpers ─────────────────────────────────────────────────────────
+    def color(v):
+        if v is None:
+            return "#666"
+        return "#16A34A" if v >= 0 else "#DC2626"
+
+    def usd0(v):
+        if v is None:
+            return "—"
+        sign = "−" if v < 0 else ""
+        return sign + "$" + f"{abs(v):,.0f}"
+
+    def shares(v):
+        if v is None:
+            return "—"
+        return f"{v:,.2f}"
+
+    def pct(v, d=2):
+        if v is None:
+            return "—"
+        return f"{'+' if v >= 0 else ''}{v:.{d}f}%"
+
+    # Live benchmark chips (sorted by weight desc)
+    sorted_hold = sorted(holdings, key=lambda h: -(h.get("weight") or 0))
+    chips_html = "".join(
+        f"<span style='display:inline-block;background:#F4F6F8;"
+        f"border:1px solid #DCE3EB;border-radius:6px;padding:4px 9px;"
+        f"margin:2px 3px 2px 0;font-family:Menlo,monospace;font-size:11px;color:#0A1628'>"
+        f"<strong>{h.get('ticker','?')}</strong> "
+        f"<span style='color:#677788;font-weight:400'>{(h.get('weight') or 0)*100:.1f}%</span>"
+        f"</span>"
+        for h in sorted_hold
+    )
+
+    # Per-stock attribution rows
+    attr_rows_html = ""
+    for a in attribution:
+        sells_chip = ""
+        buys_chip  = ""
+        divs_chip  = ""
+        if (a.get("total_sold_shares") or 0) > 0:
+            avgp = (a["total_sell_proceeds"] or 0) / a["total_sold_shares"]
+            sells_chip = (
+                f"<span style='background:#FEE2E2;color:#DC2626;border-radius:3px;"
+                f"padding:1px 5px;margin-right:3px;font-size:10px;font-weight:700;"
+                f"font-family:Menlo,monospace;display:inline-block;margin-bottom:2px'>"
+                f"▼ {shares(a['total_sold_shares'])} @ ${avgp:.2f}</span>"
+            )
+        if (a.get("total_bought_shares") or 0) > 0:
+            avgp = (a["total_buy_cost"] or 0) / a["total_bought_shares"]
+            buys_chip = (
+                f"<span style='background:#DCFCE7;color:#16A34A;border-radius:3px;"
+                f"padding:1px 5px;margin-right:3px;font-size:10px;font-weight:700;"
+                f"font-family:Menlo,monospace;display:inline-block;margin-bottom:2px'>"
+                f"▲ {shares(a['total_bought_shares'])} @ ${avgp:.2f}</span>"
+            )
+        if (a.get("dividends_cash") or 0) > 0:
+            divs_chip = (
+                f"<span style='background:#FEF3C7;color:#B45309;border-radius:3px;"
+                f"padding:1px 5px;margin-right:3px;font-size:10px;font-weight:700;"
+                f"font-family:Menlo,monospace;display:inline-block;margin-bottom:2px'>"
+                f"div ${(a['dividends_cash']):,.0f}</span>"
+            )
+        activity_html = (sells_chip + buys_chip + divs_chip) or "<span style='color:#9CA3AF'>—</span>"
+
+        start_cell = (
+            f"<strong>{shares(a.get('start_shares'))}</strong> sh<br>"
+            f"<span style='color:#9CA3AF;font-size:10px'>"
+            f"@ ${a.get('jan1_price') or 0:.2f} = {usd0(a.get('start_value'))}</span>"
+            if (a.get("start_shares") or 0) > 0
+            else "<span style='color:#9CA3AF'>—</span>"
+        )
+        end_cell = (
+            f"<strong>{shares(a.get('end_shares'))}</strong> sh<br>"
+            f"<span style='color:#9CA3AF;font-size:10px'>"
+            f"@ ${a.get('end_price') or 0:.2f} = {usd0(a.get('end_value'))}</span>"
+            if (a.get("end_shares") or 0) > 0
+            else "<span style='color:#9CA3AF;font-size:10px'>fully sold</span>"
+        )
+
+        gain = a.get("dollar_gain") or 0.0
+        contrib = a.get("contribution_pct") or 0.0
+        attr_rows_html += (
+            f"<tr>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;font-weight:700'>{a.get('ticker','?')}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;font-family:Menlo,monospace;font-size:11px'>{start_cell}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE'>{activity_html}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;font-family:Menlo,monospace;font-size:11px'>{end_cell}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;color:{color(gain)};font-weight:700;font-family:Menlo,monospace'>"
+            f"{('+' if gain >= 0 else '−') + '$' + f'{abs(gain):,.0f}'}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #EEE;text-align:right;color:{color(contrib)};font-weight:800;font-family:Menlo,monospace'>{pct(contrib)}</td>"
+            f"</tr>"
+        )
+
+    total_gain = sum(a.get("dollar_gain") or 0.0 for a in attribution)
+    total_contrib = (total_gain / begin_value * 100.0) if begin_value else 0.0
+
+    # ── HTML body ────────────────────────────────────────────────────────────
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:'Helvetica Neue',Arial,sans-serif;color:#0A1628">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:24px 0">
+<tr><td align="center">
+<table width="720" cellpadding="0" cellspacing="0" style="max-width:720px;width:100%">
+
+  <!-- Header -->
+  <tr><td style="background:#0A1628;padding:18px 24px;border-radius:10px 10px 0 0;color:#fff">
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="vertical-align:middle">{logo_img_tag}</td>
+      <td style="vertical-align:middle;text-align:right">
+        <div style="font-size:11px;color:#C9A84C;font-weight:800;letter-spacing:1.5px">LIVE PORTFOLIO YTD REPORT</div>
+        <div style="font-size:11px;color:#94A3B8;margin-top:3px">{uploaded_human}</div>
+      </td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- Hero metric -->
+  <tr><td style="background:#fff;padding:24px;text-align:center;border-bottom:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.2px;color:#9CA3AF">YTD RETURN — CASH-FLOW ADJUSTED (MODIFIED DIETZ)</div>
+    <div style="font-size:48px;font-weight:800;font-family:Menlo,monospace;color:{color(md_pct)};margin-top:8px">{pct(md_pct)}</div>
+  </td></tr>
+
+  <!-- Stat grid -->
+  <tr><td style="background:#fff;padding:18px 24px">
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td style="width:25%;padding:10px;border:1px solid #E5E7EB;border-radius:6px;vertical-align:top">
+        <div style="font-size:9px;font-weight:800;letter-spacing:1px;color:#9CA3AF">JAN 1</div>
+        <div style="font-size:18px;font-weight:800;font-family:Menlo,monospace;margin-top:4px">${begin_value:,.0f}</div>
+      </td>
+      <td style="width:8px"></td>
+      <td style="width:25%;padding:10px;border:1px solid #E5E7EB;border-radius:6px;vertical-align:top">
+        <div style="font-size:9px;font-weight:800;letter-spacing:1px;color:#9CA3AF">TODAY</div>
+        <div style="font-size:18px;font-weight:800;font-family:Menlo,monospace;margin-top:4px">${end_value:,.0f}</div>
+        <div style="font-size:9px;color:#16A34A;margin-top:2px">✓ from positions CSV</div>
+      </td>
+      <td style="width:8px"></td>
+      <td style="width:25%;padding:10px;border:1px solid #E5E7EB;border-radius:6px;vertical-align:top">
+        <div style="font-size:9px;font-weight:800;letter-spacing:1px;color:#9CA3AF">NET FLOWS</div>
+        <div style="font-size:18px;font-weight:800;font-family:Menlo,monospace;color:{color(net_flow)};margin-top:4px">{usd0(net_flow)}</div>
+        <div style="font-size:9px;color:#9CA3AF;margin-top:2px">{snap.get('flow_count', 0)} events</div>
+      </td>
+      <td style="width:8px"></td>
+      <td style="width:25%;padding:10px;border:1px solid #E5E7EB;border-radius:6px;vertical-align:top">
+        <div style="font-size:9px;font-weight:800;letter-spacing:1px;color:#9CA3AF">TRADES</div>
+        <div style="font-size:18px;font-weight:800;font-family:Menlo,monospace;margin-top:4px">{snap.get('trade_count', 0)}</div>
+        <div style="font-size:9px;color:#9CA3AF;margin-top:2px">{snap.get('dividend_count', 0)} dividends</div>
+      </td>
+    </tr>
+    </table>
+  </td></tr>
+
+  <!-- Live benchmark positions -->
+  <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:10px">
+      LIVE BENCHMARK · {len(sorted_hold)} POSITIONS
+    </div>
+    <div>{chips_html}</div>
+  </td></tr>
+
+  <!-- Attribution table -->
+  <tr><td style="background:#fff;padding:18px 24px;border-top:1px solid #E5E7EB">
+    <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#C9A84C;margin-bottom:10px">
+      PERFORMANCE ATTRIBUTION — BY HOLDING (TRANSACTION-AWARE)
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="background:#F4F6F8">
+          <th style="padding:8px;text-align:left;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">TICKER</th>
+          <th style="padding:8px;text-align:left;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">JAN 1</th>
+          <th style="padding:8px;text-align:left;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">YTD ACTIVITY</th>
+          <th style="padding:8px;text-align:left;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">NOW</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">$ P&amp;L</th>
+          <th style="padding:8px;text-align:right;font-size:9px;letter-spacing:0.8px;color:#6B7280;border-bottom:1px solid #DCE3EB">% CONTRIB</th>
+        </tr>
+      </thead>
+      <tbody>{attr_rows_html}</tbody>
+      <tfoot>
+        <tr style="background:#F4F6F8">
+          <td colspan="4" style="padding:10px 8px;text-align:right;font-weight:700;font-size:11px;color:#0A1628">TOTAL</td>
+          <td style="padding:10px 8px;text-align:right;color:{color(total_gain)};font-weight:800;font-family:Menlo,monospace">{usd0(total_gain)}</td>
+          <td style="padding:10px 8px;text-align:right;color:{color(total_contrib)};font-weight:800;font-family:Menlo,monospace">{pct(total_contrib)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </td></tr>
+
+  <!-- Footer -->
+  <tr><td style="background:#0A1628;padding:14px 24px;border-radius:0 0 10px 10px;text-align:center;color:#94A3B8;font-size:10px">
+    DGA Capital · Generated by the Research Analyst · Snapshot ID {snap.get('id','')}
+  </td></tr>
+
+</table></td></tr></table></body></html>"""
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"]    = from_addr
+    msg["To"]      = to_email
+    msg.set_content(plain_body)
+    msg.add_alternative(html_body, subtype="html")
+    return msg
 
 
 def promote_live_portfolio(holdings_input: list[dict]) -> dict:

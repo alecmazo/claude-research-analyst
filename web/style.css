@@ -1689,6 +1689,103 @@ body {
 .attr-table tbody td.attr-num    { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .attr-table tbody tr:hover td    { background: rgba(255,255,255,0.03); }
 
+/* ── YTD snapshot history list ─────────────────────────────────────────── */
+.ytd-snap-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; margin-bottom: 6px;
+  background: var(--white);
+  border: 1px solid var(--light-gray);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.06s;
+}
+.ytd-snap-row:hover {
+  border-color: var(--gold);
+  box-shadow: 0 2px 10px rgba(201,168,76,0.10);
+  transform: translateY(-1px);
+}
+.ytd-snap-row-left { flex: 1; min-width: 0; }
+.ytd-snap-date {
+  font-size: 13px; font-weight: 700; color: var(--navy);
+  letter-spacing: 0.2px;
+}
+.ytd-snap-meta {
+  font-size: 11px; color: var(--mid-gray);
+  margin-top: 2px;
+  font-family: "SF Mono", "Menlo", monospace;
+}
+.ytd-snap-row-right {
+  display: flex; align-items: center; gap: 10px;
+}
+.ytd-snap-return {
+  font-size: 16px; font-weight: 800;
+  font-family: "SF Mono", "Menlo", monospace;
+}
+.ytd-snap-return.green { color: #16A34A; }
+.ytd-snap-return.red   { color: #DC2626; }
+.ytd-snap-delete {
+  background: transparent;
+  border: 1px solid var(--light-gray);
+  border-radius: 4px;
+  width: 26px; height: 26px;
+  font-size: 12px; color: var(--mid-gray);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.ytd-snap-delete:hover {
+  background: rgba(220,38,38,0.08);
+  border-color: rgba(220,38,38,0.3);
+  color: #DC2626;
+}
+
+/* ── Email row at bottom of YTD detail ─────────────────────────────────── */
+.tracker-email-row {
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: var(--off-white);
+  border: 1px solid var(--light-gray);
+  border-radius: 8px;
+}
+.tracker-email-title {
+  font-size: 10px; font-weight: 800; letter-spacing: 1.2px;
+  color: var(--gold); text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.tracker-email-row-inner {
+  display: flex; gap: 8px; align-items: stretch;
+}
+.tracker-email-input {
+  flex: 1;
+  padding: 9px 12px;
+  background: var(--white);
+  border: 1px solid var(--light-gray);
+  border-radius: 6px;
+  font-size: 14px; color: var(--navy);
+  font-family: inherit;
+}
+.tracker-email-input:focus {
+  outline: none; border-color: var(--gold);
+}
+.tracker-email-row .btn-primary {
+  padding: 9px 18px; font-size: 13px; min-width: 130px;
+}
+.tracker-email-status {
+  font-size: 12px; margin-top: 8px; min-height: 16px;
+}
+.tracker-email-status.ok      { color: #16A34A; font-weight: 600; }
+.tracker-email-status.error   { color: #DC2626; font-weight: 600; }
+.tracker-email-status.pending { color: var(--mid-gray); font-style: italic; }
+
+@media (max-width: 600px) {
+  .tracker-email-row-inner {
+    flex-direction: column;
+  }
+  .tracker-email-row .btn-primary {
+    min-width: 0;
+  }
+}
+
 .tracker-live-empty { color: var(--mid-gray); font-style: italic; font-size: 13px; }
 .tracker-live-line {
   display: flex; align-items: center; justify-content: space-between;

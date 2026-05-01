@@ -696,14 +696,18 @@ def get_tracker_live():
 
 
 @app.get("/api/track/live/detail")
-def get_tracker_live_detail():
+def get_tracker_live_detail(snapshot_id: str | None = None):
     """YTD attribution for the live portfolio (year-start baseline + SPY benchmark).
 
     Per-holding return uses each ticker's first close of the calendar year as
     the entry baseline, so this surfaces who is driving annual outperformance
     versus the SPY YTD constant.
+
+    Optional `snapshot_id` query param — when provided, returns the YTD detail
+    using that historical snapshot's holdings and attribution instead of the
+    current live state, so the user can re-open any past run.
     """
-    return analyst.compute_live_ytd_detail()
+    return analyst.compute_live_ytd_detail(snapshot_id=snapshot_id)
 
 
 @app.post("/api/track/live/ytd")
@@ -753,6 +757,56 @@ async def compute_live_ytd_unified(
 
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
+    return result
+
+
+@app.get("/api/track/live/snapshots")
+def list_live_ytd_snapshots():
+    """List all stored YTD snapshots (newest first) for the live portfolio."""
+    return analyst.list_ytd_snapshots()
+
+
+@app.get("/api/track/live/snapshots/{snapshot_id}")
+def get_live_ytd_snapshot(snapshot_id: str):
+    """Get one stored YTD snapshot by id (full attribution + holdings)."""
+    result = analyst.get_ytd_snapshot(snapshot_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    return result
+
+
+@app.delete("/api/track/live/snapshots/{snapshot_id}")
+def delete_live_ytd_snapshot(snapshot_id: str):
+    """Delete a stored YTD snapshot by id."""
+    result = analyst.delete_ytd_snapshot(snapshot_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    return result
+
+
+class EmailYtdRequest(BaseModel):
+    email: str
+    snapshot_id: str | None = None
+
+
+@app.post("/api/track/live/ytd/email")
+def email_live_ytd_report(body: EmailYtdRequest):
+    """Email the YTD report (live benchmark + attribution) to the given address.
+
+    If snapshot_id is omitted, sends the most recent stored snapshot.
+    """
+    if not body.email or "@" not in body.email:
+        raise HTTPException(status_code=422, detail="A valid email address is required.")
+    try:
+        result = analyst.email_ytd_report(body.email, body.snapshot_id)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"email_ytd_report raised: {exc}\n\nTraceback:\n{tb}",
+        )
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("error", "Email failed"))
     return result
 
 

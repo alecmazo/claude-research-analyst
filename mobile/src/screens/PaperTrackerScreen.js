@@ -38,15 +38,24 @@ export default function PaperTrackerScreen({ navigation }) {
   const [ytdResult,        setYtdResult]       = useState(null);
   const [ytdError,         setYtdError]        = useState(null);
 
+  // ── Snapshot history + email ───────────────────────────────────────────
+  const [snapshots,        setSnapshots]       = useState([]);
+  const [activeSnapshotId, setActiveSnapshotId] = useState(null);
+  const [emailAddr,        setEmailAddr]       = useState('');
+  const [emailStatus,      setEmailStatus]     = useState(null);  // {kind: 'ok'|'error'|'pending', text}
+  const [emailSending,     setEmailSending]    = useState(false);
+
   const load = async () => {
     try {
-      const [data, liveData] = await Promise.all([
+      const [data, liveData, snapsData] = await Promise.all([
         api.listTrackers(),
         api.getLiveBenchmark().catch(() => ({})),
+        api.listYtdSnapshots().catch(() => ({})),
       ]);
       setPortfolios(data.portfolios || []);
       const lp = liveData?.live_portfolio || null;
       setLive(lp);
+      setSnapshots(snapsData?.snapshots || []);
       // Re-hydrate previously stored unified-YTD result so the attribution
       // table is visible without re-uploading.
       const h = lp?.account_history;
@@ -120,6 +129,16 @@ export default function PaperTrackerScreen({ navigation }) {
         beginValue:    bv,
       });
       setYtdResult(data);
+      // Refresh snapshot history so the new run shows up immediately
+      try {
+        const s = await api.listYtdSnapshots();
+        setSnapshots(s?.snapshots || []);
+      } catch {}
+      // Force a re-fetch of the YTD detail with the new snapshot id
+      if (data?.snapshot_id) {
+        setLiveDetail(null);
+        setActiveSnapshotId(data.snapshot_id);
+      }
     } catch (e) {
       setYtdError(e.message);
       Alert.alert('Calculation failed', e.message);
@@ -298,20 +317,59 @@ export default function PaperTrackerScreen({ navigation }) {
   };
 
   // ── Live benchmark card — tappable, expands to YTD detail ─────────────────
+  // snapshotId: optional — opens the detail view pinned to a historical snapshot
+  const loadLiveDetail = async (snapshotId = null) => {
+    setLiveLoading(true);
+    setEmailStatus(null);
+    setActiveSnapshotId(snapshotId || null);
+    try {
+      const d = await api.getLiveBenchmarkDetail(snapshotId);
+      if (d?.ok) {
+        setLiveDetail(d);
+        // The server-resolved snapshot id is what we email later
+        setActiveSnapshotId(d.snapshot_id || snapshotId || null);
+      } else {
+        Alert.alert('Could not load', d?.error || 'Live YTD detail unavailable.');
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
   const toggleLiveDetail = async () => {
     const willExpand = !liveExpanded;
     setLiveExpanded(willExpand);
     if (willExpand && !liveDetail) {
-      setLiveLoading(true);
-      try {
-        const d = await api.getLiveBenchmarkDetail();
-        if (d?.ok) setLiveDetail(d);
-        else Alert.alert('Could not load', d?.error || 'Live YTD detail unavailable.');
-      } catch (e) {
-        Alert.alert('Error', e.message);
-      } finally {
-        setLiveLoading(false);
-      }
+      await loadLiveDetail(null);
+    }
+  };
+
+  const openSnapshot = async (snap) => {
+    setLiveExpanded(true);
+    await loadLiveDetail(snap.id);
+  };
+
+  // ── Email YTD report ─────────────────────────────────────────────────────
+  const sendEmail = async () => {
+    const e = (emailAddr || '').trim();
+    if (!e || !e.includes('@')) {
+      setEmailStatus({ kind: 'error', text: 'Enter a valid email address.' });
+      return;
+    }
+    setEmailSending(true);
+    setEmailStatus({ kind: 'pending', text: 'Sending…' });
+    try {
+      const r = await api.emailYtdReport(e, activeSnapshotId);
+      setEmailStatus({
+        kind: 'ok',
+        text: `✓ Sent to ${r.sent_to || e} via ${r.transport || 'email'}.`,
+      });
+    } catch (err) {
+      setEmailStatus({ kind: 'error', text: `Error: ${err.message}` });
+    } finally {
+      setEmailSending(false);
     }
   };
 
@@ -415,10 +473,87 @@ export default function PaperTrackerScreen({ navigation }) {
                 {(liveDetail.holdings || []).map((h, i, arr) => (
                   <HoldingRow key={h.ticker} h={h} idx={i} arr={arr} />
                 ))}
+
+                {/* Email this report */}
+                <View style={styles.emailBox}>
+                  <Text style={styles.emailBoxTitle}>EMAIL THIS REPORT</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    value={emailAddr}
+                    onChangeText={setEmailAddr}
+                    placeholder="you@example.com"
+                    placeholderTextColor={colors.midGray}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <TouchableOpacity
+                    style={[styles.btnPrimary, emailSending && { opacity: 0.6 }]}
+                    onPress={sendEmail}
+                    disabled={emailSending}
+                  >
+                    {emailSending
+                      ? <ActivityIndicator color={colors.navy} />
+                      : <Text style={styles.btnPrimaryText}>Send Report</Text>}
+                  </TouchableOpacity>
+                  {emailStatus && (
+                    <Text style={[
+                      styles.emailStatus,
+                      emailStatus.kind === 'ok'      && { color: '#16A34A' },
+                      emailStatus.kind === 'error'   && { color: '#DC2626' },
+                      emailStatus.kind === 'pending' && { color: colors.midGray, fontStyle: 'italic' },
+                    ]}>
+                      {emailStatus.text}
+                    </Text>
+                  )}
+                </View>
               </>
             )}
           </View>
         )}
+      </View>
+    );
+  };
+
+  // ── Past YTD runs (snapshot history) card ────────────────────────────────
+  const renderSnapshotsCard = () => {
+    if (!live || !snapshots.length) return null;
+    const usd0 = (v) => v == null ? '—'
+      : (v < 0 ? '−' : '') + '$' + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardLabel}>PAST YTD RUNS</Text>
+        <Text style={styles.formHint}>
+          Tap any run to re-open the full attribution with that snapshot's holdings &amp; values.
+        </Text>
+        {snapshots.map(s => {
+          const md = s.md_return_pct ?? 0;
+          const dt = s.uploaded_at
+            ? new Date(s.uploaded_at).toLocaleString('en-US', {
+                month: 'short', day: 'numeric', year: 'numeric',
+                hour: 'numeric', minute: '2-digit',
+              })
+            : '—';
+          return (
+            <TouchableOpacity
+              key={s.id}
+              style={styles.snapRow}
+              onPress={() => openSnapshot(s)}
+              activeOpacity={0.7}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.snapDate}>{dt}</Text>
+                <Text style={styles.snapMeta} numberOfLines={1}>
+                  {usd0(s.begin_value)} → {usd0(s.end_value)} ·
+                  {' '}{s.positions_count} pos · {s.trade_count} trades
+                </Text>
+              </View>
+              <Text style={[styles.snapReturn, { color: pctColor(md) }]}>
+                {fmtPct(md)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
@@ -549,6 +684,7 @@ export default function PaperTrackerScreen({ navigation }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
         >
           {renderLiveCard()}
+          {renderSnapshotsCard()}
           {renderYtdCard()}
 
           <View style={[styles.card, { paddingTop: 14 }]}>
@@ -1134,6 +1270,41 @@ const styles = StyleSheet.create({
   attrSectionLabel: {
     fontSize: 10, fontWeight: '800', letterSpacing: 1,
     color: colors.gold, marginTop: 4, marginBottom: 6,
+  },
+
+  // ── Email-this-report box (inside live YTD detail) ──────────────────────
+  emailBox: {
+    marginTop: 18, padding: 14,
+    borderRadius: 8,
+    backgroundColor: 'rgba(201,168,76,0.05)',
+    borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)',
+  },
+  emailBoxTitle: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1,
+    color: colors.gold, marginBottom: 8,
+  },
+  emailStatus: {
+    fontSize: 12, marginTop: 8, fontWeight: '600',
+  },
+
+  // ── Snapshot history rows ───────────────────────────────────────────────
+  snapRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    padding: 10, marginBottom: 6,
+    backgroundColor: colors.offWhite,
+    borderRadius: 8,
+    borderWidth: 1, borderColor: colors.lightGray,
+  },
+  snapDate: {
+    fontSize: 13, fontWeight: '700', color: colors.navy,
+  },
+  snapMeta: {
+    fontSize: 11, color: colors.midGray,
+    fontFamily: 'Courier New', marginTop: 2,
+  },
+  snapReturn: {
+    fontSize: 16, fontWeight: '800', fontFamily: 'Courier New',
+    marginLeft: 10,
   },
 
   // ── Attribution result ────────────────────────────────────────────────────

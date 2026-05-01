@@ -258,6 +258,16 @@
     </div>
 
     <!-- Account history upload — Modified Dietz YTD accuracy -->
+    <!-- Past YTD runs (snapshot history) -->
+    <div class="card" id="ytd-snapshots-card" style="display:none;">
+      <div class="label">PAST YTD RUNS</div>
+      <p class="hint" style="margin-bottom:8px;">
+        Every YTD calculation is saved here. Click any run to re-open the full
+        attribution with that snapshot's holdings &amp; values.
+      </p>
+      <div id="ytd-snapshots-list"></div>
+    </div>
+
     <div class="card" id="history-upload-card" style="display:none;">
       <div class="label">ACCURATE YTD &mdash; CASH-FLOW &amp; TRANSACTION ADJUSTED</div>
       <p class="hint" style="margin-bottom:12px;">
@@ -341,6 +351,21 @@
       <div class="tracker-detail-actions">
         <button id="tracker-detail-close-portfolio" class="btn-secondary">Stop Tracking</button>
         <button id="tracker-detail-delete" class="btn-danger">Delete Portfolio</button>
+      </div>
+
+      <!-- Email this report (live mode only — hidden by applyDetailMode) -->
+      <div id="tracker-email-row" class="tracker-email-row" style="display:none;">
+        <div class="tracker-email-title">Email this report</div>
+        <div class="tracker-email-row-inner">
+          <input
+            type="email"
+            id="tracker-email-input"
+            class="tracker-email-input"
+            placeholder="you@example.com"
+            autocomplete="email">
+          <button id="tracker-email-btn" class="btn-primary">Send Report</button>
+        </div>
+        <div id="tracker-email-status" class="tracker-email-status"></div>
       </div>
     </div>
   </div><!-- /port-mode-tracker -->

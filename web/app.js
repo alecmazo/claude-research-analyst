@@ -131,7 +131,25 @@ const api = {
     method: 'DELETE', headers: { 'x-auth-token': getToken() }
   }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); })),
   getLiveBenchmark: () => apiGet('/api/track/live'),
-  getLiveBenchmarkDetail: () => apiGet('/api/track/live/detail'),
+  getLiveBenchmarkDetail: (snapshotId) => apiGet(
+    '/api/track/live/detail' + (snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : '')
+  ),
+  listYtdSnapshots: () => apiGet('/api/track/live/snapshots'),
+  deleteYtdSnapshot: (id) => fetch(`${API_BASE}/api/track/live/snapshots/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'x-auth-token': getToken() },
+  }).then(r => r.json()),
+  emailYtdReport: (email, snapshotId) => fetch(`${API_BASE}/api/track/live/ytd/email`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
+    body:    JSON.stringify({ email, snapshot_id: snapshotId || null }),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    return r.json();
+  }),
 };
 
 // ---------- View switching ----------
@@ -1112,6 +1130,110 @@ function initTracker() {
 
   // Unified YTD: Modified Dietz return + per-stock attribution in one call
   document.getElementById('history-upload-btn')?.addEventListener('click', uploadAccountHistory);
+
+  // Email the YTD report (only visible in live YTD detail mode)
+  document.getElementById('tracker-email-btn')?.addEventListener('click', sendYtdEmail);
+
+  // Pre-fill email field from previous use
+  const lastEmail = localStorage.getItem('@dga_last_ytd_email') || '';
+  const emailEl = document.getElementById('tracker-email-input');
+  if (emailEl && lastEmail) emailEl.value = lastEmail;
+}
+
+// Track which snapshot is currently being viewed (null = current/latest live).
+let _currentYtdSnapshotId = null;
+
+// ── YTD snapshot history list ────────────────────────────────────────────
+async function loadYtdSnapshots() {
+  const card = document.getElementById('ytd-snapshots-card');
+  const list = document.getElementById('ytd-snapshots-list');
+  if (!card || !list) return;
+  try {
+    const data = await api.listYtdSnapshots();
+    const snaps = data?.snapshots || [];
+    if (!snaps.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    list.innerHTML = snaps.map(s => _ytdSnapshotRowHtml(s)).join('');
+    list.querySelectorAll('.ytd-snap-row').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        if (ev.target.closest('.ytd-snap-delete')) return;  // ignore delete clicks
+        openLiveBenchmarkDetail(el.dataset.id);
+      });
+    });
+    list.querySelectorAll('.ytd-snap-delete').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const id = el.dataset.id;
+        if (!confirm('Delete this snapshot? This cannot be undone.')) return;
+        try {
+          await api.deleteYtdSnapshot(id);
+          await loadYtdSnapshots();
+        } catch (e) { alert('Could not delete: ' + e.message); }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = `<div class="empty">Could not load: ${err.message}</div>`;
+  }
+}
+
+function _ytdSnapshotRowHtml(s) {
+  const md = s.md_return_pct ?? 0;
+  const cls = md >= 0 ? 'green' : 'red';
+  const sign = md >= 0 ? '+' : '';
+  const dt = s.uploaded_at ? new Date(s.uploaded_at).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }) : '—';
+  const usd0 = (v) => v == null ? '—' : (v < 0 ? '−' : '') + '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+  return `<div class="ytd-snap-row" data-id="${s.id}">
+    <div class="ytd-snap-row-left">
+      <div class="ytd-snap-date">${dt}</div>
+      <div class="ytd-snap-meta">
+        ${usd0(s.begin_value)} → ${usd0(s.end_value)} ·
+        ${s.positions_count} positions · ${s.trade_count} trades
+      </div>
+    </div>
+    <div class="ytd-snap-row-right">
+      <div class="ytd-snap-return ${cls}">${sign}${md.toFixed(2)}%</div>
+      <button class="ytd-snap-delete" data-id="${s.id}" title="Delete snapshot">✕</button>
+    </div>
+  </div>`;
+}
+
+// ── Email YTD report ──────────────────────────────────────────────────────
+async function sendYtdEmail() {
+  const input = document.getElementById('tracker-email-input');
+  const status = document.getElementById('tracker-email-status');
+  const btn = document.getElementById('tracker-email-btn');
+  const email = (input?.value || '').trim();
+  if (!email || !email.includes('@')) {
+    if (status) {
+      status.textContent = 'Enter a valid email address.';
+      status.className = 'tracker-email-status error';
+    }
+    return;
+  }
+  localStorage.setItem('@dga_last_ytd_email', email);
+
+  btn.disabled = true;
+  if (status) {
+    status.textContent = 'Sending…';
+    status.className = 'tracker-email-status pending';
+  }
+  try {
+    const r = await api.emailYtdReport(email, _currentYtdSnapshotId);
+    if (status) {
+      status.textContent = `✓ Sent to ${r.sent_to || email} via ${r.transport || 'email'}.`;
+      status.className = 'tracker-email-status ok';
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = `Error: ${err.message}`;
+      status.className = 'tracker-email-status error';
+    }
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Live benchmark card (clickable → YTD detail) ──────────────────────────
@@ -1132,6 +1254,10 @@ async function loadLiveBenchmark() {
       if (histCard) histCard.style.display = 'none';
       return;
     }
+
+    // Load snapshot history (newest first) — shows past YTD runs above the
+    // upload card so the user can re-open / email any one of them.
+    loadYtdSnapshots();
 
     // Show the unified YTD card once we have a live portfolio
     if (histCard) {
@@ -1474,8 +1600,9 @@ async function openTrackerDetail(id) {
 }
 
 // ── Live Benchmark YTD detail (clicked from the Live Benchmark card) ──────
-async function openLiveBenchmarkDetail() {
+async function openLiveBenchmarkDetail(snapshotId) {
   _trackerExpandedId = null;
+  _currentYtdSnapshotId = snapshotId || null;
   const card = document.getElementById('tracker-detail-card');
   card.dataset.mode = 'live';
   card.style.display = 'block';
@@ -1485,10 +1612,16 @@ async function openLiveBenchmarkDetail() {
   const attrEl = document.getElementById('tracker-attribution');
   if (attrEl) attrEl.innerHTML = '';
   document.getElementById('tracker-holdings-table').innerHTML = '';
+  // Reset email status when re-opening
+  const emailStatus = document.getElementById('tracker-email-status');
+  if (emailStatus) { emailStatus.textContent = ''; emailStatus.className = 'tracker-email-status'; }
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    const p = await api.getLiveBenchmarkDetail();
+    const p = await api.getLiveBenchmarkDetail(snapshotId);
+    // If the response includes a snapshot id, remember it so the email
+    // request points at exactly the same data the user is viewing.
+    _currentYtdSnapshotId = p?.snapshot_id || snapshotId || null;
     if (!p?.ok) {
       document.getElementById('tracker-detail-name').textContent = 'Live YTD';
       document.getElementById('tracker-detail-meta').textContent = p?.error || 'Unavailable';
@@ -1544,6 +1677,10 @@ function applyDetailMode(mode) {
   // Hide Stop Tracking / Delete buttons in live mode (it's not a paper portfolio)
   const actionRow = card.querySelector('.tracker-detail-actions');
   if (actionRow) actionRow.style.display = isLive ? 'none' : 'flex';
+
+  // Email row only makes sense for live YTD (paper portfolios are different)
+  const emailRow = document.getElementById('tracker-email-row');
+  if (emailRow) emailRow.style.display = isLive ? '' : 'none';
 }
 
 function closeTrackerDetail() {
