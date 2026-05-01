@@ -2549,18 +2549,40 @@ def compute_position_attribution(
     except Exception:
         pass  # fall back to per-ticker below
 
-    # Per-ticker fallback for any that failed the bulk download
+    # Per-ticker fallback for any that failed the bulk download.
+    # Also tries preferred-stock ticker remapping:
+    #   Fidelity: NLYPRF  →  yfinance: NLY-PF
+    #   Fidelity: BACPRL  →  yfinance: BAC-PL
+    #   Fidelity: CPRJ    →  yfinance: C-PJ
+    # Pattern: {BASE}PR{SERIES} where BASE is 1-4 uppercase letters,
+    # SERIES is a single letter → {BASE}-P{SERIES}
+    import re as _re_pref
+
+    def _yf_ticker_variants(t: str) -> list:
+        """Return yfinance ticker variants to try, preferred remap first."""
+        variants = [t]
+        m = _re_pref.match(r'^([A-Z]{1,4})PR([A-Z])$', t)
+        if m:
+            base, series = m.group(1), m.group(2)
+            variants.insert(0, f"{base}-P{series}")   # NLY-PF — most common
+            variants.insert(1, f"{base}^{series}")    # NLY^F — alternate
+        return variants
+
     for ticker in all_tickers:
         if ticker not in jan1_prices:
-            try:
-                import yfinance as _yf2
-                h = _yf2.Ticker(ticker).history(
-                    start=price_start, end=price_end, auto_adjust=False
-                )
-                if h is not None and not h.empty:
-                    jan1_prices[ticker] = float(h["Close"].dropna().iloc[-1])
-            except Exception:
-                pass
+            for yf_sym in _yf_ticker_variants(ticker):
+                try:
+                    import yfinance as _yf2
+                    h = _yf2.Ticker(yf_sym).history(
+                        start=price_start, end=price_end, auto_adjust=False
+                    )
+                    if h is not None and not h.empty:
+                        price_val = float(h["Close"].dropna().iloc[-1])
+                        if price_val > 0:
+                            jan1_prices[ticker] = price_val  # store under original ticker
+                            break  # found it — stop trying variants
+                except Exception:
+                    pass
 
     # ── Step 4: Compute attribution per ticker ───────────────────────────────
     attribution: list[dict] = []
@@ -2596,30 +2618,49 @@ def compute_position_attribution(
         start_shares = max(0.0, start_shares)  # guard against reconstruction errors
 
         # Starting value: use Jan 1 price (fallback to end price if unavailable)
-        jan1_price  = jan1_prices.get(ticker, end_price)
-        start_value = start_shares * jan1_price
+        price_fetched = ticker in jan1_prices
+        jan1_price    = jan1_prices.get(ticker, end_price)
+        start_value   = start_shares * jan1_price
 
-        # Total dollar P&L for this ticker this year
-        dollar_gain = (
-            end_value
-            + total_sell_proceeds
-            + dividends_cash
-            - start_value
-            - total_buy_cost
-            - total_reinv_cost
+        # ── Unreliable-price detection ──────────────────────────────────────
+        # A fully-sold position (end_price = 0) where yfinance also returned
+        # nothing will fall back to end_price = $0, making start_value = $0
+        # and dollar_gain = full proceeds (completely wrong).
+        # Mark such rows so we can warn the user and exclude from totals.
+        price_missing = (
+            not price_fetched          # yfinance returned nothing
+            and start_shares > 0       # position existed at Jan 1
+            and jan1_price <= 0        # fallback landed on $0
         )
 
-        contribution_pct = round(dollar_gain / begin_value * 100.0, 4) if begin_value > 0 else 0.0
-        total_explained += dollar_gain
-
-        # Ticker-level return (for reference, not used in portfolio attribution)
-        if start_value + total_buy_cost + total_reinv_cost > 0:
-            invested = start_value + total_buy_cost + total_reinv_cost
-            ticker_return_pct = round(
-                (end_value + total_sell_proceeds + dividends_cash - invested) / invested * 100.0, 2
-            )
-        else:
+        if price_missing:
+            # We don't know the opening basis — set gain to dividends only
+            # (at least dividends are real cash received, capital P&L unknown)
+            dollar_gain      = dividends_cash
+            contribution_pct = round(dollar_gain / begin_value * 100.0, 4) if begin_value > 0 else 0.0
             ticker_return_pct = None
+        else:
+            # Total dollar P&L for this ticker this year
+            dollar_gain = (
+                end_value
+                + total_sell_proceeds
+                + dividends_cash
+                - start_value
+                - total_buy_cost
+                - total_reinv_cost
+            )
+            contribution_pct = round(dollar_gain / begin_value * 100.0, 4) if begin_value > 0 else 0.0
+
+            # Ticker-level return (for reference, not used in portfolio attribution)
+            if start_value + total_buy_cost + total_reinv_cost > 0:
+                invested = start_value + total_buy_cost + total_reinv_cost
+                ticker_return_pct = round(
+                    (end_value + total_sell_proceeds + dividends_cash - invested) / invested * 100.0, 2
+                )
+            else:
+                ticker_return_pct = None
+
+        total_explained += dollar_gain
 
         attribution.append({
             "ticker":              ticker,
@@ -2640,8 +2681,9 @@ def compute_position_attribution(
             "contribution_pct":    contribution_pct,
             "ticker_return_pct":   ticker_return_pct,
             "trade_count":         len(ticker_trades),
-            "trades":              ticker_trades,        # detail list
-            "jan1_price_source":   "fetched" if ticker in jan1_prices else "fallback",
+            "trades":              ticker_trades,
+            "jan1_price_source":   "fetched" if price_fetched else "fallback",
+            "price_missing":       price_missing,   # True = Jan 1 price unavailable, gain unreliable
         })
 
     # ── MM tickers: interest/dividends-only attribution ─────────────────────

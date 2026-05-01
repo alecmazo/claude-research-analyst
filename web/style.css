@@ -2112,6 +2112,19 @@ body {
 }
 .live-chip-ticker { font-weight: 800; color: var(--navy); letter-spacing: 0.4px; }
 .live-chip-weight { color: var(--mid-gray); font-weight: 600; }
+/* Missing Jan 1 price row — orange/amber warning */
+.attr-row-missing { opacity: 0.8; }
+.attr-row-missing .attr-ticker { color: #b45309; }
+.attr-missing-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fef3c7; border: 1px solid #f59e0b;
+  color: #b45309; font-size: 10px; font-weight: 800;
+  cursor: help; margin-left: 4px;
+}
+.attr-missing-hint { color: #b45309; font-style: italic; }
+.attr-muted { color: #9ca3af !important; font-style: italic; }
+
 /* Money-market attribution row — muted, clearly a cash position */
 .attr-row-mm { opacity: 0.75; }
 .attr-row-mm .attr-ticker { color: #2e7d52; }

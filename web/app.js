@@ -1389,6 +1389,23 @@ function _renderUnifiedYtdResult(data) {
 
   // ── Per-ticker attribution rows (clean, summarized) ──────────────────────
   const attribRows = (data.attribution || []).map(a => {
+    // ── Missing Jan 1 price — fully sold, yfinance returned nothing ──────────
+    if (a.price_missing) {
+      const divChip = a.dividends_cash > 0
+        ? `<span class="attr-chip div">div ${fmtUSD0(a.dividends_cash)}</span>` : '';
+      const sellChip = a.total_sold_shares > 0
+        ? `<span class="attr-chip sell">▼ ${fmtSh(a.total_sold_shares)} @ $${(a.total_sell_proceeds / a.total_sold_shares).toFixed(2)}</span>` : '';
+      const activity = [sellChip, divChip].filter(Boolean).join(' ') || '<span class="attr-sub">—</span>';
+      return `<tr class="attr-row-missing">
+        <td class="attr-ticker">${a.ticker} <span class="attr-missing-badge" title="Jan 1 price unavailable — capital P&amp;L excluded from totals">?</span></td>
+        <td class="attr-pos"><span class="attr-sub attr-missing-hint">Jan 1 price unavailable</span></td>
+        <td class="attr-act">${activity}</td>
+        <td class="attr-pos"><span class="attr-sub">fully sold</span></td>
+        <td class="attr-num attr-muted" title="Capital gain unknown — only dividends shown">divs only</td>
+        <td class="attr-num attr-muted">—</td>
+      </tr>`;
+    }
+
     // ── Money-market / cash row — interest-only, no shares reconstruction ──
     if (a.is_mm) {
       const divChip = a.dividends_cash > 0
