@@ -215,14 +215,16 @@ export default function PaperTrackerScreen({ navigation }) {
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
         <Ionicons name="arrow-back" size={22} color={colors.white} />
       </TouchableOpacity>
-      <Text style={styles.headerTitle}>Paper Tracker</Text>
+      <Text style={styles.headerTitle}>Tracker</Text>
       <View style={{ width: 38 }} />
     </View>
   );
 
   // ── Unified YTD card (Modified Dietz + per-stock attribution) ───────────
   const renderYtdCard = () => {
-    if (!live) return null;  // only show once a live portfolio exists
+    // The Tracker page is independent of any prior Live Rebalance — the
+    // unified YTD card is always visible. Uploading the two CSVs and a Jan 1
+    // value is enough; the live portfolio is auto-created server-side.
     const md = ytdResult?.md_return_pct;
 
     return (
@@ -517,7 +519,7 @@ export default function PaperTrackerScreen({ navigation }) {
 
   // ── Past YTD runs (snapshot history) card ────────────────────────────────
   const renderSnapshotsCard = () => {
-    if (!live || !snapshots.length) return null;
+    if (!snapshots.length) return null;
     const usd0 = (v) => v == null ? '—'
       : (v < 0 ? '−' : '') + '$' + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
     return (

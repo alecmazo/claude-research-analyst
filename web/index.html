@@ -156,10 +156,10 @@
     <span></span>
   </header>
 
-  <!-- Mode toggle: Live Rebalance ↔ Paper Tracker -->
+  <!-- Mode toggle: Live Rebalance ↔ Tracker -->
   <div class="port-mode-toggle">
     <button class="port-mode-btn active" data-port-mode="rebalance">Live Rebalance</button>
-    <button class="port-mode-btn" data-port-mode="tracker">Paper Tracker</button>
+    <button class="port-mode-btn" data-port-mode="tracker">Tracker</button>
   </div>
 
   <!-- ── REBALANCE MODE ──────────────────────────────────────────── -->
@@ -174,33 +174,9 @@
     <div id="portfolio-file-info" class="file-info"></div>
   </div>
 
-  <div class="card">
-    <div class="label">PRIMARY STRATEGY</div>
-    <div class="strategy-list" id="strategy-list">
-      <label class="strategy-option">
-        <input type="radio" name="strategy" value="current" checked>
-        <div class="strategy-body">
-          <div class="strategy-title">Current Portfolio</div>
-          <div class="strategy-desc">Keeps every position — no selling. Optimizes weights for risk-adjusted return. Position caps scale with market cap (large caps up to 20%, small caps 7–10%). Works with any number of positions.</div>
-        </div>
-      </label>
-      <label class="strategy-option">
-        <input type="radio" name="strategy" value="pro">
-        <div class="strategy-body">
-          <div class="strategy-title">High Conviction</div>
-          <div class="strategy-desc">8–15 best ideas, max 15% each, sector cap 25%. Can trim or exit weak positions.</div>
-        </div>
-      </label>
-      <label class="strategy-option">
-        <input type="radio" name="strategy" value="allin">
-        <div class="strategy-body">
-          <div class="strategy-title">All In — Top 3</div>
-          <div class="strategy-desc">Only the 3 highest-conviction names, up to 40% each. Max aggression.</div>
-        </div>
-      </label>
-    </div>
-    <p class="hint">The xlsx output contains <strong>all three</strong> strategies side by side; your primary choice shows first in the Optimized column.</p>
-  </div>
+  <!-- Strategy selector removed — every run produces all three strategies
+       (Current Portfolio, High Conviction, All-In Top 3) side-by-side. -->
+  <input type="hidden" id="strategy-list" value="current">
 
   <div class="card">
     <div class="gamma-row" style="margin-top:0;padding-top:0;border-top:none;">

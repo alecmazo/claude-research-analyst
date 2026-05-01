@@ -361,7 +361,9 @@ if (portfolioRunBtn) {
   portfolioRunBtn.addEventListener('click', async () => {
     const file = portfolioFileInput.files?.[0];
     if (!file) return;
-    const strategy = document.querySelector('input[name="strategy"]:checked')?.value || 'pro';
+    // Strategy selector removed from the UI — backend always returns all
+    // three (current / pro / allin); 'current' is fine as the canonical primary.
+    const strategy = 'current';
     const reuse = document.getElementById('portfolio-reuse').checked;
     const gamma = document.getElementById('portfolio-gamma').checked;
 
@@ -575,25 +577,10 @@ function renderPortfolioResult(result, target) {
   el.style.display = 'block';
 }
 
-// Load strategy metadata from the server (keeps UI in sync with backend).
-async function loadStrategies() {
-  try {
-    const strategies = await api.listStrategies();
-    const list = document.getElementById('strategy-list');
-    if (!list || !strategies?.length) return;
-    list.innerHTML = strategies.map((s, i) => `
-      <label class="strategy-option">
-        <input type="radio" name="strategy" value="${s.key}" ${i === 0 ? 'checked' : ''}>
-        <div class="strategy-body">
-          <div class="strategy-title">${s.label}</div>
-          <div class="strategy-desc">${s.description}</div>
-        </div>
-      </label>
-    `).join('');
-  } catch {
-    // keep static fallback
-  }
-}
+// Strategy selector was removed from the UI — every run produces all three
+// (current / pro / allin) so there's nothing to load. Keep a no-op here in
+// case any caller still references it.
+async function loadStrategies() { /* no-op */ }
 
 // ============================================================================
 // REAL-TIME PRICES — inject live price tags into the Saved Reports list
@@ -1242,26 +1229,29 @@ async function loadLiveBenchmark() {
   const card = document.getElementById('tracker-live-card');
   const histCard = document.getElementById('history-upload-card');
   if (!wrap) return;
+
+  // The Tracker page is independent of the Live Rebalance tab — the YTD
+  // upload card and snapshot history are always visible. The user can run
+  // an accurate cash-flow + transaction-adjusted YTD just by uploading the
+  // two CSVs and entering Jan 1 value, with no prior live-rebalance step.
+  if (histCard) histCard.style.display = '';
+  loadYtdSnapshots();
+
   try {
     const data = await api.getLiveBenchmark();
     const live = data?.live_portfolio;
     if (!live) {
       wrap.innerHTML = `<div class="tracker-live-empty">
-        No live portfolio yet. Upload your portfolio on the Live Rebalance tab to set a benchmark.
+        Live benchmark will be set automatically the first time you calculate
+        an accurate YTD below — no need to run a separate rebalance.
       </div>`;
       card?.classList.remove('clickable');
       card?.removeAttribute('role');
-      if (histCard) histCard.style.display = 'none';
       return;
     }
 
-    // Load snapshot history (newest first) — shows past YTD runs above the
-    // upload card so the user can re-open / email any one of them.
-    loadYtdSnapshots();
-
-    // Show the unified YTD card once we have a live portfolio
+    // Auto-render the most recent YTD result if one exists
     if (histCard) {
-      histCard.style.display = '';
       // If a previous unified-YTD upload was persisted, re-render it from
       // live.account_history (which now also stores the attribution rows).
       const h = live.account_history;

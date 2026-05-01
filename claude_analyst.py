@@ -639,6 +639,21 @@ def _send_via_resend(msg: EmailMessage) -> dict | None:
         err_msg = err_body.get("message") or err_body.get("error") or resp.text
     except Exception:  # noqa: BLE001
         err_msg = resp.text
+
+    # Special-case the most common gotcha: Resend's free tier (no verified
+    # domain) only lets you send to your own account email. Translate the raw
+    # 403 into something actionable so the UI can show clear next steps.
+    is_test_only = (
+        resp.status_code == 403
+        and ("verify a domain" in err_msg.lower() or "testing emails" in err_msg.lower())
+    )
+    if is_test_only:
+        err_msg = (
+            "Resend is in test mode and can only email your own account address. "
+            "To email anyone: (1) verify your domain at resend.com/domains "
+            "(e.g. dgacapital.com), then (2) set the Railway env var "
+            "RESEND_FROM=reports@dgacapital.com (or any verified address)."
+        )
     return {
         "ok": False,
         "transport": "resend",
@@ -3039,31 +3054,67 @@ def compute_unified_ytd(
         # remains a complete record even if the live book changes later.
         "holdings_snapshot": None,  # filled below from live state
     }
+    # Build a holdings list directly from the positions CSV. The Tracker page
+    # is independent of any Live Rebalance run — when no live_portfolio exists,
+    # we auto-create one from the uploaded positions so the YTD detail and
+    # snapshots have something to reference.
+    pos_total = float(attr.get("portfolio_end_value") or end_value or 0.0)
+    pos_holdings_for_promote: list[dict] = []
+    try:
+        _pos_again = _parse_fidelity_positions_extended(positions_text)
+        if _pos_again.get("ok"):
+            for h in _pos_again.get("holdings") or []:
+                if h.get("is_mm"):
+                    continue  # exclude SPAXX/cash from benchmark holdings
+                cv = h.get("current_value") or 0.0
+                w = (cv / pos_total) if pos_total > 0 else 0.0
+                pos_holdings_for_promote.append({
+                    "ticker":       h.get("ticker"),
+                    "weight":       round(w, 6),
+                    "anchor_price": h.get("price"),
+                })
+    except Exception:  # noqa: BLE001
+        pos_holdings_for_promote = []
+
     try:
         with _tracker_lock():
             state = _load_tracker_state()
-            if state.get("live_portfolio"):
-                lp = state["live_portfolio"]
-                # Capture holdings at upload time (deep copy via JSON round-trip
-                # — primitives only, so json.loads(json.dumps(...)) is safe)
-                try:
-                    snapshot["holdings_snapshot"] = json.loads(
-                        json.dumps(lp.get("holdings") or [], default=str)
-                    )
-                    snapshot["anchor_date"] = lp.get("anchor_date")
-                except Exception:  # noqa: BLE001
-                    snapshot["holdings_snapshot"] = lp.get("holdings") or []
+            lp = state.get("live_portfolio")
 
-                lp["account_history"] = snapshot
+            # Auto-create a live_portfolio from the positions CSV if none exists.
+            # This makes the Tracker page work standalone — no separate Live
+            # Rebalance step required.
+            if not lp:
+                lp = {
+                    "anchor_date":  _today_str(),
+                    "uploaded_at":  datetime.utcnow().isoformat(),
+                    "holdings":     pos_holdings_for_promote,
+                    "auto_created": True,
+                }
+                state["live_portfolio"] = lp
 
-                # Append-only snapshot history (capped at 50 most recent)
-                snaps = lp.get("ytd_snapshots") or []
-                snaps.append(snapshot)
-                if len(snaps) > 50:
-                    snaps = snaps[-50:]
-                lp["ytd_snapshots"] = snaps
+            # Capture holdings at upload time (deep copy via JSON round-trip
+            # — primitives only, so json.loads(json.dumps(...)) is safe).
+            # Prefer the freshly-uploaded positions over a stale live snapshot.
+            holdings_to_snap = pos_holdings_for_promote or lp.get("holdings") or []
+            try:
+                snapshot["holdings_snapshot"] = json.loads(
+                    json.dumps(holdings_to_snap, default=str)
+                )
+                snapshot["anchor_date"] = lp.get("anchor_date")
+            except Exception:  # noqa: BLE001
+                snapshot["holdings_snapshot"] = holdings_to_snap
 
-                _save_tracker_state(state)
+            lp["account_history"] = snapshot
+
+            # Append-only snapshot history (capped at 50 most recent)
+            snaps = lp.get("ytd_snapshots") or []
+            snaps.append(snapshot)
+            if len(snaps) > 50:
+                snaps = snaps[-50:]
+            lp["ytd_snapshots"] = snaps
+
+            _save_tracker_state(state)
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist unified YTD: {exc}")  # non-fatal
 

@@ -93,7 +93,9 @@ export default function PortfolioScreen({ navigation }) {
         fileUri: file.uri,
         fileName: file.name,
         mimeType: file.mimeType,
-        strategy: selectedStrategy,
+        // Strategy selector removed — backend always returns all three.
+        // 'current' is the canonical primary; the others are still in the result.
+        strategy: 'current',
         reuseExisting: reuseCache,
         generateGamma,
       });
@@ -194,32 +196,8 @@ export default function PortfolioScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Strategy picker */}
-      <View style={styles.card}>
-        <Text style={styles.label}>PRIMARY STRATEGY</Text>
-        {strategies.map(s => {
-          const selected = s.key === selectedStrategy;
-          return (
-            <TouchableOpacity
-              key={s.key}
-              style={[styles.strategyOption, selected && styles.strategyOptionSelected]}
-              onPress={() => setSelectedStrategy(s.key)}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
-                {selected && <View style={styles.radioInner} />}
-              </View>
-              <View style={styles.strategyBody}>
-                <Text style={styles.strategyTitle}>{s.label}</Text>
-                <Text style={styles.strategyDesc}>{s.description}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-        <Text style={styles.hint}>
-          The xlsx output contains all three strategies; your primary choice shows first.
-        </Text>
-      </View>
+      {/* Strategy selector removed — every run produces all three strategies
+          (Current Portfolio, High Conviction, All-In Top 3) side-by-side. */}
 
       {/* Options */}
       <View style={styles.card}>
