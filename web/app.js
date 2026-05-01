@@ -1384,8 +1384,9 @@ function _renderUnifiedYtdResult(data) {
   const cls     = (v) => v == null ? '' : v >= 0 ? 'green' : 'red';
   const sign    = (v) => v == null ? '' : v >= 0 ? '+' : '';
 
-  const md       = data.md_return_pct ?? 0;
-  const netFlow  = data.net_flow      ?? 0;
+  const md      = data.md_return_pct   ?? 0;
+  const twrr    = data.twrr_return_pct ?? null;   // null = not computed yet
+  const netFlow = data.net_flow        ?? 0;
 
   // ── Per-ticker attribution rows (clean, summarized) ──────────────────────
   const attribRows = (data.attribution || []).map(a => {
@@ -1452,51 +1453,56 @@ function _renderUnifiedYtdResult(data) {
   const totalGain = data.total_dollar_gain ?? 0;
   const totalPct  = data.explained_pct     ?? 0;
 
-  // ── Flows detail (collapsible) ─────────────────────────────────────────
+  // ── Flows table (always visible — user can verify each event) ────────────
   const flowRows = (data.flows || []).map(f => {
     const cls2 = f.amount >= 0 ? 'pos' : 'neg';
     return `<tr>
       <td class="flow-date">${f.date}</td>
       <td class="flow-action">${f.action}</td>
-      <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : ''}$${Math.abs(f.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+      <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : '−'}$${Math.abs(f.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
     </tr>`;
   }).join('');
   const flowsHtml = flowRows ? `
-    <details class="flows-detail">
-      <summary>
-        ${(data.flows||[]).length} captured cash flows · net
-        <span class="${(data.net_flow||0)>=0?'pos':'neg'}">
-          ${(data.net_flow||0)>=0?'+':''}$${Math.abs(data.net_flow||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
-        </span>
-        <span class="flows-detail-hint">· click to expand</span>
-      </summary>
+    <div class="flows-section">
+      <div class="flows-section-label">CAPTURED CASH FLOWS <span class="flows-section-hint">verify these match your actual deposits/withdrawals</span></div>
       <table class="flows-table">
         <thead><tr><th>Date</th><th>Action</th><th>Amount</th></tr></thead>
         <tbody>${flowRows}</tbody>
       </table>
-    </details>` : '';
+    </div>` : `<div class="flows-section flows-section-empty">No external cash flows detected in activity CSV.</div>`;
 
-  // ── Monthly chart ─────────────────────────────────────────────────────
+  // ── Monthly chart ─────────────────────────────────────────────────────────
   const mc = data.monthly_chart;
+  const chartDbg = data.monthly_chart_error ? `<div class="monthly-chart-error">⚠ chart: ${data.monthly_chart_error}</div>` : '';
   const monthlyChartHtml = mc && mc.monthly && mc.monthly.length
     ? `<div class="monthly-chart-wrap">
          <div class="monthly-chart-header">
            <span class="section-label">YTD BY MONTH</span>
-           <span class="monthly-chart-hint">Hover a month for attribution</span>
+           <span class="monthly-chart-hint">Hover a month for attribution breakdown</span>
          </div>
-         <canvas id="monthly-ytd-canvas" width="1060" height="220" style="width:100%;height:220px"></canvas>
+         <canvas id="monthly-ytd-canvas" width="1060" height="240" style="width:100%;height:240px"></canvas>
          <div id="monthly-hover-tooltip" class="monthly-tooltip" style="display:none"></div>
        </div>`
+    : chartDbg;
+
+  // ── TWRR stat box ─────────────────────────────────────────────────────────
+  const twrrBox = twrr != null
+    ? `<div class="ytd-stat ytd-stat-twrr">
+        <div class="ytd-stat-label">TWRR <span class="twrr-note" title="Time-Weighted Rate of Return: chains monthly sub-period returns, isolating portfolio performance from the timing of your cash flows. This closely matches Fidelity's reported return.">ⓘ</span></div>
+        <div class="ytd-stat-val ${cls(twrr)}">${sign(twrr)}${twrr.toFixed(2)}%</div>
+        <div class="ytd-stat-sub">monthly chained · Fidelity-comparable</div>
+      </div>`
     : '';
 
   box.style.display = '';
   box.innerHTML = `
     <div class="ytd-result-grid">
       <div class="ytd-stat hero">
-        <div class="ytd-stat-label">YTD Return</div>
+        <div class="ytd-stat-label">MD Return</div>
         <div class="ytd-stat-val ${cls(md)}">${sign(md)}${md.toFixed(2)}%</div>
-        <div class="ytd-stat-sub">Modified Dietz · <span class="twrr-note" title="Fidelity's 6% figure uses Time-Weighted Return (TWRR) which chains sub-period returns. Modified Dietz is a dollar-weighted approximation that diverges from TWRR when large flows coincide with volatile markets. Both are valid — they measure different things.">differs from Fidelity's TWRR ⓘ</span></div>
+        <div class="ytd-stat-sub">Modified Dietz · dollar-weighted</div>
       </div>
+      ${twrrBox}
       <div class="ytd-stat">
         <div class="ytd-stat-label">Jan 1 Value</div>
         <div class="ytd-stat-val">${fmtUSD0(data.begin_value)}</div>

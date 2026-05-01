@@ -3013,10 +3013,12 @@ _FIDELITY_INFLOW_ACTIONS = frozenset({
     "ELECTRONIC FUNDS TRANSFER RECEIVED",
     "ELECTRONIC FUNDS TRANSFER",   # can be inflow or outflow — sign of Amount decides
     "CHECK RECEIVED",
-    "TRANSFER OF ASSETS",
-    "TRANSFERRED IN",
-    "JOURNALED SHARES",            # shares transferred in
+    "WIRE RECEIVED",
     "ACH RECEIVED",
+    # ── Intentionally excluded (too ambiguous — often internal Fidelity transfers) ──
+    # "TRANSFER OF ASSETS"  — ACAT or internal account-to-account move
+    # "TRANSFERRED IN"      — intra-Fidelity; not always an external deposit
+    # "JOURNALED SHARES"    — internal journal / corporate-action entries
 })
 
 _FIDELITY_OUTFLOW_KEYWORDS = frozenset({
@@ -3350,6 +3352,49 @@ def upload_account_history(
     }
 
 
+def _compute_twrr(
+    monthly_data: list,
+    flows: list,
+) -> float | None:
+    """Compute Time-Weighted Rate of Return (TWRR) from monthly sub-periods.
+
+    Chains monthly holding-period returns:
+        HPR_m  = EMV_m / (BMV_m + CF_m)
+        TWRR   = Π(HPR_m) − 1
+
+    CF_m = net external cash flow in month m (positive = deposit, negative = withdrawal).
+    Cash flows assumed at period start — consistent with how Fidelity approaches daily TWRR.
+
+    This gives a result very close to Fidelity's reported TWRR (which uses daily valuations).
+    """
+    from collections import defaultdict
+
+    flows_by_month: dict = defaultdict(float)
+    for f in flows:
+        try:
+            m = int(f["date"][5:7])
+            flows_by_month[m] += float(f["amount"])
+        except Exception:  # noqa: BLE001
+            pass
+
+    product       = 1.0
+    valid_months  = 0
+    for mo in monthly_data:
+        m    = mo["month"]
+        bmv  = float(mo.get("start_value") or 0.0)
+        emv  = float(mo.get("end_value")   or 0.0)
+        cf   = flows_by_month.get(m, 0.0)
+        denom = bmv + cf
+        if denom <= 0 or bmv <= 0:
+            continue
+        product      *= emv / denom
+        valid_months += 1
+
+    if valid_months == 0:
+        return None
+    return round((product - 1.0) * 100.0, 4)
+
+
 def compute_unified_ytd(
     positions_text: str,
     activity_text:  str,
@@ -3431,7 +3476,22 @@ def compute_unified_ytd(
     md_return     = (end_value - float(begin_value) - net_flow) / denominator
     md_return_pct = round(md_return * 100.0, 4)
 
-    # ── Persist the MD result + attribution + a snapshot for history ─────────
+    # ── Monthly chart + TWRR (computed before the lock — can be slow) ─────────
+    monthly_chart      = None
+    monthly_chart_error = None
+    twrr_return_pct    = None
+    try:
+        mc = compute_monthly_ytd_chart(positions_text, activity_text, begin_value)
+        if mc.get("ok"):
+            monthly_chart   = mc
+            twrr_return_pct = _compute_twrr(mc.get("monthly") or [], flows)
+        else:
+            monthly_chart_error = mc.get("error", "monthly chart returned not-ok")
+    except Exception as mc_exc:  # noqa: BLE001
+        monthly_chart_error = str(mc_exc)
+        print(f"⚠️  Monthly chart failed: {mc_exc}")
+
+    # ── Persist the MD/TWRR result + attribution + a snapshot for history ─────
     # `account_history` always holds the most-recent run (used by the YTD
     # detail view).  `ytd_snapshots` is an append-only list (cap 50) so the
     # user can browse / re-open / email any past run.
@@ -3448,7 +3508,9 @@ def compute_unified_ytd(
         "trade_count":       int(attr.get("trades_parsed", 0)),
         "dividend_count":    int(attr.get("dividends_parsed", 0)),
         "md_return_pct":     float(md_return_pct),
+        "twrr_return_pct":   float(twrr_return_pct) if twrr_return_pct is not None else None,
         "attribution":       attr.get("attribution", []),
+        "monthly_chart":     monthly_chart,
         # Capture the live-portfolio holdings at upload time so the snapshot
         # remains a complete record even if the live book changes later.
         "holdings_snapshot": None,  # filled below from live state
@@ -3505,13 +3567,6 @@ def compute_unified_ytd(
 
             lp["account_history"] = snapshot
 
-            # ── Monthly chart data (non-fatal if it fails) ────────────────
-            try:
-                mc = compute_monthly_ytd_chart(positions_text, activity_text, begin_value)
-                snapshot["monthly_chart"] = mc if mc.get("ok") else None
-            except Exception:
-                snapshot["monthly_chart"] = None
-
             # Append-only snapshot history (capped at 50 most recent)
             snaps = lp.get("ytd_snapshots") or []
             snaps.append(snapshot)
@@ -3527,6 +3582,7 @@ def compute_unified_ytd(
         "ok":                True,
         "snapshot_id":       snapshot_id,
         "md_return_pct":     md_return_pct,
+        "twrr_return_pct":   twrr_return_pct,
         "begin_value":       round(float(begin_value), 2),
         "end_value":         round(end_value, 2),
         "emv_source":        "positions_csv",
@@ -3540,7 +3596,8 @@ def compute_unified_ytd(
         "total_dollar_gain": attr.get("total_dollar_gain"),
         "explained_pct":     attr.get("explained_pct"),
         "positions_parsed":  attr.get("positions_parsed"),
-        "monthly_chart":     snapshot.get("monthly_chart"),
+        "monthly_chart":     monthly_chart,
+        "monthly_chart_error": monthly_chart_error,
     }
 
 

@@ -2265,26 +2265,26 @@ body {
   cursor: help;
 }
 
-/* ── Flows detail ────────────────────────────────────────────────────────── */
-.flows-detail {
-  margin: 12px 0 0;
+/* ── Flows section (always-visible) ──────────────────────────────────────── */
+.flows-section {
+  margin: 14px 0 4px;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
   overflow: hidden;
 }
-.flows-detail summary {
+.flows-section-empty {
   padding: 8px 14px;
-  cursor: pointer;
   font-size: 11px;
-  color: rgba(255,255,255,0.6);
-  background: rgba(255,255,255,0.03);
-  user-select: none;
-  list-style: none;
+  color: rgba(255,255,255,0.35);
 }
-.flows-detail summary::-webkit-details-marker { display: none; }
-.flows-detail summary::before { content: '▶ '; font-size: 9px; }
-.flows-detail[open] summary::before { content: '▼ '; }
-.flows-detail-hint { color: rgba(255,255,255,0.35); }
+.flows-section-label {
+  padding: 7px 14px;
+  font-size: 10px; font-weight: 800; letter-spacing: .06em;
+  color: rgba(255,255,255,0.45);
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.flows-section-hint { font-weight: 400; color: rgba(255,255,255,0.28); margin-left: 8px; }
 .flows-table {
   width: 100%; border-collapse: collapse;
   font-size: 11px; font-family: "SF Mono", Menlo, monospace;
@@ -2298,6 +2298,21 @@ body {
 .flow-date { color: rgba(255,255,255,0.5); }
 .flow-action { color: rgba(255,255,255,0.75); }
 .flow-amt { font-weight: 700; }
+
+/* ── TWRR stat box ────────────────────────────────────────────────────────── */
+.ytd-stat-twrr {
+  border-left: 2px solid rgba(212,175,55,0.4);
+}
+.monthly-chart-error {
+  margin: 10px 0;
+  padding: 8px 12px;
+  background: rgba(220,38,38,0.1);
+  border: 1px solid rgba(220,38,38,0.25);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #F87171;
+  font-family: "SF Mono", Menlo, monospace;
+}
 
 /* ── Monthly chart ────────────────────────────────────────────────────────── */
 .monthly-chart-wrap {
