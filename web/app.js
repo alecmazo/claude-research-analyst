@@ -1257,15 +1257,19 @@ async function loadLiveBenchmark() {
       const h = live.account_history;
       if (h && h.attribution) {
         _renderUnifiedYtdResult({
-          md_return_pct:     h.md_return_pct,
-          begin_value:       h.begin_value,
-          end_value:         h.end_value,
-          emv_source:        h.emv_source || 'positions_csv',
-          net_flow:          h.net_flow,
-          flow_count:        h.flow_count,
-          trade_count:       h.trade_count,
-          dividend_count:    h.dividend_count,
-          attribution:       h.attribution,
+          md_return_pct:       h.md_return_pct,
+          twrr_return_pct:     h.twrr_return_pct   ?? null,
+          begin_value:         h.begin_value,
+          end_value:           h.end_value,
+          emv_source:          h.emv_source || 'positions_csv',
+          net_flow:            h.net_flow,
+          flow_count:          h.flow_count,
+          trade_count:         h.trade_count,
+          dividend_count:      h.dividend_count,
+          attribution:         h.attribution,
+          flows:               h.flows               || [],
+          monthly_chart:       h.monthly_chart       || null,
+          monthly_chart_error: h.monthly_chart_error || null,
           // total / explained recomputed from rows so it matches even if not stored
           total_dollar_gain: (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0),
           explained_pct:     h.begin_value
@@ -1462,6 +1466,10 @@ function _renderUnifiedYtdResult(data) {
       <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : '−'}$${Math.abs(f.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
     </tr>`;
   }).join('');
+  // Show unique action types seen in the CSV (diagnostic — helps verify flow capture)
+  const actionsDbg = (data.unique_actions || []).length
+    ? `<div class="flows-actions-seen">All action types in CSV: ${(data.unique_actions || []).map(a => `<code>${a}</code>`).join(' · ')}</div>`
+    : '';
   const flowsHtml = flowRows ? `
     <div class="flows-section">
       <div class="flows-section-label">CAPTURED CASH FLOWS <span class="flows-section-hint">verify these match your actual deposits/withdrawals</span></div>
@@ -1469,7 +1477,8 @@ function _renderUnifiedYtdResult(data) {
         <thead><tr><th>Date</th><th>Action</th><th>Amount</th></tr></thead>
         <tbody>${flowRows}</tbody>
       </table>
-    </div>` : `<div class="flows-section flows-section-empty">No external cash flows detected in activity CSV.</div>`;
+      ${actionsDbg}
+    </div>` : `<div class="flows-section flows-section-empty">No external cash flows detected in activity CSV.${actionsDbg}</div>`;
 
   // ── Monthly chart ─────────────────────────────────────────────────────────
   const mc = data.monthly_chart;

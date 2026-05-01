@@ -2285,6 +2285,17 @@ body {
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 .flows-section-hint { font-weight: 400; color: rgba(255,255,255,0.28); margin-left: 8px; }
+.flows-actions-seen {
+  padding: 6px 14px 8px;
+  font-size: 10px; color: rgba(255,255,255,0.3);
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+.flows-actions-seen code {
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px; padding: 1px 4px;
+  font-family: "SF Mono", Menlo, monospace; font-size: 9.5px;
+  color: rgba(255,255,255,0.5);
+}
 .flows-table {
   width: 100%; border-collapse: collapse;
   font-size: 11px; font-family: "SF Mono", Menlo, monospace;

@@ -3497,23 +3497,26 @@ def compute_unified_ytd(
     # user can browse / re-open / email any past run.
     snapshot_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     snapshot = {
-        "id":                snapshot_id,
-        "uploaded_at":       datetime.utcnow().isoformat(),
-        "begin_value":       round(float(begin_value), 2),
-        "end_value":         round(end_value, 2),
-        "emv_source":        "positions_csv",
-        "net_flow":          round(net_flow, 2),
-        "flow_count":        len(flows),
-        "transaction_count": int(flows_parse.get("transaction_count", 0)),
-        "trade_count":       int(attr.get("trades_parsed", 0)),
-        "dividend_count":    int(attr.get("dividends_parsed", 0)),
-        "md_return_pct":     float(md_return_pct),
-        "twrr_return_pct":   float(twrr_return_pct) if twrr_return_pct is not None else None,
-        "attribution":       attr.get("attribution", []),
-        "monthly_chart":     monthly_chart,
+        "id":                  snapshot_id,
+        "uploaded_at":         datetime.utcnow().isoformat(),
+        "begin_value":         round(float(begin_value), 2),
+        "end_value":           round(end_value, 2),
+        "emv_source":          "positions_csv",
+        "net_flow":            round(net_flow, 2),
+        "flow_count":          len(flows),
+        "flows":               sorted(flows, key=lambda f: f["date"]),  # persisted for page-load render
+        "unique_actions":      sorted(flows_parse.get("unique_actions") or []),
+        "transaction_count":   int(flows_parse.get("transaction_count", 0)),
+        "trade_count":         int(attr.get("trades_parsed", 0)),
+        "dividend_count":      int(attr.get("dividends_parsed", 0)),
+        "md_return_pct":       float(md_return_pct),
+        "twrr_return_pct":     float(twrr_return_pct) if twrr_return_pct is not None else None,
+        "attribution":         attr.get("attribution", []),
+        "monthly_chart":       monthly_chart,
+        "monthly_chart_error": monthly_chart_error,
         # Capture the live-portfolio holdings at upload time so the snapshot
         # remains a complete record even if the live book changes later.
-        "holdings_snapshot": None,  # filled below from live state
+        "holdings_snapshot":   None,  # filled below from live state
     }
     # Build a holdings list directly from the positions CSV. The Tracker page
     # is independent of any Live Rebalance run — when no live_portfolio exists,
@@ -3592,6 +3595,7 @@ def compute_unified_ytd(
         "dividend_count":    int(attr.get("dividends_parsed", 0)),
         "transaction_count": int(flows_parse.get("transaction_count", 0)),
         "flows":             flows,
+        "unique_actions":    sorted(flows_parse.get("unique_actions") or []),
         "attribution":       attr.get("attribution", []),
         "total_dollar_gain": attr.get("total_dollar_gain"),
         "explained_pct":     attr.get("explained_pct"),
