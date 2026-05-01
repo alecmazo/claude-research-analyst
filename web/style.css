@@ -1612,6 +1612,83 @@ body {
   color: var(--white); font-size: 12px;
 }
 
+/* ── Unified YTD result (Modified Dietz + attribution) ─────────────────── */
+.ytd-result-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+@media (max-width: 700px) {
+  .ytd-result-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ytd-result-grid .ytd-stat.hero { grid-column: 1 / -1; }
+}
+.ytd-stat {
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.ytd-stat.hero {
+  background: linear-gradient(135deg, rgba(201,168,76,0.10), rgba(201,168,76,0.04));
+  border-color: rgba(201,168,76,0.20);
+}
+.ytd-stat-label {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
+  text-transform: uppercase; color: rgba(255,255,255,0.45);
+  margin-bottom: 5px;
+  display: flex; align-items: center; gap: 6px;
+}
+.ytd-stat-val {
+  font-size: 18px; font-weight: 800; font-family: "SF Mono", monospace;
+  color: var(--white);
+}
+.ytd-stat.hero .ytd-stat-val { font-size: 26px; }
+.ytd-stat-val.green { color: #4ADE80; }
+.ytd-stat-val.red   { color: #F87171; }
+.ytd-stat-sub {
+  font-size: 9px; color: rgba(255,255,255,0.4);
+  margin-top: 3px; font-style: italic;
+}
+
+.attr-table-title {
+  font-size: 10px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--gold);
+  margin: 4px 0 8px;
+}
+
+/* Compact attribution chips (used inside table rows) */
+.attr-chip {
+  display: inline-block;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin: 0 2px 2px 0;
+  font-size: 9px; font-weight: 700;
+  font-family: "SF Mono", monospace;
+  white-space: nowrap;
+}
+.attr-chip.sell { background: rgba(248,113,113,0.15); color: #F87171; }
+.attr-chip.buy  { background: rgba(74,222,128,0.15);  color: #4ADE80; }
+.attr-chip.div  { background: rgba(251,191,36,0.15);  color: #FBBF24; }
+
+.attr-pos {
+  font-family: "SF Mono", monospace;
+  font-size: 11px; color: rgba(255,255,255,0.85);
+  white-space: nowrap;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.attr-act {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  white-space: normal; max-width: 220px;
+}
+.attr-table tbody td.attr-ticker { padding: 6px 8px; }
+.attr-table tbody td.attr-num    { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.attr-table tbody tr:hover td    { background: rgba(255,255,255,0.03); }
+
 .tracker-live-empty { color: var(--mid-gray); font-style: italic; font-size: 13px; }
 .tracker-live-line {
   display: flex; align-items: center; justify-content: space-between;

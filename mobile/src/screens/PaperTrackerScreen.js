@@ -30,21 +30,13 @@ export default function PaperTrackerScreen({ navigation }) {
   const [liveDetail, setLiveDetail]   = useState(null);
   const [liveLoading, setLiveLoading] = useState(false);
 
-  // ── Modified Dietz history upload ───────────────────────────────────────
-  const [histFile,        setHistFile]        = useState(null);
-  const [histBeginValue,  setHistBeginValue]  = useState('');
-  const [histEndValue,    setHistEndValue]    = useState('');
-  const [histSubmitting,  setHistSubmitting]  = useState(false);
-  const [histResult,      setHistResult]      = useState(null);
-  const [histError,       setHistError]       = useState(null);
-
-  // ── Transaction attribution ─────────────────────────────────────────────
-  const [attrPosFile,     setAttrPosFile]     = useState(null);
-  const [attrActFile,     setAttrActFile]     = useState(null);
-  const [attrBeginValue,  setAttrBeginValue]  = useState('');
-  const [attrSubmitting,  setAttrSubmitting]  = useState(false);
-  const [attrResult,      setAttrResult]      = useState(null);
-  const [attrError,       setAttrError]       = useState(null);
+  // ── Unified YTD upload (Modified Dietz + per-stock attribution) ─────────
+  const [ytdPosFile,       setYtdPosFile]      = useState(null);
+  const [ytdActFile,       setYtdActFile]      = useState(null);
+  const [ytdBeginValue,    setYtdBeginValue]   = useState('');
+  const [ytdSubmitting,    setYtdSubmitting]   = useState(false);
+  const [ytdResult,        setYtdResult]       = useState(null);
+  const [ytdError,         setYtdError]        = useState(null);
 
   const load = async () => {
     try {
@@ -55,8 +47,25 @@ export default function PaperTrackerScreen({ navigation }) {
       setPortfolios(data.portfolios || []);
       const lp = liveData?.live_portfolio || null;
       setLive(lp);
-      // Re-hydrate the last Modified Dietz result if previously persisted
-      if (lp?.account_history) setHistResult(lp.account_history);
+      // Re-hydrate previously stored unified-YTD result so the attribution
+      // table is visible without re-uploading.
+      const h = lp?.account_history;
+      if (h && h.attribution) {
+        const totalGain = (h.attribution || []).reduce((s, a) => s + (a.dollar_gain || 0), 0);
+        setYtdResult({
+          md_return_pct:     h.md_return_pct,
+          begin_value:       h.begin_value,
+          end_value:         h.end_value,
+          emv_source:        h.emv_source || 'positions_csv',
+          net_flow:          h.net_flow,
+          flow_count:        h.flow_count,
+          trade_count:       h.trade_count,
+          dividend_count:    h.dividend_count,
+          attribution:       h.attribution,
+          total_dollar_gain: totalGain,
+          explained_pct:     h.begin_value ? totalGain / h.begin_value * 100 : 0,
+        });
+      }
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -65,69 +74,57 @@ export default function PaperTrackerScreen({ navigation }) {
     }
   };
 
-  // ── CSV picker (shared) ───────────────────────────────────────────────────
+  // ── Resilient CSV picker (handles both v12 and v14+ shapes) ──────────────
   const pickCsv = async (setter) => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['text/csv', 'text/plain', 'application/vnd.ms-excel', '*/*'],
+        // */* is most reliable on iOS — specific MIME types can grey out CSVs
+        // from cloud providers.
+        type: '*/*',
         copyToCacheDirectory: true,
+        multiple: false,
       });
-      if (result.canceled) return;
-      const asset = result.assets?.[0];
-      if (asset) setter(asset);
+      if (result?.canceled) return;
+      const asset = result?.assets?.[0] || (result?.uri ? result : null);
+      if (!asset?.uri) {
+        Alert.alert('No file selected', 'Could not read the selected file. Try again, or pick a file from Files / iCloud Drive.');
+        return;
+      }
+      setter({
+        uri:      asset.uri,
+        name:     asset.name     || 'file.csv',
+        mimeType: asset.mimeType || asset.type || 'text/csv',
+        size:     asset.size,
+      });
     } catch (err) {
-      Alert.alert('Could not pick file', err.message);
+      Alert.alert('Could not pick file', err.message || String(err));
     }
   };
 
-  // ── Modified Dietz upload handler ─────────────────────────────────────────
-  const submitHistory = async () => {
-    if (!histFile)        return Alert.alert('Missing file', 'Pick your Fidelity activity CSV first.');
-    const bv = parseFloat(histBeginValue);
-    const ev = parseFloat(histEndValue);
-    if (!bv || bv <= 0)   return Alert.alert('Missing value', 'Enter your Jan 1 portfolio total.');
-    if (!ev || ev <= 0)   return Alert.alert('Missing value', "Enter today's portfolio total (full Fidelity account balance).");
+  // ── Single unified handler (replaces the two separate flows) ─────────────
+  const submitYtd = async () => {
+    if (!ytdPosFile) { Alert.alert('Missing file', 'Pick your Fidelity Positions CSV.');  return; }
+    if (!ytdActFile) { Alert.alert('Missing file', 'Pick your Fidelity Activity CSV.');   return; }
+    const bv = parseFloat(ytdBeginValue);
+    if (!bv || bv <= 0) { Alert.alert('Missing value', 'Enter your Jan 1 portfolio total.'); return; }
 
-    setHistSubmitting(true); setHistError(null); setHistResult(null);
+    setYtdSubmitting(true); setYtdError(null); setYtdResult(null);
     try {
-      const data = await api.uploadAccountHistory({
-        fileUri:    histFile.uri,
-        fileName:   histFile.name,
-        mimeType:   histFile.mimeType,
-        beginValue: bv,
-        endValue:   ev,
-      });
-      setHistResult(data);
-    } catch (e) {
-      setHistError(e.message);
-    } finally {
-      setHistSubmitting(false);
-    }
-  };
-
-  // ── Attribution handler ───────────────────────────────────────────────────
-  const submitAttribution = async () => {
-    if (!attrPosFile)     return Alert.alert('Missing file', 'Pick your Fidelity Positions CSV.');
-    if (!attrActFile)     return Alert.alert('Missing file', 'Pick your Fidelity Activity CSV.');
-    const bv = parseFloat(attrBeginValue);
-    if (!bv || bv <= 0)   return Alert.alert('Missing value', 'Enter your Jan 1 portfolio total.');
-
-    setAttrSubmitting(true); setAttrError(null); setAttrResult(null);
-    try {
-      const data = await api.computeAttribution({
-        positionsUri:  attrPosFile.uri,
-        positionsName: attrPosFile.name,
-        positionsType: attrPosFile.mimeType,
-        activityUri:   attrActFile.uri,
-        activityName:  attrActFile.name,
-        activityType:  attrActFile.mimeType,
+      const data = await api.computeUnifiedYtd({
+        positionsUri:  ytdPosFile.uri,
+        positionsName: ytdPosFile.name,
+        positionsType: ytdPosFile.mimeType,
+        activityUri:   ytdActFile.uri,
+        activityName:  ytdActFile.name,
+        activityType:  ytdActFile.mimeType,
         beginValue:    bv,
       });
-      setAttrResult(data);
+      setYtdResult(data);
     } catch (e) {
-      setAttrError(e.message);
+      setYtdError(e.message);
+      Alert.alert('Calculation failed', e.message);
     } finally {
-      setAttrSubmitting(false);
+      setYtdSubmitting(false);
     }
   };
 
@@ -204,176 +201,96 @@ export default function PaperTrackerScreen({ navigation }) {
     </View>
   );
 
-  // ── Account History (Modified Dietz YTD) card ───────────────────────────
-  const renderHistoryCard = () => {
+  // ── Unified YTD card (Modified Dietz + per-stock attribution) ───────────
+  const renderYtdCard = () => {
     if (!live) return null;  // only show once a live portfolio exists
-    const md = histResult?.md_return_pct;
-    const isExact = histResult?.emv_source === 'user_provided';
+    const md = ytdResult?.md_return_pct;
 
     return (
       <View style={styles.card}>
-        <Text style={styles.cardLabel}>ACCOUNT HISTORY — ACCURATE YTD</Text>
+        <Text style={styles.cardLabel}>ACCURATE YTD — CASH-FLOW &amp; TRANSACTION ADJUSTED</Text>
         <Text style={styles.formHint}>
-          Upload your Fidelity activity CSV to compute a cash-flow-adjusted YTD return
-          (Modified Dietz). Enter your actual Jan 1 and today's account totals.
+          Upload both Fidelity CSVs to compute a Modified Dietz YTD return and a
+          per-stock attribution. Today's account value is auto-extracted from the
+          Positions CSV (positions × current prices + money market).
         </Text>
 
         <Text style={styles.formFieldLabel}>Jan 1 Portfolio Value ($)</Text>
         <TextInput
           style={styles.formInput}
-          value={histBeginValue}
-          onChangeText={setHistBeginValue}
-          keyboardType="numeric"
-          placeholder="e.g. 3628719"
-          placeholderTextColor={colors.midGray}
-        />
-
-        <Text style={styles.formFieldLabel}>Today's Portfolio Value ($)</Text>
-        <Text style={styles.formSubHint}>
-          Full account total from Fidelity — includes money market and all positions
-        </Text>
-        <TextInput
-          style={styles.formInput}
-          value={histEndValue}
-          onChangeText={setHistEndValue}
-          keyboardType="numeric"
-          placeholder="e.g. 3850000"
-          placeholderTextColor={colors.midGray}
-        />
-
-        <Text style={styles.formFieldLabel}>Activity CSV</Text>
-        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setHistFile)}>
-          <Ionicons name="document-text-outline" size={16} color={colors.gold} />
-          <Text style={styles.filePickerText} numberOfLines={1}>
-            {histFile?.name || 'Tap to choose CSV…'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.btnPrimary, histSubmitting && { opacity: 0.6 }]}
-          onPress={submitHistory}
-          disabled={histSubmitting}
-        >
-          {histSubmitting ? (
-            <ActivityIndicator color={colors.navy} />
-          ) : (
-            <Text style={styles.btnPrimaryText}>Upload &amp; Calculate Modified Dietz</Text>
-          )}
-        </TouchableOpacity>
-
-        {histError && <Text style={styles.errorText}>{histError}</Text>}
-
-        {histResult && (
-          <View style={styles.resultBox}>
-            <Text style={styles.resultTitle}>
-              MODIFIED DIETZ YTD{histResult.uploaded_at ? ' (stored)' : ''}
-            </Text>
-            <ResultRow label="YTD Return (cash-flow adjusted)"
-                       value={fmtPct(md)}
-                       valueColor={pctColor(md)} mono />
-            <ResultRow label="Jan 1 Portfolio Value" value={fmtUSD(histResult.begin_value)} mono />
-            <ResultRow
-              label={
-                <Text style={styles.resultKey}>
-                  Today's Portfolio Value
-                  <Text style={[styles.emvBadge, isExact ? styles.emvBadgeExact : styles.emvBadgeEst]}>
-                    {' '}{isExact ? '✓ exact' : '~ estimated'}
-                  </Text>
-                </Text>
-              }
-              value={fmtUSD(histResult.end_value)} mono
-            />
-            <ResultRow label="Net External Flows"
-                       value={fmtUSD(histResult.net_flow)}
-                       valueColor={pctColor(histResult.net_flow)} mono />
-            <ResultRow label="External Flow Events" value={String(histResult.flow_count ?? 0)} mono />
-            <ResultRow label="Total Transactions" value={String(histResult.transaction_count ?? 0)} mono />
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  // ── Transaction Attribution card ────────────────────────────────────────
-  const renderAttributionCard = () => {
-    if (!live) return null;
-
-    return (
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>TRANSACTION ATTRIBUTION — BY HOLDING</Text>
-        <Text style={styles.formHint}>
-          Upload both CSVs to see each stock's true YTD contribution — factoring in
-          partial sales, new purchases, dividends, and the actual Jan 1 position.
-        </Text>
-
-        <Text style={styles.formFieldLabel}>Jan 1 Portfolio Value ($)</Text>
-        <TextInput
-          style={styles.formInput}
-          value={attrBeginValue}
-          onChangeText={setAttrBeginValue}
+          value={ytdBeginValue}
+          onChangeText={setYtdBeginValue}
           keyboardType="numeric"
           placeholder="e.g. 3628719"
           placeholderTextColor={colors.midGray}
         />
 
         <Text style={styles.formFieldLabel}>Positions CSV (current holdings)</Text>
-        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setAttrPosFile)}>
+        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setYtdPosFile)}>
           <Ionicons name="document-text-outline" size={16} color={colors.gold} />
           <Text style={styles.filePickerText} numberOfLines={1}>
-            {attrPosFile?.name || 'Tap to choose Positions CSV…'}
+            {ytdPosFile?.name || 'Tap to choose Positions CSV…'}
           </Text>
         </TouchableOpacity>
 
         <Text style={styles.formFieldLabel}>Activity CSV (YTD transactions)</Text>
-        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setAttrActFile)}>
+        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setYtdActFile)}>
           <Ionicons name="document-text-outline" size={16} color={colors.gold} />
           <Text style={styles.filePickerText} numberOfLines={1}>
-            {attrActFile?.name || 'Tap to choose Activity CSV…'}
+            {ytdActFile?.name || 'Tap to choose Activity CSV…'}
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.btnPrimary, attrSubmitting && { opacity: 0.6 }]}
-          onPress={submitAttribution}
-          disabled={attrSubmitting}
+          style={[styles.btnPrimary, ytdSubmitting && { opacity: 0.6 }]}
+          onPress={submitYtd}
+          disabled={ytdSubmitting}
         >
-          {attrSubmitting ? (
+          {ytdSubmitting ? (
             <ActivityIndicator color={colors.navy} />
           ) : (
-            <Text style={styles.btnPrimaryText}>Calculate Transaction Attribution</Text>
+            <Text style={styles.btnPrimaryText}>Calculate YTD &amp; Attribution</Text>
           )}
         </TouchableOpacity>
 
-        {attrError && <Text style={styles.errorText}>{attrError}</Text>}
+        {ytdError && <Text style={styles.errorText}>{ytdError}</Text>}
 
-        {attrResult && (
+        {ytdResult && (
           <View style={styles.resultBox}>
-            {/* Summary */}
-            <View style={styles.attrSummaryGrid}>
-              <View style={styles.attrSummaryCell}>
-                <Text style={styles.attrSummaryKey}>TOTAL ATTRIBUTED</Text>
-                <Text style={[styles.attrSummaryVal, { color: pctColor(attrResult.total_dollar_gain) }]}>
-                  {fmtUSD(attrResult.total_dollar_gain)}
+            {/* Hero stat: YTD return */}
+            <View style={styles.ytdHeroBox}>
+              <Text style={styles.ytdHeroLabel}>YTD RETURN</Text>
+              <Text style={[styles.ytdHeroVal, { color: pctColor(md) }]}>{fmtPct(md)}</Text>
+              <Text style={styles.ytdHeroSub}>cash-flow adjusted (Modified Dietz)</Text>
+            </View>
+
+            {/* Stat grid */}
+            <View style={styles.ytdStatGrid}>
+              <View style={styles.ytdStatCell}>
+                <Text style={styles.ytdStatKey}>JAN 1</Text>
+                <Text style={styles.ytdStatVal}>{fmtUSD(ytdResult.begin_value)}</Text>
+              </View>
+              <View style={styles.ytdStatCell}>
+                <Text style={styles.ytdStatKey}>TODAY</Text>
+                <Text style={styles.ytdStatVal}>{fmtUSD(ytdResult.end_value)}</Text>
+                <Text style={styles.ytdStatBadge}>✓ from CSV</Text>
+              </View>
+              <View style={styles.ytdStatCell}>
+                <Text style={styles.ytdStatKey}>NET FLOWS</Text>
+                <Text style={[styles.ytdStatVal, { color: pctColor(ytdResult.net_flow) }]}>
+                  {fmtUSD(ytdResult.net_flow)}
                 </Text>
+                <Text style={styles.ytdStatBadge}>{ytdResult.flow_count ?? 0} events</Text>
               </View>
-              <View style={styles.attrSummaryCell}>
-                <Text style={styles.attrSummaryKey}>CONTRIBUTION %</Text>
-                <Text style={[styles.attrSummaryVal, { color: pctColor(attrResult.explained_pct) }]}>
-                  {fmtPct(attrResult.explained_pct)}
-                </Text>
-              </View>
-              <View style={styles.attrSummaryCell}>
-                <Text style={styles.attrSummaryKey}>POSITIONS</Text>
-                <Text style={styles.attrSummaryVal}>{attrResult.positions_parsed}</Text>
-              </View>
-              <View style={styles.attrSummaryCell}>
-                <Text style={styles.attrSummaryKey}>TRADES</Text>
-                <Text style={styles.attrSummaryVal}>{attrResult.trades_parsed}</Text>
+              <View style={styles.ytdStatCell}>
+                <Text style={styles.ytdStatKey}>TRADES</Text>
+                <Text style={styles.ytdStatVal}>{ytdResult.trade_count ?? 0}</Text>
+                <Text style={styles.ytdStatBadge}>{ytdResult.dividend_count ?? 0} divs</Text>
               </View>
             </View>
 
-            {/* Per-ticker rows — biggest absolute impact first */}
-            {(attrResult.attribution || []).map(a => <AttributionRow key={a.ticker} a={a} />)}
+            <Text style={styles.attrSectionLabel}>PERFORMANCE ATTRIBUTION — by holding</Text>
+            {(ytdResult.attribution || []).map(a => <AttributionRow key={a.ticker} a={a} />)}
           </View>
         )}
       </View>
@@ -632,8 +549,7 @@ export default function PaperTrackerScreen({ navigation }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
         >
           {renderLiveCard()}
-          {renderHistoryCard()}
-          {renderAttributionCard()}
+          {renderYtdCard()}
 
           <View style={[styles.card, { paddingTop: 14 }]}>
             <Text style={styles.cardLabel}>PAPER PORTFOLIOS</Text>
@@ -1174,6 +1090,51 @@ const styles = StyleSheet.create({
   },
   emvBadgeExact: { color: '#4ADE80', backgroundColor: 'rgba(74,222,128,0.15)' },
   emvBadgeEst:   { color: '#FBBF24', backgroundColor: 'rgba(251,191,36,0.15)' },
+
+  // ── Unified YTD result ────────────────────────────────────────────────────
+  ytdHeroBox: {
+    backgroundColor: 'rgba(201,168,76,0.10)',
+    borderRadius: 8, padding: 14,
+    borderWidth: 1, borderColor: 'rgba(201,168,76,0.20)',
+    alignItems: 'center', marginBottom: 12,
+  },
+  ytdHeroLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1,
+    color: 'rgba(255,255,255,0.5)', marginBottom: 4,
+  },
+  ytdHeroVal: {
+    fontSize: 32, fontWeight: '800',
+    fontFamily: 'Courier New', color: colors.white,
+  },
+  ytdHeroSub: {
+    fontSize: 10, color: 'rgba(255,255,255,0.5)',
+    fontStyle: 'italic', marginTop: 2,
+  },
+  ytdStatGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+    marginBottom: 14,
+  },
+  ytdStatCell: {
+    flexBasis: '48%', flexGrow: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 6, padding: 8,
+  },
+  ytdStatKey: {
+    fontSize: 8, fontWeight: '800', color: 'rgba(255,255,255,0.4)',
+    letterSpacing: 0.6, marginBottom: 3,
+  },
+  ytdStatVal: {
+    fontSize: 14, fontWeight: '800', color: colors.white,
+    fontFamily: 'Courier New',
+  },
+  ytdStatBadge: {
+    fontSize: 9, color: 'rgba(255,255,255,0.4)',
+    fontStyle: 'italic', marginTop: 2,
+  },
+  attrSectionLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1,
+    color: colors.gold, marginTop: 4, marginBottom: 6,
+  },
 
   // ── Attribution result ────────────────────────────────────────────────────
   attrSummaryGrid: {

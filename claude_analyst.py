@@ -1659,7 +1659,7 @@ def compute_live_ytd_detail() -> dict:
         h["weight"] = round(h["weight"] / _tracked_total, 8)
 
     bd = _portfolio_breakdown(virtual)
-    sorted_holdings = sorted(
+    snapshot_holdings = sorted(
         bd["breakdown"],
         key=lambda h: (h.get("contribution_pct") if h.get("contribution_pct") is not None else -1e9),
         reverse=True,
@@ -1672,12 +1672,46 @@ def compute_live_ytd_detail() -> dict:
     spy_ytd = spy_series[-1]["return_pct"] if spy_series else None
     port_ret = bd["weighted_return"]
 
-    # ── If the user uploaded account history, use the Modified Dietz return ───
-    # as the authoritative YTD number. The snapshot-based return (above) is
-    # shown as an "estimate" alongside it.
-    history = live.get("account_history") or {}
+    # ── Pull stored YTD result (Modified Dietz + transaction-aware attribution) ──
+    # If the user has uploaded the unified YTD, prefer those numbers everywhere:
+    #  - md_return_pct as the authoritative portfolio return
+    #  - per-ticker attribution rows reflecting real partial sales / buys / divs
+    #    (replacing the broken weight × snapshot-return approximation)
+    history       = live.get("account_history") or {}
     md_return_pct = history.get("md_return_pct")
+    stored_attr   = history.get("attribution") or []
     authoritative_return = md_return_pct if md_return_pct is not None else port_ret
+
+    # Build the holdings rows for the Live YTD detail. Use transaction-aware
+    # attribution if we have it; otherwise fall back to the snapshot breakdown.
+    if stored_attr:
+        sorted_holdings = []
+        for a in stored_attr:
+            end_sh   = a.get("end_shares")    or 0.0
+            start_sh = a.get("start_shares")  or 0.0
+            ret_pct  = a.get("ticker_return_pct")
+            sorted_holdings.append({
+                "ticker":             a.get("ticker"),
+                "weight":             (a.get("end_value") or 0.0) / max(history.get("end_value") or 1.0, 1.0),
+                "entry_price":        a.get("jan1_price"),
+                "current_price":      a.get("end_price"),
+                "return_pct":         ret_pct,
+                "contribution_pct":   a.get("contribution_pct"),
+                "dollar_gain":        a.get("dollar_gain"),
+                "start_shares":       start_sh,
+                "end_shares":         end_sh,
+                "trade_count":        a.get("trade_count", 0),
+                "dividends_cash":     a.get("dividends_cash", 0.0),
+                "total_sold_shares":  a.get("total_sold_shares", 0.0),
+                "total_bought_shares": a.get("total_bought_shares", 0.0),
+                "vs_avg":             None,  # not meaningful with $-based contribution
+            })
+        sorted_holdings.sort(
+            key=lambda h: abs(h.get("contribution_pct") or 0.0),
+            reverse=True,
+        )
+    else:
+        sorted_holdings = snapshot_holdings
 
     # Days tracked = number of calendar days since year start
     try:
@@ -2879,6 +2913,130 @@ def upload_account_history(
         "columns_detected":  parsed.get("columns_detected", []),
         "unique_actions":    parsed.get("unique_actions", []),
         "skipped_no_amount": parsed.get("skipped_no_amount", 0),
+    }
+
+
+def compute_unified_ytd(
+    positions_text: str,
+    activity_text:  str,
+    begin_value:    float,
+) -> dict:
+    """Single unified YTD computation: Modified Dietz return + per-stock attribution.
+
+    Replaces the two separate flows (account_history + attribution). One call,
+    one set of inputs:
+        • positions_text — Fidelity Positions CSV (current holdings + cash)
+        • activity_text  — Fidelity Activity/History CSV (YTD transactions)
+        • begin_value    — Jan 1 portfolio total ($)
+
+    The end portfolio value (EMV) is auto-derived as the sum of every position
+    × current price PLUS money-market funds (SPAXX/FZFXX/etc.) — exactly what
+    Fidelity shows as the account total. No manual end-value entry needed.
+
+    The result includes:
+        • md_return_pct     — Modified Dietz YTD return (cash-flow weighted)
+        • end_value         — auto-extracted from positions CSV
+        • net_flow          — net deposits − withdrawals from activity CSV
+        • attribution[]     — per-ticker dollar gain + contribution %, sorted
+                              by absolute impact, with trade summary baked in
+        • Persisted to live_portfolio.account_history so the YTD detail card
+          can render attribution from real per-ticker math instead of the
+          broken weight×snapshot-return approximation.
+    """
+    if not positions_text:
+        return {"ok": False, "error": "Positions CSV content is required."}
+    if not activity_text:
+        return {"ok": False, "error": "Activity CSV content is required."}
+    if not begin_value or begin_value <= 0:
+        return {"ok": False, "error": "Jan 1 portfolio value is required and must be positive."}
+
+    # ── Per-ticker attribution (also gives us positions_total_value as EMV) ──
+    attr = compute_position_attribution(positions_text, activity_text, begin_value)
+    if not attr.get("ok"):
+        return attr
+
+    # End market value = total of all positions (incl. money-market) at current px
+    end_value = float(attr.get("portfolio_end_value") or 0.0)
+    if end_value <= 0:
+        return {
+            "ok": False,
+            "error": (
+                "Could not compute end portfolio value from positions CSV — "
+                "no positions parsed with both quantity and price."
+            ),
+        }
+
+    # ── External cash flows from the activity CSV (for Modified Dietz) ───────
+    flows_parse = parse_fidelity_history(activity_text)
+    if not flows_parse.get("ok"):
+        return flows_parse
+
+    flows    = flows_parse["flows"]
+    net_flow = float(flows_parse["net_flow"])
+
+    # ── Modified Dietz: R = (EMV − BMV − CF) / (BMV + Σ(CFᵢ × Wᵢ)) ──────────
+    year         = datetime.now().year
+    period_start = datetime(year, 1, 1)
+    today_dt     = datetime.now()
+    cd           = max(1, (today_dt - period_start).days)
+
+    weighted_flows = 0.0
+    for f in flows:
+        try:
+            flow_dt         = datetime.strptime(f["date"], "%Y-%m-%d")
+            di              = max(0, (flow_dt - period_start).days)
+            wi              = (cd - di) / cd
+            weighted_flows += float(f["amount"]) * wi
+        except Exception:  # noqa: BLE001
+            continue
+
+    denominator = float(begin_value) + weighted_flows
+    if denominator <= 0:
+        return {"ok": False, "error": "Modified Dietz denominator ≤ 0 — check your Jan 1 value."}
+
+    md_return     = (end_value - float(begin_value) - net_flow) / denominator
+    md_return_pct = round(md_return * 100.0, 4)
+
+    # ── Persist BOTH the MD result AND the attribution to tracker.json ───────
+    # The Live Portfolio YTD detail will read this back and render real
+    # attribution rows instead of the broken weight×snapshot math.
+    try:
+        with _tracker_lock():
+            state = _load_tracker_state()
+            if state.get("live_portfolio"):
+                state["live_portfolio"]["account_history"] = {
+                    "uploaded_at":       datetime.utcnow().isoformat(),
+                    "begin_value":       round(float(begin_value), 2),
+                    "end_value":         round(end_value, 2),
+                    "emv_source":        "positions_csv",
+                    "net_flow":          round(net_flow, 2),
+                    "flow_count":        len(flows),
+                    "transaction_count": int(flows_parse.get("transaction_count", 0)),
+                    "trade_count":       int(attr.get("trades_parsed", 0)),
+                    "dividend_count":    int(attr.get("dividends_parsed", 0)),
+                    "md_return_pct":     float(md_return_pct),
+                    "attribution":       attr.get("attribution", []),
+                }
+                _save_tracker_state(state)
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not persist unified YTD: {exc}")  # non-fatal
+
+    return {
+        "ok":                True,
+        "md_return_pct":     md_return_pct,
+        "begin_value":       round(float(begin_value), 2),
+        "end_value":         round(end_value, 2),
+        "emv_source":        "positions_csv",
+        "net_flow":          round(net_flow, 2),
+        "flow_count":        len(flows),
+        "trade_count":       int(attr.get("trades_parsed", 0)),
+        "dividend_count":    int(attr.get("dividends_parsed", 0)),
+        "transaction_count": int(flows_parse.get("transaction_count", 0)),
+        "flows":             flows,
+        "attribution":       attr.get("attribution", []),
+        "total_dollar_gain": attr.get("total_dollar_gain"),
+        "explained_pct":     attr.get("explained_pct"),
+        "positions_parsed":  attr.get("positions_parsed"),
     }
 
 

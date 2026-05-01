@@ -706,94 +706,53 @@ def get_tracker_live_detail():
     return analyst.compute_live_ytd_detail()
 
 
-@app.post("/api/track/live/history")
-async def upload_live_history(
-    file: UploadFile = File(...),
-    begin_value: float = Form(...),
-    end_value: float = Form(0.0),
-):
-    """Upload a Fidelity account activity/history CSV to compute Modified Dietz YTD return.
-
-    Accepts multipart/form-data with:
-      - file:        Fidelity account history CSV (from History tab → Export)
-      - begin_value: Portfolio market value on January 1 (number, no $ sign)
-      - end_value:   Today's total account value — includes money-market & all positions
-                     (number, no $ sign). If provided, this is used directly as EMV.
-
-    Returns the Modified Dietz return plus cash flow summary.  The result is
-    persisted with the live portfolio and used as the authoritative YTD figure
-    in place of the snapshot-based estimate.
-    """
-    suffix = Path(file.filename or "history.csv").suffix.lower()
-    if suffix not in (".csv", ".txt", ""):
-        raise HTTPException(status_code=422, detail="File must be a .csv text file")
-    if begin_value <= 0:
-        raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
-    try:
-        content = await file.read()
-        raw_text = content.decode("utf-8", errors="replace")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not read file: {exc}")
-
-    try:
-        result = analyst.upload_account_history(raw_text, begin_value, end_value=end_value)
-    except Exception as exc:  # noqa: BLE001
-        tb = traceback.format_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"upload_account_history raised: {exc}\n\nTraceback:\n{tb}",
-        )
-    if not result.get("ok"):
-        raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
-    return result
-
-
-@app.post("/api/track/live/attribution")
-async def compute_live_attribution(
+@app.post("/api/track/live/ytd")
+async def compute_live_ytd_unified(
     positions_file: UploadFile = File(...),
     activity_file:  UploadFile = File(...),
     begin_value:    float = Form(...),
 ):
-    """Compute transaction-aware per-ticker YTD performance attribution.
+    """Single unified YTD endpoint: Modified Dietz return + per-stock attribution.
 
-    Accepts multipart/form-data with:
-      - positions_file: Fidelity positions/holdings CSV (Accounts → Positions → Download CSV)
-                        Provides current shares and current price for each holding.
-      - activity_file:  Fidelity activity/history CSV (Accounts & Trade → History → Download CSV)
-                        Provides all YTD trades (YOU BOUGHT/YOU SOLD) and dividends.
-      - begin_value:    Total portfolio value on January 1 ($).
+    Replaces the previous separate /history and /attribution flows. The end
+    portfolio value (EMV) is auto-derived from the Positions CSV (sum of all
+    holdings × current price + money-market funds) — no manual entry needed.
 
-    For each ticker, reconstructs the Jan 1 position, accounts for all trades and
-    dividends, and returns the exact dollar P&L and portfolio contribution % for the year.
+    Multipart inputs:
+      - positions_file: Fidelity Positions CSV (Accounts → Positions → Download CSV)
+      - activity_file:  Fidelity Activity CSV  (Accounts & Trade → History → Download CSV)
+      - begin_value:    Jan 1 portfolio total ($)
+
+    Returns merged result with md_return_pct, end_value, attribution[], etc.
+    The attribution is also persisted to live_portfolio.account_history so the
+    Live YTD detail card can render real per-ticker math.
     """
     if begin_value <= 0:
         raise HTTPException(status_code=422, detail="begin_value must be a positive dollar amount")
 
-    # Read both files
     try:
-        pos_content  = await positions_file.read()
+        pos_content    = await positions_file.read()
         positions_text = pos_content.decode("utf-8", errors="replace")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not read positions file: {exc}")
 
     try:
-        act_content  = await activity_file.read()
+        act_content   = await activity_file.read()
         activity_text = act_content.decode("utf-8", errors="replace")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not read activity file: {exc}")
 
     try:
-        result = analyst.compute_position_attribution(positions_text, activity_text, begin_value)
+        result = analyst.compute_unified_ytd(positions_text, activity_text, begin_value)
     except Exception as exc:
         tb = traceback.format_exc()
         raise HTTPException(
             status_code=500,
-            detail=f"compute_position_attribution raised: {exc}\n\nTraceback:\n{tb}",
+            detail=f"compute_unified_ytd raised: {exc}\n\nTraceback:\n{tb}",
         )
 
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Unknown error"))
-
     return result
 
 

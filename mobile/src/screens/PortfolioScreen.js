@@ -56,24 +56,35 @@ export default function PortfolioScreen({ navigation }) {
   const pickFile = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: [
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'application/vnd.ms-excel',
-          'text/csv',
-          '*/*',
-        ],
+        // iOS: */* lets the user choose any file from Files / iCloud / Downloads.
+        // Listing specific MIME types here can grey out CSVs from cloud providers.
+        type: '*/*',
         copyToCacheDirectory: true,
+        multiple: false,
       });
-      if (result.canceled) return;
-      const asset = result.assets?.[0];
-      if (asset) setFile(asset);
+      // Handle both old (>=12) and new (>=14) shape gracefully
+      if (result?.canceled) return;
+      const asset = result?.assets?.[0] || (result?.uri ? result : null);
+      if (!asset?.uri) {
+        Alert.alert('No file selected', 'Could not read the selected file. Try again, or pick a file from Files or iCloud Drive.');
+        return;
+      }
+      setFile({
+        uri:      asset.uri,
+        name:     asset.name     || 'portfolio.csv',
+        mimeType: asset.mimeType || asset.type || 'application/octet-stream',
+        size:     asset.size,
+      });
     } catch (err) {
-      Alert.alert('Could not pick file', err.message);
+      Alert.alert('Could not pick file', err.message || String(err));
     }
   };
 
   const startRun = async () => {
-    if (!file) return;
+    if (!file) {
+      Alert.alert('No file selected', 'Please choose a portfolio CSV or XLSX first.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setJob(null);
@@ -90,7 +101,9 @@ export default function PortfolioScreen({ navigation }) {
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(() => pollJob(resp.job_id), 4000);
     } catch (err) {
-      setError(err.message);
+      const msg = err?.message || String(err);
+      setError(msg);
+      Alert.alert('Rebalance failed', msg);
     } finally {
       setSubmitting(false);
     }

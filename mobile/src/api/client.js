@@ -210,34 +210,10 @@ export const api = {
   getLiveBenchmark:       ()    => request('/api/track/live'),
   getLiveBenchmarkDetail: ()    => request('/api/track/live/detail'),
 
-  // Modified Dietz YTD return — uploads activity CSV + total values
-  uploadAccountHistory: async ({ fileUri, fileName, mimeType, beginValue, endValue }) => {
-    const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
-    const fd = new FormData();
-    fd.append('file', {
-      uri:  fileUri,
-      name: fileName || 'history.csv',
-      type: mimeType || 'text/csv',
-    });
-    fd.append('begin_value', String(beginValue));
-    fd.append('end_value',   String(endValue || 0));
-    fd.append('token',       token || '');
-    const headers = {};
-    if (token) headers['x-auth-token'] = token;
-    const resp = await fetch(`${base}/api/track/live/history`, {
-      method:  'POST',
-      headers,
-      body:    fd,
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(text || `${resp.status}`);
-    }
-    return resp.json();
-  },
-
-  // Per-ticker transaction-aware attribution — uploads BOTH positions and activity CSVs
-  computeAttribution: async ({
+  // Unified YTD: Modified Dietz return + per-stock attribution in ONE call.
+  // Today's total value is auto-extracted from the Positions CSV (sum of all
+  // positions × current prices + money market) — no manual entry needed.
+  computeUnifiedYtd: async ({
     positionsUri, positionsName, positionsType,
     activityUri,  activityName,  activityType,
     beginValue,
@@ -258,7 +234,7 @@ export const api = {
     fd.append('token',       token || '');
     const headers = {};
     if (token) headers['x-auth-token'] = token;
-    const resp = await fetch(`${base}/api/track/live/attribution`, {
+    const resp = await fetch(`${base}/api/track/live/ytd`, {
       method:  'POST',
       headers,
       body:    fd,
