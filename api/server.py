@@ -1000,6 +1000,9 @@ async def no_cache_shell_middleware(request: Request, call_next):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        # Stop Railway's edge layer / Cloudflare from caching the shell
+        response.headers["Surrogate-Control"] = "no-store"
+        response.headers["CDN-Cache-Control"] = "no-store"
     return response
 
 

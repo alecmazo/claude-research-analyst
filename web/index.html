@@ -6,11 +6,21 @@
   <meta name="theme-color" content="#0A1628">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- Force browsers (incl. iOS PWA) to never serve a cached shell -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>DGA Research</title>
-  <link rel="stylesheet" href="/app/style.css?v=ui5">
+  <link rel="stylesheet" href="/app/style.css?v=ui8">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
+<!-- Bust any stale PWA / service-worker cache on every load -->
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+}
+</script>
 
 <!-- ============ LOGIN OVERLAY ============ -->
 <div id="login-overlay">
@@ -560,6 +570,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui5"></script>
+<script src="/app/app.js?v=ui8"></script>
 </body>
 </html>
