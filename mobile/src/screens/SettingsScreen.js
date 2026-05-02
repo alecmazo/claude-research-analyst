@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
 import {
-  api, getBaseUrl, setBaseUrl,
+  api, getBaseUrl, setBaseUrl, resetBaseUrlToProd,
   getGammaEnabled, setGammaEnabled,
   getStoredPassword, login,
 } from '../api/client';
@@ -14,7 +14,7 @@ import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
-const APP_BUILD = 'mobile-ui10-20260502';
+const APP_BUILD = 'mobile-ui10b-20260502';
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState]     = useState('');
@@ -92,6 +92,23 @@ export default function SettingsScreen() {
     Alert.alert('Saved', 'Server URL updated.');
   };
 
+  // ── One-tap recovery: nuke any stored localhost/private URL and switch
+  //    back to the public Railway production server.
+  const resetUrl = async () => {
+    const newUrl = await resetBaseUrlToProd();
+    setBaseUrlState(newUrl);
+    setServerStatus(null);
+    // Re-test connectivity to give immediate feedback
+    try {
+      await api.health();
+      setServerStatus('ok');
+      Alert.alert('Reset complete', `Now using ${newUrl} — connection OK.`);
+    } catch (e) {
+      setServerStatus('error');
+      Alert.alert('Reset complete', `Now using ${newUrl}, but the connection still failed: ${e?.message || e}`);
+    }
+  };
+
   // ── Save password — exchange for HMAC token via /api/auth ──────────────────
   const savePassword = async () => {
     const pw = password.trim() || 'dgacapital';
@@ -147,6 +164,14 @@ export default function SettingsScreen() {
             {serverStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={colors.green} />}
             {serverStatus === 'error' && <Ionicons name="close-circle"     size={22} color={colors.red}   />}
           </View>
+
+          <TouchableOpacity style={styles.resetBtn} onPress={resetUrl}>
+            <Ionicons name="refresh-outline" size={14} color={colors.midGray} />
+            <Text style={styles.resetBtnText}>Reset to production server (Railway)</Text>
+          </TouchableOpacity>
+          <Text style={styles.sectionHint}>
+            Tap if "Network request failed" — wipes any stale localhost URL and reconnects to https://dga-portfolio.up.railway.app
+          </Text>
         </View>
 
         {/* ── Password ── */}
@@ -349,5 +374,13 @@ const styles = StyleSheet.create({
   },
   updateStatusText: {
     fontSize: 12, color: colors.midGray, marginTop: 8, lineHeight: 16,
+  },
+  resetBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 8, marginTop: 8,
+  },
+  resetBtnText: {
+    fontSize: 12, fontWeight: '600', color: colors.midGray,
+    textDecorationLine: 'underline',
   },
 });

@@ -13,12 +13,15 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Build-time-injected API base URL. Set via eas.json's `env` block per profile:
-//   • development → http://localhost:8000  (Mac running `npx expo start`)
-//   • preview     → https://<your>.up.railway.app
-//   • production  → https://<your>.up.railway.app  (LP-facing build)
-// Falls back to localhost when running via plain `npx expo start` with no env.
-const DEFAULT_BASE_URL   = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+// API base URL.
+// CRITICAL: the production fallback MUST be the public Railway URL —
+// `localhost` from an iPhone points to the phone itself, never your Mac.
+// `EXPO_PUBLIC_API_BASE_URL` is build-time-injected via eas.json env blocks
+// (development → localhost:8000 for the simulator), but if it's missing
+// (e.g. an OTA bundle published from a shell without that env var set)
+// we default to Railway so the iPhone can still reach the API.
+const PROD_API_BASE_URL  = 'https://dga-portfolio.up.railway.app';
+const DEFAULT_BASE_URL   = process.env.EXPO_PUBLIC_API_BASE_URL || PROD_API_BASE_URL;
 const DEFAULT_PASSWORD   = 'dgacapital';           // server default
 
 const BASE_URL_KEY  = '@dga_api_base_url';
@@ -26,17 +29,39 @@ const GAMMA_KEY     = '@dga_gamma_enabled';
 const PASSWORD_KEY  = '@dga_password';             // plain-text password user entered
 const TOKEN_KEY     = '@dga_token_cache';          // HMAC token returned by /api/auth
 
+// Migrate stale `localhost` URLs that older builds saved to AsyncStorage.
+// On a real iPhone (TestFlight build) localhost is meaningless and every
+// request fails with "Network request failed" — auto-redirect to Railway.
+function isInvalidStoredUrl(url) {
+  if (!url) return true;
+  return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url);
+}
+
 // ── Base URL ─────────────────────────────────────────────────────────────────
 export async function getBaseUrl() {
   try {
     const s = await AsyncStorage.getItem(BASE_URL_KEY);
-    return s || DEFAULT_BASE_URL;
+    if (isInvalidStoredUrl(s)) {
+      // Stale dev URL — overwrite with Railway and surface that to callers.
+      if (s) {
+        try { await AsyncStorage.setItem(BASE_URL_KEY, DEFAULT_BASE_URL); } catch {}
+      }
+      return DEFAULT_BASE_URL;
+    }
+    return s;
   } catch {
     return DEFAULT_BASE_URL;
   }
 }
 export async function setBaseUrl(url) {
   await AsyncStorage.setItem(BASE_URL_KEY, url.replace(/\/$/, ''));
+}
+// Force-reset whatever URL is stored back to the production default. Wired
+// to the "Reset Server URL" button in Settings so the user can self-recover
+// if a bad URL got cached and the app can't reach the API.
+export async function resetBaseUrlToProd() {
+  await AsyncStorage.setItem(BASE_URL_KEY, DEFAULT_BASE_URL);
+  return DEFAULT_BASE_URL;
 }
 
 // ── Gamma preference ─────────────────────────────────────────────────────────
