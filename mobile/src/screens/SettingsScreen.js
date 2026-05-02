@@ -4,6 +4,7 @@ import {
   Alert, ScrollView, Switch, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Updates from 'expo-updates';
 import {
   api, getBaseUrl, setBaseUrl,
   getGammaEnabled, setGammaEnabled,
@@ -11,6 +12,9 @@ import {
 } from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
+
+// Bump on every JS / OTA push so the user can verify what's running.
+const APP_BUILD = 'mobile-ui10-20260502';
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState]     = useState('');
@@ -21,11 +25,47 @@ export default function SettingsScreen() {
   const [savingPw, setSavingPw]        = useState(false);
   const [gammaDefault, setGammaDefault] = useState(false);
 
+  // ── App version + OTA update state ─────────────────────────────────────
+  const [serverBuild, setServerBuild]    = useState(null);
+  const [updateState, setUpdateState]    = useState('idle');   // idle | checking | downloading | uptodate | available | reloading | error
+  const [updateMessage, setUpdateMessage] = useState('');
+
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
     getGammaEnabled().then(setGammaDefault);
     getStoredPassword().then(pw => setPassword(pw || ''));
+    // Fetch server build for display
+    api.getBuild().then(j => setServerBuild(j?.build || 'unknown')).catch(() => setServerBuild('offline'));
   }, []);
+
+  // ── OTA: pull latest JS bundle from EAS Update without TestFlight rebuild
+  const checkForUpdates = async () => {
+    setUpdateState('checking');
+    setUpdateMessage('');
+    try {
+      if (__DEV__) {
+        setUpdateState('error');
+        setUpdateMessage('Updates only work in TestFlight / App Store builds, not Expo Go.');
+        return;
+      }
+      const result = await Updates.checkForUpdateAsync();
+      if (!result.isAvailable) {
+        setUpdateState('uptodate');
+        setUpdateMessage('You\'re on the latest version.');
+        return;
+      }
+      setUpdateState('downloading');
+      setUpdateMessage('Update found — downloading…');
+      await Updates.fetchUpdateAsync();
+      setUpdateState('reloading');
+      setUpdateMessage('Restarting to apply update…');
+      // Tiny delay so the user sees the message before reload
+      setTimeout(() => Updates.reloadAsync(), 600);
+    } catch (e) {
+      setUpdateState('error');
+      setUpdateMessage(e?.message || String(e));
+    }
+  };
 
   // ── Test server connection ──────────────────────────────────────────────────
   const testConnection = async () => {
@@ -164,6 +204,56 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* ── App Updates ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>APP UPDATES</Text>
+          <Text style={styles.sectionHint}>
+            Tap to pull the latest UI fixes over-the-air. No TestFlight reinstall needed.
+          </Text>
+          <View style={styles.versionRow}>
+            <Text style={styles.versionKey}>App build</Text>
+            <Text style={styles.versionVal}>{APP_BUILD}</Text>
+          </View>
+          <View style={styles.versionRow}>
+            <Text style={styles.versionKey}>Server build</Text>
+            <Text style={styles.versionVal}>{serverBuild || 'checking…'}</Text>
+          </View>
+          <View style={styles.versionRow}>
+            <Text style={styles.versionKey}>OTA channel</Text>
+            <Text style={styles.versionVal}>{Updates.channel || 'embedded'}</Text>
+          </View>
+          <View style={styles.versionRow}>
+            <Text style={styles.versionKey}>Runtime</Text>
+            <Text style={styles.versionVal}>{Updates.runtimeVersion || '—'}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.saveBtn, styles.saveBtnGold,
+                    (updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading') && styles.disabledBtn]}
+            onPress={checkForUpdates}
+            disabled={updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading'}
+          >
+            {(updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading')
+              ? <ActivityIndicator size="small" color={colors.navy} />
+              : <Ionicons name="refresh" size={16} color={colors.navy} />}
+            <Text style={styles.saveBtnGoldText}>
+              {updateState === 'checking'    ? 'Checking…'
+              : updateState === 'downloading' ? 'Downloading…'
+              : updateState === 'reloading'   ? 'Restarting…'
+              : 'Check for Updates'}
+            </Text>
+          </TouchableOpacity>
+          {updateMessage ? (
+            <Text style={[
+              styles.updateStatusText,
+              updateState === 'uptodate' && { color: colors.green },
+              updateState === 'error'    && { color: colors.red },
+            ]}>
+              {updateState === 'uptodate' ? '✓ ' : updateState === 'error' ? '⚠ ' : ''}{updateMessage}
+            </Text>
+          ) : null}
+        </View>
+
         {/* ── About ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>ABOUT</Text>
@@ -246,4 +336,18 @@ const styles = StyleSheet.create({
   switchLabelText: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
   switchLabelHint: { fontSize: 12, color: colors.midGray, marginTop: 2 },
   aboutText:       { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
+  versionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  versionKey: { fontSize: 12, color: colors.midGray },
+  versionVal: {
+    fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '600',
+    maxWidth: '60%', textAlign: 'right',
+  },
+  updateStatusText: {
+    fontSize: 12, color: colors.midGray, marginTop: 8, lineHeight: 16,
+  },
 });

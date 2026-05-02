@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import * as Updates from 'expo-updates';
 
 import HomeScreen             from './src/screens/HomeScreen';
 import AnalysisScreen         from './src/screens/AnalysisScreen';
@@ -38,7 +39,27 @@ function PortfolioStack() {
   );
 }
 
+// Auto-fetch the latest OTA update on cold launch. expo-updates is
+// configured in app.json with checkAutomatically=ON_LOAD and our EAS Update
+// channel, so this runs in the background and silently swaps in the new
+// JS bundle on the next reload.
+async function checkForOtaUpdate() {
+  try {
+    if (__DEV__) return;   // skip in Expo Go / dev builds
+    const result = await Updates.checkForUpdateAsync();
+    if (result.isAvailable) {
+      await Updates.fetchUpdateAsync();
+      // Reload immediately so the user sees the fix without restarting.
+      await Updates.reloadAsync();
+    }
+  } catch (e) {
+    // Network glitches, dev client, etc. — fail silently.
+    console.log('[OTA] update check skipped:', e?.message || e);
+  }
+}
+
 export default function App() {
+  useEffect(() => { checkForOtaUpdate(); }, []);
   return (
     <NavigationContainer>
       <StatusBar style="light" />

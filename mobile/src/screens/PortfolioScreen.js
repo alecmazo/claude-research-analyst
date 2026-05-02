@@ -161,9 +161,8 @@ export default function PortfolioScreen({ navigation }) {
   };
 
   const result = job?.result;
-  const orderedStrategies = result
-    ? [result.primary_strategy, ...Object.keys(result.strategies).filter(k => k !== result.primary_strategy)]
-    : [];
+  // (orderedStrategies removed — strategy result blocks no longer rendered
+  // on this screen; per-strategy breakdown lives on the PortfolioSummary view.)
 
   return (
     <View style={styles.wrapper}>
@@ -244,32 +243,10 @@ export default function PortfolioScreen({ navigation }) {
           {error && <Text style={styles.errorText}>{error}</Text>}
           {job.error && <Text style={styles.errorText}>{job.error}</Text>}
 
-          {result && orderedStrategies.map(k => {
-            const s = result.strategies[k];
-            if (!s) return null;
-            const isPrimary = k === result.primary_strategy;
-            const pills = Object.entries(s.weights)
-              .sort(([, a], [, b]) => b - a);
-            return (
-              <View key={k} style={[styles.resultBlock, isPrimary && styles.resultBlockPrimary]}>
-                <View style={styles.resultHead}>
-                  <Text style={styles.resultTitle}>
-                    {s.label}{isPrimary ? ' — Primary' : ''}
-                  </Text>
-                  <Text style={styles.resultCount}>{s.held} positions</Text>
-                </View>
-                <View style={styles.pillRow}>
-                  {pills.length === 0 && <Text style={styles.emptyPill}>No positions</Text>}
-                  {pills.map(([t, w]) => (
-                    <View key={t} style={styles.pill}>
-                      <Text style={styles.pillTicker}>{t}</Text>
-                      <Text style={styles.pillWeight}>{(w * 100).toFixed(1)}%</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            );
-          })}
+          {/* Strategy result blocks intentionally omitted — the website was
+              streamlined to show only status + download/Sheets actions on this
+              card. The full per-strategy breakdown is on the Portfolio Summary
+              screen ("View Summary" button below). */}
 
           {job.status === 'done' && (
             <TouchableOpacity style={styles.runBtn} onPress={openDownload}>
@@ -297,35 +274,9 @@ export default function PortfolioScreen({ navigation }) {
             {lastRun.strategy  ? `  ·  ${lastRun.strategy}` : ''}
           </Text>
 
-          {/* Mini result pills */}
-          {lastRun.result && (() => {
-            const r = lastRun.result;
-            const primary = r.primary_strategy;
-            const order = [primary, ...Object.keys(r.strategies || {}).filter(k => k !== primary)];
-            return order.map(k => {
-              const s = (r.strategies || {})[k];
-              if (!s) return null;
-              const isPrimary = k === primary;
-              const pills = Object.entries(s.weights || {}).sort(([,a],[,b]) => b - a);
-              return (
-                <View key={k} style={[styles.resultBlock, isPrimary && styles.resultBlockPrimary]}>
-                  <View style={styles.resultHead}>
-                    <Text style={styles.resultTitle}>{s.label}{isPrimary ? ' — Primary' : ''}</Text>
-                    <Text style={styles.resultCount}>{s.held} positions</Text>
-                  </View>
-                  <View style={styles.pillRow}>
-                    {pills.length === 0 && <Text style={styles.emptyPill}>No positions</Text>}
-                    {pills.map(([t, w]) => (
-                      <View key={t} style={styles.pill}>
-                        <Text style={styles.pillTicker}>{t}</Text>
-                        <Text style={styles.pillWeight}>{(w * 100).toFixed(1)}%</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              );
-            });
-          })()}
+          {/* Strategy result blocks intentionally omitted to match the website's
+              streamlined Portfolio tab. Tap "View Summary" below for the full
+              per-strategy breakdown. */}
 
           <View style={styles.lastRunActions}>
             <TouchableOpacity

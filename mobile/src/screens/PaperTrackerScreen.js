@@ -33,6 +33,7 @@ export default function PaperTrackerScreen({ navigation }) {
   // ── Unified YTD upload (Modified Dietz + per-stock attribution) ─────────
   const [ytdPosFile,       setYtdPosFile]      = useState(null);
   const [ytdActFile,       setYtdActFile]      = useState(null);
+  const [ytdMonthlyFile,   setYtdMonthlyFile]  = useState(null);   // Investment Income Balance CSV (optional)
   const [ytdBeginValue,    setYtdBeginValue]   = useState('');
   const [ytdSubmitting,    setYtdSubmitting]   = useState(false);
   const [ytdResult,        setYtdResult]       = useState(null);
@@ -112,10 +113,18 @@ export default function PaperTrackerScreen({ navigation }) {
 
   // ── Single unified handler (replaces the two separate flows) ─────────────
   const submitYtd = async () => {
-    if (!ytdPosFile) { Alert.alert('Missing file', 'Pick your Fidelity Positions CSV.');  return; }
-    if (!ytdActFile) { Alert.alert('Missing file', 'Pick your Fidelity Activity CSV.');   return; }
+    if (!ytdPosFile) { Alert.alert('Missing file', 'Pick your Account Positions CSV.');  return; }
+    if (!ytdActFile) { Alert.alert('Missing file', 'Pick your Account History CSV.');    return; }
+    // Jan 1 value is optional when Investment Income Balance CSV is provided —
+    // the server will read the starting balance directly from that CSV.
     const bv = parseFloat(ytdBeginValue);
-    if (!bv || bv <= 0) { Alert.alert('Missing value', 'Enter your Jan 1 portfolio total.'); return; }
+    if (!ytdMonthlyFile && (!bv || bv <= 0)) {
+      Alert.alert(
+        'Missing Jan 1 value',
+        'Enter your Jan 1 portfolio total — or upload an Investment Income Balance CSV and we will read it from there automatically.'
+      );
+      return;
+    }
 
     setYtdSubmitting(true); setYtdError(null); setYtdResult(null);
     try {
@@ -126,7 +135,13 @@ export default function PaperTrackerScreen({ navigation }) {
         activityUri:   ytdActFile.uri,
         activityName:  ytdActFile.name,
         activityType:  ytdActFile.mimeType,
-        beginValue:    bv,
+        // Optional Investment Income Balance CSV (Fidelity Monthly Statement).
+        // Provides exact month-end balances for accurate chart + TWRR + supplies
+        // the Jan 1 starting value when the user leaves it blank.
+        monthlyPerfUri:  ytdMonthlyFile?.uri,
+        monthlyPerfName: ytdMonthlyFile?.name,
+        monthlyPerfType: ytdMonthlyFile?.mimeType,
+        beginValue:    (bv && bv > 0) ? bv : null,
       });
       setYtdResult(data);
       // Refresh snapshot history so the new run shows up immediately
@@ -233,10 +248,13 @@ export default function PaperTrackerScreen({ navigation }) {
         <Text style={styles.formHint}>
           Upload both Fidelity CSVs to compute a Modified Dietz YTD return and a
           per-stock attribution. Today's account value is auto-extracted from the
-          Positions CSV (positions × current prices + money market).
+          Account Positions CSV (positions × current prices + money market).
         </Text>
 
-        <Text style={styles.formFieldLabel}>Jan 1 Portfolio Value ($)</Text>
+        <View style={styles.formFieldLabelRow}>
+          <Text style={[styles.formFieldLabel, styles.formFieldLabelInRow]}>Jan 1 Portfolio Value ($)</Text>
+          <Text style={styles.formFieldOptional}>optional w/ Income Balance CSV</Text>
+        </View>
         <TextInput
           style={styles.formInput}
           value={ytdBeginValue}
@@ -245,22 +263,39 @@ export default function PaperTrackerScreen({ navigation }) {
           placeholder="e.g. 3628719"
           placeholderTextColor={colors.midGray}
         />
+        <Text style={styles.formFieldHint}>
+          Skip this field if you upload an Investment Income Balance CSV below — the starting balance is read from it automatically.
+        </Text>
 
-        <Text style={styles.formFieldLabel}>Positions CSV (current holdings)</Text>
+        <Text style={styles.formFieldLabel}>Account Positions CSV (Current Holdings)</Text>
         <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setYtdPosFile)}>
           <Ionicons name="document-text-outline" size={16} color={colors.gold} />
           <Text style={styles.filePickerText} numberOfLines={1}>
-            {ytdPosFile?.name || 'Tap to choose Positions CSV…'}
+            {ytdPosFile?.name || 'Tap to choose Account Positions CSV…'}
           </Text>
         </TouchableOpacity>
 
-        <Text style={styles.formFieldLabel}>Activity CSV (YTD transactions)</Text>
+        <Text style={styles.formFieldLabel}>Account History CSV (YTD transactions)</Text>
         <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setYtdActFile)}>
           <Ionicons name="document-text-outline" size={16} color={colors.gold} />
           <Text style={styles.filePickerText} numberOfLines={1}>
-            {ytdActFile?.name || 'Tap to choose Activity CSV…'}
+            {ytdActFile?.name || 'Tap to choose Account History CSV…'}
           </Text>
         </TouchableOpacity>
+
+        <View style={styles.formFieldLabelRow}>
+          <Text style={[styles.formFieldLabel, styles.formFieldLabelInRow]}>Investment Income Balance CSV</Text>
+          <Text style={styles.formFieldOptional}>optional</Text>
+        </View>
+        <TouchableOpacity style={styles.filePicker} onPress={() => pickCsv(setYtdMonthlyFile)}>
+          <Ionicons name="document-text-outline" size={16} color={colors.gold} />
+          <Text style={styles.filePickerText} numberOfLines={1}>
+            {ytdMonthlyFile?.name || 'Tap to choose Investment Income Balance CSV…'}
+          </Text>
+        </TouchableOpacity>
+        <Text style={styles.formFieldHint}>
+          Fidelity Monthly Statement — provides exact month-end balances for accurate chart and TWRR. Export: Accounts &amp; Trade → Statements → Monthly Statement → Download CSV.
+        </Text>
 
         <TouchableOpacity
           style={[styles.btnPrimary, ytdSubmitting && { opacity: 0.6 }]}
@@ -1167,6 +1202,23 @@ const styles = StyleSheet.create({
     fontSize: 10, fontWeight: '700', color: colors.midGray,
     letterSpacing: 1, textTransform: 'uppercase',
     marginTop: 10, marginBottom: 4,
+  },
+  formFieldLabelRow: {
+    flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap',
+    marginTop: 10, marginBottom: 4, gap: 8,
+  },
+  formFieldLabelInRow: {
+    marginTop: 0, marginBottom: 0,
+  },
+  formFieldOptional: {
+    fontSize: 9, fontWeight: '700', color: colors.midGray,
+    letterSpacing: 0.5, textTransform: 'uppercase',
+    backgroundColor: colors.lightGray, paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 3, overflow: 'hidden',
+  },
+  formFieldHint: {
+    fontSize: 11, color: colors.midGray, lineHeight: 15,
+    marginTop: 4, marginBottom: 6, fontStyle: 'italic',
   },
   formSubHint: {
     fontSize: 10, color: colors.midGray, fontStyle: 'italic',

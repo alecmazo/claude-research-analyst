@@ -219,11 +219,20 @@ export const api = {
   }),
 
   // Unified YTD: Modified Dietz return + per-stock attribution in ONE call.
-  // Today's total value is auto-extracted from the Positions CSV (sum of all
-  // positions × current prices + money market) — no manual entry needed.
+  // Today's total value is auto-extracted from the Account Positions CSV (sum
+  // of all positions × current prices + money market).
+  //
+  // Optional inputs:
+  //  • monthlyPerf*  — Investment Income Balance CSV (Fidelity Monthly
+  //    Statement). When present, the server reads exact month-end balances
+  //    for accurate chart + TWRR, AND uses its first-month "start" value as
+  //    the Jan 1 begin_value if the user leaves that field blank.
+  //  • beginValue    — Jan 1 portfolio total. May be null when monthlyPerf
+  //    is provided; otherwise required.
   computeUnifiedYtd: async ({
     positionsUri, positionsName, positionsType,
     activityUri,  activityName,  activityType,
+    monthlyPerfUri, monthlyPerfName, monthlyPerfType,
     beginValue,
   }) => {
     const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
@@ -238,7 +247,16 @@ export const api = {
       name: activityName || 'activity.csv',
       type: activityType || 'text/csv',
     });
-    fd.append('begin_value', String(beginValue));
+    if (monthlyPerfUri) {
+      fd.append('monthly_perf_file', {
+        uri:  monthlyPerfUri,
+        name: monthlyPerfName || 'monthly_perf.csv',
+        type: monthlyPerfType || 'text/csv',
+      });
+    }
+    if (beginValue != null && beginValue !== '' && Number(beginValue) > 0) {
+      fd.append('begin_value', String(beginValue));
+    }
     fd.append('token',       token || '');
     const headers = {};
     if (token) headers['x-auth-token'] = token;
@@ -251,6 +269,17 @@ export const api = {
       const text = await resp.text();
       throw new Error(text || `${resp.status}`);
     }
+    return resp.json();
+  },
+
+  // Server build version (public — no auth required). Used by Settings to
+  // show what's currently deployed and let the user verify the OTA update.
+  getBuild: async () => {
+    const base = await getBaseUrl();
+    const resp = await fetch(`${base}/api/build?_t=${Date.now()}`, {
+      cache: 'no-store',
+    });
+    if (!resp.ok) throw new Error(`${resp.status}`);
     return resp.json();
   },
 };
