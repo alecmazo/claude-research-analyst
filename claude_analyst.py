@@ -4676,20 +4676,30 @@ def promote_live_portfolio(holdings_input: list[dict]) -> dict:
     # because yfinance can't price them (preferred shares, etc.), but that is
     # NOT a reason to inflate the remaining weights.  Calculations that need
     # weights to sum to 1.0 (e.g., _portfolio_breakdown) normalize internally.
-    live = {
-        "uploaded_at": datetime.utcnow().isoformat(),
-        "anchor_date": today,
-        "holdings":    cleaned,
-        "series":      [{"date": today, "value": 100.0, "return_pct": 0.0}],
-    }
-
+    #
+    # CRITICAL: when there's already a live_portfolio with prior account_history
+    # and ytd_snapshots, we MUST preserve those — they represent the user's
+    # uploaded YTD runs and should never be silently wiped by a fresh rebalance.
+    # Only `holdings`, `anchor_date`, `uploaded_at`, and `series` are replaced.
     with _tracker_lock():
         state = _load_tracker_state()
+        existing = state.get("live_portfolio") or {}
+        live = dict(existing)   # shallow copy so we keep every existing key
+        live["uploaded_at"] = datetime.utcnow().isoformat()
+        live["anchor_date"] = today
+        live["holdings"]    = cleaned
+        live["series"]      = [{"date": today, "value": 100.0, "return_pct": 0.0}]
+        # account_history and ytd_snapshots flow through untouched if they exist
+        # (existing.get("account_history") / existing.get("ytd_snapshots"))
         state["live_portfolio"] = live
         _ensure_spy_back_to(state, today)
         _save_tracker_state(state)
 
-    print(f"📊 Live portfolio promoted ({len(cleaned)} tickers, anchored {today})")
+    preserved = []
+    if existing.get("account_history"): preserved.append("account_history")
+    if existing.get("ytd_snapshots"):   preserved.append(f"{len(existing['ytd_snapshots'])} YTD snapshots")
+    suffix = f" (preserved {', '.join(preserved)})" if preserved else ""
+    print(f"📊 Live portfolio promoted ({len(cleaned)} tickers, anchored {today}){suffix}")
     return {"ok": True, "live_portfolio": live}
 
 

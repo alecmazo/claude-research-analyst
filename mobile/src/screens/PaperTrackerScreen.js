@@ -553,6 +553,33 @@ export default function PaperTrackerScreen({ navigation }) {
   };
 
   // ── Past YTD runs (snapshot history) card ────────────────────────────────
+  const deleteSnapshot = (snap) => {
+    const dt = snap.uploaded_at
+      ? new Date(snap.uploaded_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'this snapshot';
+    Alert.alert(
+      'Delete this run?',
+      `${dt} will be removed from history. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: async () => {
+          try {
+            await api.deleteYtdSnapshot(snap.id);
+            // If the deleted snapshot was the active one, clear the detail panel
+            if (activeSnapshotId === snap.id) {
+              setActiveSnapshotId(null);
+              setLiveDetail(null);
+            }
+            const s = await api.listYtdSnapshots();
+            setSnapshots(s?.snapshots || []);
+          } catch (e) {
+            Alert.alert('Could not delete', e?.message || String(e));
+          }
+        } },
+      ]
+    );
+  };
+
   const renderSnapshotsCard = () => {
     if (!snapshots.length) return null;
     const usd0 = (v) => v == null ? '—'
@@ -561,7 +588,8 @@ export default function PaperTrackerScreen({ navigation }) {
       <View style={styles.card}>
         <Text style={styles.cardLabel}>PAST YTD RUNS</Text>
         <Text style={styles.formHint}>
-          Tap any run to re-open the full attribution with that snapshot's holdings &amp; values.
+          Every YTD calculation is saved here. Tap any run to re-open the full
+          attribution. Tap the ✕ to remove a run from history.
         </Text>
         {snapshots.map(s => {
           const md = s.md_return_pct ?? 0;
@@ -571,24 +599,39 @@ export default function PaperTrackerScreen({ navigation }) {
                 hour: 'numeric', minute: '2-digit',
               })
             : '—';
+          const isActive = activeSnapshotId === s.id;
           return (
-            <TouchableOpacity
-              key={s.id}
-              style={styles.snapRow}
-              onPress={() => openSnapshot(s)}
-              activeOpacity={0.7}
-            >
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.snapDate}>{dt}</Text>
-                <Text style={styles.snapMeta} numberOfLines={1}>
-                  {usd0(s.begin_value)} → {usd0(s.end_value)} ·
-                  {' '}{s.positions_count} pos · {s.trade_count} trades
+            <View key={s.id} style={[styles.snapRow, isActive && styles.snapRowActive]}>
+              <TouchableOpacity
+                style={styles.snapRowMain}
+                onPress={() => openSnapshot(s)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <View style={styles.snapDateRow}>
+                    <Text style={styles.snapDate}>{dt}</Text>
+                    {isActive && (
+                      <Text style={styles.snapActiveBadge}>ACTIVE</Text>
+                    )}
+                  </View>
+                  <Text style={styles.snapMeta} numberOfLines={1}>
+                    {usd0(s.begin_value)} → {usd0(s.end_value)} ·
+                    {' '}{s.positions_count} pos · {s.trade_count} trades
+                  </Text>
+                </View>
+                <Text style={[styles.snapReturn, { color: pctColor(md) }]}>
+                  {fmtPct(md)}
                 </Text>
-              </View>
-              <Text style={[styles.snapReturn, { color: pctColor(md) }]}>
-                {fmtPct(md)}
-              </Text>
-            </TouchableOpacity>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.snapDeleteBtn}
+                onPress={() => deleteSnapshot(s)}
+                hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+                accessibilityLabel="Delete snapshot"
+              >
+                <Ionicons name="close" size={16} color={colors.midGray} />
+              </TouchableOpacity>
+            </View>
           );
         })}
       </View>
@@ -1343,14 +1386,31 @@ const styles = StyleSheet.create({
 
   // ── Snapshot history rows ───────────────────────────────────────────────
   snapRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: 10, marginBottom: 6,
+    flexDirection: 'row', alignItems: 'stretch',
+    marginBottom: 6,
     backgroundColor: colors.offWhite,
     borderRadius: 8,
     borderWidth: 1, borderColor: colors.lightGray,
+    overflow: 'hidden',
+  },
+  snapRowActive: {
+    borderColor: colors.gold, backgroundColor: '#FAF6E8',
+    borderWidth: 1.5,
+  },
+  snapRowMain: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', padding: 10,
+  },
+  snapDateRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
   },
   snapDate: {
     fontSize: 13, fontWeight: '700', color: colors.navy,
+  },
+  snapActiveBadge: {
+    fontSize: 9, fontWeight: '800', color: colors.navy, letterSpacing: 0.5,
+    backgroundColor: colors.gold, paddingHorizontal: 5, paddingVertical: 1,
+    borderRadius: 3, overflow: 'hidden',
   },
   snapMeta: {
     fontSize: 11, color: colors.midGray,
@@ -1359,6 +1419,11 @@ const styles = StyleSheet.create({
   snapReturn: {
     fontSize: 16, fontWeight: '800', fontFamily: 'Courier New',
     marginLeft: 10,
+  },
+  snapDeleteBtn: {
+    width: 36,
+    alignItems: 'center', justifyContent: 'center',
+    borderLeftWidth: 1, borderLeftColor: colors.lightGray,
   },
 
   // ── Attribution result ────────────────────────────────────────────────────
