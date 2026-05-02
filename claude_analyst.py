@@ -3243,6 +3243,12 @@ _FIDELITY_INTERNAL_ACTIONS = frozenset({
     "EXERCISED",
     "OPENING TRANSACTION",
     "CLOSING TRANSACTION",
+    # ── Securities lending (Fidelity Fully Paid Lending program) ────────────
+    # Bookkeeping entries that move shares in/out of loan; not cash flows.
+    # Hidden from the "captured cash flows" UI but retained in
+    # parse result `all_transactions` for full audit trail.
+    "YOU LOANED",                    # "YOU LOANED SECURITIES"
+    "LOAN RETURNED",                 # "LOAN RETURNED" / "LOAN RETURNED SECURITIES"
 })
 
 
