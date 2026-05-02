@@ -677,6 +677,42 @@ body {
   margin: 0 0 12px;
 }
 
+/* App version + force-refresh card */
+.version-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.version-info {
+  font-size: 13px;
+  color: var(--dark-gray);
+  line-height: 1.7;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.version-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.version-info strong {
+  color: var(--navy);
+  font-family: "SF Mono", Menlo, Courier, monospace;
+  font-size: 12px;
+}
+.version-refresh-btn {
+  width: auto;
+  padding: 10px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+  align-self: center;
+}
+@media (max-width: 480px) {
+  .version-refresh-btn { width: 100%; }
+}
+
 /* ============ PORTFOLIO VIEW ============ */
 .file-input {
   width: 100%;

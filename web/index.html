@@ -11,16 +11,61 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>DGA Research</title>
-  <link rel="stylesheet" href="/app/style.css?v=ui9">
+  <!-- ──────────────────────────────────────────────────────────────────────
+       PRE-LOAD CACHE BUST  (runs before any other script / asset)
+       ────────────────────────────────────────────────────────────────────
+       Synchronous version check that fires the FIRST thing a stale iOS PWA
+       sees on load. If the server reports a newer build than what's stored
+       locally, force a hard reload with a cache-bust query param BEFORE
+       app.js / style.css are even fetched. This way old cached assets are
+       evicted from the browser's HTTP cache on the very next request.
+       ────────────────────────────────────────────────────────────────────── -->
+  <script>
+  (function () {
+    var EXPECTED = 'ui10-20260502';
+    try {
+      // Nuke any service worker (we don't use one, so this is purely defensive)
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { r.unregister(); });
+        });
+      }
+      // Nuke any Cache Storage entries (no SW means none, but be safe)
+      if (window.caches && caches.keys) {
+        caches.keys().then(function (keys) {
+          keys.forEach(function (k) { caches.delete(k); });
+        });
+      }
+    } catch (_) {}
+
+    // Async server check — if mismatch, force-reload bypassing every cache layer
+    try {
+      var bust = '?_t=' + Date.now();
+      fetch('/api/build' + bust, { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          if (!j || !j.build) return;
+          var stored = null;
+          try { stored = localStorage.getItem('_dga_build'); } catch (_) {}
+          // If server build differs from BOTH our HTML constant AND localStorage
+          // → we're definitely stale, force a hard reload.
+          if (j.build !== EXPECTED || (stored && stored !== j.build)) {
+            try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
+            var u = new URL(window.location.href);
+            u.searchParams.set('_b', String(Date.now()));
+            window.location.replace(u.toString());
+          } else {
+            try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
+          }
+        })
+        .catch(function () { /* offline — leave alone */ });
+    } catch (_) {}
+  })();
+  </script>
+  <link rel="stylesheet" href="/app/style.css?v=ui10">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-<!-- Bust any stale PWA / service-worker cache on every load -->
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-}
-</script>
 
 <!-- ============ LOGIN OVERLAY ============ -->
 <div id="login-overlay">
@@ -562,6 +607,24 @@ if ('serviceWorker' in navigator) {
     </p>
   </div>
 
+  <div class="card" id="app-version-card">
+    <div class="label">APP VERSION</div>
+    <div class="version-row">
+      <div class="version-info">
+        <div class="version-line">Loaded build: <strong id="version-loaded">checking…</strong></div>
+        <div class="version-line">Server build: <strong id="version-server">checking…</strong></div>
+        <div class="version-line" id="version-status">—</div>
+      </div>
+      <button id="force-refresh-btn" class="btn-primary version-refresh-btn">
+        Force Refresh
+      </button>
+    </div>
+    <p class="hint" style="margin-top:10px;">
+      If the iPhone home-screen icon shows an old version, tap <strong>Force Refresh</strong>
+      to clear the cache and reload the latest build.
+    </p>
+  </div>
+
   <div class="card">
     <div class="label">ABOUT</div>
     <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="about-logo" onerror="this.style.display='none'">
@@ -570,6 +633,6 @@ if ('serviceWorker' in navigator) {
   </div>
 </section>
 
-<script src="/app/app.js?v=ui9"></script>
+<script src="/app/app.js?v=ui10"></script>
 </body>
 </html>

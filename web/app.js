@@ -13,7 +13,7 @@
 //      HTML / JS disk cache entirely — even an iOS standalone PWA will see
 //      the new server version.
 //   2) Stored localStorage compare ensures we don't reload-loop.
-const DGA_BUILD = 'ui9-20260501-b';
+const DGA_BUILD = 'ui10-20260502';
 ;(function(){
   try {
     const stored = localStorage.getItem('_dga_build');
@@ -220,7 +220,14 @@ document.querySelectorAll('[data-target]').forEach(el => {
     showView(t);
     if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
     if (t === 'view-portfolio') rehydratePortfolioLastCard();
+    if (t === 'view-settings') updateAppVersionCard();
   });
+});
+
+// Wire up Force Refresh button (in Settings view)
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('force-refresh-btn');
+  if (btn) btn.addEventListener('click', forceRefreshApp);
 });
 
 // ---------- Server status ----------
@@ -237,6 +244,59 @@ async function checkServer() {
     dot.className = 'status-dot err';
     if (txt) { txt.textContent = 'Offline'; txt.style.color = 'var(--red)'; }
   }
+}
+
+// ---------- App version display + manual force-refresh ----------
+async function updateAppVersionCard() {
+  const loadedEl = document.getElementById('version-loaded');
+  const serverEl = document.getElementById('version-server');
+  const statusEl = document.getElementById('version-status');
+  if (!loadedEl) return; // settings view not in DOM
+  loadedEl.textContent = DGA_BUILD;
+  try {
+    const r = await fetch('/api/build?_t=' + Date.now(), { cache: 'no-store' });
+    const j = r.ok ? await r.json() : null;
+    if (j && j.build) {
+      serverEl.textContent = j.build;
+      if (j.build === DGA_BUILD) {
+        statusEl.textContent = '✓ Up to date';
+        statusEl.style.color = 'var(--green, #16A34A)';
+      } else {
+        statusEl.textContent = '⚠ Update available — tap Force Refresh';
+        statusEl.style.color = 'var(--gold, #C9A84C)';
+      }
+    } else {
+      serverEl.textContent = 'unknown';
+      statusEl.textContent = 'Could not reach server';
+    }
+  } catch {
+    serverEl.textContent = 'offline';
+    statusEl.textContent = 'Offline — cannot check';
+  }
+}
+
+async function forceRefreshApp() {
+  const btn = document.getElementById('force-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing cache…'; }
+  try {
+    // 1) Unregister any service workers (we don't use one, but be safe)
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister().catch(() => {})));
+    }
+    // 2) Drop every Cache Storage entry
+    if (window.caches && caches.keys) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
+    }
+    // 3) Wipe the build marker so we don't no-op on next load
+    try { localStorage.removeItem('_dga_build'); } catch (_) {}
+  } catch (_) { /* best-effort */ }
+  // 4) Hard reload with a unique cache-bust query
+  const u = new URL(window.location.href);
+  u.searchParams.set('_b', String(Date.now()));
+  // Use replace() so the back button doesn't take them to the stale URL
+  window.location.replace(u.toString());
 }
 
 // loadReports is defined later in the file (with live-price injection).
