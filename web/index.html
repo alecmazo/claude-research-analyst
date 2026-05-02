@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui10-20260502';
+    var EXPECTED = 'ui11-20260502';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -38,31 +38,42 @@
       }
     } catch (_) {}
 
-    // Async server check — if mismatch, force-reload bypassing every cache layer
+    // Async server check — if mismatch, force-reload bypassing every cache layer.
+    //
+    // ⚠ LOOP GUARD: if we've already reloaded once in this session OR the URL
+    // already has ?_b= (proof of a recent reload), DO NOT reload again. Even if
+    // the cache didn't fully clear, an infinite reload is much worse — it
+    // prevents the user from logging in. We just update localStorage and let
+    // the user use whatever code is loaded; the next fresh session will retry.
     try {
+      var alreadyTried = false;
+      try {
+        var url0 = new URL(window.location.href);
+        if (url0.searchParams.get('_b')) alreadyTried = true;
+      } catch (_) {}
+      try {
+        if (sessionStorage.getItem('_dga_reload_attempted') === '1') alreadyTried = true;
+      } catch (_) {}
+
       var bust = '?_t=' + Date.now();
       fetch('/api/build' + bust, { cache: 'no-store' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) {
           if (!j || !j.build) return;
-          var stored = null;
-          try { stored = localStorage.getItem('_dga_build'); } catch (_) {}
-          // If server build differs from BOTH our HTML constant AND localStorage
-          // → we're definitely stale, force a hard reload.
-          if (j.build !== EXPECTED || (stored && stored !== j.build)) {
-            try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
-            var u = new URL(window.location.href);
-            u.searchParams.set('_b', String(Date.now()));
-            window.location.replace(u.toString());
-          } else {
-            try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
-          }
+          // Always sync localStorage to whatever the server reports.
+          try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
+          if (j.build === EXPECTED) return;             // already current
+          if (alreadyTried) return;                     // loop guard — give up
+          try { sessionStorage.setItem('_dga_reload_attempted', '1'); } catch (_) {}
+          var u = new URL(window.location.href);
+          u.searchParams.set('_b', String(Date.now()));
+          window.location.replace(u.toString());
         })
         .catch(function () { /* offline — leave alone */ });
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui10">
+  <link rel="stylesheet" href="/app/style.css?v=ui11">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -633,6 +644,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui10"></script>
+<script src="/app/app.js?v=ui11"></script>
 </body>
 </html>

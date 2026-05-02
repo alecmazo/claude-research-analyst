@@ -6,43 +6,52 @@
 // Forces a hard reload the first time a device loads the new version,
 // evicting stale iOS PWA / Safari cache that ignores Cache-Control headers.
 //
-// Two-stage strategy:
-//   1) On load, IIFE compares LOCAL `BUILD` to the server's /api/build.
-//      Mismatch → force `location.reload(true)` with a cache-busting query
-//      param (`?_b=<timestamp>`). This works because fetch() bypasses the
-//      HTML / JS disk cache entirely — even an iOS standalone PWA will see
-//      the new server version.
-//   2) Stored localStorage compare ensures we don't reload-loop.
-const DGA_BUILD = 'ui10-20260502';
+// LOOP GUARD: never reload more than once per session. If the URL already
+// has ?_b= or we've recorded a reload attempt in sessionStorage, we just
+// update localStorage and move on — an infinite reload is far worse than
+// a stale UI for the user (it blocks login entirely). Next fresh session
+// (new tab, hard quit) will retry the reload.
+const DGA_BUILD = 'ui11-20260502';
 ;(function(){
+  let alreadyTried = false;
+  try {
+    const u0 = new URL(window.location.href);
+    if (u0.searchParams.get('_b')) alreadyTried = true;
+  } catch (_) {}
+  try {
+    if (sessionStorage.getItem('_dga_reload_attempted') === '1') alreadyTried = true;
+  } catch (_) {}
+
   try {
     const stored = localStorage.getItem('_dga_build');
-    if (stored && stored !== DGA_BUILD) {
-      localStorage.setItem('_dga_build', DGA_BUILD);
-      // Force fetch from server, not disk cache
+    localStorage.setItem('_dga_build', DGA_BUILD);
+    if (stored && stored !== DGA_BUILD && !alreadyTried) {
+      try { sessionStorage.setItem('_dga_reload_attempted', '1'); } catch (_) {}
       const u = new URL(window.location.href);
       u.searchParams.set('_b', Date.now().toString());
       window.location.replace(u.toString());
       return;
     }
-    localStorage.setItem('_dga_build', DGA_BUILD);
   } catch (_) {}
 
   // Async: ask the server what the current build is. If it differs from our
-  // embedded constant, the cached HTML/JS are stale → hard reload.
+  // embedded constant AND we haven't already tried, hard reload once.
   try {
     fetch('/api/build', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!j || !j.build) return;
-        if (j.build !== DGA_BUILD) {
-          console.log('[DGA] Build mismatch — local:', DGA_BUILD, 'server:', j.build);
-          try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
-          const u = new URL(window.location.href);
-          u.searchParams.set('_b', Date.now().toString());
-          // Bypass the document cache by adding a fresh query param
-          window.location.replace(u.toString());
+        try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
+        if (j.build === DGA_BUILD) return;
+        if (alreadyTried) {
+          console.log('[DGA] Build mismatch but reload guard active — local:', DGA_BUILD, 'server:', j.build);
+          return;
         }
+        console.log('[DGA] Build mismatch — local:', DGA_BUILD, 'server:', j.build);
+        try { sessionStorage.setItem('_dga_reload_attempted', '1'); } catch (_) {}
+        const u = new URL(window.location.href);
+        u.searchParams.set('_b', Date.now().toString());
+        window.location.replace(u.toString());
       })
       .catch(() => { /* offline — ignore */ });
   } catch (_) {}
