@@ -7786,17 +7786,31 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
 
 
 def fetch_from_dropbox(ticker: str) -> str | None:
-    """Download `{TICKER}_DGA_Report.md` from the Dropbox folder, or None."""
+    """Download `{TICKER}_DGA_Report.md` from Dropbox, or None.
+
+    Looks first in the `MD cached/` subfolder (current layout), then falls
+    back to the base folder so old reports stored before the reorganisation
+    are still found.
+    """
     dbx = _dropbox_client()
     if dbx is None:
         return None
     folder = _dropbox_folder()
-    path = f"{folder}/{ticker}_DGA_Report.md" if folder else f"/{ticker}_DGA_Report.md"
-    try:
-        _, response = dbx.files_download(path)
-        return response.content.decode("utf-8", errors="replace")
-    except Exception:
-        return None
+    filename = f"{ticker}_DGA_Report.md"
+
+    # Primary: new subfolder location
+    md_sub = (f"{folder}/{DROPBOX_MD_SUBFOLDER}/{filename}"
+              if folder else f"/{DROPBOX_MD_SUBFOLDER}/{filename}")
+    # Fallback: legacy base-folder location (pre-reorganisation)
+    base_path = f"{folder}/{filename}" if folder else f"/{filename}"
+
+    for path in (md_sub, base_path):
+        try:
+            _, response = dbx.files_download(path)
+            return response.content.decode("utf-8", errors="replace")
+        except Exception:
+            continue
+    return None
 
 
 def _is_drive_quota_error(exc: Exception) -> bool:

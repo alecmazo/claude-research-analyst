@@ -1185,15 +1185,18 @@ def _hydrate_from_dropbox() -> None:
                 pass
         return n
 
-    # Base folder — metadata JSON only
-    downloaded += _hydrate_entries(_list(folder),           folder,
-                                   accept_special=True)
-    # Subfolders — each type restricted to its own folder
-    downloaded += _hydrate_entries(_list(pres_folder),      pres_folder,
+    # Base folder — metadata JSON + legacy .md/.docx that haven't been moved yet
+    base_ents = _list(folder)
+    downloaded += _hydrate_entries(base_ents, folder,
+                                   accept_special=True,
+                                   accept_md=True,    # legacy fallback
+                                   accept_docx=True)  # legacy fallback
+    # Subfolders — canonical locations after the folder reorganisation
+    downloaded += _hydrate_entries(_list(pres_folder),       pres_folder,
                                    accept_pptx=True)
-    downloaded += _hydrate_entries(_list(reports_folder),   reports_folder,
+    downloaded += _hydrate_entries(_list(reports_folder),    reports_folder,
                                    accept_docx=True)
-    downloaded += _hydrate_entries(_list(md_folder),        md_folder,
+    downloaded += _hydrate_entries(_list(md_folder),         md_folder,
                                    accept_md=True)
     downloaded += _hydrate_entries(_list(rebalanced_folder), rebalanced_folder,
                                    accept_xlsx=True)
