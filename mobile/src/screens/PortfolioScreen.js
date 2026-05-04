@@ -264,12 +264,34 @@ export default function PortfolioScreen({ navigation }) {
               <Ionicons name="open-outline" size={14} color={colors.navy} style={{ marginLeft: 4 }} />
             </TouchableOpacity>
           )}
-          {job.status === 'done' && result?.gamma_error && (
-            <View style={styles.gammaErrorBox}>
-              <Ionicons name="warning-outline" size={15} color="#92400E" />
-              <Text style={styles.gammaErrorText}>Gamma: {result.gamma_error}</Text>
-            </View>
-          )}
+          {job.status === 'done' && result?.gamma_error && (() => {
+            const err = result.gamma_error || '';
+            const isCredits = /credit|insufficient|billing/i.test(err);
+            return (
+              <TouchableOpacity
+                style={[styles.gammaErrorBox, isCredits && styles.gammaCreditsBox]}
+                onPress={() => Linking.openURL('https://gamma.app/account')}
+                activeOpacity={isCredits ? 0.6 : 1}
+              >
+                <Ionicons
+                  name={isCredits ? 'card-outline' : 'warning-outline'}
+                  size={15}
+                  color="#92400E"
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.gammaErrorText, { fontWeight: '700' }]}>
+                    {isCredits ? 'Gamma credits exhausted' : 'Gamma error'}
+                  </Text>
+                  <Text style={[styles.gammaErrorText, { marginTop: 2 }]}>{err}</Text>
+                  {isCredits && (
+                    <Text style={[styles.gammaErrorText, { marginTop: 4, fontWeight: '700', textDecorationLine: 'underline' }]}>
+                      Tap to open gamma.app/account →
+                    </Text>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })()}
           {job.status === 'done' && result?.gsheets?.ok && (
             <TouchableOpacity
               style={[styles.runBtn, styles.sheetsBtn]}
@@ -428,7 +450,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F59E0B',
   },
-  gammaErrorText: { fontSize: 12, color: '#92400E', flex: 1, lineHeight: 16 },
+  gammaErrorText: { fontSize: 12, color: '#92400E', lineHeight: 16 },
+  gammaCreditsBox: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#D97706',
+    borderWidth: 1.5,
+  },
   statusText: { fontSize: 14, fontWeight: '600', color: colors.navy, marginBottom: 6 },
   errorText: { fontSize: 13, color: colors.red, marginTop: 4 },
   resultBlock: {

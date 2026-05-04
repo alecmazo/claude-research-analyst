@@ -1107,52 +1107,70 @@ def download_portfolio_xlsx(job_id: str):
 # folder. This repopulates the Saved Reports list after a Railway redeploy.
 # ---------------------------------------------------------------------------
 def _hydrate_from_dropbox() -> None:
+    """Restore .md / .docx / .pptx + metadata files from Dropbox into the
+    container's /stocks folder on startup so the app survives Railway
+    redeploys (which wipe local files).
+
+    PPTX files now live in `<base>/Presentations/` per user request, so we
+    list both the base folder and the Presentations subfolder.
+    """
     dbx = analyst._dropbox_client()
     if dbx is None:
         return
     folder = analyst._dropbox_folder()
-    try:
-        result = dbx.files_list_folder(folder if folder else "")
-        entries = result.entries
-        while result.has_more:
-            result = dbx.files_list_folder_continue(result.cursor)
-            entries += result.entries
-    except Exception:
-        return
+    pres_folder = (f"{folder}/{analyst.DROPBOX_PRESENTATIONS_SUBFOLDER}"
+                   if folder else f"/{analyst.DROPBOX_PRESENTATIONS_SUBFOLDER}")
+
+    def _list(path: str):
+        try:
+            result = dbx.files_list_folder(path if path else "")
+            ents = list(result.entries)
+            while result.has_more:
+                result = dbx.files_list_folder_continue(result.cursor)
+                ents += result.entries
+            return ents
+        except Exception:
+            return []
+
+    base_entries = _list(folder)
+    pres_entries = _list(pres_folder)
 
     downloaded = 0
-    for entry in entries:
-        name = getattr(entry, "name", "")
-        # Hydrate per-ticker reports (.md, .docx, .pptx) so links + downloads
-        # survive Railway redeploys.  Without this, the container starts with
-        # an empty /stocks folder and "Presentation not found" hits every
-        # PPTX request even though the file lives in Dropbox.
-        # Also hydrate Portfolio_Summary, tracker.json, intelligence.json,
-        # and the gamma metadata index so the mobile app can re-display
-        # "View Gamma" links after a restart.
-        is_report_md   = name.endswith("_DGA_Report.md")
-        is_report_docx = name.endswith("_DGA_Report.docx")
-        is_pres_pptx   = name.endswith("_DGA_Presentation.pptx")
-        is_special     = name in {
-            "Portfolio_Summary.md", "Portfolio_Summary.docx", "Portfolio_Summary.pptx",
-            "tracker.json", "intelligence.json", "_gamma_index.json", "_job_index.json",
-        }
-        if not (is_report_md or is_report_docx or is_pres_pptx or is_special):
-            continue
-        local = analyst.STOCKS_FOLDER / name
-        if local.exists():
-            continue
-        try:
-            import dropbox as _dbx_mod  # noqa: PLC0415
-            _, resp = dbx.files_download(
-                f"{folder}/{name}" if folder else f"/{name}"
-            )
-            local.write_bytes(resp.content)
-            downloaded += 1
-        except Exception:
-            pass
+
+    def _hydrate_entries(entries: list, source_folder: str) -> int:
+        nonlocal downloaded
+        n = 0
+        for entry in entries:
+            name = getattr(entry, "name", "")
+            is_report_md   = name.endswith("_DGA_Report.md")
+            is_report_docx = name.endswith("_DGA_Report.docx")
+            is_pres_pptx   = name.endswith("_DGA_Presentation.pptx") or name == "Portfolio_Summary.pptx"
+            is_special     = name in {
+                "Portfolio_Summary.md", "Portfolio_Summary.docx",
+                "tracker.json", "intelligence.json",
+                "_gamma_index.json", "_job_index.json",
+            }
+            if not (is_report_md or is_report_docx or is_pres_pptx or is_special):
+                continue
+            local = analyst.STOCKS_FOLDER / name
+            if local.exists():
+                continue
+            try:
+                _, resp = dbx.files_download(
+                    f"{source_folder}/{name}" if source_folder else f"/{name}"
+                )
+                local.write_bytes(resp.content)
+                n += 1
+            except Exception:
+                pass
+        return n
+
+    downloaded += _hydrate_entries(base_entries, folder)
+    downloaded += _hydrate_entries(pres_entries, pres_folder)
+
     if downloaded:
-        print(f"☁️  Hydrated {downloaded} file(s) from Dropbox into /stocks")
+        print(f"☁️  Hydrated {downloaded} file(s) from Dropbox into /stocks "
+              f"(base: {folder or '/'}, presentations: {pres_folder})")
 
 
 threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()

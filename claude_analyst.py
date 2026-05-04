@@ -5501,8 +5501,25 @@ def _gamma_generate(input_text: str, num_cards: int,
     if resp.status_code not in (200, 201):
         body = (resp.text or "")[:500]
         print(f"   ❌ Gamma error {resp.status_code}: {body}")
+        # Detect "out of credits" specifically — Gamma returns 402 or a body
+        # containing 'credit' / 'insufficient' when the workspace is empty.
+        body_lower = body.lower()
+        if (resp.status_code == 402
+                or "credit" in body_lower
+                or "insufficient" in body_lower
+                or "quota" in body_lower
+                or "billing" in body_lower):
+            raise RuntimeError(
+                "Gamma is out of credits. Top up at https://gamma.app/account → "
+                "Plan & Billing, then re-run the analysis."
+            )
+        if resp.status_code in (401, 403):
+            raise RuntimeError(
+                "Gamma API key was rejected. Check GAMMA_API_KEY in Railway → "
+                "Variables (get a fresh key at https://gamma.app/account)."
+            )
         # Surface the API's actual error message so the mobile UI shows
-        # something actionable like "Invalid API key" or "Quota exceeded".
+        # something actionable for any other error.
         raise RuntimeError(f"Gamma API {resp.status_code}: {body}")
 
     gen_id = resp.json().get("generationId")
@@ -5538,8 +5555,14 @@ def _gamma_generate(input_text: str, num_cards: int,
                     print(f"   ⚠️  Could not save PPTX: {exc}")
             return gamma_url, used
         if st == "failed":
-            err_msg = status.get("error") or status.get("message") or "unknown"
+            err_msg = str(status.get("error") or status.get("message") or "unknown")
             print(f"   ❌ Gamma generation failed: {err_msg}")
+            err_lower = err_msg.lower()
+            if "credit" in err_lower or "insufficient" in err_lower or "billing" in err_lower:
+                raise RuntimeError(
+                    "Gamma is out of credits. Top up at https://gamma.app/account → "
+                    "Plan & Billing, then re-run the analysis."
+                )
             raise RuntimeError(f"Gamma generation failed: {err_msg}")
         if attempt % 10 == 0:
             print(f"   ⏳ Gamma still generating… ({attempt+1}/200)  status={st}")
@@ -7677,6 +7700,24 @@ def _dropbox_folder() -> str:
     return f"/{raw}" if raw else ""
 
 
+# PowerPoint presentations get their own dedicated subfolder so the user can
+# browse them as a self-contained set in Dropbox without the .md / .docx noise.
+DROPBOX_PRESENTATIONS_SUBFOLDER = "Presentations"
+
+
+def _dropbox_dest_for(file_name: str) -> str:
+    """Pick the Dropbox destination path for a given file name.
+
+    PPTX files → `<base>/Presentations/<name>` so they live in their own
+    folder per user preference. All other files → `<base>/<name>`.
+    """
+    base = _dropbox_folder()
+    if file_name.lower().endswith(".pptx"):
+        return (f"{base}/{DROPBOX_PRESENTATIONS_SUBFOLDER}/{file_name}"
+                if base else f"/{DROPBOX_PRESENTATIONS_SUBFOLDER}/{file_name}")
+    return f"{base}/{file_name}" if base else f"/{file_name}"
+
+
 def push_to_dropbox(file_paths: list[Path | str]) -> dict:
     """Upload files to the Dropbox 'DGA Research Reports' folder.
 
@@ -7700,7 +7741,8 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
         p = Path(fp)
         if not p.exists():
             continue
-        dest = f"{folder}/{p.name}" if folder else f"/{p.name}"
+        # Route .pptx files to the dedicated /Presentations subfolder.
+        dest = _dropbox_dest_for(p.name)
         try:
             dbx.files_upload(
                 p.read_bytes(),
@@ -7716,6 +7758,8 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
         "ok": bool(uploaded) or not [Path(f) for f in file_paths if Path(f).exists()],
         "uploaded": uploaded,
         "folder": folder,
+        "presentations_folder": (f"{folder}/{DROPBOX_PRESENTATIONS_SUBFOLDER}"
+                                 if folder else f"/{DROPBOX_PRESENTATIONS_SUBFOLDER}"),
         "errors": errors or None,
     }
 

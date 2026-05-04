@@ -188,12 +188,34 @@ export default function AnalysisScreen({ route, navigation }) {
           <Ionicons name="open-outline" size={15} color={colors.navy} style={{ marginLeft: 'auto' }} />
         </TouchableOpacity>
       )}
-      {isDone && job?.result?.gamma_error && (
-        <View style={styles.gammaErrorBox}>
-          <Ionicons name="warning-outline" size={16} color={colors.amber} />
-          <Text style={styles.gammaErrorText}>Gamma: {job.result.gamma_error}</Text>
-        </View>
-      )}
+      {isDone && job?.result?.gamma_error && (() => {
+        const err = job.result.gamma_error || '';
+        const isCredits = /credit|insufficient|billing/i.test(err);
+        return (
+          <TouchableOpacity
+            style={[styles.gammaErrorBox, isCredits && styles.gammaCreditsBox]}
+            onPress={() => Linking.openURL('https://gamma.app/account')}
+            activeOpacity={isCredits ? 0.6 : 1}
+          >
+            <Ionicons
+              name={isCredits ? 'card-outline' : 'warning-outline'}
+              size={16}
+              color={isCredits ? '#92400E' : colors.amber}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.gammaErrorText}>
+                {isCredits ? 'Gamma credits exhausted' : 'Gamma error'}
+              </Text>
+              <Text style={[styles.gammaErrorText, { marginTop: 2 }]}>{err}</Text>
+              {isCredits && (
+                <Text style={[styles.gammaErrorText, { marginTop: 4, fontWeight: '700', textDecorationLine: 'underline' }]}>
+                  Tap to open gamma.app/account →
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
+        );
+      })()}
 
       {isDone && (
         <TouchableOpacity
@@ -295,5 +317,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F59E0B',
   },
-  gammaErrorText: { fontSize: 12, color: '#92400E', flex: 1, lineHeight: 16 },
+  gammaErrorText: { fontSize: 12, color: '#92400E', lineHeight: 16 },
+  gammaCreditsBox: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#D97706',
+    borderWidth: 1.5,
+  },
 });
