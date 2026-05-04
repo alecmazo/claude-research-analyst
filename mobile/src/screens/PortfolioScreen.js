@@ -250,8 +250,25 @@ export default function PortfolioScreen({ navigation }) {
 
           {job.status === 'done' && (
             <TouchableOpacity style={styles.runBtn} onPress={openDownload}>
+              <Ionicons name="document-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
               <Text style={styles.runBtnText}>Download DGA-portfolio.xlsx</Text>
             </TouchableOpacity>
+          )}
+          {job.status === 'done' && result?.gamma_url && (
+            <TouchableOpacity
+              style={[styles.runBtn, styles.gammaBtn]}
+              onPress={() => Linking.openURL(result.gamma_url)}
+            >
+              <Ionicons name="easel-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
+              <Text style={styles.runBtnText}>View Gamma Presentation</Text>
+              <Ionicons name="open-outline" size={14} color={colors.navy} style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+          )}
+          {job.status === 'done' && result?.gamma_error && (
+            <View style={styles.gammaErrorBox}>
+              <Ionicons name="warning-outline" size={15} color="#92400E" />
+              <Text style={styles.gammaErrorText}>Gamma: {result.gamma_error}</Text>
+            </View>
           )}
           {job.status === 'done' && result?.gsheets?.ok && (
             <TouchableOpacity
@@ -392,6 +409,26 @@ const styles = StyleSheet.create({
   runBtnDisabled: { opacity: 0.5 },
   runBtnText: { color: colors.navy, fontWeight: '800', fontSize: 14, letterSpacing: 1 },
   sheetsBtn: { backgroundColor: '#0F9D58', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  gammaBtn: {
+    backgroundColor: colors.offWhite,
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gammaErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  gammaErrorText: { fontSize: 12, color: '#92400E', flex: 1, lineHeight: 16 },
   statusText: { fontSize: 14, fontWeight: '600', color: colors.navy, marginBottom: 6 },
   errorText: { fontSize: 13, color: colors.red, marginTop: 4 },
   resultBlock: {

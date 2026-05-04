@@ -40,3 +40,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Google service account credentials (do NOT commit)
+dga-service-account.json
+*-service-account.json

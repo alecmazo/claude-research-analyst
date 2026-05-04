@@ -172,8 +172,9 @@ export const api = {
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
 
   downloadUrl: async (ticker, type) => {
-    const base = await getBaseUrl();
-    return `${base}/api/download/${ticker}/${type}`;
+    const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
+    const t = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${base}/api/download/${ticker}/${type}${t}`;
   },
 
   // ---------- Portfolio ----------
@@ -199,8 +200,9 @@ export const api = {
 
   getPortfolioJob: (jobId) => request(`/api/portfolio/${jobId}`),
   portfolioDownloadUrl: async (jobId) => {
-    const base = await getBaseUrl();
-    return `${base}/api/portfolio/${jobId}/download`;
+    const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
+    const t = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${base}/api/portfolio/${jobId}/download${t}`;
   },
   getLastPortfolio:    () => request('/api/portfolio/last'),
   getPortfolioSummary: () => request('/api/portfolio/summary'),

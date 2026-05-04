@@ -72,12 +72,16 @@ export default function ReportScreen({ route }) {
           <TouchableOpacity style={styles.iconBtn} onPress={handleShare}>
             <Ionicons name="share-outline" size={22} color={colors.white} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => handleDownload('docx')}>
-            <Ionicons name="document-outline" size={22} color={colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconBtn, styles.pptxBtn]} onPress={() => handleDownload('pptx')}>
-            <Ionicons name="easel-outline" size={22} color={colors.navy} />
-          </TouchableOpacity>
+          {report?.has_docx !== false && (
+            <TouchableOpacity style={styles.iconBtn} onPress={() => handleDownload('docx')}>
+              <Ionicons name="document-outline" size={22} color={colors.white} />
+            </TouchableOpacity>
+          )}
+          {report?.has_pptx && (
+            <TouchableOpacity style={[styles.iconBtn, styles.pptxBtn]} onPress={() => handleDownload('pptx')}>
+              <Ionicons name="easel-outline" size={22} color={colors.navy} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 

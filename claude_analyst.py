@@ -68,6 +68,15 @@ SCAN_RESULTS_FILE = STOCKS_FOLDER / "scan_results.json"
 INTEL_FILE = STOCKS_FOLDER / "intelligence.json"
 TRACKER_FILE = STOCKS_FOLDER / "tracker.json"   # paper portfolios + live + SPY series
 
+# Gamma metadata index — maps ticker → { gamma_url, generated_at, ... }.
+# Survives Railway restarts via Dropbox hydration so the "View Gamma"
+# button keeps working days/weeks after the original analysis ran.
+GAMMA_INDEX_FILE = STOCKS_FOLDER / "_gamma_index.json"
+# How long a Gamma deck is considered "fresh" — re-runs of the same ticker
+# inside this window reuse the existing presentation instead of burning
+# credits on a duplicate.
+GAMMA_FRESH_DAYS = 30
+
 # Default recipient for portfolio-analysis emails (override via PORTFOLIO_EMAIL_TO env var).
 DEFAULT_PORTFOLIO_EMAIL_TO = "alecmazo1@gmail.com"
 
@@ -5280,6 +5289,89 @@ def extract_summary_from_report(report_text: str) -> dict:
 # ============================================================================
 # Gamma.app integration
 # ============================================================================
+def _load_gamma_index() -> dict:
+    """Load the on-disk Gamma metadata index (ticker → { gamma_url, generated_at })."""
+    try:
+        if GAMMA_INDEX_FILE.exists():
+            return json.loads(GAMMA_INDEX_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_gamma_index(idx: dict) -> None:
+    """Persist the Gamma index to disk (best-effort)."""
+    try:
+        GAMMA_INDEX_FILE.write_text(json.dumps(idx, indent=2, sort_keys=True))
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  Could not persist gamma index: {exc}")
+
+
+def _record_gamma(key: str, gamma_url: str | None, *, pptx_filename: str | None = None,
+                  credits: int | None = None) -> None:
+    """Record a Gamma generation in the index (key is usually the ticker, or
+    'PORTFOLIO' for the portfolio summary)."""
+    if not gamma_url:
+        return
+    idx = _load_gamma_index()
+    idx[key.upper()] = {
+        "gamma_url": gamma_url,
+        "generated_at": datetime.utcnow().isoformat(),
+        "pptx_filename": pptx_filename,
+        "credits": credits,
+    }
+    _save_gamma_index(idx)
+
+
+def _existing_fresh_gamma(key: str) -> dict | None:
+    """Return the existing Gamma entry for `key` IF it's < GAMMA_FRESH_DAYS old
+    AND the local PPTX file still exists.  Used to skip duplicate generation
+    on rapid re-runs of the same ticker."""
+    idx = _load_gamma_index()
+    entry = idx.get(key.upper())
+    if not entry:
+        return None
+    try:
+        gen_at = datetime.fromisoformat(entry.get("generated_at", ""))
+    except Exception:
+        return None
+    age_days = (datetime.utcnow() - gen_at).total_seconds() / 86400.0
+    if age_days > GAMMA_FRESH_DAYS:
+        return None
+    pptx_name = entry.get("pptx_filename") or ""
+    if pptx_name and not (STOCKS_FOLDER / pptx_name).exists():
+        return None  # Stale index entry — local PPTX is gone
+    return entry
+
+
+def _purge_stale_local_gamma(key: str) -> None:
+    """If the existing local PPTX for `key` is older than GAMMA_FRESH_DAYS,
+    delete it so the next generation can replace it cleanly.  Also removes
+    the matching index entry."""
+    idx = _load_gamma_index()
+    entry = idx.get(key.upper())
+    if not entry:
+        return
+    try:
+        gen_at = datetime.fromisoformat(entry.get("generated_at", ""))
+    except Exception:
+        return
+    age_days = (datetime.utcnow() - gen_at).total_seconds() / 86400.0
+    if age_days <= GAMMA_FRESH_DAYS:
+        return  # still fresh
+    pptx_name = entry.get("pptx_filename") or ""
+    if pptx_name:
+        old_pptx = STOCKS_FOLDER / pptx_name
+        try:
+            if old_pptx.exists():
+                old_pptx.unlink()
+                print(f"   🗑  Removed stale Gamma PPTX (>{GAMMA_FRESH_DAYS}d): {pptx_name}")
+        except Exception:
+            pass
+    idx.pop(key.upper(), None)
+    _save_gamma_index(idx)
+
+
 def _gamma_design_block() -> str:
     return """IMPORTANT DESIGN RULES (enforce strictly):
 - Branding: DGA CAPITAL. Place a bold "DGA CAPITAL" wordmark in gold
@@ -5638,23 +5730,42 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     gamma_credits = 0
     gamma_error: str | None = None
     if generate_gamma:
-        try:
-            out_pptx = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
-            gamma_url, gamma_credits = create_gamma_for_stock(
-                report_text, ticker, data.get("latest_filing_type", "10-K"), out_pptx=out_pptx
-            )
-            if gamma_url is None:
-                gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
-        except Exception as _gamma_exc:  # noqa: BLE001
-            gamma_error = str(_gamma_exc)
-            print(f"   ⚠️  Gamma skipped for {ticker}: {_gamma_exc}")
+        # 1. Reuse a fresh existing deck if one was generated < GAMMA_FRESH_DAYS
+        #    ago — saves credits and avoids piling up duplicate decks in the
+        #    Gamma.app workspace for rapid re-runs of the same ticker.
+        existing = _existing_fresh_gamma(ticker)
+        if existing:
+            gamma_url     = existing.get("gamma_url")
+            gamma_credits = existing.get("credits", 0) or 0
+            print(f"   ♻️  Reusing existing Gamma deck (<{GAMMA_FRESH_DAYS}d old) for {ticker}: {gamma_url}")
+        else:
+            # 2. Older than the freshness window → purge the stale local PPTX
+            #    + index entry before regenerating, so we don't keep a stale
+            #    file lying around with the same name.
+            _purge_stale_local_gamma(ticker)
+            try:
+                out_pptx = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
+                gamma_url, gamma_credits = create_gamma_for_stock(
+                    report_text, ticker, data.get("latest_filing_type", "10-K"), out_pptx=out_pptx
+                )
+                if gamma_url is None:
+                    gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
+                else:
+                    _record_gamma(ticker, gamma_url,
+                                  pptx_filename=out_pptx.name, credits=gamma_credits)
+            except Exception as _gamma_exc:  # noqa: BLE001
+                gamma_error = str(_gamma_exc)
+                print(f"   ⚠️  Gamma skipped for {ticker}: {_gamma_exc}")
 
-    # Upload report files to Google Drive (best-effort, non-blocking).
+    # Upload report files to Google Drive / Dropbox (best-effort, non-blocking).
+    # Include the gamma index so the URL survives Railway redeploys.
     drive_files = [p for p in [md_path, out_docx] if p.exists()]
     if generate_gamma:
         pptx_path = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
         if pptx_path.exists():
             drive_files.append(pptx_path)
+        if GAMMA_INDEX_FILE.exists():
+            drive_files.append(GAMMA_INDEX_FILE)
     gdrive_status: dict = {"ok": False, "skipped": True}
     try:
         gdrive_status = push_to_google_drive(drive_files)
@@ -5766,16 +5877,26 @@ def run_portfolio_summary(ticker_results: list[dict], *, generate_gamma: bool) -
     gamma_credits = 0
     gamma_error: str | None = None
     if generate_gamma:
-        try:
-            out_pptx = STOCKS_FOLDER / "Portfolio_Summary.pptx"
-            gamma_url, gamma_credits = create_gamma_portfolio_summary(
-                summary_md, ranked_rows, out_pptx=out_pptx
-            )
-            if gamma_url is None:
-                gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
-        except Exception as _gamma_exc:  # noqa: BLE001
-            gamma_error = str(_gamma_exc)
-            print(f"   ⚠️  Gamma skipped for portfolio: {_gamma_exc}")
+        existing = _existing_fresh_gamma("PORTFOLIO")
+        if existing:
+            gamma_url     = existing.get("gamma_url")
+            gamma_credits = existing.get("credits", 0) or 0
+            print(f"   ♻️  Reusing portfolio Gamma deck (<{GAMMA_FRESH_DAYS}d old): {gamma_url}")
+        else:
+            _purge_stale_local_gamma("PORTFOLIO")
+            try:
+                out_pptx = STOCKS_FOLDER / "Portfolio_Summary.pptx"
+                gamma_url, gamma_credits = create_gamma_portfolio_summary(
+                    summary_md, ranked_rows, out_pptx=out_pptx
+                )
+                if gamma_url is None:
+                    gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
+                else:
+                    _record_gamma("PORTFOLIO", gamma_url,
+                                  pptx_filename=out_pptx.name, credits=gamma_credits)
+            except Exception as _gamma_exc:  # noqa: BLE001
+                gamma_error = str(_gamma_exc)
+                print(f"   ⚠️  Gamma skipped for portfolio: {_gamma_exc}")
 
     return {
         "ok": True,

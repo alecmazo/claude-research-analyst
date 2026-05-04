@@ -390,12 +390,26 @@ def get_report(ticker: str):
     folder = analyst.STOCKS_FOLDER
     has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
     has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
+    # Look up Gamma URL from the on-disk index so the mobile UI can show
+    # the "View Gamma" button even days/weeks after the original run.
+    gamma_url = None
+    gamma_generated_at = None
+    try:
+        idx = analyst._load_gamma_index()
+        entry = idx.get(ticker)
+        if entry:
+            gamma_url = entry.get("gamma_url")
+            gamma_generated_at = entry.get("generated_at")
+    except Exception:
+        pass
     return {
         "ticker": ticker,
         "report_md": md_path.read_text(),
         "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
         "has_docx": has_docx,
         "has_pptx": has_pptx,
+        "gamma_url": gamma_url,
+        "gamma_generated_at": gamma_generated_at,
     }
 
 
@@ -458,16 +472,22 @@ def clear_local_cache():
 def list_reports():
     """Return all tickers that have saved reports."""
     folder = analyst.STOCKS_FOLDER
+    try:
+        gamma_idx = analyst._load_gamma_index()
+    except Exception:
+        gamma_idx = {}
     reports = []
     for md_file in sorted(folder.glob("*_DGA_Report.md"), key=lambda p: p.stat().st_mtime, reverse=True):
         ticker = md_file.name.replace("_DGA_Report.md", "")
         has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
         has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
+        gamma_entry = gamma_idx.get(ticker) or {}
         reports.append({
             "ticker": ticker,
             "generated_at": datetime.utcfromtimestamp(md_file.stat().st_mtime).isoformat(),
             "has_docx": has_docx,
             "has_pptx": has_pptx,
+            "gamma_url": gamma_entry.get("gamma_url"),
         })
     return reports
 
@@ -1081,13 +1101,21 @@ def _hydrate_from_dropbox() -> None:
     downloaded = 0
     for entry in entries:
         name = getattr(entry, "name", "")
-        # Hydrate per-ticker reports AND the last Portfolio_Summary so the
-        # Research page's "Last Portfolio Summary" card survives redeploys.
-        # Also hydrate tracker.json so paper portfolios + snapshots survive.
-        if not (name.endswith("_DGA_Report.md")
-                or name == "Portfolio_Summary.md"
-                or name == "tracker.json"
-                or name == "intelligence.json"):
+        # Hydrate per-ticker reports (.md, .docx, .pptx) so links + downloads
+        # survive Railway redeploys.  Without this, the container starts with
+        # an empty /stocks folder and "Presentation not found" hits every
+        # PPTX request even though the file lives in Dropbox.
+        # Also hydrate Portfolio_Summary, tracker.json, intelligence.json,
+        # and the gamma metadata index so the mobile app can re-display
+        # "View Gamma" links after a restart.
+        is_report_md   = name.endswith("_DGA_Report.md")
+        is_report_docx = name.endswith("_DGA_Report.docx")
+        is_pres_pptx   = name.endswith("_DGA_Presentation.pptx")
+        is_special     = name in {
+            "Portfolio_Summary.md", "Portfolio_Summary.docx", "Portfolio_Summary.pptx",
+            "tracker.json", "intelligence.json", "_gamma_index.json", "_job_index.json",
+        }
+        if not (is_report_md or is_report_docx or is_pres_pptx or is_special):
             continue
         local = analyst.STOCKS_FOLDER / name
         if local.exists():
