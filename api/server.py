@@ -209,6 +209,10 @@ _sjobs_lock = threading.Lock()
 _ijobs: dict[str, dict[str, Any]] = {}
 _ijobs_lock = threading.Lock()
 
+# In-memory daily-brief job store (Goldman-style PM morning notes).
+_bjobs: dict[str, dict[str, Any]] = {}
+_bjobs_lock = threading.Lock()
+
 
 def _run_portfolio(
     job_id: str,
@@ -797,6 +801,69 @@ def get_intelligence_status(job_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Daily Brief — Goldman-style PM morning note (Grok 4.x w/ live X + web)
+# ---------------------------------------------------------------------------
+
+def _run_daily_brief(job_id: str) -> None:
+    with _bjobs_lock:
+        _bjobs[job_id]["status"] = "running"
+    try:
+        result = analyst.run_daily_brief()
+        with _bjobs_lock:
+            _bjobs[job_id]["status"] = "done" if result.get("ok") else "failed"
+            _bjobs[job_id]["result"] = result
+            if not result.get("ok"):
+                _bjobs[job_id]["error"] = result.get("error", "Unknown error")
+    except BaseException as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        print(f"\n❌ Daily Brief job {job_id} CRASHED:\n{tb}", flush=True)
+        with _bjobs_lock:
+            _bjobs[job_id]["status"] = "failed"
+            _bjobs[job_id]["error"] = str(exc)
+
+
+@app.post("/api/daily-brief")
+def start_daily_brief(background_tasks: BackgroundTasks):
+    """Start a Goldman-style PM morning brief (Grok 4.30-beta w/ live search)."""
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _bjobs_lock:
+        _bjobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "result": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_daily_brief, job_id)
+    return _bjobs[job_id]
+
+
+@app.get("/api/daily-brief/latest")
+def get_latest_daily_brief():
+    """Return the most-recently-completed daily brief (persisted to disk)."""
+    path = analyst.DAILY_BRIEF_FILE
+    if not path.exists():
+        return {"exists": False}
+    try:
+        data = json.loads(path.read_text())
+        data["exists"] = True
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read daily brief: {exc}")
+
+
+@app.get("/api/daily-brief/{job_id}")
+def get_daily_brief_status(job_id: str):
+    """Poll a running or completed daily-brief job."""
+    with _bjobs_lock:
+        job = _bjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Daily brief job not found")
+    return job
+
+
+# ---------------------------------------------------------------------------
 # Paper Portfolio Tracker
 # ---------------------------------------------------------------------------
 
@@ -1167,7 +1234,7 @@ def _hydrate_from_dropbox() -> None:
             if accept_xlsx and name.lower().endswith(".xlsx"):
                 keep = True
             if accept_special and name in {
-                "tracker.json", "intelligence.json",
+                "tracker.json", "intelligence.json", "daily_brief.json",
                 "_gamma_index.json", "_job_index.json",
             }:
                 keep = True

@@ -178,6 +178,10 @@ const api = {
   startIntelligence: (days) => apiPost('/api/intelligence', { days }),
   getIntelligenceJob: (id) => apiGet(`/api/intelligence/${id}`),
   getLatestIntelligence: () => apiGet('/api/intelligence/latest'),
+  // Daily Brief (Goldman-style PM morning note)
+  startDailyBrief: () => apiPost('/api/daily-brief', {}),
+  getDailyBriefJob: (id) => apiGet(`/api/daily-brief/${id}`),
+  getLatestDailyBrief: () => apiGet('/api/daily-brief/latest'),
   // Paper Tracker
   createTracker: (body) => apiPost('/api/track', body),
   listTrackers: () => apiGet('/api/track'),
@@ -713,17 +717,23 @@ async function injectReportPrices(reports) {
     if (!el) return;
     try {
       const q = await api.getQuote(r.ticker);
-      if (!q?.price) return;
+      if (!q?.price) {
+        el.innerHTML = '<span class="rr-price-missing">—</span>';
+        return;
+      }
       const price = Number(q.price);
       const prev  = Number(q.previous_close);
-      el.textContent = `$${price.toFixed(2)}`;
-      if (prev && prev > 0) {
-        const pct = ((price - prev) / prev) * 100;
+      let pct = q?.pct_change ?? null;
+      if (pct == null && prev > 0) pct = ((price - prev) / prev) * 100;
+
+      let html = `<span class="rr-price">$${price.toFixed(2)}</span>`;
+      if (pct != null) {
         const sign = pct >= 0 ? '+' : '';
+        const cls  = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+        html += `<span class="rr-pct ${cls}">${sign}${pct.toFixed(2)}%</span>`;
         el.title = `${sign}${pct.toFixed(2)}% today`;
-        el.className = `report-price-tag ${pct > 0 ? 'up' : pct < 0 ? 'down' : ''}`;
-        el.textContent = `$${price.toFixed(2)} (${sign}${pct.toFixed(1)}%)`;
       }
+      el.innerHTML = html;
     } catch { /* non-fatal */ }
   });
   await Promise.allSettled(fetches);
@@ -996,23 +1006,51 @@ async function loadReports() {
     const reports = await api.listReports();
     if (!reports.length) {
       list.innerHTML = '<div class="empty">No reports yet. Run your first analysis above.</div>';
+      // Hide the count badge if it's there
+      const countEl = document.getElementById('reports-count');
+      if (countEl) countEl.style.display = 'none';
       return;
     }
-    list.innerHTML = reports.map(r => `
-      <div class="report-item" data-ticker="${r.ticker}">
-        <div class="report-item-left">
-          <div class="ticker-name">${r.ticker}</div>
-          <div class="date">${formatDate(r.generated_at)}</div>
+    // Update count badge in section header
+    const countEl = document.getElementById('reports-count');
+    if (countEl) {
+      countEl.textContent = reports.length;
+      countEl.style.display = 'inline-block';
+    }
+    // Compact date — drop the year when it's the current year for tighter rows
+    const yr = new Date().getFullYear();
+    const compactDate = (iso) => {
+      try {
+        const d = new Date(iso);
+        const opts = d.getFullYear() === yr
+          ? { month: 'short', day: 'numeric' }
+          : { month: 'short', day: 'numeric', year: '2-digit' };
+        return d.toLocaleDateString('en-US', opts);
+      } catch { return ''; }
+    };
+    list.innerHTML = `
+      <div class="reports-table">
+        <div class="reports-col-header">
+          <span>TICKER</span>
+          <span>PRICE / CHG</span>
         </div>
-        <div class="report-item-right">
-          <span class="report-price-tag" id="price-tag-${r.ticker}">…</span>
-          ${r.has_docx ? '<span class="badge">DOCX</span>' : ''}
-          ${r.has_pptx ? '<span class="badge gold">PPTX</span>' : ''}
-          <span class="chevron">›</span>
-        </div>
+        ${reports.map(r => `
+          <div class="report-row" data-ticker="${r.ticker}">
+            <div class="rr-ticker-cell">
+              <div class="rr-ticker">${r.ticker}</div>
+              <div class="rr-meta">
+                ${r.has_docx ? '<span class="rr-dot rr-dot-navy" title="DOCX"></span>' : ''}
+                ${r.has_pptx ? '<span class="rr-dot rr-dot-gold" title="PPTX"></span>' : ''}
+                <span class="rr-date">${compactDate(r.generated_at)}</span>
+              </div>
+            </div>
+            <div class="rr-price-cell" id="price-tag-${r.ticker}">…</div>
+            <span class="rr-chev">›</span>
+          </div>
+        `).join('')}
       </div>
-    `).join('');
-    list.querySelectorAll('.report-item').forEach(el => {
+    `;
+    list.querySelectorAll('.report-row').forEach(el => {
       el.addEventListener('click', () => openReport(el.dataset.ticker));
     });
     // Kick off price fetches without blocking the render.
@@ -1058,6 +1096,7 @@ setInterval(checkServer, 30000);
 
 let _intelDays = 30;
 let _intelPollTimer = null;
+let _briefPollTimer = null;
 
 function initIntelligence() {
   // Horizon pill wiring
@@ -1069,18 +1108,30 @@ function initIntelligence() {
     });
   });
 
-  // Run button
+  // Run buttons
   document.getElementById('intel-run-btn')?.addEventListener('click', runIntelligence);
+  document.getElementById('brief-run-btn')?.addEventListener('click', runDailyBrief);
 
-  // Load latest persisted brief
-  loadLatestIntelligence();
+  // Load latest persisted brief — show whichever is freshest
+  loadLatestBriefs();
 }
 
-async function loadLatestIntelligence() {
+async function loadLatestBriefs() {
   try {
-    const data = await api.getLatestIntelligence();
-    if (data?.exists && data?.markdown) {
-      renderIntelResult(data);
+    const [intelRes, briefRes] = await Promise.allSettled([
+      api.getLatestIntelligence(),
+      api.getLatestDailyBrief(),
+    ]);
+    const intel = intelRes.status === 'fulfilled' && intelRes.value?.exists
+      ? intelRes.value : null;
+    const brief = briefRes.status === 'fulfilled' && briefRes.value?.exists
+      ? briefRes.value : null;
+    const intelDate = intel ? new Date(intel.generated_at).getTime() : 0;
+    const briefDate = brief ? new Date(brief.generated_at).getTime() : 0;
+    if (briefDate >= intelDate && brief?.markdown) {
+      renderIntelResult(brief, 'brief');
+    } else if (intel?.markdown) {
+      renderIntelResult(intel, 'intel');
     }
   } catch { /* server offline — silent */ }
 }
@@ -1089,8 +1140,10 @@ async function runIntelligence() {
   const btn = document.getElementById('intel-run-btn');
   const statusEl = document.getElementById('intel-status');
   const errEl = document.getElementById('intel-error');
+  const briefBtn = document.getElementById('brief-run-btn');
 
   btn.disabled = true;
+  if (briefBtn) briefBtn.disabled = true;
   btn.textContent = '⏳ Running…';
   statusEl.style.display = 'block';
   statusEl.textContent = 'Queued — starting shortly…';
@@ -1099,6 +1152,13 @@ async function runIntelligence() {
 
   clearInterval(_intelPollTimer);
 
+  const reset = () => {
+    btn.disabled = false;
+    if (briefBtn) briefBtn.disabled = false;
+    btn.textContent = '💡 Run Intelligence';
+    statusEl.style.display = 'none';
+  };
+
   try {
     const job = await api.startIntelligence(_intelDays);
     _intelPollTimer = setInterval(async () => {
@@ -1106,19 +1166,12 @@ async function runIntelligence() {
         const j = await api.getIntelligenceJob(job.job_id);
         if (j.status === 'done') {
           clearInterval(_intelPollTimer);
-          btn.disabled = false;
-          btn.textContent = '💡 Run Intelligence';
-          statusEl.style.display = 'none';
-          if (j.result?.ok) {
-            renderIntelResult(j.result);
-          } else {
-            showIntelError(j.result?.error || j.error || 'Unknown error');
-          }
+          reset();
+          if (j.result?.ok) renderIntelResult(j.result, 'intel');
+          else showIntelError(j.result?.error || j.error || 'Unknown error');
         } else if (j.status === 'failed') {
           clearInterval(_intelPollTimer);
-          btn.disabled = false;
-          btn.textContent = '💡 Run Intelligence';
-          statusEl.style.display = 'none';
+          reset();
           showIntelError(j.error || 'Intelligence run failed');
         } else {
           statusEl.textContent = j.status === 'running'
@@ -1127,16 +1180,67 @@ async function runIntelligence() {
         }
       } catch (err) {
         clearInterval(_intelPollTimer);
-        btn.disabled = false;
-        btn.textContent = '💡 Run Intelligence';
-        statusEl.style.display = 'none';
+        reset();
         showIntelError(err.message);
       }
     }, 3000);
   } catch (err) {
+    reset();
+    showIntelError(err.message);
+  }
+}
+
+async function runDailyBrief() {
+  const btn = document.getElementById('brief-run-btn');
+  const statusEl = document.getElementById('brief-status');
+  const errEl = document.getElementById('intel-error');
+  const intelBtn = document.getElementById('intel-run-btn');
+
+  if (!btn) return;
+  btn.disabled = true;
+  if (intelBtn) intelBtn.disabled = true;
+  btn.textContent = '⏳ Pulling overnight tape…';
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Queued — starting shortly…';
+  errEl.style.display = 'none';
+  document.getElementById('intel-empty').style.display = 'none';
+
+  clearInterval(_briefPollTimer);
+
+  const reset = () => {
     btn.disabled = false;
-    btn.textContent = '💡 Run Intelligence';
+    if (intelBtn) intelBtn.disabled = false;
+    btn.textContent = '📰 Generate Daily Brief';
     statusEl.style.display = 'none';
+  };
+
+  try {
+    const job = await api.startDailyBrief();
+    _briefPollTimer = setInterval(async () => {
+      try {
+        const j = await api.getDailyBriefJob(job.job_id);
+        if (j.status === 'done') {
+          clearInterval(_briefPollTimer);
+          reset();
+          if (j.result?.ok) renderIntelResult(j.result, 'brief');
+          else showIntelError(j.result?.error || j.error || 'Unknown error');
+        } else if (j.status === 'failed') {
+          clearInterval(_briefPollTimer);
+          reset();
+          showIntelError(j.error || 'Daily brief failed');
+        } else {
+          statusEl.textContent = j.status === 'running'
+            ? 'Scanning overnight tape, X, and headlines…'
+            : 'Queued — starting shortly…';
+        }
+      } catch (err) {
+        clearInterval(_briefPollTimer);
+        reset();
+        showIntelError(err.message);
+      }
+    }, 3000);
+  } catch (err) {
+    reset();
     showIntelError(err.message);
   }
 }
@@ -1150,8 +1254,8 @@ function showIntelError(msg) {
 // Stash the latest brief so the "Track this brief" button knows what to lock in.
 let _latestBrief = null;
 
-function renderIntelResult(data) {
-  _latestBrief = data;
+function renderIntelResult(data, kind = 'intel') {
+  _latestBrief = { ...data, kind };
 
   // Hide empty state
   document.getElementById('intel-empty').style.display = 'none';
@@ -1159,7 +1263,24 @@ function renderIntelResult(data) {
   // Meta
   const card = document.getElementById('intel-result-card');
   card.style.display = 'block';
-  document.getElementById('intel-days-label').textContent = `${data.days}-day lookback`;
+
+  // Badge styling — gold for daily brief, navy for strategic intelligence
+  const badgeEl = document.getElementById('intel-kind-badge');
+  if (badgeEl) {
+    if (kind === 'brief') {
+      badgeEl.textContent = '📰 DAILY BRIEF';
+      badgeEl.classList.add('brief');
+    } else {
+      badgeEl.textContent = '⚡ LIVE BRIEF';
+      badgeEl.classList.remove('brief');
+    }
+  }
+
+  // Sub-label: lookback for intel, today's date for brief
+  document.getElementById('intel-days-label').textContent =
+    kind === 'brief'
+      ? (data.date_str || 'Today')
+      : `${data.days}-day lookback`;
   document.getElementById('intel-generated-at').textContent =
     data.generated_at ? formatDate(data.generated_at) : '';
 

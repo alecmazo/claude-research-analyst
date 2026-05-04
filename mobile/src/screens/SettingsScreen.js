@@ -1,20 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ScrollView, Switch, ActivityIndicator,
+  Alert, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
 import {
   api, getBaseUrl, setBaseUrl, resetBaseUrlToProd,
-  getGammaEnabled, setGammaEnabled,
   getStoredPassword, login,
 } from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
-const APP_BUILD = 'mobile-ui12-20260504';
+const APP_BUILD = 'mobile-ui13-20260504';
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState]     = useState('');
@@ -23,7 +22,6 @@ export default function SettingsScreen() {
   const [authStatus, setAuthStatus]    = useState(null);    // null | 'ok' | 'error'
   const [testingConn, setTestingConn]  = useState(false);
   const [savingPw, setSavingPw]        = useState(false);
-  const [gammaDefault, setGammaDefault] = useState(false);
 
   // ── App version + OTA update state ─────────────────────────────────────
   const [serverBuild, setServerBuild]    = useState(null);
@@ -32,7 +30,6 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
-    getGammaEnabled().then(setGammaDefault);
     getStoredPassword().then(pw => setPassword(pw || ''));
     // Fetch server build for display
     api.getBuild().then(j => setServerBuild(j?.build || 'unknown')).catch(() => setServerBuild('offline'));
@@ -210,23 +207,6 @@ export default function SettingsScreen() {
           {authStatus === 'ok' && (
             <Text style={styles.authOkText}>✓ Connected — token saved</Text>
           )}
-        </View>
-
-        {/* ── Defaults ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>DEFAULTS</Text>
-          <View style={styles.switchRow}>
-            <View style={styles.switchLabel}>
-              <Text style={styles.switchLabelText}>Generate Gamma Presentation</Text>
-              <Text style={styles.switchLabelHint}>Requires Gamma API credits</Text>
-            </View>
-            <Switch
-              value={gammaDefault}
-              onValueChange={v => { setGammaDefault(v); setGammaEnabled(v); }}
-              trackColor={{ false: colors.lightGray, true: colors.gold }}
-              thumbColor={colors.white}
-            />
-          </View>
         </View>
 
         {/* ── App Updates ── */}

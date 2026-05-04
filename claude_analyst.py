@@ -66,6 +66,7 @@ STOCKS_FOLDER.mkdir(parents=True, exist_ok=True)
 WATCHLIST_FILE = STOCKS_FOLDER / "watchlist.json"
 SCAN_RESULTS_FILE = STOCKS_FOLDER / "scan_results.json"
 INTEL_FILE = STOCKS_FOLDER / "intelligence.json"
+DAILY_BRIEF_FILE = STOCKS_FOLDER / "daily_brief.json"  # most-recent Goldman-style brief
 TRACKER_FILE = STOCKS_FOLDER / "tracker.json"   # paper portfolios + live + SPY series
 
 # Gamma metadata index — maps ticker → { gamma_url, generated_at, ... }.
@@ -138,6 +139,10 @@ def _optional_env(name: str, default: str = "") -> str:
 
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
 GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.20-reasoning")
+# Daily Brief / Intelligence runs use the latest Grok 4.30-beta for the
+# freshest macro reasoning + live search. Override via GROK_INTEL_MODEL in
+# .env if you want to roll back.
+GROK_INTEL_MODEL = _optional_env("GROK_INTEL_MODEL", "grok-4.30-beta")
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
 # is actually requested at runtime.
@@ -1329,6 +1334,7 @@ def run_market_intelligence(days: int = 30) -> dict:
         markdown = call_grok(
             INTEL_SYSTEM_PROMPT,
             user_msg,
+            model=GROK_INTEL_MODEL,
             live_search=True,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1366,6 +1372,179 @@ def run_market_intelligence(days: int = 30) -> dict:
         print(f"✅ Market intelligence complete — {len(tickers)} tickers identified.")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not persist intelligence results: {exc}")
+
+    return payload
+
+
+# ============================================================================
+# Daily Brief — Goldman-Sachs-style PM morning note (live web + X search)
+# ============================================================================
+DAILY_BRIEF_SYSTEM_PROMPT = """You are the chief portfolio manager at DGA Capital, writing your morning brief the way a senior Goldman Sachs equity PM would: dense, specific, action-oriented, no fluff.
+
+Your audience is one person — the firm's PM — who needs to walk into the trading floor with a complete read on the day in 90 seconds. They already know what the S&P is. They want EDGE: who said what overnight, what's mispriced, what to watch into the close, where the consensus is wrong.
+
+Use your live web and X (Twitter) search aggressively. Pull from:
+- Bloomberg, Reuters, WSJ, FT, CNBC headlines from the last 18 hours
+- X posts from credible market voices (e.g., @zerohedge, @LizAnnSonders, @BobEUnlimited, @TheTranscript_, @SrsResearch, @Stoneocean, @sharkbarbs, @t1alpha, sell-side analysts, fund managers)
+- Earnings call snippets, sell-side notes referenced in headlines
+- Federal Reserve commentary, ECB/BoJ/PBOC statements
+- Sector ETF flows / dark pool prints if mentioned in news
+- Asia + Europe overnight close, futures action, FX, crude, gold, 10Y yield, VIX
+
+Hard rules:
+- NEVER hedge. Take a view. "Watch X — likely up 3% on the open" beats "X may move."
+- Cite SPECIFIC numbers, prices, and times whenever possible
+- Name SPECIFIC tickers using **TICKER** format (each on its own line in the names section) — these become tappable in the app
+- Skip generic risk disclaimers and "consult your advisor" language
+- If a section has nothing genuinely interesting, write "Nothing meaningful overnight" rather than padding with filler
+- Total length target: ~700-900 words — dense but readable in under 2 minutes"""
+
+
+_DAILY_BRIEF_USER_TEMPLATE = """\
+DATE: {today}
+TIME: Morning brief (pre-market US)
+
+Write your morning brief for the DGA Capital trading floor. Use EXACTLY this format:
+
+---
+
+## ⚡ THE TAKE
+
+*Two to three sentences. The single most important thing to know about today's market and how DGA should be positioned.*
+
+---
+
+## 🌍 OVERNIGHT TAPE
+
+**Asia close:** [Nikkei, Hang Seng, Shanghai Comp — % moves and the why]
+**Europe (live):** [STOXX 600, DAX, FTSE — % moves and the why]
+**US futures:** [ES, NQ, RTY — % from prior close, key level being tested]
+**Cross-asset:** [10Y yield, DXY, WTI crude, gold, BTC — meaningful moves only]
+**VIX / spreads:** [Where vol and credit are pricing risk]
+
+---
+
+## 📅 TODAY'S CALENDAR
+
+**Macro releases (with consensus):**
+- [HH:MM ET] [Release] — consensus: X.X% / prior: X.X%
+- [Repeat for each meaningful print]
+
+**Earnings before/after the bell:**
+- **TICKER** [BMO/AMC] — [what the Street is looking for; the one number that moves the stock]
+- [Repeat for 3-6 most-watched names]
+
+**Fed / Central bank speak:**
+- [Speaker, time, what to listen for]
+
+---
+
+## 🎯 ACTIONABLE NAMES (5-8 tickers)
+
+*Stocks where SOMETHING IS HAPPENING right now — earnings reaction, broker upgrade, news catalyst, technical breakout, or a developing thesis. Each block must start with **TICKER** on its own line.*
+
+**TICKER**
+**Setup:** [What's happening — last night's print, a downgrade, a rumor, a chart break]
+**The trade:** [Long/short bias, key level, expected magnitude — be specific]
+**Risk:** [What kills this in one sentence]
+
+[Repeat for each name]
+
+---
+
+## 🔥 X / NEWS PULSE
+
+*The 4-6 most important headlines or X posts from the last 18 hours, ranked by what actually moves portfolios. Each entry: source, the take, why it matters.*
+
+- **[Source / @handle]** — [The take.] *Matters because…*
+- [Repeat]
+
+---
+
+## 🧭 SECTOR & FACTOR ROTATION
+
+*Where money is flowing this week. Be specific about ETFs (XLK, XLF, XLE, XLV, etc.) and factor baskets (momentum, low-vol, quality, value).*
+
+- [Sector/factor]: [direction + the catalyst driving it]
+- [Repeat 3-5 lines]
+
+---
+
+## ⚠️ CONTRARIAN WATCH
+
+*One name where the consensus is provably wrong. Be bold.*
+
+**TICKER**
+**Consensus says:** [The narrative]
+**You say:** [The contrarian view, with the data point that makes you right]
+"""
+
+
+def run_daily_brief() -> dict:
+    """Run a Goldman-style morning brief via Grok 4.x with live web + X search.
+
+    Returns:
+        {
+            "ok": bool,
+            "generated_at": str (ISO),
+            "markdown": str,
+            "tickers": list[str],
+            "error": str | None,
+        }
+    """
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    now_iso = datetime.utcnow().isoformat()
+    user_msg = _DAILY_BRIEF_USER_TEMPLATE.format(today=today)
+
+    print(f"📰 Running Daily Brief ({GROK_INTEL_MODEL}) with live X + web search…")
+
+    try:
+        markdown = call_grok(
+            DAILY_BRIEF_SYSTEM_PROMPT,
+            user_msg,
+            model=GROK_INTEL_MODEL,
+            live_search=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Daily Brief failed: {exc}")
+        return {
+            "ok": False,
+            "generated_at": now_iso,
+            "markdown": "",
+            "tickers": [],
+            "error": str(exc),
+        }
+
+    # Parse out **TICKER** tokens so the UI can make them tappable.
+    import re as _re
+    tickers = list(dict.fromkeys(
+        m.group(1).upper()
+        for m in _re.finditer(r'^\*\*([A-Z]{1,6})\*\*\s*$', markdown, _re.MULTILINE)
+    ))
+
+    payload = {
+        "ok": True,
+        "generated_at": now_iso,
+        "date_str": today,
+        "markdown": markdown,
+        "tickers": tickers,
+        "error": None,
+    }
+
+    # Persist to disk so it survives restarts and can be hydrated.
+    try:
+        DAILY_BRIEF_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DAILY_BRIEF_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str, indent=2))
+        tmp.replace(DAILY_BRIEF_FILE)
+        # Also push to Dropbox so a Railway redeploy doesn't lose it.
+        try:
+            push_to_dropbox([str(DAILY_BRIEF_FILE)])
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"✅ Daily Brief complete — {len(tickers)} tickers flagged.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not persist daily brief: {exc}")
 
     return payload
 

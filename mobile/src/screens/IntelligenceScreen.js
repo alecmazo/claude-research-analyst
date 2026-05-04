@@ -35,66 +35,112 @@ export default function IntelligenceScreen({ navigation }) {
   const [days, setDays]           = useState(30);
   const [running, setRunning]     = useState(false);
   const [result, setResult]       = useState(null);   // last completed result
+  const [resultKind, setResultKind] = useState(null); // 'intel' | 'brief'
   const [status, setStatus]       = useState('');     // human-readable status line
   const [error, setError]         = useState(null);
+  const [briefRunning, setBriefRunning] = useState(false);
   const pollRef                   = useRef(null);
 
   // ── Load latest persisted result on tab focus ──────────────────────────────
+  // Show the freshest of (intelligence brief, daily brief) — daily briefs
+  // change every morning so they usually win.
   useFocusEffect(
     useCallback(() => {
-      api.getLatestIntelligence()
-        .then(data => {
-          if (data?.exists && data?.markdown) setResult(data);
-        })
-        .catch(() => {}); // server offline — silent
+      Promise.allSettled([
+        api.getLatestIntelligence(),
+        api.getLatestDailyBrief(),
+      ]).then(([intelRes, briefRes]) => {
+        const intel = intelRes.status === 'fulfilled' && intelRes.value?.exists
+          ? intelRes.value : null;
+        const brief = briefRes.status === 'fulfilled' && briefRes.value?.exists
+          ? briefRes.value : null;
+        const intelDate = intel ? new Date(intel.generated_at).getTime() : 0;
+        const briefDate = brief ? new Date(brief.generated_at).getTime() : 0;
+        if (briefDate >= intelDate && brief?.markdown) {
+          setResult(brief); setResultKind('brief');
+        } else if (intel?.markdown) {
+          setResult(intel); setResultKind('intel');
+        }
+      }).catch(() => {});
     }, [])
   );
 
   // ── Polling ────────────────────────────────────────────────────────────────
-  const startPolling = (jobId) => {
+  // kind = 'intel' (long-horizon brief) | 'brief' (daily Goldman-style note)
+  const startPolling = (jobId, kind) => {
     clearInterval(pollRef.current);
+    const fetcher = kind === 'brief'
+      ? api.getDailyBriefJob
+      : api.getIntelligenceJob;
+    const runningMsg = kind === 'brief'
+      ? 'Scanning overnight tape, X, and headlines…'
+      : 'Scanning X and web for market signals…';
+    const finishedSetters = (running) => {
+      if (kind === 'brief') setBriefRunning(running);
+      else setRunning(running);
+    };
     pollRef.current = setInterval(async () => {
       try {
-        const job = await api.getIntelligenceJob(jobId);
+        const job = await fetcher(jobId);
         if (job.status === 'done') {
           clearInterval(pollRef.current);
-          setRunning(false);
+          finishedSetters(false);
           setStatus('');
           if (job.result?.ok) {
             setResult(job.result);
+            setResultKind(kind);
             setError(null);
           } else {
             setError(job.result?.error || job.error || 'Unknown error');
           }
         } else if (job.status === 'failed') {
           clearInterval(pollRef.current);
-          setRunning(false);
+          finishedSetters(false);
           setStatus('');
-          setError(job.error || 'Intelligence run failed');
+          setError(job.error || 'Run failed');
         } else {
-          setStatus(job.status === 'running'
-            ? 'Scanning X and web for market signals…'
-            : 'Queued — starting shortly…');
+          setStatus(job.status === 'running' ? runningMsg : 'Queued — starting shortly…');
         }
       } catch (err) {
         clearInterval(pollRef.current);
-        setRunning(false);
+        finishedSetters(false);
         setStatus('');
         setError(err.message);
       }
     }, POLL_INTERVAL_MS);
   };
 
-  // ── Run handler ────────────────────────────────────────────────────────────
+  // ── Run handler — long-horizon intelligence brief ─────────────────────────
   const handleRun = async () => {
+    if (running || briefRunning) return;
     setRunning(true);
     setError(null);
     setStatus('Queued — starting shortly…');
     try {
       const job = await api.startIntelligence(days);
-      startPolling(job.job_id);
+      startPolling(job.job_id, 'intel');
     } catch (err) {
       setRunning(false);
+      setStatus('');
+      if (err?.isAuthError) {
+        Alert.alert('Wrong Password', 'Go to Settings → Server Password.');
+      } else {
+        setError(err.message);
+      }
+    }
+  };
+
+  // ── Run handler — Goldman-style Daily Brief ───────────────────────────────
+  const handleDailyBrief = async () => {
+    if (running || briefRunning) return;
+    setBriefRunning(true);
+    setError(null);
+    setStatus('Queued — starting shortly…');
+    try {
+      const job = await api.startDailyBrief();
+      startPolling(job.job_id, 'brief');
+    } catch (err) {
+      setBriefRunning(false);
       setStatus('');
       if (err?.isAuthError) {
         Alert.alert('Wrong Password', 'Go to Settings → Server Password.');
@@ -221,15 +267,50 @@ export default function IntelligenceScreen({ navigation }) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Config card ── */}
+        {/* ── Daily Brief card (Grok 4.30-beta — fast, action-oriented) ── */}
+        <View style={[styles.card, styles.briefCard]}>
+          <View style={styles.briefHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.briefTitle}>📰 Daily Brief</Text>
+              <Text style={styles.briefSubtitle}>
+                Goldman-style PM morning note — overnight tape, calendar,
+                actionable names, X pulse. Live web + X search.
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={[styles.briefBtn,
+              (briefRunning || running) && styles.runBtnDisabled]}
+            onPress={handleDailyBrief}
+            disabled={briefRunning || running}
+            activeOpacity={0.8}
+          >
+            {briefRunning ? (
+              <View style={styles.runBtnInner}>
+                <ActivityIndicator size="small" color={colors.gold} style={{ marginRight: 8 }} />
+                <Text style={styles.briefBtnText}>RUNNING…</Text>
+              </View>
+            ) : (
+              <View style={styles.runBtnInner}>
+                <Ionicons name="newspaper" size={16} color={colors.gold} style={{ marginRight: 6 }} />
+                <Text style={styles.briefBtnText}>GENERATE DAILY BRIEF</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {briefRunning && status ? (
+            <Text style={styles.statusText}>{status}</Text>
+          ) : null}
+        </View>
+
+        {/* ── Config card (long-horizon Intelligence brief) ── */}
         <View style={styles.card}>
-          <Text style={styles.cardLabel}>LOOKBACK WINDOW</Text>
+          <Text style={styles.cardLabel}>STRATEGIC LOOKBACK (3-5 YR HORIZON)</Text>
           <View style={styles.horizonRow}>
             {HORIZON_OPTIONS.map(opt => (
               <TouchableOpacity
                 key={opt.value}
                 style={[styles.pill, days === opt.value && styles.pillActive]}
-                onPress={() => !running && setDays(opt.value)}
+                onPress={() => !running && !briefRunning && setDays(opt.value)}
                 activeOpacity={0.75}
               >
                 <Text style={[styles.pillText, days === opt.value && styles.pillTextActive]}>
@@ -240,9 +321,9 @@ export default function IntelligenceScreen({ navigation }) {
           </View>
 
           <TouchableOpacity
-            style={[styles.runBtn, running && styles.runBtnDisabled]}
+            style={[styles.runBtn, (running || briefRunning) && styles.runBtnDisabled]}
             onPress={handleRun}
-            disabled={running}
+            disabled={running || briefRunning}
             activeOpacity={0.8}
           >
             {running ? (
@@ -264,7 +345,7 @@ export default function IntelligenceScreen({ navigation }) {
           ) : null}
 
           {/* Error */}
-          {!running && error ? (
+          {!(running || briefRunning) && error ? (
             <View style={styles.errorBox}>
               <Ionicons name="alert-circle-outline" size={16} color={colors.red} />
               <Text style={styles.errorText}>{error}</Text>
@@ -278,10 +359,18 @@ export default function IntelligenceScreen({ navigation }) {
             {/* Meta bar */}
             <View style={styles.resultMeta}>
               <View style={styles.resultMetaLeft}>
-                <View style={styles.liveBadge}>
-                  <Text style={styles.liveBadgeText}>⚡ LIVE BRIEF</Text>
+                <View style={[styles.liveBadge,
+                  resultKind === 'brief' && styles.liveBadgeBrief]}>
+                  <Text style={[styles.liveBadgeText,
+                    resultKind === 'brief' && styles.liveBadgeTextBrief]}>
+                    {resultKind === 'brief' ? '📰 DAILY BRIEF' : '⚡ LIVE BRIEF'}
+                  </Text>
                 </View>
-                <Text style={styles.resultDays}>{result.days}-day lookback</Text>
+                <Text style={styles.resultDays}>
+                  {resultKind === 'brief'
+                    ? (result.date_str || 'Today')
+                    : `${result.days}-day lookback`}
+                </Text>
               </View>
               <Text style={styles.resultDate}>{formatDate(result.generated_at)}</Text>
             </View>
@@ -294,14 +383,16 @@ export default function IntelligenceScreen({ navigation }) {
               {result.markdown}
             </Markdown>
           </View>
-        ) : !running ? (
+        ) : !(running || briefRunning) ? (
           <View style={styles.emptyState}>
-            <Ionicons name="bulb-outline" size={48} color={colors.lightGray} />
-            <Text style={styles.emptyTitle}>No intelligence brief yet</Text>
+            <Ionicons name="newspaper-outline" size={48} color={colors.lightGray} />
+            <Text style={styles.emptyTitle}>No brief yet</Text>
             <Text style={styles.emptySubtitle}>
-              Select a lookback window and tap Run Intelligence.{'\n'}
-              Grok will scan the latest X posts and web news to surface macro themes,
-              sector rotations, and specific company ideas.
+              Tap <Text style={{ fontWeight: '700' }}>Generate Daily Brief</Text> for a Goldman-style PM
+              morning note: overnight tape, today's catalysts, actionable
+              names.{'\n\n'}
+              Or pick a lookback window and tap <Text style={{ fontWeight: '700' }}>Run Intelligence</Text>{' '}
+              for a 3-5yr strategic view.
             </Text>
           </View>
         ) : null}
@@ -373,6 +464,41 @@ const styles = StyleSheet.create({
   runBtnInner:    { flexDirection: 'row', alignItems: 'center' },
   runBtnText:     { color: colors.navy, fontWeight: '800', fontSize: 14, letterSpacing: 1 },
 
+  // ── Daily Brief card (high-emphasis dark variant) ──
+  briefCard: {
+    backgroundColor: colors.navy,
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+  },
+  briefHeader: { flexDirection: 'row', marginBottom: 14 },
+  briefTitle:  {
+    color: colors.gold,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  briefSubtitle: {
+    color: colors.lightGray,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  briefBtn: {
+    backgroundColor: colors.navyLight,
+    borderRadius: 8,
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+  },
+  briefBtnText: {
+    color: colors.gold,
+    fontWeight: '800',
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+
   statusText: {
     fontSize: 12,
     color: colors.midGray,
@@ -419,7 +545,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
-  liveBadgeText: { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  liveBadgeBrief:     { backgroundColor: colors.gold },
+  liveBadgeText:      { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  liveBadgeTextBrief: { color: colors.navy },
   resultDays:  { fontSize: 11, color: colors.midGray, fontWeight: '600' },
   resultDate:  { fontSize: 11, color: colors.midGray },
 

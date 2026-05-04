@@ -151,7 +151,10 @@
   <!-- Per-ticker expandable scan results -->
   <div id="scan-results-list"></div>
 
-  <div class="label section-label">SAVED REPORTS</div>
+  <div class="reports-section-header">
+    <div class="label section-label" style="margin:0;">SAVED REPORTS</div>
+    <span id="reports-count" class="reports-count-badge" style="display:none;"></span>
+  </div>
   <div id="reports-list" class="reports-list">
     <div class="empty">Loading…</div>
   </div>
@@ -517,9 +520,24 @@
     <span></span>
   </header>
 
-  <!-- Config card -->
+  <!-- Daily Brief card — Goldman-style PM morning note -->
+  <div class="card brief-card">
+    <div class="brief-header">
+      <div class="brief-title">📰 Daily Brief</div>
+      <div class="brief-subtitle">
+        Goldman-style PM morning note — overnight tape, today's calendar,
+        actionable names, X pulse. Live web + X search via Grok 4.30-beta.
+      </div>
+    </div>
+    <button id="brief-run-btn" class="btn-brief full-width">
+      📰 Generate Daily Brief
+    </button>
+    <div id="brief-status" class="intel-status" style="display:none;"></div>
+  </div>
+
+  <!-- Strategic intelligence card -->
   <div class="card">
-    <div class="label">LOOKBACK WINDOW</div>
+    <div class="label">STRATEGIC LOOKBACK (3-5 YR HORIZON)</div>
     <div class="intel-horizon-row">
       <button class="intel-horizon-pill active" data-days="30">30 days</button>
       <button class="intel-horizon-pill" data-days="60">60 days</button>
@@ -538,7 +556,7 @@
   <div id="intel-result-card" class="card intel-result-card" style="display:none;">
     <div class="intel-result-meta">
       <div class="intel-result-meta-left">
-        <span class="intel-live-badge">⚡ LIVE BRIEF</span>
+        <span id="intel-kind-badge" class="intel-live-badge">⚡ LIVE BRIEF</span>
         <span id="intel-days-label" class="intel-days-label"></span>
       </div>
       <span id="intel-generated-at" class="intel-gen-date"></span>
@@ -644,6 +662,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui12"></script>
+<script src="/app/app.js?v=ui13"></script>
 </body>
 </html>

@@ -104,46 +104,48 @@ export default function HomeScreen({ navigation, route }) {
     const pctStr   = pct != null ? `${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%` : null;
     const isUp     = pct != null && pct >= 0;
 
+    // Compact date "May 4" — year only when not current year
+    const dt   = new Date(item.generated_at);
+    const yr   = dt.getFullYear();
+    const nowY = new Date().getFullYear();
+    const dateStr = dt.toLocaleDateString('en-US',
+      yr === nowY
+        ? { month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', year: '2-digit' });
+
     return (
       <TouchableOpacity
-        style={styles.reportCard}
+        style={styles.reportRow}
         onPress={() => navigation.navigate('Report', { ticker: item.ticker })}
+        activeOpacity={0.7}
       >
-        <View style={styles.reportCardLeft}>
+        {/* Left: ticker + tiny format dots underneath */}
+        <View style={styles.tickerCell}>
           <Text style={styles.reportTicker}>{item.ticker}</Text>
-          <Text style={styles.reportDate}>
-            {new Date(item.generated_at).toLocaleDateString('en-US', {
-              month: 'short', day: 'numeric', year: 'numeric',
-            })}
-          </Text>
+          <View style={styles.formatDotsRow}>
+            {item.has_docx && <View style={styles.docxDot} />}
+            {item.has_pptx && <View style={styles.pptxDot} />}
+            <Text style={styles.reportDate}>{dateStr}</Text>
+          </View>
         </View>
 
-        <View style={styles.reportCardRight}>
-          {/* Live price + pct change */}
-          {priceStr && (
-            <View style={styles.priceGroup}>
+        {/* Right: tightly-packed price column */}
+        <View style={styles.priceCell}>
+          {priceStr ? (
+            <>
               <Text style={styles.priceText}>{priceStr}</Text>
               {pctStr && (
                 <Text style={[styles.pctText, isUp ? styles.pctUp : styles.pctDown]}>
                   {pctStr}
                 </Text>
               )}
-            </View>
+            </>
+          ) : (
+            <Text style={styles.priceMissing}>—</Text>
           )}
-
-          {/* Format badges */}
-          {item.has_docx && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>DOCX</Text>
-            </View>
-          )}
-          {item.has_pptx && (
-            <View style={[styles.badge, styles.badgeGold]}>
-              <Text style={styles.badgeText}>PPTX</Text>
-            </View>
-          )}
-          <Ionicons name="chevron-forward" size={18} color={colors.midGray} />
         </View>
+
+        <Ionicons name="chevron-forward" size={14} color={colors.midGray} style={styles.chev} />
       </TouchableOpacity>
     );
   };
@@ -199,16 +201,32 @@ export default function HomeScreen({ navigation, route }) {
       </View>
 
       {/* Reports list */}
-      <Text style={styles.sectionTitle}>SAVED REPORTS</Text>
+      <View style={styles.listHeaderRow}>
+        <Text style={styles.sectionTitle}>SAVED REPORTS</Text>
+        {reports.length > 0 && (
+          <Text style={styles.countBadge}>{reports.length}</Text>
+        )}
+      </View>
       <FlatList
         data={reports}
         keyExtractor={item => item.ticker}
         renderItem={renderReport}
+        ItemSeparatorComponent={() => <View style={styles.sep} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+        ListHeaderComponent={
+          reports.length > 0 ? (
+            <View style={styles.colHeader}>
+              <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
+              <Text style={[styles.colHeaderText, { textAlign: 'right' }]}>PRICE / CHG</Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <Text style={styles.emptyText}>No reports yet. Run your first analysis above.</Text>
         }
-        contentContainerStyle={reports.length === 0 && styles.emptyContainer}
+        contentContainerStyle={
+          reports.length > 0 ? styles.listContent : styles.emptyContainer
+        }
       />
     </View>
   );
@@ -261,39 +279,86 @@ const styles = StyleSheet.create({
     borderTopColor: colors.lightGray,
   },
   gammaLabel:   { fontSize: 14, fontWeight: '600', color: colors.darkGray },
+
+  // Section header row
+  listHeaderRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, marginBottom: 6,
+  },
   sectionTitle: {
     fontSize: 11, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5, marginHorizontal: 16, marginBottom: 8,
+    letterSpacing: 1.5,
   },
-  reportCard: {
+  countBadge: {
+    marginLeft: 8,
+    fontSize: 11, fontWeight: '700', color: colors.gold,
+    backgroundColor: colors.navy,
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
+    overflow: 'hidden',
+  },
+
+  // List container - one shared card holds all rows for tighter info density
+  listContent: {
     backgroundColor: colors.white,
     marginHorizontal: 16,
-    marginBottom: 8,
     borderRadius: 10,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingVertical: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 2,
   },
-  reportCardLeft:  { flex: 1 },
-  reportTicker:    { fontSize: 17, fontWeight: '700', color: colors.navy, letterSpacing: 1 },
-  reportDate:      { fontSize: 12, color: colors.midGray, marginTop: 2 },
-  reportCardRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  // Live price / pct
-  priceGroup:  { alignItems: 'flex-end', marginRight: 4 },
-  priceText:   { fontSize: 13, fontWeight: '700', color: colors.navy, fontFamily: 'Courier New' },
-  pctText:     { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', marginTop: 1 },
-  pctUp:       { color: colors.green },
-  pctDown:     { color: colors.red },
-  // Format badges
-  badge:       { backgroundColor: colors.navyLight, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 4 },
-  badgeGold:   { backgroundColor: colors.gold },
-  badgeText:   { color: colors.white, fontSize: 10, fontWeight: '700' },
-  emptyContainer: { flexGrow: 1, justifyContent: 'center' },
-  emptyText:      { textAlign: 'center', color: colors.midGray, fontSize: 14, paddingHorizontal: 40 },
+
+  // Column header row (TICKER / PRICE)
+  colHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6,
+    borderBottomWidth: 1, borderBottomColor: colors.lightGray,
+  },
+  colHeaderText: {
+    fontSize: 9, fontWeight: '800', color: colors.midGray,
+    letterSpacing: 1.2,
+  },
+
+  // Compact two-line row, ~46px tall vs old ~70px
+  reportRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  sep: { height: 1, backgroundColor: colors.lightGray, marginLeft: 14 },
+  tickerCell:    { flex: 1 },
+  reportTicker:  {
+    fontSize: 15, fontWeight: '800', color: colors.navy,
+    letterSpacing: 1.2, lineHeight: 18,
+  },
+  formatDotsRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
+  docxDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.navyLight,
+  },
+  pptxDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.gold,
+  },
+  reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 2 },
+
+  priceCell: { alignItems: 'flex-end', minWidth: 86 },
+  priceText: {
+    fontSize: 14, fontWeight: '700', color: colors.navy,
+    fontFamily: 'Courier New', lineHeight: 16,
+  },
+  pctText: {
+    fontSize: 11, fontWeight: '700', fontFamily: 'Courier New',
+    lineHeight: 13, marginTop: 1,
+  },
+  pctUp:        { color: colors.green },
+  pctDown:      { color: colors.red },
+  priceMissing: { fontSize: 14, color: colors.lightGray, fontFamily: 'Courier New' },
+
+  chev: { marginLeft: 6 },
+
+  emptyContainer: { flexGrow: 1, justifyContent: 'center', backgroundColor: 'transparent' },
+  emptyText: {
+    textAlign: 'center', color: colors.midGray, fontSize: 14,
+    paddingHorizontal: 40, paddingVertical: 32,
+  },
 });

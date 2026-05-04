@@ -226,6 +226,11 @@ export const api = {
   getIntelligenceJob:    (jobId) => request(`/api/intelligence/${jobId}`),
   getLatestIntelligence: ()      => request('/api/intelligence/latest'),
 
+  // ---------- Daily Brief (Goldman-style PM morning note) ----------
+  startDailyBrief:     ()      => request('/api/daily-brief', { method: 'POST' }),
+  getDailyBriefJob:    (jobId) => request(`/api/daily-brief/${jobId}`),
+  getLatestDailyBrief: ()      => request('/api/daily-brief/latest'),
+
   // ---------- Paper Portfolio Tracker ----------
   createTracker: (body) => request('/api/track', {
     method: 'POST', body: JSON.stringify(body),

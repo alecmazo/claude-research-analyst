@@ -304,45 +304,117 @@ body {
 }
 .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ============ REPORTS LIST ============ */
+/* ============ REPORTS LIST — compact table layout ============ */
+.reports-section-header {
+  display: flex;
+  align-items: center;
+  margin: 0 16px 6px;
+  gap: 10px;
+}
+.reports-count-badge {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--gold);
+  background: var(--navy);
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+}
 .reports-list { padding: 0 16px; }
 
-.report-item {
+.reports-table {
   background: var(--white);
   border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  overflow: hidden;
+}
+
+.reports-col-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--light-gray);
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--mid-gray);
+  letter-spacing: 1.2px;
+}
+
+.report-row {
+  display: grid;
+  grid-template-columns: 1fr auto 14px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--light-gray);
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+.reports-table .report-row:first-of-type { border-top: none; }
+.report-row:hover  { background: var(--off-white); }
+.report-row:active { background: rgba(201,168,76,0.08); }
+
+.rr-ticker-cell { display: flex; flex-direction: column; min-width: 0; }
+.rr-ticker {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--navy);
+  letter-spacing: 1.1px;
+  line-height: 1.15;
+}
+.rr-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-  transition: transform 0.1s, box-shadow 0.2s;
+  gap: 5px;
+  margin-top: 2px;
+  line-height: 1;
 }
-.report-item:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+.rr-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
-.report-item:active { transform: translateY(0); }
+.rr-dot-navy { background: var(--navy-light); }
+.rr-dot-gold { background: var(--gold); }
+.rr-date {
+  font-size: 11px;
+  color: var(--mid-gray);
+  margin-left: 2px;
+}
 
-.report-item-left .ticker-name {
-  font-size: 17px;
+.rr-price-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: "Courier New", monospace;
+  min-width: 96px;
+}
+.rr-price {
+  font-size: 13px;
   font-weight: 700;
   color: var(--navy);
-  letter-spacing: 1px;
+  line-height: 1.15;
 }
-.report-item-left .date {
-  font-size: 12px;
+.rr-pct {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 1px;
+  line-height: 1;
+}
+.rr-pct.up   { color: var(--green); }
+.rr-pct.down { color: var(--red); }
+.rr-price-missing { color: var(--light-gray); font-size: 13px; }
+
+.rr-chev {
   color: var(--mid-gray);
-  margin-top: 2px;
+  font-size: 16px;
+  text-align: center;
+  font-weight: 300;
 }
 
-.report-item-right {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
+/* Legacy badge kept for other views (analysis result, etc.) */
 .badge {
   background: var(--navy-light);
   color: white;
@@ -1312,6 +1384,46 @@ body {
 }
 
 /* ── Status text while running ── */
+/* ── Daily Brief card (high-emphasis dark variant) ── */
+.brief-card {
+  background: var(--navy);
+  border: 1.5px solid var(--gold);
+}
+.brief-header { margin-bottom: 14px; }
+.brief-title {
+  color: var(--gold);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.brief-subtitle {
+  color: var(--light-gray);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.btn-brief {
+  background: var(--navy-light);
+  color: var(--gold);
+  border: 1.5px solid var(--gold);
+  border-radius: 8px;
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background-color 0.15s, transform 0.1s;
+}
+.btn-brief:hover  { background: rgba(201,168,76,0.18); }
+.btn-brief:active { transform: translateY(1px); }
+.btn-brief:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Brief variant of the live badge — gold instead of navy */
+.intel-live-badge.brief {
+  background: var(--gold);
+  color: var(--navy);
+}
+
 .intel-status {
   margin-top: 10px;
   font-size: 12px;
