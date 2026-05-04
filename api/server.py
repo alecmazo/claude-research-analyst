@@ -316,10 +316,15 @@ def get_report(ticker: str):
     md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
     if not md_path.exists():
         raise HTTPException(status_code=404, detail=f"No report found for {ticker}")
+    folder = analyst.STOCKS_FOLDER
+    has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
+    has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
     return {
         "ticker": ticker,
         "report_md": md_path.read_text(),
         "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
+        "has_docx": has_docx,
+        "has_pptx": has_pptx,
     }
 
 

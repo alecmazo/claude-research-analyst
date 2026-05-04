@@ -5631,14 +5631,23 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     )
     print(f"   💾 Word: {out_docx}")
 
-    # Gamma
+    # Gamma — wrapped in try/except so a missing API key or Gamma API error
+    # never kills the whole analysis job.  gamma_error is set when generation
+    # was requested but failed so the mobile/web UI can surface the reason.
     gamma_url = None
     gamma_credits = 0
+    gamma_error: str | None = None
     if generate_gamma:
-        out_pptx = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
-        gamma_url, gamma_credits = create_gamma_for_stock(
-            report_text, ticker, data.get("latest_filing_type", "10-K"), out_pptx=out_pptx
-        )
+        try:
+            out_pptx = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
+            gamma_url, gamma_credits = create_gamma_for_stock(
+                report_text, ticker, data.get("latest_filing_type", "10-K"), out_pptx=out_pptx
+            )
+            if gamma_url is None:
+                gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
+        except Exception as _gamma_exc:  # noqa: BLE001
+            gamma_error = str(_gamma_exc)
+            print(f"   ⚠️  Gamma skipped for {ticker}: {_gamma_exc}")
 
     # Upload report files to Google Drive (best-effort, non-blocking).
     drive_files = [p for p in [md_path, out_docx] if p.exists()]
@@ -5663,6 +5672,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         "xbrl_json": str(audit_path),
         "gamma_url": gamma_url,
         "gamma_credits": gamma_credits,
+        "gamma_error": gamma_error,
         "summary": summary,
         "gdrive": gdrive_status,
     })
@@ -5751,14 +5761,21 @@ def run_portfolio_summary(ticker_results: list[dict], *, generate_gamma: bool) -
     )
     print(f"💾 Portfolio Word summary: {out_docx}")
 
-    # Gamma
+    # Gamma — wrapped so a missing API key never kills the portfolio job
     gamma_url = None
     gamma_credits = 0
+    gamma_error: str | None = None
     if generate_gamma:
-        out_pptx = STOCKS_FOLDER / "Portfolio_Summary.pptx"
-        gamma_url, gamma_credits = create_gamma_portfolio_summary(
-            summary_md, ranked_rows, out_pptx=out_pptx
-        )
+        try:
+            out_pptx = STOCKS_FOLDER / "Portfolio_Summary.pptx"
+            gamma_url, gamma_credits = create_gamma_portfolio_summary(
+                summary_md, ranked_rows, out_pptx=out_pptx
+            )
+            if gamma_url is None:
+                gamma_error = "Gamma generation failed (API error or timeout — check server logs)"
+        except Exception as _gamma_exc:  # noqa: BLE001
+            gamma_error = str(_gamma_exc)
+            print(f"   ⚠️  Gamma skipped for portfolio: {_gamma_exc}")
 
     return {
         "ok": True,
@@ -5767,6 +5784,7 @@ def run_portfolio_summary(ticker_results: list[dict], *, generate_gamma: bool) -
         "summary_md": summary_md,
         "gamma_url": gamma_url,
         "gamma_credits": gamma_credits,
+        "gamma_error": gamma_error,
         "ranked_rows": ranked_rows,
     }
 
