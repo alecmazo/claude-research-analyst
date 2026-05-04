@@ -1,12 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
-  TouchableOpacity, Share, Linking, Alert,
+  TouchableOpacity, Share, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
+
+const MIME = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
 
 export default function ReportScreen({ route }) {
   const { ticker } = route.params;
@@ -14,6 +21,7 @@ export default function ReportScreen({ route }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [quote, setQuote] = useState(null);
+  const [downloading, setDownloading] = useState(null); // 'docx' | 'pptx' | null
 
   useEffect(() => {
     Promise.all([
@@ -28,16 +36,34 @@ export default function ReportScreen({ route }) {
   };
 
   const handleDownload = async (type) => {
+    setDownloading(type);
     try {
       const url = await api.downloadUrl(ticker, type);
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert('Cannot open', `URL not supported: ${url}`);
+      const localPath = `${FileSystem.cacheDirectory}${ticker}_DGA_Report.${type}`;
+
+      // Download file to device cache
+      const result = await FileSystem.downloadAsync(url, localPath);
+      if (result.status !== 200) {
+        throw new Error(`Server returned ${result.status}`);
       }
+
+      // Show iOS share sheet — lets user open in Word, PowerPoint, Files, Mail, etc.
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Not supported', 'Sharing is not available on this device.');
+        return;
+      }
+      await Sharing.shareAsync(result.uri, {
+        mimeType: MIME[type],
+        dialogTitle: `${ticker} DGA ${type === 'docx' ? 'Word Report' : 'Presentation'}`,
+        UTI: type === 'docx'
+          ? 'org.openxmlformats.wordprocessingml.document'
+          : 'org.openxmlformats.presentationml.presentation',
+      });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      Alert.alert('Download failed', err.message);
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -72,11 +98,27 @@ export default function ReportScreen({ route }) {
           <TouchableOpacity style={styles.iconBtn} onPress={handleShare}>
             <Ionicons name="share-outline" size={22} color={colors.white} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => handleDownload('docx')}>
-            <Ionicons name="document-outline" size={22} color={colors.white} />
+
+          {/* Word download */}
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => handleDownload('docx')}
+            disabled={downloading === 'docx'}
+          >
+            {downloading === 'docx'
+              ? <ActivityIndicator size="small" color={colors.white} />
+              : <Ionicons name="document-outline" size={22} color={colors.white} />}
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconBtn, styles.pptxBtn]} onPress={() => handleDownload('pptx')}>
-            <Ionicons name="easel-outline" size={22} color={colors.navy} />
+
+          {/* PowerPoint / Gamma download */}
+          <TouchableOpacity
+            style={[styles.iconBtn, styles.pptxBtn]}
+            onPress={() => handleDownload('pptx')}
+            disabled={downloading === 'pptx'}
+          >
+            {downloading === 'pptx'
+              ? <ActivityIndicator size="small" color={colors.navy} />
+              : <Ionicons name="easel-outline" size={22} color={colors.navy} />}
           </TouchableOpacity>
         </View>
       </View>

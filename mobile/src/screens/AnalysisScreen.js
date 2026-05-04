@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator,
-  ScrollView, TouchableOpacity, Alert,
+  ScrollView, TouchableOpacity, Alert, Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
@@ -126,6 +126,17 @@ export default function AnalysisScreen({ route, navigation }) {
           <Ionicons name="arrow-forward" size={18} color={colors.navy} />
         </TouchableOpacity>
       )}
+
+      {isDone && job?.result?.gamma_url && (
+        <TouchableOpacity
+          style={styles.gammaBtn}
+          onPress={() => Linking.openURL(job.result.gamma_url)}
+        >
+          <Ionicons name="easel-outline" size={18} color={colors.navy} />
+          <Text style={styles.gammaBtnText}>Open Gamma Presentation</Text>
+          <Ionicons name="open-outline" size={16} color={colors.navy} style={{ marginLeft: 'auto' }} />
+        </TouchableOpacity>
+      )}
     </ScrollView>
   );
 }
@@ -183,4 +194,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   viewReportText: { fontSize: 16, fontWeight: '700', color: colors.navy },
+  gammaBtn: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+  },
+  gammaBtnText: { fontSize: 15, fontWeight: '700', color: colors.navy, flex: 1 },
 });
