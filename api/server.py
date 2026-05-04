@@ -49,7 +49,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Auth — stateless HMAC token (survives restarts, no DB needed)
 # ---------------------------------------------------------------------------
-_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/api/build", "/"}
+_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/api/build", "/api/diagnostics", "/"}
 
 def _portfolio_password() -> str:
     return os.environ.get("PORTFOLIO_PASSWORD", "dgacapital").strip()
@@ -286,6 +286,28 @@ def build_version():
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    """Return non-secret config info so we can verify env vars are set
+    without exposing the actual values.  Used to debug Gamma / Dropbox /
+    Drive integrations on Railway."""
+    def _is_set(name: str) -> bool:
+        return bool((os.environ.get(name, "") or "").strip())
+    return {
+        "gamma_api_key_set":     _is_set("GAMMA_API_KEY"),
+        "gamma_folder_id_set":   _is_set("GAMMA_FOLDER_ID"),
+        "dropbox_configured":    all(_is_set(k) for k in ("DROPBOX_APP_KEY","DROPBOX_APP_SECRET","DROPBOX_REFRESH_TOKEN")),
+        "google_drive_set":      _is_set("GOOGLE_SERVICE_ACCOUNT_JSON") or Path(__file__).resolve().parent.parent.joinpath("dga-service-account.json").exists(),
+        "xai_api_key_set":       _is_set("XAI_API_KEY"),
+        "build":                 WEB_BUILD_VERSION,
+        "stocks_folder":         str(analyst.STOCKS_FOLDER),
+        "stocks_pptx_count":     len(list(analyst.STOCKS_FOLDER.glob("*_DGA_Presentation.pptx"))),
+        "stocks_docx_count":     len(list(analyst.STOCKS_FOLDER.glob("*_DGA_Report.docx"))),
+        "stocks_md_count":       len(list(analyst.STOCKS_FOLDER.glob("*_DGA_Report.md"))),
+        "gamma_index_entries":   len(analyst._load_gamma_index()),
+    }
 
 
 @app.post("/api/analyze", response_model=JobStatus)
