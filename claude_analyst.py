@@ -5475,6 +5475,10 @@ Use the portfolio write-up below verbatim where applicable.
 
 def _gamma_generate(input_text: str, num_cards: int,
                     out_pptx: Path | None = None) -> tuple[str | None, int]:
+    """Generate a Gamma deck. Raises RuntimeError with the actual API
+    response on any non-2xx so the caller (and the mobile UI) can surface
+    the real reason — invalid key, exhausted credits, bad folder id, etc.
+    """
     headers = {"Content-Type": "application/json", "X-API-KEY": get_gamma_api_key()}
     payload = {
         "inputText": input_text,
@@ -5484,26 +5488,39 @@ def _gamma_generate(input_text: str, num_cards: int,
         "exportAs": "pptx",
         "folderIds": [GAMMA_FOLDER_ID] if GAMMA_FOLDER_ID else None,
     }
-    resp = requests.post(
-        "https://public-api.gamma.app/v1.0/generations",
-        json=payload,
-        headers=headers,
-        timeout=60,
-    )
+    try:
+        resp = requests.post(
+            "https://public-api.gamma.app/v1.0/generations",
+            json=payload,
+            headers=headers,
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Gamma POST failed (network): {exc}") from exc
+
     if resp.status_code not in (200, 201):
-        print(f"   ❌ Gamma error {resp.status_code}: {resp.text[:300]}")
-        return None, 0
+        body = (resp.text or "")[:500]
+        print(f"   ❌ Gamma error {resp.status_code}: {body}")
+        # Surface the API's actual error message so the mobile UI shows
+        # something actionable like "Invalid API key" or "Quota exceeded".
+        raise RuntimeError(f"Gamma API {resp.status_code}: {body}")
+
     gen_id = resp.json().get("generationId")
     print(f"   ✅ Gamma generation started ({gen_id})")
 
     for attempt in range(200):
         time.sleep(6)
-        status = requests.get(
-            f"https://public-api.gamma.app/v1.0/generations/{gen_id}",
-            headers=headers,
-            timeout=30,
-        ).json()
-        if status.get("status") == "completed":
+        try:
+            status = requests.get(
+                f"https://public-api.gamma.app/v1.0/generations/{gen_id}",
+                headers=headers,
+                timeout=30,
+            ).json()
+        except Exception as exc:  # noqa: BLE001
+            print(f"   ⚠️  Gamma status poll error: {exc}")
+            continue
+        st = status.get("status")
+        if st == "completed":
             gamma_url = status.get("gammaUrl")
             export_url = status.get("exportUrl")
             credits = status.get("credits", {})
@@ -5511,19 +5528,23 @@ def _gamma_generate(input_text: str, num_cards: int,
             remaining = credits.get("remaining", "?")
             print(f"   ✅ PPTX ready: {gamma_url}  (credits used: {used}, remaining: {remaining})")
             if export_url and out_pptx is not None:
-                r = requests.get(export_url, stream=True, timeout=60)
-                with open(out_pptx, "wb") as fh:
-                    for chunk in r.iter_content(8192):
-                        fh.write(chunk)
-                print(f"   💾 Saved {out_pptx}")
+                try:
+                    r = requests.get(export_url, stream=True, timeout=60)
+                    with open(out_pptx, "wb") as fh:
+                        for chunk in r.iter_content(8192):
+                            fh.write(chunk)
+                    print(f"   💾 Saved {out_pptx}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"   ⚠️  Could not save PPTX: {exc}")
             return gamma_url, used
-        if status.get("status") == "failed":
-            print("   ❌ Gamma generation failed")
-            return None, 0
+        if st == "failed":
+            err_msg = status.get("error") or status.get("message") or "unknown"
+            print(f"   ❌ Gamma generation failed: {err_msg}")
+            raise RuntimeError(f"Gamma generation failed: {err_msg}")
         if attempt % 10 == 0:
-            print(f"   ⏳ Gamma still generating… ({attempt+1}/200)")
+            print(f"   ⏳ Gamma still generating… ({attempt+1}/200)  status={st}")
     print("   ❌ Gamma timeout")
-    return None, 0
+    raise RuntimeError("Gamma generation timeout (>20 min)")
 
 
 # ============================================================================
