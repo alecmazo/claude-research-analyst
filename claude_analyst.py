@@ -7700,22 +7700,38 @@ def _dropbox_folder() -> str:
     return f"/{raw}" if raw else ""
 
 
-# PowerPoint presentations get their own dedicated subfolder so the user can
-# browse them as a self-contained set in Dropbox without the .md / .docx noise.
-DROPBOX_PRESENTATIONS_SUBFOLDER = "Presentations"
+# Each file type gets its own Dropbox subfolder for tidy browsing.
+DROPBOX_PRESENTATIONS_SUBFOLDER = "Presentations"   # .pptx
+DROPBOX_REPORTS_SUBFOLDER       = "Reports"         # .docx
+DROPBOX_MD_SUBFOLDER            = "MD cached"       # .md  (markdown reports)
+DROPBOX_REBALANCED_SUBFOLDER    = "Rebalanced"      # .xlsx (portfolio rebalance files)
 
 
 def _dropbox_dest_for(file_name: str) -> str:
     """Pick the Dropbox destination path for a given file name.
 
-    PPTX files → `<base>/Presentations/<name>` so they live in their own
-    folder per user preference. All other files → `<base>/<name>`.
+    Routes each file type to its own subfolder:
+      .pptx  → <base>/Presentations/
+      .docx  → <base>/Reports/
+      .md    → <base>/MD cached/
+      .xlsx  → <base>/Rebalanced/
+      other  → <base>/   (e.g. .json metadata files)
     """
     base = _dropbox_folder()
-    if file_name.lower().endswith(".pptx"):
-        return (f"{base}/{DROPBOX_PRESENTATIONS_SUBFOLDER}/{file_name}"
-                if base else f"/{DROPBOX_PRESENTATIONS_SUBFOLDER}/{file_name}")
-    return f"{base}/{file_name}" if base else f"/{file_name}"
+    name_lower = file_name.lower()
+
+    if name_lower.endswith(".pptx"):
+        sub = DROPBOX_PRESENTATIONS_SUBFOLDER
+    elif name_lower.endswith(".docx"):
+        sub = DROPBOX_REPORTS_SUBFOLDER
+    elif name_lower.endswith(".md"):
+        sub = DROPBOX_MD_SUBFOLDER
+    elif name_lower.endswith(".xlsx"):
+        sub = DROPBOX_REBALANCED_SUBFOLDER
+    else:
+        return f"{base}/{file_name}" if base else f"/{file_name}"
+
+    return f"{base}/{sub}/{file_name}" if base else f"/{sub}/{file_name}"
 
 
 def push_to_dropbox(file_paths: list[Path | str]) -> dict:
@@ -7754,12 +7770,17 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{p.name}: {exc}")
 
+    def _sub(name: str) -> str:
+        return f"{folder}/{name}" if folder else f"/{name}"
+
     return {
         "ok": bool(uploaded) or not [Path(f) for f in file_paths if Path(f).exists()],
         "uploaded": uploaded,
         "folder": folder,
-        "presentations_folder": (f"{folder}/{DROPBOX_PRESENTATIONS_SUBFOLDER}"
-                                 if folder else f"/{DROPBOX_PRESENTATIONS_SUBFOLDER}"),
+        "presentations_folder": _sub(DROPBOX_PRESENTATIONS_SUBFOLDER),
+        "reports_folder":       _sub(DROPBOX_REPORTS_SUBFOLDER),
+        "md_folder":            _sub(DROPBOX_MD_SUBFOLDER),
+        "rebalanced_folder":    _sub(DROPBOX_REBALANCED_SUBFOLDER),
         "errors": errors or None,
     }
 

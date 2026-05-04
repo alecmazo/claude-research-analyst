@@ -577,7 +577,8 @@ async def start_portfolio(
 
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    xlsx_out = PORTFOLIO_OUT_DIR / f"{job_id}_{analyst.DGA_PORTFOLIO_FILENAME}"
+    date_str = datetime.utcnow().strftime("%Y%m%d")
+    xlsx_out = PORTFOLIO_OUT_DIR / f"Rebalance{date_str}.xlsx"
 
     with _pjobs_lock:
         _pjobs[job_id] = {
@@ -1107,19 +1108,29 @@ def download_portfolio_xlsx(job_id: str):
 # folder. This repopulates the Saved Reports list after a Railway redeploy.
 # ---------------------------------------------------------------------------
 def _hydrate_from_dropbox() -> None:
-    """Restore .md / .docx / .pptx + metadata files from Dropbox into the
-    container's /stocks folder on startup so the app survives Railway
-    redeploys (which wipe local files).
+    """Restore all report/analysis files from Dropbox into the container's
+    /stocks folder on startup so the app survives Railway redeploys (which
+    wipe local files).
 
-    PPTX files now live in `<base>/Presentations/` per user request, so we
-    list both the base folder and the Presentations subfolder.
+    Files are now spread across four Dropbox subfolders:
+      <base>/                  → metadata JSON files (tracker, gamma index, etc.)
+      <base>/Presentations/    → .pptx PowerPoint files
+      <base>/Reports/          → .docx Word reports
+      <base>/MD cached/        → .md markdown reports
+      <base>/Rebalanced/       → .xlsx portfolio rebalance files
     """
     dbx = analyst._dropbox_client()
     if dbx is None:
         return
     folder = analyst._dropbox_folder()
-    pres_folder = (f"{folder}/{analyst.DROPBOX_PRESENTATIONS_SUBFOLDER}"
-                   if folder else f"/{analyst.DROPBOX_PRESENTATIONS_SUBFOLDER}")
+
+    def _sub(name: str) -> str:
+        return f"{folder}/{name}" if folder else f"/{name}"
+
+    pres_folder      = _sub(analyst.DROPBOX_PRESENTATIONS_SUBFOLDER)
+    reports_folder   = _sub(analyst.DROPBOX_REPORTS_SUBFOLDER)
+    md_folder        = _sub(analyst.DROPBOX_MD_SUBFOLDER)
+    rebalanced_folder = _sub(analyst.DROPBOX_REBALANCED_SUBFOLDER)
 
     def _list(path: str):
         try:
@@ -1132,45 +1143,65 @@ def _hydrate_from_dropbox() -> None:
         except Exception:
             return []
 
-    base_entries = _list(folder)
-    pres_entries = _list(pres_folder)
-
     downloaded = 0
 
-    def _hydrate_entries(entries: list, source_folder: str) -> int:
-        nonlocal downloaded
+    def _hydrate_entries(entries: list, source_folder: str,
+                         accept_md: bool = False,
+                         accept_docx: bool = False,
+                         accept_pptx: bool = False,
+                         accept_xlsx: bool = False,
+                         accept_special: bool = False) -> int:
         n = 0
         for entry in entries:
             name = getattr(entry, "name", "")
-            is_report_md   = name.endswith("_DGA_Report.md")
-            is_report_docx = name.endswith("_DGA_Report.docx")
-            is_pres_pptx   = name.endswith("_DGA_Presentation.pptx") or name == "Portfolio_Summary.pptx"
-            is_special     = name in {
-                "Portfolio_Summary.md", "Portfolio_Summary.docx",
+            keep = False
+            if accept_md and (name.endswith("_DGA_Report.md")
+                              or name in {"Portfolio_Summary.md"}):
+                keep = True
+            if accept_docx and (name.endswith("_DGA_Report.docx")
+                                or name == "Portfolio_Summary.docx"):
+                keep = True
+            if accept_pptx and (name.endswith("_DGA_Presentation.pptx")
+                                or name == "Portfolio_Summary.pptx"):
+                keep = True
+            if accept_xlsx and name.lower().endswith(".xlsx"):
+                keep = True
+            if accept_special and name in {
                 "tracker.json", "intelligence.json",
                 "_gamma_index.json", "_job_index.json",
-            }
-            if not (is_report_md or is_report_docx or is_pres_pptx or is_special):
+            }:
+                keep = True
+            if not keep:
                 continue
             local = analyst.STOCKS_FOLDER / name
             if local.exists():
                 continue
             try:
-                _, resp = dbx.files_download(
-                    f"{source_folder}/{name}" if source_folder else f"/{name}"
-                )
+                path = f"{source_folder}/{name}" if source_folder else f"/{name}"
+                _, resp = dbx.files_download(path)
                 local.write_bytes(resp.content)
                 n += 1
             except Exception:
                 pass
         return n
 
-    downloaded += _hydrate_entries(base_entries, folder)
-    downloaded += _hydrate_entries(pres_entries, pres_folder)
+    # Base folder — metadata JSON only
+    downloaded += _hydrate_entries(_list(folder),           folder,
+                                   accept_special=True)
+    # Subfolders — each type restricted to its own folder
+    downloaded += _hydrate_entries(_list(pres_folder),      pres_folder,
+                                   accept_pptx=True)
+    downloaded += _hydrate_entries(_list(reports_folder),   reports_folder,
+                                   accept_docx=True)
+    downloaded += _hydrate_entries(_list(md_folder),        md_folder,
+                                   accept_md=True)
+    downloaded += _hydrate_entries(_list(rebalanced_folder), rebalanced_folder,
+                                   accept_xlsx=True)
 
     if downloaded:
         print(f"☁️  Hydrated {downloaded} file(s) from Dropbox into /stocks "
-              f"(base: {folder or '/'}, presentations: {pres_folder})")
+              f"(base: {folder or '/'}, subfolders: Presentations, Reports, "
+              f"MD cached, Rebalanced)")
 
 
 threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()
