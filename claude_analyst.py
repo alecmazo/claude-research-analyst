@@ -140,7 +140,7 @@ def _optional_env(name: str, default: str = "") -> str:
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
 # All analysis, research, intelligence, and daily brief runs on grok-4.3.
 # Override via GROK_MODEL in .env to pin a specific version.
-GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3")
+GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3-latest")
 # Intelligence / Daily Brief use the same model as analysis.
 GROK_INTEL_MODEL = GROK_MODEL
 
