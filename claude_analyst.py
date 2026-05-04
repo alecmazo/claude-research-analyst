@@ -139,10 +139,10 @@ def _optional_env(name: str, default: str = "") -> str:
 
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
 GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.20-reasoning")
-# Daily Brief / Intelligence runs use the latest Grok 4.30-beta for the
+# Daily Brief / Intelligence runs use the latest Grok 4.3 for the
 # freshest macro reasoning + live search. Override via GROK_INTEL_MODEL in
 # .env if you want to roll back.
-GROK_INTEL_MODEL = _optional_env("GROK_INTEL_MODEL", "grok-4.30-beta")
+GROK_INTEL_MODEL = _optional_env("GROK_INTEL_MODEL", "grok-4.3")
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
 # is actually requested at runtime.
