@@ -88,6 +88,30 @@ async def auth_middleware(request: Request, call_next):
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# Persistent job-index — survives server restarts on Railway.
+# Maps { job_id: { "ticker": str, "type": "analysis"|"portfolio" } }
+# Stored next to the stocks folder so it lives on the same volume.
+# ---------------------------------------------------------------------------
+_JOB_INDEX_PATH = analyst.STOCKS_FOLDER / "_job_index.json"
+
+def _load_job_index() -> dict:
+    try:
+        if _JOB_INDEX_PATH.exists():
+            return json.loads(_JOB_INDEX_PATH.read_text())
+    except Exception:
+        pass
+    return {}
+
+def _save_job_index_entry(job_id: str, entry: dict) -> None:
+    """Append / update one entry in the on-disk job index (best-effort)."""
+    try:
+        idx = _load_job_index()
+        idx[job_id] = entry
+        _JOB_INDEX_PATH.write_text(json.dumps(idx, indent=2))
+    except Exception:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -283,18 +307,65 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
             "result": None,
         }
 
+    # Persist mapping so we can recover after a server restart.
+    _save_job_index_entry(job_id, {"ticker": ticker, "type": "analysis", "created_at": now})
+
     background_tasks.add_task(_run_analysis, job_id, ticker, req.generate_gamma)
     return _jobs[job_id]
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobStatus)
 def get_job_status(job_id: str):
-    """Poll for the status of a previously submitted job."""
+    """Poll for the status of a previously submitted job.
+
+    If the job is not in memory (server restarted), we fall back to the
+    on-disk job-index: if the report file already exists we return a
+    synthetic "done" response so the mobile app can navigate to the report.
+    If neither the in-memory job nor the report file exists we return 404.
+    """
     with _jobs_lock:
         job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    if job:
+        return job
+
+    # --- Recovery path after server restart ---
+    idx = _load_job_index()
+    entry = idx.get(job_id)
+    if entry and entry.get("type") == "analysis":
+        ticker = entry.get("ticker", "").upper()
+        md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+        if md_path.exists():
+            # Report was completed before the restart — synthesize a done response.
+            has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
+            has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
+            recovered = {
+                "job_id": job_id,
+                "ticker": ticker,
+                "status": "done",
+                "created_at": entry.get("created_at", ""),
+                "error": None,
+                "result": {
+                    "ok": True,
+                    "has_report": True,
+                    "has_docx": has_docx,
+                    "has_pptx": has_pptx,
+                    "gamma_url": None,
+                    "gamma_error": None,
+                    "recovered": True,   # flag so client knows it was recovered
+                },
+            }
+            # Re-hydrate in memory so subsequent polls are fast.
+            with _jobs_lock:
+                _jobs[job_id] = recovered
+            return recovered
+        else:
+            # Index entry exists but the report never finished — the job was lost.
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job was lost in a server restart before completing. Please re-run the analysis for {ticker}.",
+            )
+
+    raise HTTPException(status_code=404, detail="Job not found")
 
 
 @app.get("/api/jobs")
@@ -476,6 +547,13 @@ async def start_portfolio(
             "error": None,
             "result": None,
         }
+
+    # Persist so we can recover the xlsx path after a server restart.
+    _save_job_index_entry(job_id, {
+        "type": "portfolio",
+        "xlsx_path": str(xlsx_out),
+        "created_at": now,
+    })
 
     background_tasks.add_task(
         _run_portfolio,
@@ -924,12 +1002,42 @@ def get_portfolio_summary_md():
 
 @app.get("/api/portfolio/{job_id}", response_model=PortfolioJobStatus)
 def get_portfolio_status(job_id: str):
-    """Poll a portfolio run."""
+    """Poll a portfolio run.  Falls back to the on-disk index after a restart."""
     with _pjobs_lock:
         job = _pjobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Portfolio job not found")
-    return job
+    if job:
+        return job
+
+    # Recovery path after server restart.
+    idx = _load_job_index()
+    entry = idx.get(job_id)
+    if entry and entry.get("type") == "portfolio":
+        xlsx_path = entry.get("xlsx_path", "")
+        if xlsx_path and Path(xlsx_path).exists():
+            recovered = {
+                "job_id": job_id,
+                "status": "done",
+                "created_at": entry.get("created_at", ""),
+                "strategy": "current",
+                "n_tickers": 0,
+                "error": None,
+                "result": {
+                    "ok": True,
+                    "xlsx_path": xlsx_path,
+                    "gamma_url": None,
+                    "gamma_error": None,
+                    "recovered": True,
+                },
+            }
+            with _pjobs_lock:
+                _pjobs[job_id] = recovered
+            return recovered
+        raise HTTPException(
+            status_code=404,
+            detail="Portfolio job was lost in a server restart. Please re-run.",
+        )
+
+    raise HTTPException(status_code=404, detail="Portfolio job not found")
 
 
 @app.get("/api/portfolio/{job_id}/download")
