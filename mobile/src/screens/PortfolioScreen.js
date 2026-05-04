@@ -4,6 +4,8 @@ import {
   ActivityIndicator, Alert, Switch, Linking,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
@@ -101,10 +103,31 @@ export default function PortfolioScreen() {
     }
   };
 
+  const [downloading, setDownloading] = useState(false);
+
   const openDownload = async () => {
     if (!job) return;
-    const url = await api.portfolioDownloadUrl(job.job_id);
-    Linking.openURL(url);
+    setDownloading(true);
+    try {
+      const url = await api.portfolioDownloadUrl(job.job_id);
+      const localPath = `${FileSystem.cacheDirectory}DGA-portfolio.xlsx`;
+      const result = await FileSystem.downloadAsync(url, localPath);
+      if (result.status !== 200) throw new Error(`Server returned ${result.status}`);
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Not supported', 'Sharing is not available on this device.');
+        return;
+      }
+      await Sharing.shareAsync(result.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'DGA Portfolio — Open in Excel or Numbers',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (err) {
+      Alert.alert('Download failed', err.message);
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const result = job?.result;
@@ -232,8 +255,10 @@ export default function PortfolioScreen() {
           })}
 
           {job.status === 'done' && (
-            <TouchableOpacity style={styles.runBtn} onPress={openDownload}>
-              <Text style={styles.runBtnText}>Download DGA-portfolio.xlsx</Text>
+            <TouchableOpacity style={[styles.runBtn, downloading && styles.runBtnDisabled]} onPress={openDownload} disabled={downloading}>
+              {downloading
+                ? <ActivityIndicator color={colors.navy} />
+                : <Text style={styles.runBtnText}>Download DGA-portfolio.xlsx</Text>}
             </TouchableOpacity>
           )}
           {job.status === 'done' && result?.gsheets?.ok && (

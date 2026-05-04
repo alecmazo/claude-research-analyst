@@ -2042,6 +2042,41 @@ def push_to_google_sheets(
     except Exception as exc:
         return {"ok": False, "error": f"Auth/open failed: {exc}"}
 
+    # Helper colours for the Sheets API (values in 0-1 float range).
+    _NAVY  = {"red": 0.039, "green": 0.086, "blue": 0.157}  # #0A1628
+    _GOLD  = {"red": 0.788, "green": 0.659, "blue": 0.298}  # #C9A84C
+    _WHITE = {"red": 1.0,   "green": 1.0,   "blue": 1.0}
+    _OFFWH = {"red": 0.961, "green": 0.969, "blue": 0.980}  # #F5F7FA
+
+    def _fmt_header(ws, n_cols: int) -> None:
+        """Navy background, white bold text on the header row."""
+        col_end = chr(ord("A") + n_cols - 1)
+        ws.format(f"A1:{col_end}1", {
+            "backgroundColor": _NAVY,
+            "textFormat": {
+                "foregroundColor": _WHITE,
+                "bold": True,
+                "fontSize": 11,
+            },
+            "horizontalAlignment": "CENTER",
+        })
+
+    def _fmt_pct_cols(ws, start_col: int, n_cols: int, n_data_rows: int) -> None:
+        """Apply 0.00% number format to weight columns (decimals stored as 0-1)."""
+        for c in range(start_col, start_col + n_cols):
+            col_letter = chr(ord("A") + c - 1)
+            ws.format(f"{col_letter}2:{col_letter}{n_data_rows + 2}", {
+                "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
+                "horizontalAlignment": "RIGHT",
+            })
+
+    def _fmt_currency_col(ws, col: int, n_data_rows: int) -> None:
+        col_letter = chr(ord("A") + col - 1)
+        ws.format(f"{col_letter}2:{col_letter}{n_data_rows + 1}", {
+            "numberFormat": {"type": "CURRENCY", "pattern": "$#,##0.00"},
+            "horizontalAlignment": "RIGHT",
+        })
+
     try:
         other_order = [s for s in ("pro", "concentrated", "allin") if s != primary_strategy]
         order = [primary_strategy] + other_order
@@ -2080,6 +2115,36 @@ def push_to_google_sheets(
         port_rows.append(total_row)
 
         _gsheets_upsert_sheet(sh, "Portfolio", port_rows)
+        ws_port = sh.worksheet("Portfolio")
+        _fmt_header(ws_port, len(port_headers))
+        # Gold highlight on the "Optimized" (primary strategy) column header (col C = index 3)
+        ws_port.format("C1", {
+            "backgroundColor": _GOLD,
+            "textFormat": {"foregroundColor": _NAVY, "bold": True, "fontSize": 11},
+            "horizontalAlignment": "CENTER",
+        })
+        # Weight columns start at B (col 2); all columns from B onwards are percentages
+        _fmt_pct_cols(ws_port, start_col=2, n_cols=len(port_headers) - 1,
+                      n_data_rows=len(all_tickers) + 1)  # +1 for TOTAL row
+        # Bold ticker column
+        ws_port.format(f"A2:A{len(all_tickers) + 2}", {
+            "textFormat": {"bold": True},
+            "horizontalAlignment": "CENTER",
+        })
+        # Highlight TOTAL row
+        total_row_idx = len(all_tickers) + 2
+        ws_port.format(f"A{total_row_idx}:{chr(ord('A') + len(port_headers) - 1)}{total_row_idx}", {
+            "backgroundColor": _OFFWH,
+            "textFormat": {"bold": True},
+        })
+        ws_port.freeze(rows=1)
+        # Column widths (approximate via gspread pixel width)
+        try:
+            ws_port.set_column_width(1, 90)   # Ticker col A
+            for c in range(2, len(port_headers) + 1):
+                ws_port.set_column_width(c, 160)
+        except Exception:
+            pass  # set_column_width may not be available in older gspread
 
         # ---- Sheet: Summary ----
         sum_headers = [
@@ -2095,12 +2160,17 @@ def push_to_google_sheets(
         sum_rows: list[list] = [sum_headers]
         for ticker in all_tickers:
             meta = primary_rows_by_tkr.get(ticker, {})
+            upside = meta.get("upside_pct")
+            try:
+                upside = float(upside) if upside is not None else None
+            except (TypeError, ValueError):
+                upside = None
             srow: list = [
                 ticker,
                 meta.get("rating", "—"),
                 meta.get("price"),
                 meta.get("price_target"),
-                meta.get("upside_pct"),
+                upside,
                 meta.get("sector", "Unknown"),
                 round(strategy_results[primary_strategy]["weights"].get(ticker, 0.0), 4),
             ]
@@ -2109,6 +2179,23 @@ def push_to_google_sheets(
             sum_rows.append(srow)
 
         _gsheets_upsert_sheet(sh, "Summary", sum_rows)
+        ws_sum = sh.worksheet("Summary")
+        _fmt_header(ws_sum, len(sum_headers))
+        n_data = len(all_tickers)
+        _fmt_currency_col(ws_sum, col=3, n_data_rows=n_data)  # Current Price
+        _fmt_currency_col(ws_sum, col=4, n_data_rows=n_data)  # 12M Target
+        # Upside % (col E = 5) — stored as plain float like 23.5 (not 0-1), so use NUMBER not PERCENT
+        ws_sum.format(f"E2:E{n_data + 1}", {
+            "numberFormat": {"type": "NUMBER", "pattern": "0.00"},
+            "horizontalAlignment": "RIGHT",
+        })
+        # Weight columns start at col 7 (G)
+        _fmt_pct_cols(ws_sum, start_col=7, n_cols=len(sum_headers) - 6, n_data_rows=n_data)
+        ws_sum.format(f"A2:A{n_data + 1}", {
+            "textFormat": {"bold": True},
+            "horizontalAlignment": "CENTER",
+        })
+        ws_sum.freeze(rows=1)
 
         # ---- Sheet: Run Log (append-only audit trail) ----
         log_headers = ["Timestamp", "Tickers", "Strategy", "Top Picks", "# Positions"]
@@ -2123,6 +2210,12 @@ def push_to_google_sheets(
             sum(1 for v in strategy_results[primary_strategy]["weights"].values() if v > 0),
         ]
         _gsheets_append_log(sh, "Run Log", log_headers, log_row)
+        try:
+            ws_log = sh.worksheet("Run Log")
+            _fmt_header(ws_log, len(log_headers))
+            ws_log.freeze(rows=1)
+        except Exception:
+            pass
 
         url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
         return {"ok": True, "url": url}
