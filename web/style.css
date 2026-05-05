@@ -330,9 +330,10 @@ body {
 }
 
 .reports-col-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr 96px 96px 14px;
   align-items: center;
+  gap: 10px;
   padding: 8px 14px 6px;
   border-bottom: 1px solid var(--light-gray);
   font-size: 9px;
@@ -340,10 +341,12 @@ body {
   color: var(--mid-gray);
   letter-spacing: 1.2px;
 }
+.reports-col-header .rch-price  { text-align: right; }
+.reports-col-header .rch-target { text-align: right; color: var(--gold); }
 
 .report-row {
   display: grid;
-  grid-template-columns: 1fr auto 14px;
+  grid-template-columns: 1fr 96px 96px 14px;
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
@@ -367,21 +370,30 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-top: 2px;
+  margin-top: 3px;
   line-height: 1;
 }
-.rr-dot {
-  width: 6px;
-  height: 6px;
+
+/* DOC / PPT pills — matches mobile so the format indicators read the
+   same on both surfaces. (Replaces the old indistinguishable colored
+   dots.) */
+.rr-pill {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 1px 4px;
   border-radius: 3px;
+  line-height: 1;
   flex-shrink: 0;
 }
-.rr-dot-navy { background: var(--navy-light); }
-.rr-dot-gold { background: var(--gold); }
+.rr-pill-doc { background: var(--navy);      color: var(--white); }
+.rr-pill-ppt { background: var(--gold);      color: var(--navy);  }
+
 .rr-date {
   font-size: 11px;
   color: var(--mid-gray);
-  margin-left: 2px;
+  margin-left: 3px;
 }
 
 .rr-price-cell {
@@ -389,7 +401,6 @@ body {
   flex-direction: column;
   align-items: flex-end;
   font-family: "Courier New", monospace;
-  min-width: 96px;
 }
 .rr-price {
   font-size: 13px;
@@ -407,11 +418,88 @@ body {
 .rr-pct.down { color: var(--red); }
 .rr-price-missing { color: var(--light-gray); font-size: 13px; }
 
+/* Target / upside column — visually distinct from the live-price column
+   so it doesn't compete with intraday color. Tiny gold "TGT" label. */
+.rr-target-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: "Courier New", monospace;
+}
+.rr-target-label {
+  font-size: 7px;
+  font-weight: 800;
+  color: var(--gold);
+  letter-spacing: 1.0px;
+  line-height: 1;
+  margin-bottom: 1px;
+}
+.rr-target {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dark-gray);
+  line-height: 1.1;
+}
+.rr-upside {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 1px;
+  line-height: 1;
+}
+.rr-upside.up   { color: var(--green); }
+.rr-upside.down { color: var(--red); }
+.rr-target-missing { color: var(--light-gray); font-size: 12px; }
+
 .rr-chev {
   color: var(--mid-gray);
   font-size: 16px;
   text-align: center;
   font-weight: 300;
+}
+
+/* ── Live portfolio progress (in-flight rebalance run) ────────────────── */
+.ppt-progress {
+  margin-bottom: 6px;
+}
+.ppt-bar {
+  height: 6px;
+  background: var(--light-gray);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.ppt-bar-fill {
+  height: 100%;
+  background: var(--gold);
+  border-radius: 3px;
+  transition: width 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ppt-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.ppt-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ppt-counter {
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mid-gray);
+}
+.ppt-tallies {
+  margin-top: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  color: var(--mid-gray);
 }
 
 /* Legacy badge kept for other views (analysis result, etc.) */

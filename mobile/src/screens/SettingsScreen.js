@@ -13,7 +13,7 @@ import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
-const APP_BUILD = 'mobile-ui15-20260505';
+const APP_BUILD = 'mobile-ui16-20260505';
 
 export default function SettingsScreen() {
   const [baseUrl, setBaseUrlState]     = useState('');

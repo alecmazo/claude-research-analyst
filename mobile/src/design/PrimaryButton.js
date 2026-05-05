@@ -26,7 +26,6 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors, radius, fontSize, letterSpacing } from './tokens';
-import { haptics } from './haptics';
 
 export default function PrimaryButton({
   title,
@@ -45,7 +44,6 @@ export default function PrimaryButton({
 
   const handlePress = () => {
     if (isDisabled) return;
-    haptics.onPressPrimary();
     onPress?.();
   };
 

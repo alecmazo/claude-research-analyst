@@ -143,6 +143,10 @@ class PortfolioJobStatus(BaseModel):
     n_tickers: int
     error: str | None = None
     result: dict | None = None
+    # Live progress emitted by run_portfolio_rebalance — populated on
+    # /portfolio/{id} polls while status='running'. Frontend renders a
+    # per-ticker counter ("3 / 12 — analyzing AAPL") and progress bar.
+    progress: dict | None = None
 
 
 class IntelligenceRequest(BaseModel):
@@ -240,6 +244,30 @@ def _run_portfolio(
 ) -> None:
     with _pjobs_lock:
         _pjobs[job_id]["status"] = "running"
+        _pjobs[job_id]["progress"] = {
+            "step": "queued", "pct": 0.0,
+            "label": "Starting portfolio run…",
+            "ticker_index": 0, "ticker_total": 0,
+            "current_ticker": None,
+            "ok": [], "failed": [],
+        }
+
+    # Progress callback — runs on the worker thread, mutates the shared
+    # job dict. The portfolio pipeline emits per-ticker progress so the
+    # frontend can render a "3 / 12 — analyzing AAPL" counter.
+    def _record_progress(step: str, pct: float, label: str, extra: dict) -> None:
+        with _pjobs_lock:
+            if job_id in _pjobs:
+                _pjobs[job_id]["progress"] = {
+                    "step": step,
+                    "pct": pct,
+                    "label": label,
+                    "ticker_index": extra.get("ticker_index", 0),
+                    "ticker_total": extra.get("ticker_total", 0),
+                    "current_ticker": extra.get("ticker"),
+                    "ok": list(extra.get("ok", []) or []),
+                    "failed": list(extra.get("failed", []) or []),
+                }
 
     try:
         result = analyst.run_portfolio_rebalance(
@@ -248,12 +276,23 @@ def _run_portfolio(
             generate_gamma=generate_gamma,
             reuse_existing=reuse_existing,
             output_path=xlsx_out_path,
+            on_progress=_record_progress,
         )
         with _pjobs_lock:
             _pjobs[job_id]["status"] = "done" if result.get("ok") else "failed"
             _pjobs[job_id]["result"] = result
             if not result.get("ok"):
                 _pjobs[job_id]["error"] = "No tickers could be analyzed."
+            # Mark progress as done so the UI doesn't keep showing "Analyzing X"
+            # after the result lands.
+            _pjobs[job_id]["progress"] = {
+                **(_pjobs[job_id].get("progress") or {}),
+                "step": "done" if result.get("ok") else "failed",
+                "pct": 1.0,
+                "label": (f"Done — {len(result.get('tickers_ok') or [])} ok, "
+                          f"{len(result.get('tickers_failed') or [])} failed")
+                          if result.get("ok") else "Failed",
+            }
         # Auto-promote the input holdings as the new "live portfolio" benchmark
         # so the Paper Tracker can compare idea baskets against your real book.
         if result.get("ok"):
@@ -543,9 +582,51 @@ def delete_report(ticker: str):
     return {"ticker": ticker, "cleared": cleared, "count": len(cleared)}
 
 
+# In-memory summary cache, keyed by md_file.stat().st_mtime_ns. Avoids
+# re-parsing the same markdown on every /api/reports call. Capped implicitly
+# by the number of tickers a user has cached locally.
+_summary_cache: dict[str, dict] = {}
+
+
+def _extract_summary_cached(md_file: Path) -> dict:
+    """Return {rating, price_target, upside_pct} for a saved report.
+
+    Parsing happens once per (ticker, mtime) pair — re-running an analysis
+    bumps mtime which invalidates the cache. We only read the first 12KB
+    of the file because every field extract_summary_from_report cares about
+    is in the report header / summary table.
+    """
+    try:
+        key = f"{md_file.name}:{md_file.stat().st_mtime_ns}"
+    except OSError:
+        return {}
+    cached = _summary_cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        with open(md_file, "rb") as fh:
+            head = fh.read(12 * 1024).decode("utf-8", errors="replace")
+        full = analyst.extract_summary_from_report(head)
+    except Exception:  # noqa: BLE001
+        full = {}
+    summary = {
+        "rating":        full.get("rating"),
+        "price_target":  full.get("price_target"),
+        "current_price": full.get("current_price"),
+        "upside_pct":    full.get("upside_pct"),
+    }
+    _summary_cache[key] = summary
+    return summary
+
+
 @app.get("/api/reports")
 def list_reports():
-    """Return all tickers that have saved reports."""
+    """Return all tickers that have saved reports.
+
+    Each entry now includes an extracted summary (`rating`, `price_target`,
+    `upside_pct`) so the Research tab can show a target-vs-price chip in
+    the saved-reports list without an extra API round-trip per row.
+    """
     folder = analyst.STOCKS_FOLDER
     try:
         gamma_idx = analyst._load_gamma_index()
@@ -557,12 +638,19 @@ def list_reports():
         has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
         has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
         gamma_entry = gamma_idx.get(ticker) or {}
+        summary = _extract_summary_cached(md_file)
         reports.append({
             "ticker": ticker,
             "generated_at": datetime.utcfromtimestamp(md_file.stat().st_mtime).isoformat(),
             "has_docx": has_docx,
             "has_pptx": has_pptx,
             "gamma_url": gamma_entry.get("gamma_url"),
+            # Extracted summary fields (may be None for older reports without
+            # the standard header).
+            "rating":        summary.get("rating"),
+            "price_target":  summary.get("price_target"),
+            "current_price": summary.get("current_price"),
+            "upside_pct":    summary.get("upside_pct"),
         })
     return reports
 
@@ -642,6 +730,15 @@ async def start_portfolio(
             "n_tickers": len(records),
             "error": None,
             "result": None,
+            # Seeded so a poll right after submit gets a useful payload
+            # rather than null. Real values arrive once the worker thread
+            # starts firing on_progress.
+            "progress": {
+                "step": "queued", "pct": 0.0,
+                "label": "Queued — analyzing tickers shortly…",
+                "ticker_index": 0, "ticker_total": len(records),
+                "current_ticker": None, "ok": [], "failed": [],
+            },
         }
 
     # Persist so we can recover the xlsx path after a server restart.

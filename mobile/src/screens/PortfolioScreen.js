@@ -220,13 +220,50 @@ export default function PortfolioScreen({ navigation }) {
       {job && (
         <View style={styles.card}>
           <Text style={styles.label}>STATUS</Text>
-          <Text style={styles.statusText}>
-            {job.status === 'done'
-              ? `✅ Done — ${job.n_tickers} tickers analyzed`
-              : job.status === 'failed'
-                ? '❌ Failed'
-                : `${job.status === 'running' ? 'Analyzing' : 'Queued'} — ${job.n_tickers} tickers (${job.strategy})…`}
-          </Text>
+
+          {/* Live progress bar + per-ticker counter (running only) */}
+          {(job.status === 'queued' || job.status === 'running') && job.progress && (
+            <View style={styles.progressWrap}>
+              <View style={styles.progressBarTrack}>
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    { width: `${Math.round((job.progress.pct ?? 0) * 100)}%` },
+                  ]}
+                />
+              </View>
+              <View style={styles.progressMetaRow}>
+                <Text style={styles.progressLabelText} numberOfLines={1}>
+                  {job.progress.label || (job.status === 'running' ? 'Analyzing…' : 'Queued')}
+                </Text>
+                {job.progress.ticker_total > 0 && (
+                  <Text style={styles.progressCounter}>
+                    {job.progress.ticker_index || 0}/{job.progress.ticker_total}
+                  </Text>
+                )}
+              </View>
+              {/* Tiny ok / failed mini-counter while running */}
+              {(job.progress.ok?.length || job.progress.failed?.length) ? (
+                <Text style={styles.progressTallies}>
+                  {(job.progress.ok?.length || 0)} ok
+                  {(job.progress.failed?.length > 0)
+                    ? ` · ${job.progress.failed.length} failed`
+                    : ''}
+                </Text>
+              ) : null}
+            </View>
+          )}
+
+          {/* Final status line — clean and informative */}
+          {job.status === 'done' && (
+            <Text style={styles.statusText}>
+              ✅ Done — {job.n_tickers} tickers analyzed
+            </Text>
+          )}
+          {job.status === 'failed' && (
+            <Text style={styles.statusText}>❌ Failed</Text>
+          )}
+
           {error && <Text style={styles.errorText}>{error}</Text>}
           {job.error && <Text style={styles.errorText}>{job.error}</Text>}
 
@@ -451,6 +488,47 @@ const styles = StyleSheet.create({
   },
   statusText: { fontSize: 14, fontWeight: '600', color: colors.navy, marginBottom: 6 },
   errorText: { fontSize: 13, color: colors.red, marginTop: 4 },
+
+  // Live progress UI for in-flight portfolio runs.
+  progressWrap: {
+    marginBottom: 8,
+  },
+  progressBarTrack: {
+    height: 6,
+    backgroundColor: colors.lightGray,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: colors.gold,
+    borderRadius: 3,
+  },
+  progressMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  progressLabelText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.navy,
+  },
+  progressCounter: {
+    fontSize: 12,
+    color: colors.midGray,
+    fontFamily: 'Courier New',
+    fontWeight: '700',
+  },
+  progressTallies: {
+    marginTop: 4,
+    fontSize: 11,
+    color: colors.midGray,
+    fontFamily: 'Courier New',
+  },
   resultBlock: {
     marginTop: 10,
     padding: 12,

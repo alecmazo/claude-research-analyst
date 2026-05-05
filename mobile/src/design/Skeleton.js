@@ -43,8 +43,8 @@ export function Skeleton({
 
 /**
  * SkeletonReportRow — one row in the saved-reports list.
- * Mirrors the shape of HomeScreen's reportRow so the swap to real
- * content doesn't reflow.
+ * Mirrors the shape of HomeScreen's 3-column reportRow (ticker / price /
+ * target) so the swap to real content doesn't reflow.
  */
 export function SkeletonReportRow() {
   return (
@@ -57,10 +57,15 @@ export function SkeletonReportRow() {
           <Skeleton width={42} height={12} radius={3} />
         </View>
       </View>
-      <View style={{ alignItems: 'flex-end', minWidth: 86 }}>
-        <Skeleton width={64} height={14} radius={3} />
+      <View style={{ alignItems: 'flex-end', minWidth: 78, marginRight: 10 }}>
+        <Skeleton width={60} height={14} radius={3} />
         <View style={{ height: 4 }} />
-        <Skeleton width={48} height={12} radius={3} />
+        <Skeleton width={42} height={11} radius={3} />
+      </View>
+      <View style={{ alignItems: 'flex-end', minWidth: 70 }}>
+        <Skeleton width={36} height={14} radius={3} />
+        <View style={{ height: 4 }} />
+        <Skeleton width={44} height={11} radius={3} />
       </View>
     </View>
   );

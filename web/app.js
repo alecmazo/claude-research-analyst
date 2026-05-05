@@ -538,8 +538,30 @@ async function pollPortfolio() {
   try {
     const job = await api.getPortfolioJob(portfolioJobId);
     if (job.status === 'queued' || job.status === 'running') {
-      portfolioStatusText.textContent =
-        `${job.status === 'running' ? 'Analyzing' : 'Queued'} — ${job.n_tickers} tickers (${job.strategy})…`;
+      // Real progress (per-ticker counter + bar) when the backend supplies
+      // it; legacy fallback otherwise so older servers still work.
+      const p = job.progress;
+      if (p) {
+        const pct = Math.max(0, Math.min(1, Number(p.pct ?? 0)));
+        const counter = p.ticker_total
+          ? `${p.ticker_index || 0}/${p.ticker_total}`
+          : '';
+        const tallies = (p.ok?.length || p.failed?.length)
+          ? `${p.ok?.length || 0} ok${p.failed?.length ? ` · ${p.failed.length} failed` : ''}`
+          : '';
+        portfolioStatusText.innerHTML = `
+          <div class="ppt-progress">
+            <div class="ppt-bar"><div class="ppt-bar-fill" style="width:${(pct * 100).toFixed(1)}%"></div></div>
+            <div class="ppt-meta">
+              <span class="ppt-label">${(p.label || 'Working…').replace(/[<>&]/g, '')}</span>
+              ${counter ? `<span class="ppt-counter">${counter}</span>` : ''}
+            </div>
+            ${tallies ? `<div class="ppt-tallies">${tallies}</div>` : ''}
+          </div>`;
+      } else {
+        portfolioStatusText.textContent =
+          `${job.status === 'running' ? 'Analyzing' : 'Queued'} — ${job.n_tickers} tickers (${job.strategy})…`;
+      }
     } else if (job.status === 'done') {
       clearInterval(portfolioPollTimer);
       portfolioStatusText.textContent = `✅ Done — ${job.n_tickers} tickers analyzed`;
@@ -713,12 +735,13 @@ async function injectReportPrices(reports) {
   if (!reports || !reports.length) return;
   // Fan out all quote fetches in parallel — non-blocking, best-effort.
   const fetches = reports.map(async r => {
-    const el = document.getElementById(`price-tag-${r.ticker}`);
-    if (!el) return;
+    const priceEl  = document.getElementById(`price-tag-${r.ticker}`);
+    const targetEl = document.getElementById(`target-tag-${r.ticker}`);
+    if (!priceEl) return;
     try {
       const q = await api.getQuote(r.ticker);
       if (!q?.price) {
-        el.innerHTML = '<span class="rr-price-missing">—</span>';
+        priceEl.innerHTML = '<span class="rr-price-missing">—</span>';
         return;
       }
       const price = Number(q.price);
@@ -731,9 +754,25 @@ async function injectReportPrices(reports) {
         const sign = pct >= 0 ? '+' : '';
         const cls  = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
         html += `<span class="rr-pct ${cls}">${sign}${pct.toFixed(2)}%</span>`;
-        el.title = `${sign}${pct.toFixed(2)}% today`;
+        priceEl.title = `${sign}${pct.toFixed(2)}% today`;
       }
-      el.innerHTML = html;
+      priceEl.innerHTML = html;
+
+      // Recompute target upside against the live price so it's in sync
+      // intraday (the server's stored upside_pct is from report-time close).
+      if (targetEl && r.price_target != null) {
+        const tgt = Number(r.price_target);
+        const upside = price > 0 ? ((tgt - price) / price) * 100 : null;
+        let h = `<span class="rr-target-label">TGT</span>`;
+        h    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
+        if (upside != null) {
+          const sign = upside >= 0 ? '+' : '';
+          const cls  = upside >= 0 ? 'up' : 'down';
+          h += `<span class="rr-upside ${cls}">${sign}${upside.toFixed(1)}%</span>`;
+          targetEl.title = `12M target $${tgt.toFixed(0)} = ${sign}${upside.toFixed(1)}% upside vs $${price.toFixed(2)}`;
+        }
+        targetEl.innerHTML = h;
+      }
     } catch { /* non-fatal */ }
   });
   await Promise.allSettled(fetches);
@@ -1028,23 +1067,42 @@ async function loadReports() {
         return d.toLocaleDateString('en-US', opts);
       } catch { return ''; }
     };
+    // Pre-render target placeholder using server-extracted summary so the
+    // target column doesn't pop in late on slow networks. Live price arrives
+    // shortly after via injectReportPrices() and we recompute upside there.
+    const targetCellHtml = (r) => {
+      if (r.price_target == null) return '<span class="rr-target-missing">—</span>';
+      const tgt = Number(r.price_target);
+      let pct = r.upside_pct != null ? Number(r.upside_pct) : null;
+      let html = `<span class="rr-target-label">TGT</span>`;
+      html    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
+      if (pct != null) {
+        const sign = pct >= 0 ? '+' : '';
+        const cls  = pct >= 0 ? 'up' : 'down';
+        html += `<span class="rr-upside ${cls}">${sign}${pct.toFixed(1)}%</span>`;
+      }
+      return html;
+    };
+
     list.innerHTML = `
       <div class="reports-table">
         <div class="reports-col-header">
           <span>TICKER</span>
-          <span>PRICE / CHG</span>
+          <span class="rch-price">PRICE</span>
+          <span class="rch-target">TGT / UPSIDE</span>
         </div>
         ${reports.map(r => `
           <div class="report-row" data-ticker="${r.ticker}">
             <div class="rr-ticker-cell">
               <div class="rr-ticker">${r.ticker}</div>
               <div class="rr-meta">
-                ${r.has_docx ? '<span class="rr-dot rr-dot-navy" title="DOCX"></span>' : ''}
-                ${r.has_pptx ? '<span class="rr-dot rr-dot-gold" title="PPTX"></span>' : ''}
+                ${r.has_docx ? '<span class="rr-pill rr-pill-doc" title="Word report available">DOC</span>' : ''}
+                ${r.has_pptx ? '<span class="rr-pill rr-pill-ppt" title="Gamma deck available">PPT</span>' : ''}
                 <span class="rr-date">${compactDate(r.generated_at)}</span>
               </div>
             </div>
             <div class="rr-price-cell" id="price-tag-${r.ticker}">…</div>
+            <div class="rr-target-cell" id="target-tag-${r.ticker}">${targetCellHtml(r)}</div>
             <span class="rr-chev">›</span>
           </div>
         `).join('')}

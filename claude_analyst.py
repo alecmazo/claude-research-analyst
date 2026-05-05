@@ -8302,6 +8302,7 @@ def run_portfolio_rebalance(
     output_path: Path | str | None = None,
     system_prompt: str | None = None,
     verbose: bool = False,
+    on_progress=None,
 ) -> dict:
     """Analyze every ticker in *portfolio_records* and produce DGA-portfolio.xlsx.
 
@@ -8312,6 +8313,19 @@ def run_portfolio_rebalance(
       - xlsx_path: str path to the generated xlsx
       - primary_strategy: key of the primary strategy shown first
       - summary: short roll-up for API responses
+
+    Progress reporting:
+        ``on_progress`` is an optional callable
+        ``(step, pct, label, extra)`` invoked at each pipeline boundary.
+        ``step`` is one of:
+            ``"queued" | "analyzing" | "rollup" | "weights" | "writing"
+             | "email" | "sheets" | "drive" | "done"``
+        ``extra`` is a dict with per-step context — most importantly
+        ``{"ticker_index": i, "ticker_total": n, "ticker": "AAPL",
+        "ok": [list of OK so far], "failed": [list of failed so far]}``
+        during ``"analyzing"``. The frontend uses this to render a
+        per-ticker counter ("3 / 12 — analyzing AAPL") instead of a
+        single opaque spinner.
     """
     if primary_strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {primary_strategy}")
@@ -8320,8 +8334,37 @@ def run_portfolio_rebalance(
         system_prompt = load_system_prompt()
 
     tickers = portfolio_tickers(portfolio_records)
+    n_tickers = len(tickers)
+
+    def _emit(step, pct, label, extra=None):
+        if on_progress is None:
+            return
+        try:
+            on_progress(step, max(0.0, min(1.0, float(pct))), label, extra or {})
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Per-ticker analyses dominate the runtime. We allocate 80% of the
+    # progress bar to this phase, then split the remaining 20% across
+    # roll-up, weight computation, xlsx write, and side-effects.
+    ANALYZE_BUDGET = 0.80
+
+    _emit("analyzing", 0.0, f"Analyzing {n_tickers} tickers…",
+          {"ticker_total": n_tickers, "ticker_index": 0,
+           "ok": [], "failed": []})
+
     ticker_results: list[dict] = []
-    for ticker in tickers:
+    ok_so_far: list[str] = []
+    failed_so_far: list[str] = []
+    for i, ticker in enumerate(tickers):
+        # Announce the ticker at the START of its analysis so the UI shows
+        # the right ticker label *while* it's running, not after.
+        _emit("analyzing",
+              ANALYZE_BUDGET * (i / max(1, n_tickers)),
+              f"Analyzing {ticker} ({i + 1}/{n_tickers})",
+              {"ticker_total": n_tickers, "ticker_index": i + 1,
+               "ticker": ticker,
+               "ok": list(ok_so_far), "failed": list(failed_so_far)})
         try:
             r = analyze_ticker(
                 ticker,
@@ -8333,9 +8376,19 @@ def run_portfolio_rebalance(
         except Exception as exc:  # noqa: BLE001
             r = {"ticker": ticker, "ok": False, "error": str(exc)}
         ticker_results.append(r)
+        if r.get("ok"):
+            ok_so_far.append(ticker)
+        else:
+            failed_so_far.append(ticker)
 
     ok_results = [r for r in ticker_results if r.get("ok")]
     failed = [r for r in ticker_results if not r.get("ok")]
+
+    _emit("rollup", ANALYZE_BUDGET + 0.04,
+          f"Roll-up commentary ({len(ok_results)} tickers)",
+          {"ticker_total": n_tickers, "ticker_index": n_tickers,
+           "ok": [r["ticker"] for r in ok_results],
+           "failed": [r.get("ticker", "?") for r in failed]})
 
     # Run the Grok roll-up (best-effort — gives us ranked rows if reachable).
     ranked_rows = None
@@ -8347,6 +8400,9 @@ def run_portfolio_rebalance(
                 ranked_rows = roll.get("ranked_rows")
         except Exception:  # noqa: BLE001
             roll = {"ok": False}
+
+    _emit("weights", ANALYZE_BUDGET + 0.10,
+          "Computing portfolio weights (3 strategies)")
 
     # Always compute ALL three strategies so the xlsx shows comparisons.
     strategy_results: dict[str, dict] = {}
@@ -8360,6 +8416,9 @@ def run_portfolio_rebalance(
         output_path = Path.cwd() / DGA_PORTFOLIO_FILENAME
     else:
         output_path = Path(output_path)
+
+    _emit("writing", ANALYZE_BUDGET + 0.13,
+          "Writing DGA-portfolio.xlsx")
 
     write_dga_portfolio_xlsx(
         output_path=output_path,
@@ -8380,6 +8439,8 @@ def run_portfolio_rebalance(
 
     run_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
+    _emit("email", ANALYZE_BUDGET + 0.16, "Sending portfolio email")
+
     # Email portfolio results — only fires for multi-ticker (portfolio) runs.
     email_status: dict = {"ok": False, "skipped": True}
     if len(ok_results) > 1:
@@ -8398,6 +8459,8 @@ def run_portfolio_rebalance(
         except Exception as exc:  # noqa: BLE001
             email_status = {"ok": False, "error": str(exc)}
 
+    _emit("sheets", ANALYZE_BUDGET + 0.18, "Pushing to Google Sheets")
+
     # Google Sheets push — only fires for multi-ticker runs.
     gsheets_status: dict = {"ok": False, "skipped": True}
     if len(ok_results) > 1:
@@ -8410,6 +8473,8 @@ def run_portfolio_rebalance(
             )
         except Exception as exc:  # noqa: BLE001
             gsheets_status = {"ok": False, "error": str(exc)}
+
+    _emit("drive", ANALYZE_BUDGET + 0.19, "Uploading to Dropbox / Drive")
 
     # Google Drive upload — portfolio xlsx + all per-ticker reports + the
     # Grok portfolio roll-up (Portfolio_Summary.md/.docx) so the Research
@@ -8432,6 +8497,12 @@ def run_portfolio_rebalance(
         gdrive_status = push_to_google_drive(drive_files)
     except Exception as exc:  # noqa: BLE001
         gdrive_status = {"ok": False, "error": str(exc)}
+
+    _emit("done", 1.0,
+          f"Done — {len(ok_results)}/{n_tickers} tickers analyzed",
+          {"ticker_total": n_tickers, "ticker_index": n_tickers,
+           "ok": [r["ticker"] for r in ok_results],
+           "failed": [r.get("ticker", "?") for r in failed]})
 
     return {
         "ok": bool(ok_results),

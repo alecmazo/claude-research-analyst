@@ -203,6 +203,24 @@ export default function HomeScreen({ navigation, route }) {
     const pctStr   = pct != null ? `${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%` : null;
     const isUp     = pct != null && pct >= 0;
 
+    // ── Target price + upside (from saved report) ──
+    // Recompute upside live whenever we have both target + current quote price
+    // so the % stays in sync with intraday moves. Falls back to the server's
+    // stored upside_pct (computed against close-of-day price at report time).
+    const target = item.price_target != null ? Number(item.price_target) : null;
+    const livePrice = q?.price != null ? Number(q.price) : null;
+    let targetUpside = null;
+    if (target != null && livePrice != null && livePrice > 0) {
+      targetUpside = ((target - livePrice) / livePrice) * 100;
+    } else if (item.upside_pct != null) {
+      targetUpside = Number(item.upside_pct);
+    }
+    const targetStr  = target != null ? `$${target.toFixed(0)}` : null;
+    const upsideStr  = targetUpside != null
+      ? `${targetUpside >= 0 ? '+' : ''}${targetUpside.toFixed(1)}%`
+      : null;
+    const targetUp   = targetUpside != null && targetUpside >= 0;
+
     // Compact date "May 4" — year only when not current year
     const dateStr = formatDateCompact(item.generated_at);
 
@@ -232,7 +250,7 @@ export default function HomeScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Right: tightly-packed price column */}
+        {/* Center: live price + today's % change */}
         <View style={styles.priceCell}>
           {priceStr ? (
             <>
@@ -245,6 +263,23 @@ export default function HomeScreen({ navigation, route }) {
             </>
           ) : (
             <Text style={styles.priceMissing}>—</Text>
+          )}
+        </View>
+
+        {/* Right: 12M target + upside */}
+        <View style={styles.targetCell}>
+          {targetStr ? (
+            <>
+              <Text style={styles.targetLabel}>TGT</Text>
+              <Text style={styles.targetText}>{targetStr}</Text>
+              {upsideStr && (
+                <Text style={[styles.upsideText, targetUp ? styles.pctUp : styles.pctDown]}>
+                  {upsideStr}
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text style={styles.targetMissing}>—</Text>
           )}
         </View>
 
@@ -343,7 +378,8 @@ export default function HomeScreen({ navigation, route }) {
             reports.length > 0 ? (
               <View style={styles.colHeader}>
                 <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
-                <Text style={[styles.colHeaderText, { textAlign: 'right' }]}>PRICE / CHG</Text>
+                <Text style={[styles.colHeaderText, styles.colHeaderPrice]}>PRICE</Text>
+                <Text style={[styles.colHeaderText, styles.colHeaderTarget]}>TGT / UPSIDE</Text>
               </View>
             ) : null
           }
@@ -523,7 +559,7 @@ const styles = StyleSheet.create({
   },
   reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 3 },
 
-  priceCell: { alignItems: 'flex-end', minWidth: 86 },
+  priceCell: { alignItems: 'flex-end', minWidth: 78, marginRight: 10 },
   priceText: {
     fontSize: 14, fontWeight: '700', color: colors.navy,
     fontFamily: 'Courier New', lineHeight: 16,
@@ -535,6 +571,27 @@ const styles = StyleSheet.create({
   pctUp:        { color: colors.green },
   pctDown:      { color: colors.red },
   priceMissing: { fontSize: 14, color: colors.lightGray, fontFamily: 'Courier New' },
+
+  // Target column — visually distinct (gold-tinged) so it doesn't compete
+  // with the live-price column. Slightly smaller font to keep row density.
+  targetCell: { alignItems: 'flex-end', minWidth: 70 },
+  targetLabel: {
+    fontSize: 7, fontWeight: '800', color: colors.gold,
+    letterSpacing: 1.0, lineHeight: 10,
+  },
+  targetText: {
+    fontSize: 13, fontWeight: '700', color: colors.darkGray,
+    fontFamily: 'Courier New', lineHeight: 16,
+  },
+  upsideText: {
+    fontSize: 11, fontWeight: '700', fontFamily: 'Courier New',
+    lineHeight: 13, marginTop: 1,
+  },
+  targetMissing: { fontSize: 13, color: colors.lightGray, fontFamily: 'Courier New' },
+
+  // Column-header alignment for the new 3-column layout
+  colHeaderPrice:  { width: 78, marginRight: 10, textAlign: 'right' },
+  colHeaderTarget: { width: 70, textAlign: 'right', color: colors.gold },
 
   chev: { marginLeft: 6 },
 
