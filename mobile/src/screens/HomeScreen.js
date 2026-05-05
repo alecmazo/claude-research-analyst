@@ -1,29 +1,37 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
+  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { api, getGammaEnabled, setGammaEnabled as saveGamma } from '../api/client';
+import {
+  api, getGammaEnabled, setGammaEnabled as saveGamma, getBaseUrl,
+} from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 export default function HomeScreen({ navigation, route }) {
   const [ticker, setTicker]       = useState('');
   const [loading, setLoading]     = useState(false);
+  const [runningTicker, setRunningTicker] = useState('');  // ticker shown in RUN button while loading
   const [reports, setReports]     = useState([]);
   const [prices, setPrices]       = useState({});  // { AAPL: { price, pct_change } }
   const [refreshing, setRefreshing] = useState(false);
   const [serverOk, setServerOk]   = useState(null);
+  const [serverLatencyMs, setServerLatencyMs] = useState(null);
   const [gammaEnabled, setGammaEnabled] = useState(false);  // default OFF
+  const [lastLoadedAt, setLastLoadedAt] = useState(null);   // Date of last successful list load
 
   const checkServer = async () => {
+    const t0 = Date.now();
     try {
       await api.health();
       setServerOk(true);
+      setServerLatencyMs(Date.now() - t0);
     } catch {
       setServerOk(false);
+      setServerLatencyMs(null);
     }
   };
 
@@ -31,6 +39,7 @@ export default function HomeScreen({ navigation, route }) {
     try {
       const data = await api.listReports();
       setReports(data);
+      setLastLoadedAt(new Date());
       // Fetch live prices in parallel (non-blocking — failures silently dropped)
       const map = {};
       await Promise.allSettled(
@@ -76,6 +85,7 @@ export default function HomeScreen({ navigation, route }) {
       return;
     }
     setLoading(true);
+    setRunningTicker(t);
     try {
       const job = await api.startAnalysis(t, gammaEnabled);
       setTicker('');
@@ -88,7 +98,81 @@ export default function HomeScreen({ navigation, route }) {
       }
     } finally {
       setLoading(false);
+      setRunningTicker('');
     }
+  };
+
+  // ── Tap status dot → show server URL + latency + state ─────────────────────
+  const handleStatusDotPress = async () => {
+    const url = await getBaseUrl();
+    const stateLabel =
+      serverOk === true  ? '✓ Connected'
+    : serverOk === false ? '✗ Offline'
+    :                      '— Checking…';
+    const latency = serverLatencyMs != null ? `${serverLatencyMs} ms` : '—';
+    Alert.alert(
+      'API Server',
+      `${stateLabel}\n\nURL: ${url}\nLatency: ${latency}`,
+      [
+        { text: 'Re-test', onPress: checkServer },
+        { text: 'OK' },
+      ]
+    );
+  };
+
+  // ── Long-press a report row → action sheet ─────────────────────────────────
+  const handleRowLongPress = (item) => {
+    const downloadAndOpen = async (type) => {
+      try {
+        const url = await api.downloadUrl(item.ticker, type);
+        Linking.openURL(url);
+      } catch (err) {
+        Alert.alert('Error', err.message);
+      }
+    };
+    const confirmDelete = () => {
+      Alert.alert(
+        'Delete Cached Report?',
+        `Removes the local .md / .docx / .pptx for ${item.ticker}. The Dropbox copy is NOT touched — the next portfolio run can rehydrate it.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: async () => {
+              try {
+                await api.deleteReport(item.ticker);
+                await loadReports();
+              } catch (err) {
+                Alert.alert('Could not delete', err.message);
+              }
+          }},
+        ]
+      );
+    };
+    const reanalyze = async () => {
+      if (serverOk === false) {
+        Alert.alert('Server Offline', 'Cannot reach the API server.');
+        return;
+      }
+      try {
+        const job = await api.startAnalysis(item.ticker, gammaEnabled);
+        navigation.navigate('Analysis', { jobId: job.job_id, ticker: item.ticker });
+      } catch (err) {
+        Alert.alert('Could not re-run', err.message);
+      }
+    };
+
+    const buttons = [
+      { text: `Re-run ${item.ticker} Analysis`, onPress: reanalyze },
+    ];
+    if (item.has_docx !== false) {
+      buttons.push({ text: 'Open .docx', onPress: () => downloadAndOpen('docx') });
+    }
+    if (item.has_pptx) {
+      buttons.push({ text: 'Open .pptx', onPress: () => downloadAndOpen('pptx') });
+    }
+    buttons.push({ text: 'Delete from Cache', style: 'destructive', onPress: confirmDelete });
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert(item.ticker, 'Choose an action', buttons);
   };
 
   const renderReport = ({ item }) => {
@@ -117,14 +201,24 @@ export default function HomeScreen({ navigation, route }) {
       <TouchableOpacity
         style={styles.reportRow}
         onPress={() => navigation.navigate('Report', { ticker: item.ticker })}
+        onLongPress={() => handleRowLongPress(item)}
+        delayLongPress={350}
         activeOpacity={0.7}
       >
-        {/* Left: ticker + tiny format dots underneath */}
+        {/* Left: ticker + format pills + date */}
         <View style={styles.tickerCell}>
           <Text style={styles.reportTicker}>{item.ticker}</Text>
-          <View style={styles.formatDotsRow}>
-            {item.has_docx && <View style={styles.docxDot} />}
-            {item.has_pptx && <View style={styles.pptxDot} />}
+          <View style={styles.formatRow}>
+            {item.has_docx && (
+              <View style={styles.docPill}>
+                <Text style={styles.docPillText}>DOC</Text>
+              </View>
+            )}
+            {item.has_pptx && (
+              <View style={styles.pptPill}>
+                <Text style={styles.pptPillText}>PPT</Text>
+              </View>
+            )}
             <Text style={styles.reportDate}>{dateStr}</Text>
           </View>
         </View>
@@ -150,16 +244,28 @@ export default function HomeScreen({ navigation, route }) {
     );
   };
 
+  // ── Last-updated stamp formatter ───────────────────────────────────────────
+  const lastLoadedStr = lastLoadedAt
+    ? `Updated ${lastLoadedAt.toLocaleTimeString('en-US',
+        { hour: 'numeric', minute: '2-digit' })}`
+    : '';
+
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header — status dot is now tappable for server details */}
       <AppHeader
         title="Research"
         right={
-          <View style={[
-            styles.statusDot,
-            { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
-          ]} />
+          <TouchableOpacity
+            onPress={handleStatusDotPress}
+            activeOpacity={0.6}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <View style={[
+              styles.statusDot,
+              { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
+            ]} />
+          </TouchableOpacity>
         }
       />
 
@@ -183,10 +289,16 @@ export default function HomeScreen({ navigation, route }) {
             onPress={handleAnalyze}
             disabled={loading || !ticker.trim()}
           >
-            {loading
-              ? <ActivityIndicator color={colors.navy} size="small" />
-              : <Text style={styles.analyzeBtnText}>RUN</Text>
-            }
+            {loading ? (
+              <View style={styles.analyzeBtnInner}>
+                <ActivityIndicator color={colors.navy} size="small" />
+                {runningTicker ? (
+                  <Text style={styles.analyzeBtnLoadingText}>{runningTicker}…</Text>
+                ) : null}
+              </View>
+            ) : (
+              <Text style={styles.analyzeBtnText}>RUN</Text>
+            )}
           </TouchableOpacity>
         </View>
         <View style={styles.gammaRow}>
@@ -206,6 +318,10 @@ export default function HomeScreen({ navigation, route }) {
         {reports.length > 0 && (
           <Text style={styles.countBadge}>{reports.length}</Text>
         )}
+        <View style={{ flex: 1 }} />
+        {lastLoadedStr ? (
+          <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
+        ) : null}
       </View>
       <FlatList
         data={reports}
@@ -222,7 +338,30 @@ export default function HomeScreen({ navigation, route }) {
           ) : null
         }
         ListEmptyComponent={
-          <Text style={styles.emptyText}>No reports yet. Run your first analysis above.</Text>
+          <View style={styles.emptyWrap}>
+            <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
+            <Text style={styles.emptyTitle}>No reports yet</Text>
+            <Text style={styles.emptySubtitle}>
+              Run your first institutional analysis in three steps:
+            </Text>
+            <View style={styles.emptySteps}>
+              <View style={styles.emptyStep}>
+                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>1</Text></View>
+                <Text style={styles.emptyStepText}>Type a ticker above (e.g. AAPL)</Text>
+              </View>
+              <View style={styles.emptyStep}>
+                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>2</Text></View>
+                <Text style={styles.emptyStepText}>Tap RUN — Grok pulls SEC filings + live news</Text>
+              </View>
+              <View style={styles.emptyStep}>
+                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>3</Text></View>
+                <Text style={styles.emptyStepText}>~90 sec later, your Wall Street-format report appears here</Text>
+              </View>
+            </View>
+            <Text style={styles.emptyTip}>
+              Tip: long-press any saved report row to re-run, open files, or delete from cache.
+            </Text>
+          </View>
         }
         contentContainerStyle={
           reports.length > 0 ? styles.listContent : styles.emptyContainer
@@ -264,11 +403,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gold,
     borderRadius: 8,
     paddingHorizontal: 22,
+    minWidth: 90,
     justifyContent: 'center',
     alignItems: 'center',
   },
   analyzeBtnDisabled: { opacity: 0.5 },
+  analyzeBtnInner: {
+    flexDirection: 'row', alignItems: 'center',
+  },
   analyzeBtnText: { color: colors.navy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
+  analyzeBtnLoadingText: {
+    color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 1,
+    marginLeft: 6,
+  },
   gammaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -295,6 +442,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.navy,
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
     overflow: 'hidden',
+  },
+  lastLoadedText: {
+    fontSize: 10, fontWeight: '600', color: colors.midGray,
+    letterSpacing: 0.3,
   },
 
   // List container - one shared card holds all rows for tighter info density
@@ -332,14 +483,34 @@ const styles = StyleSheet.create({
     fontSize: 15, fontWeight: '800', color: colors.navy,
     letterSpacing: 1.2, lineHeight: 18,
   },
-  formatDotsRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
-  docxDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.navyLight,
+
+  // Format pills (replaces the old 6×6 colored dots — readable at a glance)
+  formatRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  docPill: {
+    backgroundColor: colors.navy,
+    borderRadius: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
-  pptxDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.gold,
+  docPillText: {
+    color: colors.white,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
-  reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 2 },
+  pptPill: {
+    backgroundColor: colors.gold,
+    borderRadius: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  pptPillText: {
+    color: colors.navy,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 3 },
 
   priceCell: { alignItems: 'flex-end', minWidth: 86 },
   priceText: {
@@ -357,8 +528,51 @@ const styles = StyleSheet.create({
   chev: { marginLeft: 6 },
 
   emptyContainer: { flexGrow: 1, justifyContent: 'center', backgroundColor: 'transparent' },
-  emptyText: {
-    textAlign: 'center', color: colors.midGray, fontSize: 14,
-    paddingHorizontal: 40, paddingVertical: 32,
+
+  // ── New empty state — illustrated, 3-step walkthrough ─────────────────────
+  emptyWrap: {
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    paddingVertical: 24,
+    marginHorizontal: 16,
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  emptyTitle: {
+    fontSize: 17, fontWeight: '800', color: colors.navy,
+    marginTop: 12, letterSpacing: 0.4,
+  },
+  emptySubtitle: {
+    fontSize: 13, color: colors.midGray,
+    textAlign: 'center', marginTop: 6, marginBottom: 18,
+    lineHeight: 18,
+  },
+  emptySteps: { alignSelf: 'stretch', gap: 12 },
+  emptyStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  emptyStepNum: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.navy,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  emptyStepNumText: {
+    color: colors.gold, fontSize: 12, fontWeight: '800',
+  },
+  emptyStepText: {
+    flex: 1,
+    fontSize: 13, color: colors.darkGray, lineHeight: 18,
+  },
+  emptyTip: {
+    fontSize: 11, color: colors.midGray,
+    textAlign: 'center', marginTop: 18,
+    fontStyle: 'italic', lineHeight: 16,
   },
 });

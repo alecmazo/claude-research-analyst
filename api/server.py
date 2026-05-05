@@ -494,6 +494,35 @@ def clear_local_cache():
     return {"cleared": cleared, "count": len(cleared)}
 
 
+@app.delete("/api/report/{ticker}")
+def delete_report(ticker: str):
+    """Delete the locally-cached report files for a single ticker.
+
+    Removes the .md, .docx, and .pptx files from /stocks for *ticker*.
+    Dropbox / Drive copies are NOT touched — only this server instance's
+    local cache is cleared. The next portfolio or analysis run will
+    re-hydrate or regenerate as needed.
+    """
+    ticker = ticker.strip().upper()
+    folder = analyst.STOCKS_FOLDER
+    targets = [
+        folder / f"{ticker}_DGA_Report.md",
+        folder / f"{ticker}_DGA_Report.docx",
+        folder / f"{ticker}_DGA_Presentation.pptx",
+    ]
+    cleared: list[str] = []
+    for path in targets:
+        if path.exists():
+            try:
+                path.unlink()
+                cleared.append(path.name)
+            except OSError:
+                pass
+    if not cleared:
+        raise HTTPException(status_code=404, detail=f"No cached files found for {ticker}")
+    return {"ticker": ticker, "cleared": cleared, "count": len(cleared)}
+
+
 @app.get("/api/reports")
 def list_reports():
     """Return all tickers that have saved reports."""

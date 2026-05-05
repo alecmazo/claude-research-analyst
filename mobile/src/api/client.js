@@ -170,6 +170,7 @@ export const api = {
   getReport:    (ticker) => request(`/api/report/${ticker}`),
   listReports:  ()       => request('/api/reports'),
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
+  deleteReport: (ticker) => request(`/api/report/${ticker}`, { method: 'DELETE' }),
 
   downloadUrl: async (ticker, type) => {
     const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
