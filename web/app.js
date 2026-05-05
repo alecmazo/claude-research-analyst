@@ -2775,11 +2775,12 @@ let _fundLoaded = false;
 async function loadFund() {
   if (_fundLoaded) return;   // only hit the DB once per page load
 
-  const headers = authHeaders();
-
   async function fetchJson(path) {
-    const r = await fetch(path, { headers });
-    if (!r.ok) throw new Error(`${r.status}`);
+    const r = await fetch(path, { headers: { 'x-auth-token': getToken() } });
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      throw new Error(`${r.status}${body ? ': ' + body : ''}`);
+    }
     return r.json();
   }
 
@@ -2798,8 +2799,11 @@ async function loadFund() {
     _fundLoaded = true;
 
   } catch (e) {
-    document.getElementById('fund-overview-cards').innerHTML =
-      `<div class="fund-error">Unable to load fund data: ${e.message}</div>`;
+    const msg = `<div class="fund-error">Unable to load fund data: ${e.message}</div>`;
+    document.getElementById('fund-overview-cards').innerHTML = msg;
+    document.getElementById('fund-lps-wrap').innerHTML      = msg;
+    document.getElementById('fund-positions-wrap').innerHTML = msg;
+    document.getElementById('fund-activity-wrap').innerHTML  = msg;
   }
 }
 
