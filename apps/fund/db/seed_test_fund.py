@@ -4,7 +4,7 @@ seed_test_fund.py — Seeds DGA Capital Fund I with test data.
 
 What this creates:
   • Updates fund economics (0% mgmt fee, 25% carry, 5% hurdle)
-  • 3 LP records: Eugene Mazo, Dennis Khvost, Viktoria Yemel
+  • 3 LP records + 1 GP: EM, DY, VK (LPs), AM (GP)
   • Capital call #1 — $2,000,000 initial contributions (Jan 1 2017)
   • Contribution journal entries: dr Cash / cr LP Capital per LP
   • Accumulated gains entry: 9-year growth from $2M → $3.69M
@@ -41,27 +41,35 @@ CATCH_UP_PCT  = Decimal("1.00")    # 100% GP catch-up (standard)
 # ===========================================================================
 LP_DATA = [
     {
-        "legal_name":  "Eugene Mazo",
+        "legal_name":  "EM",
         "code":        "EM",             # used in account codes: 3100-EM
         "commitment":  Decimal("1000000.00"),
         "entity_type": "individual",
         "accred_type": "net_worth",
     },
     {
-        "legal_name":  "Dennis Khvost",
-        "code":        "DK",
+        "legal_name":  "DY",
+        "code":        "DY",
         "commitment":  Decimal("500000.00"),
         "entity_type": "individual",
         "accred_type": "net_worth",
     },
     {
-        "legal_name":  "Viktoria Yemel",
-        "code":        "VY",
+        "legal_name":  "VK",
+        "code":        "VK",
         "commitment":  Decimal("500000.00"),
         "entity_type": "individual",
         "accred_type": "net_worth",
     },
 ]
+
+# General partner — stored in the lps table with entity_type='general_partner'.
+# No capital commitment; excluded from capital call allocations and journal entries.
+GP_DATA = {
+    "legal_name":  "AM",
+    "code":        "AM",
+    "entity_type": "general_partner",
+}
 
 FUND_TOTAL      = Decimal("2000000.00")   # total initial LP contributions
 CURRENT_NAV     = Decimal("3689569.10")   # current NAV (contributions + 9-yr growth)
@@ -295,6 +303,22 @@ def main():
                       "test_data/accred_placeholder.pdf", INCEPTION))
                 lp_ids[lp["code"]] = lp_id
                 print(f"  ✓  {lp['legal_name']:<22}  ({lp_id[:8]}…)")
+
+            # GP record (no capital commitment, no accred fields)
+            cur.execute(
+                "SELECT id FROM lps WHERE fund_id = %s AND legal_name = %s",
+                (fund_id, GP_DATA["legal_name"])
+            )
+            if not cur.fetchone():
+                gp_id = new_id()
+                cur.execute("""
+                    INSERT INTO lps
+                        (id, fund_id, legal_name, entity_type, status, onboarded_at)
+                    VALUES (%s,%s,%s,%s,'active',%s)
+                """, (gp_id, fund_id, GP_DATA["legal_name"], GP_DATA["entity_type"], INCEPTION))
+                print(f"  ✓  {GP_DATA['legal_name']:<22}  (GP)")
+            else:
+                print(f"  (exists)  {GP_DATA['legal_name']} (GP)")
 
             # ─────────────────────────────────────────────────────────────
             # STEP 2 — Per-LP capital accounts + commitments
