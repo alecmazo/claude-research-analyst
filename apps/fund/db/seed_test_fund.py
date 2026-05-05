@@ -313,8 +313,8 @@ def main():
                 gp_id = new_id()
                 cur.execute("""
                     INSERT INTO lps
-                        (id, fund_id, legal_name, entity_type, status, onboarded_at)
-                    VALUES (%s,%s,%s,%s,'active',%s)
+                        (id, fund_id, legal_name, entity_type, accred_type, status, onboarded_at)
+                    VALUES (%s,%s,%s,%s,'professional','active',%s)
                 """, (gp_id, fund_id, GP_DATA["legal_name"], GP_DATA["entity_type"], INCEPTION))
                 print(f"  ✓  {GP_DATA['legal_name']:<22}  (GP)")
             else:
