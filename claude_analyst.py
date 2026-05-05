@@ -5753,7 +5753,8 @@ def _gamma_generate(input_text: str, num_cards: int,
 # Per-ticker analysis pipeline
 # ============================================================================
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
-                   verbose: bool = True, reuse_existing: bool = False) -> dict:
+                   verbose: bool = True, reuse_existing: bool = False,
+                   on_progress=None) -> dict:
     """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
 
     Any uncaught exception inside the pipeline is converted to a structured
@@ -5761,6 +5762,14 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
     full traceback is printed so Railway logs show the exact file+line of
     the crash (including cryptic errors like 'list' object has no attribute
     'get' that previously bubbled up with no location info).
+
+    Progress reporting:
+        ``on_progress`` is an optional callable ``(step, pct, label)``
+        invoked at meaningful pipeline checkpoints. ``step`` is one of:
+        ``"sec_filings" | "financials" | "market_data" | "grok" |
+        "rendering" | "gamma" | "upload" | "done"``. ``pct`` is in [0, 1].
+        Exceptions inside the callback are swallowed so progress bookkeeping
+        can never crash the analysis itself.
     """
     try:
         return _analyze_ticker_impl(
@@ -5769,6 +5778,7 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             generate_gamma=generate_gamma,
             verbose=verbose,
             reuse_existing=reuse_existing,
+            on_progress=on_progress,
         )
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
@@ -5788,8 +5798,19 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
         }
 
 
+def _emit_progress(on_progress, step: str, pct: float, label: str = "") -> None:
+    """Safe wrapper around the user-provided progress callback."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(step, max(0.0, min(1.0, float(pct))), label)
+    except Exception:  # noqa: BLE001
+        pass  # progress reporting must never crash the pipeline
+
+
 def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
-                         verbose: bool = True, reuse_existing: bool = False) -> dict:
+                         verbose: bool = True, reuse_existing: bool = False,
+                         on_progress=None) -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
@@ -5814,6 +5835,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
                 pass
     if reuse_existing and md_path.exists():
         print(f"♻️  {ticker}: reusing cached report at {md_path.name}")
+        _emit_progress(on_progress, "done", 1.0, "Loaded from cache")
         report_text = md_path.read_text()
         mkt = fetch_market_snapshot(ticker)
         audit_path = STOCKS_FOLDER / f"{ticker}_xbrl_extract.json"
@@ -5848,6 +5870,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     # This parses the actual XBRL instance documents from each filing, so the
     # columns we read later map 1-to-1 onto the filing's own period contexts.
     print(f"\n🚀 {ticker}: downloading latest 10-K + 10-Q Excel workbooks…")
+    _emit_progress(on_progress, "sec_filings", 0.05,
+                   "Downloading SEC filings (10-K, 10-Q)")
     data: dict | None = None
     try:
         pull_sec_financials.download_financials(ticker)
@@ -5856,6 +5880,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         print("   Falling back to existing workbooks (if any) or companyfacts API.")
 
     # --- Step 2: read the Excel workbooks and build the verified data dict
+    _emit_progress(on_progress, "financials", 0.20,
+                   "Extracting filing-accurate financials")
     try:
         data = xlsx_edgar.extract_financials(ticker)
         verified_block = xlsx_edgar.format_verified_block(data)
@@ -5893,6 +5919,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         print(verified_block)
 
     # Current price
+    _emit_progress(on_progress, "market_data", 0.30,
+                   "Fetching live price + analyst ratings")
     mkt = fetch_market_snapshot(ticker)
 
     # Fetch live analyst ratings from GuruFocus (best-effort, non-blocking).
@@ -5921,6 +5949,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     # Developments) can surface a CEO departure from two days ago even
     # though it's past the model's training cutoff.
     print(f"   🧠 Calling Grok ({GROK_MODEL}) with live X/news/web search…")
+    _emit_progress(on_progress, "grok", 0.40,
+                   f"Grok ({GROK_MODEL}) — analyzing + live X/news search")
     try:
         report_text = call_grok(system_prompt, user_msg, live_search=True)
     except Exception as exc:  # noqa: BLE001
@@ -5933,6 +5963,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     md_path.write_text(report_text)
 
     # Render Word
+    _emit_progress(on_progress, "rendering", 0.85,
+                   "Rendering Word document")
     out_docx = STOCKS_FOLDER / f"{ticker}_DGA_Report.docx"
     summary = extract_summary_from_report(report_text)
     rating_hint = summary.get("rating") or ""
@@ -5953,6 +5985,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     gamma_credits = 0
     gamma_error: str | None = None
     if generate_gamma:
+        _emit_progress(on_progress, "gamma", 0.92, "Generating Gamma presentation")
         # 1. Reuse a fresh existing deck if one was generated < GAMMA_FRESH_DAYS
         #    ago — saves credits and avoids piling up duplicate decks in the
         #    Gamma.app workspace for rapid re-runs of the same ticker.
@@ -5982,6 +6015,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
 
     # Upload report files to Google Drive / Dropbox (best-effort, non-blocking).
     # Include the gamma index so the URL survives Railway redeploys.
+    _emit_progress(on_progress, "upload", 0.97,
+                   "Uploading to Dropbox / Drive")
     drive_files = [p for p in [md_path, out_docx] if p.exists()]
     if generate_gamma:
         pptx_path = STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx"
@@ -5995,6 +6030,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     except Exception:  # noqa: BLE001
         pass
 
+    _emit_progress(on_progress, "done", 1.0, "Report ready")
     result.update({
         "ok": True,
         "entity_name": data.get("entity_name", ticker),

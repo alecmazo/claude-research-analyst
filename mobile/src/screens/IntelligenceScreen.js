@@ -14,14 +14,14 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  ActivityIndicator, Alert, Platform,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
-import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
+import { colors, mdStyles, haptics, formatDate } from '../design';
 
 const HORIZON_OPTIONS = [
   { label: '30 days', value: 30 },
@@ -87,16 +87,19 @@ export default function IntelligenceScreen({ navigation }) {
           finishedSetters(false);
           setStatus('');
           if (job.result?.ok) {
+            haptics.onSuccess();
             setResult(job.result);
             setResultKind(kind);
             setError(null);
           } else {
+            haptics.onError();
             setError(job.result?.error || job.error || 'Unknown error');
           }
         } else if (job.status === 'failed') {
           clearInterval(pollRef.current);
           finishedSetters(false);
           setStatus('');
+          haptics.onError();
           setError(job.error || 'Run failed');
         } else {
           setStatus(job.status === 'running' ? runningMsg : 'Queued — starting shortly…');
@@ -113,6 +116,7 @@ export default function IntelligenceScreen({ navigation }) {
   // ── Run handler — long-horizon intelligence brief ─────────────────────────
   const handleRun = async () => {
     if (running || briefRunning) return;
+    haptics.onPressPrimary();
     setRunning(true);
     setError(null);
     setStatus('Queued — starting shortly…');
@@ -120,6 +124,7 @@ export default function IntelligenceScreen({ navigation }) {
       const job = await api.startIntelligence(days);
       startPolling(job.job_id, 'intel');
     } catch (err) {
+      haptics.onError();
       setRunning(false);
       setStatus('');
       if (err?.isAuthError) {
@@ -133,6 +138,7 @@ export default function IntelligenceScreen({ navigation }) {
   // ── Run handler — Goldman-style Daily Brief ───────────────────────────────
   const handleDailyBrief = async () => {
     if (running || briefRunning) return;
+    haptics.onPressPrimary();
     setBriefRunning(true);
     setError(null);
     setStatus('Queued — starting shortly…');
@@ -140,6 +146,7 @@ export default function IntelligenceScreen({ navigation }) {
       const job = await api.startDailyBrief();
       startPolling(job.job_id, 'brief');
     } catch (err) {
+      haptics.onError();
       setBriefRunning(false);
       setStatus('');
       if (err?.isAuthError) {
@@ -154,6 +161,7 @@ export default function IntelligenceScreen({ navigation }) {
   // Tapping a ticker navigates to the Home tab (Research) with ticker pre-filled.
   // We use the parent Tab navigator to switch tabs.
   const openTicker = (ticker) => {
+    haptics.onPressTab();
     // Navigate to the Research stack root; HomeScreen will receive the ticker param.
     navigation.getParent()?.navigate('Research', {
       screen: 'Home',
@@ -165,6 +173,7 @@ export default function IntelligenceScreen({ navigation }) {
   const [tracking, setTracking] = useState(false);
   const handleTrackBrief = () => {
     if (!result?.tickers?.length) return;
+    haptics.onPressPrimary();
     const tickers = result.tickers.slice(0, 20);  // clamp at 20
     Alert.alert(
       'Lock in paper portfolio?',
@@ -185,6 +194,7 @@ export default function IntelligenceScreen({ navigation }) {
                   brief_generated_at: result.generated_at,
                 },
               });
+              haptics.onSuccess();
               Alert.alert(
                 'Locked in',
                 'Paper portfolio created. View it on Portfolio → Tracker.',
@@ -198,6 +208,7 @@ export default function IntelligenceScreen({ navigation }) {
                 ]
               );
             } catch (e) {
+              haptics.onError();
               Alert.alert('Could not lock in', e.message);
             } finally {
               setTracking(false);
@@ -248,16 +259,6 @@ export default function IntelligenceScreen({ navigation }) {
     );
   };
 
-  const formatDate = (iso) => {
-    if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-        hour: 'numeric', minute: '2-digit',
-      });
-    } catch { return iso; }
-  };
-
   return (
     <View style={styles.container}>
       <AppHeader title="Intelligence" />
@@ -303,8 +304,8 @@ export default function IntelligenceScreen({ navigation }) {
         </View>
 
         {/* ── Config card (long-horizon Intelligence brief) ── */}
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>STRATEGIC LOOKBACK (3-5 YR HORIZON)</Text>
+        <View style={[styles.card, styles.strategicCard]}>
+          <Text style={styles.cardLabel}>STRATEGIC LOOKBACK</Text>
           <View style={styles.horizonRow}>
             {HORIZON_OPTIONS.map(opt => (
               <TouchableOpacity
@@ -417,6 +418,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 3,
+  },
+  // Subtle gold left-accent so the Strategic card visually balances the
+  // navy/gold Daily Brief card above it — neither feels demoted.
+  strategicCard: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.gold,
   },
   cardLabel: {
     fontSize: 11,
@@ -620,36 +627,4 @@ const styles = StyleSheet.create({
   },
 });
 
-// ── Markdown styles ───────────────────────────────────────────────────────────
-const mdStyles = {
-  body:     { color: colors.darkGray, fontSize: 14, lineHeight: 22 },
-  heading1: { color: colors.navy, fontSize: 20, fontWeight: '800', marginTop: 20, marginBottom: 8 },
-  heading2: {
-    color: colors.navy, fontSize: 17, fontWeight: '700',
-    marginTop: 18, marginBottom: 6,
-    paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#E8EDF3',
-  },
-  heading3: { color: colors.darkGray, fontSize: 15, fontWeight: '700', marginTop: 14, marginBottom: 4 },
-  strong:   { fontWeight: '800', color: colors.navy },
-  em:       { fontStyle: 'italic', color: colors.midGray },
-  hr:       { backgroundColor: '#E8EDF3', height: 1, marginVertical: 14 },
-  blockquote: {
-    backgroundColor: '#F0F4FA',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.gold,
-    paddingLeft: 12,
-    paddingVertical: 6,
-    marginVertical: 8,
-    borderRadius: 4,
-  },
-  bullet_list: { marginVertical: 4 },
-  list_item:   { marginVertical: 2 },
-  code_inline: {
-    backgroundColor: colors.lightGray,
-    color: colors.navy,
-    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
-    fontSize: 13,
-    paddingHorizontal: 4,
-    borderRadius: 3,
-  },
-};
+// (markdown styles moved to ../design/markdown — imported as `mdStyles` above)

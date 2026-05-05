@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from './theme';
+import { haptics } from '../design/haptics';
 
 // ── Icon config per route name ────────────────────────────────────────────────
 const TAB_CONFIG = {
@@ -40,9 +41,10 @@ const TAB_CONFIG = {
     active:   { family: 'mci', name: 'bank' },
   },
   Settings: {
-    // Three horizontal sliders — modern, more "instrument-panel" than a plain cog
+    // Three horizontal sliders — modern, more "instrument-panel" than a plain cog.
+    // Active uses the filled `tune` glyph for visible state delta.
     inactive: { family: 'mci', name: 'tune-variant' },
-    active:   { family: 'mci', name: 'tune-variant' },
+    active:   { family: 'mci', name: 'tune' },
   },
 };
 
@@ -72,6 +74,7 @@ export default function CustomTabBar({ state, navigation }) {
               canPreventDefault: true,
             });
             if (!focused && !event.defaultPrevented) {
+              haptics.onPressTab();
               navigation.navigate(route.name);
             }
           };
@@ -166,15 +169,16 @@ const styles = StyleSheet.create({
     }),
   },
 
+  // Same fontSize / letterSpacing for active and inactive so activation
+  // doesn't shift surrounding tabs by 1px. Color + weight handle the delta.
   label: {
     fontSize: 10,
     fontWeight: '600',
     color: colors.midGray,
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
   labelActive: {
     color: colors.gold,
     fontWeight: '800',
-    letterSpacing: 0.4,
   },
 });

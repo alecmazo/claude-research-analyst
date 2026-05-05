@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { api } from '../api/client';
 import { colors } from '../components/theme';
+import { Skeleton, haptics } from '../design';
 
 export default function PaperTrackerScreen({ navigation }) {
   const [portfolios, setPortfolios]   = useState([]);
@@ -770,7 +771,18 @@ export default function PaperTrackerScreen({ navigation }) {
           <View style={[styles.card, { paddingTop: 14 }]}>
             <Text style={styles.cardLabel}>PAPER PORTFOLIOS</Text>
             {loading ? (
-              <ActivityIndicator color={colors.gold} style={{ marginVertical: 24 }} />
+              <View style={{ gap: 10, paddingVertical: 6 }}>
+                {[0, 1, 2].map(i => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Skeleton width={'60%'} height={14} radius={3} />
+                      <View style={{ height: 6 }} />
+                      <Skeleton width={'30%'} height={11} radius={3} />
+                    </View>
+                    <Skeleton width={64} height={20} radius={4} />
+                  </View>
+                ))}
+              </View>
             ) : error ? (
               <Text style={styles.errorText}>{error}</Text>
             ) : portfolios.length === 0 ? (

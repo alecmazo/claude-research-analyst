@@ -8,8 +8,10 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   api, getGammaEnabled, setGammaEnabled as saveGamma, getBaseUrl,
 } from '../api/client';
-import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
+import {
+  colors, formatTime, formatDateCompact, haptics, SkeletonList,
+} from '../design';
 
 export default function HomeScreen({ navigation, route }) {
   const [ticker, setTicker]       = useState('');
@@ -22,6 +24,7 @@ export default function HomeScreen({ navigation, route }) {
   const [serverLatencyMs, setServerLatencyMs] = useState(null);
   const [gammaEnabled, setGammaEnabled] = useState(false);  // default OFF
   const [lastLoadedAt, setLastLoadedAt] = useState(null);   // Date of last successful list load
+  const [initialLoading, setInitialLoading] = useState(true); // first-load only — drives skeleton list
 
   const checkServer = async () => {
     const t0 = Date.now();
@@ -53,6 +56,8 @@ export default function HomeScreen({ navigation, route }) {
       setPrices(map);
     } catch {
       // server may be offline; fail silently
+    } finally {
+      setInitialLoading(false);
     }
   };
 
@@ -73,6 +78,7 @@ export default function HomeScreen({ navigation, route }) {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    haptics.onPressTab();
     await Promise.all([checkServer(), loadReports()]);
     setRefreshing(false);
   };
@@ -81,9 +87,11 @@ export default function HomeScreen({ navigation, route }) {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
     if (serverOk === false) {
+      haptics.onError();
       Alert.alert('Server Offline', 'Cannot reach the API server. Check Settings.');
       return;
     }
+    haptics.onPressPrimary();
     setLoading(true);
     setRunningTicker(t);
     try {
@@ -91,6 +99,7 @@ export default function HomeScreen({ navigation, route }) {
       setTicker('');
       navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
     } catch (err) {
+      haptics.onError();
       if (err?.isAuthError) {
         Alert.alert('Wrong Password', 'Go to Settings → Server Password. The default is "dgacapital".');
       } else {
@@ -122,7 +131,9 @@ export default function HomeScreen({ navigation, route }) {
 
   // ── Long-press a report row → action sheet ─────────────────────────────────
   const handleRowLongPress = (item) => {
+    haptics.onLongPress();
     const downloadAndOpen = async (type) => {
+      haptics.onPressPrimary();
       try {
         const url = await api.downloadUrl(item.ticker, type);
         Linking.openURL(url);
@@ -131,6 +142,7 @@ export default function HomeScreen({ navigation, route }) {
       }
     };
     const confirmDelete = () => {
+      haptics.onWarn();
       Alert.alert(
         'Delete Cached Report?',
         `Removes the local .md / .docx / .pptx for ${item.ticker}. The Dropbox copy is NOT touched — the next portfolio run can rehydrate it.`,
@@ -139,8 +151,10 @@ export default function HomeScreen({ navigation, route }) {
           { text: 'Delete', style: 'destructive', onPress: async () => {
               try {
                 await api.deleteReport(item.ticker);
+                haptics.onSuccess();
                 await loadReports();
               } catch (err) {
+                haptics.onError();
                 Alert.alert('Could not delete', err.message);
               }
           }},
@@ -148,6 +162,7 @@ export default function HomeScreen({ navigation, route }) {
       );
     };
     const reanalyze = async () => {
+      haptics.onPressPrimary();
       if (serverOk === false) {
         Alert.alert('Server Offline', 'Cannot reach the API server.');
         return;
@@ -189,13 +204,7 @@ export default function HomeScreen({ navigation, route }) {
     const isUp     = pct != null && pct >= 0;
 
     // Compact date "May 4" — year only when not current year
-    const dt   = new Date(item.generated_at);
-    const yr   = dt.getFullYear();
-    const nowY = new Date().getFullYear();
-    const dateStr = dt.toLocaleDateString('en-US',
-      yr === nowY
-        ? { month: 'short', day: 'numeric' }
-        : { month: 'short', day: 'numeric', year: '2-digit' });
+    const dateStr = formatDateCompact(item.generated_at);
 
     return (
       <TouchableOpacity
@@ -244,11 +253,8 @@ export default function HomeScreen({ navigation, route }) {
     );
   };
 
-  // ── Last-updated stamp formatter ───────────────────────────────────────────
-  const lastLoadedStr = lastLoadedAt
-    ? `Updated ${lastLoadedAt.toLocaleTimeString('en-US',
-        { hour: 'numeric', minute: '2-digit' })}`
-    : '';
+  // ── Last-updated stamp ─────────────────────────────────────────────────────
+  const lastLoadedStr = lastLoadedAt ? `Updated ${formatTime(lastLoadedAt)}` : '';
 
   return (
     <View style={styles.container}>
@@ -323,50 +329,55 @@ export default function HomeScreen({ navigation, route }) {
           <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
         ) : null}
       </View>
-      <FlatList
-        data={reports}
-        keyExtractor={item => item.ticker}
-        renderItem={renderReport}
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
-        ListHeaderComponent={
-          reports.length > 0 ? (
-            <View style={styles.colHeader}>
-              <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
-              <Text style={[styles.colHeaderText, { textAlign: 'right' }]}>PRICE / CHG</Text>
+      {/* Show skeleton on first load before any reports arrive */}
+      {initialLoading && reports.length === 0 ? (
+        <SkeletonList count={5} />
+      ) : (
+        <FlatList
+          data={reports}
+          keyExtractor={item => item.ticker}
+          renderItem={renderReport}
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+          ListHeaderComponent={
+            reports.length > 0 ? (
+              <View style={styles.colHeader}>
+                <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
+                <Text style={[styles.colHeaderText, { textAlign: 'right' }]}>PRICE / CHG</Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
+              <Text style={styles.emptyTitle}>No reports yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Run your first institutional analysis in three steps:
+              </Text>
+              <View style={styles.emptySteps}>
+                <View style={styles.emptyStep}>
+                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>1</Text></View>
+                  <Text style={styles.emptyStepText}>Type a ticker above (e.g. AAPL)</Text>
+                </View>
+                <View style={styles.emptyStep}>
+                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>2</Text></View>
+                  <Text style={styles.emptyStepText}>Tap RUN — Grok pulls SEC filings + live news</Text>
+                </View>
+                <View style={styles.emptyStep}>
+                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>3</Text></View>
+                  <Text style={styles.emptyStepText}>~90 sec later, your Wall Street-format report appears here</Text>
+                </View>
+              </View>
+              <Text style={styles.emptyTip}>
+                Tip: long-press any saved report row to re-run, open files, or delete from cache.
+              </Text>
             </View>
-          ) : null
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyWrap}>
-            <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
-            <Text style={styles.emptyTitle}>No reports yet</Text>
-            <Text style={styles.emptySubtitle}>
-              Run your first institutional analysis in three steps:
-            </Text>
-            <View style={styles.emptySteps}>
-              <View style={styles.emptyStep}>
-                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>1</Text></View>
-                <Text style={styles.emptyStepText}>Type a ticker above (e.g. AAPL)</Text>
-              </View>
-              <View style={styles.emptyStep}>
-                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>2</Text></View>
-                <Text style={styles.emptyStepText}>Tap RUN — Grok pulls SEC filings + live news</Text>
-              </View>
-              <View style={styles.emptyStep}>
-                <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>3</Text></View>
-                <Text style={styles.emptyStepText}>~90 sec later, your Wall Street-format report appears here</Text>
-              </View>
-            </View>
-            <Text style={styles.emptyTip}>
-              Tip: long-press any saved report row to re-run, open files, or delete from cache.
-            </Text>
-          </View>
-        }
-        contentContainerStyle={
-          reports.length > 0 ? styles.listContent : styles.emptyContainer
-        }
-      />
+          }
+          contentContainerStyle={
+            reports.length > 0 ? styles.listContent : styles.emptyContainer
+          }
+        />
+      )}
     </View>
   );
 }

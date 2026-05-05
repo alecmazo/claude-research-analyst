@@ -129,6 +129,10 @@ class JobStatus(BaseModel):
     created_at: str
     error: str | None = None
     result: dict | None = None
+    # Live progress emitted by analyze_ticker — populated on /status polls
+    # while status='running'. Frontend uses this to drive a real progress bar
+    # instead of simulated step transitions.
+    progress: dict | None = None
 
 
 class PortfolioJobStatus(BaseModel):
@@ -165,6 +169,16 @@ def auth(req: AuthRequest):
 def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
+        _jobs[job_id]["progress"] = {"step": "queued", "pct": 0.0, "label": "Starting…"}
+
+    # Progress callback — runs on the worker thread, mutates the shared job dict.
+    # Wrapped so a slow lock acquisition can't slow down the analysis itself.
+    def _record_progress(step: str, pct: float, label: str) -> None:
+        with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id]["progress"] = {
+                    "step": step, "pct": pct, "label": label,
+                }
 
     try:
         system_prompt = analyst.load_system_prompt()
@@ -173,10 +187,12 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
             system_prompt=system_prompt,
             generate_gamma=generate_gamma,
             verbose=False,
+            on_progress=_record_progress,
         )
         with _jobs_lock:
             if result.get("ok"):
                 _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0, "label": "Report ready"}
                 # Trim the report text to avoid sending multi-MB payloads in the
                 # status response; the full text is available via /report/{ticker}.
                 _jobs[job_id]["result"] = {k: v for k, v in result.items()
@@ -331,6 +347,10 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
             "created_at": now,
             "error": None,
             "result": None,
+            # Progress reported by the analysis pipeline. {step, pct, label}.
+            # `step` is one of: queued | sec_filings | financials | market_data
+            #                 | grok | rendering | gamma | upload | done
+            "progress": {"step": "queued", "pct": 0.0, "label": "Queued — starting shortly…"},
         }
 
     # Persist mapping so we can recover after a server restart.

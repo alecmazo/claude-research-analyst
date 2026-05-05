@@ -7,32 +7,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
-import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
+import { colors, haptics, formatDate } from '../design';
 
 const LAST_PORTFOLIO_KEY = '@dga_last_portfolio';
 
-const FALLBACK_STRATEGIES = [
-  {
-    key: 'current',
-    label: 'Current Portfolio',
-    description: 'Keeps every position — no selling. Optimizes weights for risk-adjusted return. Position caps scale with market cap (large caps ≤20%, small caps ≤10%). Works with any number of positions.',
-  },
-  {
-    key: 'pro',
-    label: 'High Conviction',
-    description: '8–15 best ideas, max 15% each, sector cap 25%. Can trim or exit weak positions.',
-  },
-  {
-    key: 'allin',
-    label: 'All In — Top 3',
-    description: 'Only the 3 highest-conviction names, up to 40% each. Max aggression.',
-  },
-];
+// NOTE: Strategy selector was removed from this screen — every run now produces
+// all three strategies (Current Portfolio, High Conviction, All-In Top 3)
+// side-by-side. The old FALLBACK_STRATEGIES constant has been deleted. If
+// you need the strategy descriptions for future tooltips, they live on the
+// server at GET /api/strategies.
 
 export default function PortfolioScreen({ navigation }) {
-  const [strategies, setStrategies]     = useState(FALLBACK_STRATEGIES);
-  const [selectedStrategy, setSelectedStrategy] = useState('current');
   const [file, setFile]                 = useState(null);
   const [reuseCache, setReuseCache]     = useState(true);
   const [generateGamma, setGenerateGamma] = useState(false);
@@ -43,9 +29,6 @@ export default function PortfolioScreen({ navigation }) {
   const pollRef = useRef(null);
 
   useEffect(() => {
-    api.listStrategies()
-      .then(s => { if (Array.isArray(s) && s.length) setStrategies(s); })
-      .catch(() => {});
     // Load persisted last-run card
     AsyncStorage.getItem(LAST_PORTFOLIO_KEY)
       .then(raw => { if (raw) setLastRun(JSON.parse(raw)); })
@@ -54,6 +37,7 @@ export default function PortfolioScreen({ navigation }) {
   }, []);
 
   const pickFile = async () => {
+    haptics.onPressTab();
     try {
       const result = await DocumentPicker.getDocumentAsync({
         // iOS: */* lets the user choose any file from Files / iCloud / Downloads.
@@ -82,9 +66,11 @@ export default function PortfolioScreen({ navigation }) {
 
   const startRun = async () => {
     if (!file) {
+      haptics.onError();
       Alert.alert('No file selected', 'Please choose a portfolio CSV or XLSX first.');
       return;
     }
+    haptics.onPressPrimary();
     setSubmitting(true);
     setError(null);
     setJob(null);
@@ -103,6 +89,7 @@ export default function PortfolioScreen({ navigation }) {
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(() => pollJob(resp.job_id), 4000);
     } catch (err) {
+      haptics.onError();
       const msg = err?.message || String(err);
       setError(msg);
       Alert.alert('Rebalance failed', msg);
@@ -118,6 +105,7 @@ export default function PortfolioScreen({ navigation }) {
       if (j.status === 'done') {
         clearInterval(pollRef.current);
         pollRef.current = null;
+        haptics.onSuccess();
         // Persist for "Last Portfolio Run" card
         const payload = {
           job_id: jobId,
@@ -131,6 +119,7 @@ export default function PortfolioScreen({ navigation }) {
       } else if (j.status === 'failed') {
         clearInterval(pollRef.current);
         pollRef.current = null;
+        haptics.onError();
       }
     } catch (err) {
       clearInterval(pollRef.current);
@@ -140,24 +129,16 @@ export default function PortfolioScreen({ navigation }) {
 
   const openDownload = async () => {
     if (!job) return;
+    haptics.onPressPrimary();
     const url = await api.portfolioDownloadUrl(job.job_id);
     Linking.openURL(url);
   };
 
   const openLastDownload = async () => {
     if (!lastRun?.job_id) return;
+    haptics.onPressPrimary();
     const url = await api.portfolioDownloadUrl(lastRun.job_id);
     Linking.openURL(url);
-  };
-
-  const formatDate = (iso) => {
-    if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-        hour: 'numeric', minute: '2-digit',
-      });
-    } catch { return iso; }
   };
 
   const result = job?.result;
@@ -170,7 +151,7 @@ export default function PortfolioScreen({ navigation }) {
         title="Portfolio"
         right={
           <TouchableOpacity
-            onPress={() => navigation.navigate('PaperTracker')}
+            onPress={() => { haptics.onPressTab(); navigation.navigate('PaperTracker'); }}
             style={styles.trackerHeaderBtn}
             activeOpacity={0.75}
           >
@@ -204,16 +185,22 @@ export default function PortfolioScreen({ navigation }) {
           <Text style={styles.toggleLabel}>Reuse cached reports (faster)</Text>
           <Switch
             value={reuseCache}
-            onValueChange={setReuseCache}
+            onValueChange={(v) => { haptics.onToggle(); setReuseCache(v); }}
             trackColor={{ false: colors.lightGray, true: colors.gold }}
             thumbColor={colors.white}
           />
         </View>
+        <View style={styles.toggleSep} />
         <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Generate Gamma Presentations</Text>
+          <View style={{ flex: 1, marginRight: 12 }}>
+            <Text style={styles.toggleLabel}>Generate Gamma Presentations</Text>
+            <Text style={styles.toggleHint}>
+              Will use ~1 Gamma credit per ticker. Check your balance at gamma.app/account.
+            </Text>
+          </View>
           <Switch
             value={generateGamma}
-            onValueChange={setGenerateGamma}
+            onValueChange={(v) => { haptics.onToggle(); setGenerateGamma(v); }}
             trackColor={{ false: colors.lightGray, true: colors.gold }}
             thumbColor={colors.white}
           />
@@ -419,7 +406,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 8,
   },
+  toggleSep: {
+    height: 1,
+    backgroundColor: colors.lightGray,
+    marginVertical: 4,
+  },
   toggleLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
+  toggleHint:  { fontSize: 11, color: colors.midGray, marginTop: 2, lineHeight: 15 },
   runBtn: {
     backgroundColor: colors.gold,
     borderRadius: 8,
