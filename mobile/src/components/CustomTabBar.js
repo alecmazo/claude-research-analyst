@@ -40,6 +40,11 @@ const TAB_CONFIG = {
     inactive: { family: 'mci', name: 'bank-outline' },
     active:   { family: 'mci', name: 'bank' },
   },
+  Fund: {
+    // Briefcase — fund administration / GP operations
+    inactive: { family: 'mci', name: 'briefcase-outline' },
+    active:   { family: 'mci', name: 'briefcase' },
+  },
   Settings: {
     // Three horizontal sliders — modern, more "instrument-panel" than a plain cog.
     // Active uses the filled `tune` glyph for visible state delta.

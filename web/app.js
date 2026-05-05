@@ -234,6 +234,7 @@ document.querySelectorAll('[data-target]').forEach(el => {
     if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
     if (t === 'view-portfolio') rehydratePortfolioLastCard();
     if (t === 'view-settings') updateAppVersionCard();
+    if (t === 'view-fund') loadFund();
   });
 });
 
@@ -2763,4 +2764,171 @@ async function submitTrack() {
     btn.disabled = false;
     btn.textContent = '📌 Lock In Portfolio';
   }
+}
+
+// ============================================================================
+// Fund Admin
+// ============================================================================
+
+let _fundLoaded = false;
+
+async function loadFund() {
+  if (_fundLoaded) return;   // only hit the DB once per page load
+
+  const headers = authHeaders();
+
+  async function fetchJson(path) {
+    const r = await fetch(path, { headers });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  }
+
+  try {
+    const [ov, lps, positions, activity] = await Promise.all([
+      fetchJson('/api/fund/overview'),
+      fetchJson('/api/fund/lps'),
+      fetchJson('/api/fund/positions'),
+      fetchJson('/api/fund/activity'),
+    ]);
+
+    renderFundOverview(ov);
+    renderFundLPs(lps, ov);
+    renderFundPositions(positions);
+    renderFundActivity(activity);
+    _fundLoaded = true;
+
+  } catch (e) {
+    document.getElementById('fund-overview-cards').innerHTML =
+      `<div class="fund-error">Unable to load fund data: ${e.message}</div>`;
+  }
+}
+
+function fmt$(n) {
+  if (n == null) return '—';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(n, decimals = 1) {
+  if (n == null) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + Number(n).toFixed(decimals) + '%';
+}
+function fmtCat(cat) {
+  return (cat || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function renderFundOverview(ov) {
+  const gainColor = ov.total_gain >= 0 ? '#c9a84c' : '#e05a4e';
+  document.getElementById('fund-overview-cards').innerHTML = `
+    <div class="fund-stat-grid">
+      <div class="fund-stat-card fund-stat-primary">
+        <div class="fund-stat-label">CURRENT NAV</div>
+        <div class="fund-stat-value">${fmt$(ov.nav)}</div>
+        <div class="fund-stat-sub" style="color:${gainColor}">
+          ${fmtPct(ov.gain_pct)} since inception
+        </div>
+      </div>
+      <div class="fund-stat-card">
+        <div class="fund-stat-label">CONTRIBUTIONS</div>
+        <div class="fund-stat-value fund-stat-md">${fmt$(ov.contributions)}</div>
+        <div class="fund-stat-sub">${ov.lp_count} limited partners</div>
+      </div>
+      <div class="fund-stat-card">
+        <div class="fund-stat-label">TOTAL GAIN</div>
+        <div class="fund-stat-value fund-stat-md" style="color:${gainColor}">${fmt$(ov.total_gain)}</div>
+        <div class="fund-stat-sub">since ${ov.inception_date?.slice(0,4) || '—'}</div>
+      </div>
+      <div class="fund-stat-card">
+        <div class="fund-stat-label">ECONOMICS</div>
+        <div class="fund-stat-value fund-stat-sm">
+          ${(ov.mgmt_fee_pct * 100).toFixed(0)} &amp; ${(ov.carry_pct * 100).toFixed(0)}
+        </div>
+        <div class="fund-stat-sub">${(ov.hurdle_pct * 100).toFixed(0)}% hurdle · ${ov.position_count} positions</div>
+      </div>
+    </div>`;
+}
+
+function renderFundLPs(lps, ov) {
+  if (!lps.length) {
+    document.getElementById('fund-lps-wrap').innerHTML = '<div class="fund-empty">No LP records found.</div>';
+    return;
+  }
+  const rows = lps.map(lp => `
+    <tr>
+      <td class="fund-td-name">${lp.legal_name}</td>
+      <td class="fund-td-num">${fmt$(lp.commitment)}</td>
+      <td class="fund-td-num" style="color:#c9a84c">${fmt$(lp.gain)}</td>
+      <td class="fund-td-num fund-td-bold">${fmt$(lp.current_value)}</td>
+      <td class="fund-td-pct">${lp.share_pct.toFixed(1)}%</td>
+    </tr>`).join('');
+  document.getElementById('fund-lps-wrap').innerHTML = `
+    <table class="fund-table">
+      <thead>
+        <tr>
+          <th class="fund-th">LP</th>
+          <th class="fund-th fund-th-num">Commitment</th>
+          <th class="fund-th fund-th-num">Gain</th>
+          <th class="fund-th fund-th-num">Current Value</th>
+          <th class="fund-th fund-th-pct">Share</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderFundPositions(positions) {
+  if (!positions.length) {
+    document.getElementById('fund-positions-wrap').innerHTML = '<div class="fund-empty">No open positions.</div>';
+    return;
+  }
+  const rows = positions.map(p => `
+    <tr>
+      <td class="fund-td-ticker">${p.symbol}</td>
+      <td class="fund-td-name fund-td-dim">${p.name}</td>
+      <td class="fund-td-num">${Number(p.total_qty).toLocaleString()}</td>
+      <td class="fund-td-num">$${Number(p.avg_cost).toFixed(2)}</td>
+      <td class="fund-td-num fund-td-bold">${fmt$(p.total_cost)}</td>
+      <td class="fund-td-pct">${p.weight_pct.toFixed(1)}%</td>
+      <td class="fund-td-lots">${p.lot_count > 1 ? p.lot_count + ' lots' : '1 lot'}</td>
+    </tr>`).join('');
+  document.getElementById('fund-positions-wrap').innerHTML = `
+    <table class="fund-table">
+      <thead>
+        <tr>
+          <th class="fund-th">Symbol</th>
+          <th class="fund-th">Name</th>
+          <th class="fund-th fund-th-num">Qty</th>
+          <th class="fund-th fund-th-num">Avg Cost</th>
+          <th class="fund-th fund-th-num">Total Cost</th>
+          <th class="fund-th fund-th-pct">Weight</th>
+          <th class="fund-th">Lots</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderFundActivity(activity) {
+  if (!activity.length) {
+    document.getElementById('fund-activity-wrap').innerHTML = '<div class="fund-empty">No transactions.</div>';
+    return;
+  }
+  const rows = activity.map(a => `
+    <tr>
+      <td class="fund-td-date">${a.effective_date}</td>
+      <td class="fund-td-cat"><span class="fund-cat-pill fund-cat-${a.category}">${fmtCat(a.category)}</span></td>
+      <td class="fund-td-desc">${a.description}</td>
+      <td class="fund-td-num fund-td-bold">${fmt$(a.amount)}</td>
+    </tr>`).join('');
+  document.getElementById('fund-activity-wrap').innerHTML = `
+    <table class="fund-table">
+      <thead>
+        <tr>
+          <th class="fund-th">Date</th>
+          <th class="fund-th">Type</th>
+          <th class="fund-th">Description</th>
+          <th class="fund-th fund-th-num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }

@@ -305,6 +305,12 @@ export const api = {
     return resp.json();
   },
 
+  // ---------- Fund Admin ----------
+  fundOverview:  () => request('/api/fund/overview'),
+  fundLps:       () => request('/api/fund/lps'),
+  fundPositions: () => request('/api/fund/positions'),
+  fundActivity:  () => request('/api/fund/activity'),
+
   // Server build version (public — no auth required). Used by Settings to
   // show what's currently deployed and let the user verify the OTA update.
   getBuild: async () => {

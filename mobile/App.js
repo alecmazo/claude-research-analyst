@@ -14,6 +14,7 @@ import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
 import PaperTrackerScreen     from './src/screens/PaperTrackerScreen';
 import IntelligenceScreen     from './src/screens/IntelligenceScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
+import FundScreen             from './src/screens/FundScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
 const Stack = createNativeStackNavigator();
@@ -71,6 +72,7 @@ export default function App() {
         <Tab.Screen name="Intelligence" component={IntelligenceScreen} />
         <Tab.Screen name="Scan"         component={ScanScreen} />
         <Tab.Screen name="Portfolio"    component={PortfolioStack} />
+        <Tab.Screen name="Fund"         component={FundScreen} />
         <Tab.Screen name="Settings"     component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>

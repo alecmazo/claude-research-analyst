@@ -7,23 +7,57 @@ PostgreSQL 14+ schema for the books-of-record.
 - `migrations/0001_initial_schema.sql` — full initial schema. Idempotent
   to a clean DB. Adds `pgcrypto` and `citext` extensions.
 - `seed/0001_chart_of_accounts.sql` — standard hedge-fund chart of
-  accounts. Seeds once per fund. Uses a `:fund_id` psql variable.
+  accounts. Seeds once per fund. Uses a `:fund_id` placeholder.
+- `apply_schema.py` — Python helper that applies migration + seed in one
+  shot. No `psql` or Docker required.
 
-## Apply the schema (local dev)
+---
+
+## Option A — Python helper (recommended, no psql needed)
+
+`psycopg2-binary` must be installed:
+```bash
+pip3 install psycopg2-binary
+```
+
+### Apply to Railway Postgres
+
+1. In Railway, open your project → **Add Plugin → PostgreSQL**.
+2. Click the Postgres plugin → **Connect** tab → copy the `DATABASE_URL`.
+3. From the repo root:
 
 ```bash
-# 1. Spin up Postgres locally (Docker is fine):
-docker run --name dga-fund-pg -e POSTGRES_PASSWORD=devpw -p 5432:5432 -d postgres:16
+cd /path/to/Claude_Research_Analyst
+DATABASE_URL="postgres://..." python3 apps/fund/db/apply_schema.py
+```
 
-# 2. Create the database:
-psql postgres://postgres:devpw@localhost:5432/postgres -c 'CREATE DATABASE dga_fund_dev;'
+Save the `Fund ID` printed at the end — add it as `FUND_ID` in Railway env vars.
 
-# 3. Apply the schema:
-psql postgres://postgres:devpw@localhost:5432/dga_fund_dev \
-     -f migrations/0001_initial_schema.sql
+### Apply to local Docker Postgres
 
-# 4. Insert your fund (one-time):
-psql postgres://postgres:devpw@localhost:5432/dga_fund_dev <<'SQL'
+```bash
+# Start Docker Desktop first, then:
+cd /path/to/Claude_Research_Analyst
+python3 apps/fund/db/apply_schema.py --local
+```
+
+---
+
+## Option B — psql (if you have it)
+
+Install psql on Mac (no Docker required):
+```bash
+brew install libpq
+echo 'export PATH="/usr/local/opt/libpq/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Apply to Railway Postgres
+
+```bash
+cd /path/to/Claude_Research_Analyst
+psql "$DATABASE_URL" -f apps/fund/db/migrations/0001_initial_schema.sql
+psql "$DATABASE_URL" <<'SQL'
 INSERT INTO funds (
     name, short_name, structure, domicile, base_ccy,
     inception_date, fiscal_year_end,
@@ -36,52 +70,59 @@ INSERT INTO funds (
     0.0200, 'committed', 'quarterly',
     0.20, 0.08, 1.00,
     99, 'open'
-);
-SELECT id FROM funds WHERE short_name = 'DGA-I';
+) ON CONFLICT (short_name) DO NOTHING RETURNING id;
 SQL
 
-# 5. Seed the chart of accounts (replace <FUND_UUID> with the id from step 4):
-psql postgres://postgres:devpw@localhost:5432/dga_fund_dev \
+# Seed CoA (replace <FUND_UUID> with the id returned above):
+psql "$DATABASE_URL" \
      -v fund_id=<FUND_UUID> \
-     -f seed/0001_chart_of_accounts.sql
+     -f apps/fund/db/seed/0001_chart_of_accounts.sql
 ```
 
-## Apply the schema (Railway production)
+### Apply locally with Docker
 
-1. In Railway, add a Postgres plugin to your project.
-2. Copy the `DATABASE_URL` Railway gives you.
-3. Run the migration locally pointing at Railway:
-   ```bash
-   psql "$DATABASE_URL" -f migrations/0001_initial_schema.sql
-   ```
-4. Insert the fund row + seed the CoA the same way.
+```bash
+# Spin up Postgres:
+docker run --name dga-fund-pg -e POSTGRES_PASSWORD=devpw -p 5432:5432 -d postgres:16
+
+# Apply (run from repo root):
+psql postgres://postgres:devpw@localhost:5432/postgres -c 'CREATE DATABASE dga_fund_dev;'
+psql postgres://postgres:devpw@localhost:5432/dga_fund_dev \
+     -f apps/fund/db/migrations/0001_initial_schema.sql
+```
+
+---
 
 ## Migration tooling — future
 
-Phase 1 of the suite migration will switch to **alembic** (Python-native
-migrations) once we have the FastAPI service:
+Phase 1 switches to **alembic** (Python-native migrations) once the
+FastAPI service is running:
 
 ```python
 # apps/fund/api/db/alembic/env.py — TBD
 ```
 
 Until then, raw SQL files are the source of truth. Each new migration
-gets a numbered file (`0002_…`, `0003_…`) and is appended to a
-`schema_migrations` table.
+gets a numbered file (`0002_…`, `0003_…`).
 
-## Test that the constraints actually work
+---
 
-Quick sanity checks you can run after applying:
+## Verify the schema
+
+After applying, run these checks:
 
 ```sql
--- 1. Trial balance is zero (no transactions yet → all zeros, balance=0)
+-- All 19 tables present:
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public' ORDER BY 1;
+
+-- Trial balance is zero (no transactions yet):
 SELECT type, SUM(balance) FROM v_trial_balance GROUP BY type;
 
--- 2. The double-entry trigger blocks unbalanced transactions:
+-- Double-entry trigger blocks unbalanced transactions:
 BEGIN;
 INSERT INTO transactions (id, fund_id, effective_date, category, description)
     VALUES (gen_random_uuid(), '<FUND_UUID>', '2026-01-01', 'opening_balance', 'test');
--- Insert a debit but no matching credit:
 INSERT INTO transaction_lines (transaction_id, line_number, account_id, debit)
     SELECT (SELECT id FROM transactions ORDER BY posted_at DESC LIMIT 1),
            1, (SELECT id FROM accounts WHERE code='1010' LIMIT 1), 1000;

@@ -1427,6 +1427,203 @@ analyst._start_tracker_snapshot_worker()
 
 
 # ---------------------------------------------------------------------------
+# Fund Admin — read-only endpoints (queries Railway Postgres via psycopg2)
+# ---------------------------------------------------------------------------
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor as _RealDictCursor
+    _PSYCOPG2_OK = True
+except ImportError:
+    _PSYCOPG2_OK = False
+
+def _fund_conn():
+    if not _PSYCOPG2_OK:
+        raise HTTPException(status_code=503, detail="psycopg2 not installed")
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+    try:
+        return psycopg2.connect(url)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Fund DB unavailable: {e}")
+
+def _fund_id(cur) -> str:
+    fid = os.environ.get("FUND_ID")
+    if fid:
+        return fid
+    cur.execute("SELECT id FROM funds WHERE short_name = 'DGA-I' LIMIT 1")
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Fund not found — run apply_schema.py first")
+    return str(row["id"])
+
+
+@app.get("/api/fund/overview")
+async def fund_overview():
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _fund_id(cur)
+            cur.execute("""
+                SELECT name, short_name, inception_date, status,
+                       mgmt_fee_pct, carry_pct, hurdle_pct, catch_up_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund = dict(cur.fetchone())
+
+            # NAV = net balance of all asset accounts
+            cur.execute("""
+                SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
+                  FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
+            """, (fid,))
+            nav = float(cur.fetchone()["nav"])
+
+            # Total LP commitments
+            cur.execute("""
+                SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
+                  FROM commitments c
+                  JOIN lps l ON l.id = c.lp_id
+                 WHERE l.fund_id = %s AND c.superseded_by IS NULL
+            """, (fid,))
+            contributions = float(cur.fetchone()["total"])
+
+            cur.execute("SELECT COUNT(*) AS n FROM lps WHERE fund_id=%s AND status='active'", (fid,))
+            lp_count = cur.fetchone()["n"]
+
+            cur.execute("SELECT COUNT(DISTINCT security_id) AS n FROM tax_lots WHERE fund_id=%s AND closed_at IS NULL", (fid,))
+            position_count = cur.fetchone()["n"]
+
+            gain = nav - contributions
+            gain_pct = (gain / contributions * 100) if contributions else 0
+
+            return {
+                "fund_name":      fund["name"],
+                "short_name":     fund["short_name"],
+                "inception_date": str(fund["inception_date"]),
+                "status":         fund["status"],
+                "mgmt_fee_pct":   float(fund["mgmt_fee_pct"]),
+                "carry_pct":      float(fund["carry_pct"]),
+                "hurdle_pct":     float(fund["hurdle_pct"]),
+                "catch_up_pct":   float(fund["catch_up_pct"]) if fund["catch_up_pct"] else None,
+                "nav":            nav,
+                "contributions":  contributions,
+                "total_gain":     gain,
+                "gain_pct":       gain_pct,
+                "lp_count":       lp_count,
+                "position_count": position_count,
+            }
+    finally:
+        conn.close()
+
+
+@app.get("/api/fund/lps")
+async def fund_lps():
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _fund_id(cur)
+            cur.execute("""
+                SELECT
+                    l.id, l.legal_name, l.entity_type, l.onboarded_at,
+                    COALESCE(c.commitment, 0)                              AS commitment,
+                    COALESCE(SUM(tl.credit) - SUM(tl.debit), 0)           AS current_value
+                  FROM lps l
+                  LEFT JOIN (
+                      SELECT lp_id, SUM(commitment_amount) AS commitment
+                        FROM commitments WHERE superseded_by IS NULL GROUP BY lp_id
+                  ) c ON c.lp_id = l.id
+                  LEFT JOIN accounts a  ON a.lp_id   = l.id AND a.fund_id = l.fund_id
+                  LEFT JOIN transaction_lines tl ON tl.account_id = a.id
+                 WHERE l.fund_id = %s AND l.status = 'active'
+                 GROUP BY l.id, l.legal_name, l.entity_type, l.onboarded_at, c.commitment
+                 ORDER BY COALESCE(c.commitment, 0) DESC
+            """, (fid,))
+            rows = cur.fetchall()
+            total_nav = sum(float(r["current_value"]) for r in rows) or 1
+            return [{
+                "id":           str(r["id"]),
+                "legal_name":   r["legal_name"],
+                "entity_type":  r["entity_type"],
+                "onboarded_at": str(r["onboarded_at"]) if r["onboarded_at"] else None,
+                "commitment":   float(r["commitment"]),
+                "current_value":float(r["current_value"]),
+                "gain":         float(r["current_value"]) - float(r["commitment"]),
+                "share_pct":    float(r["current_value"]) / total_nav * 100,
+            } for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/api/fund/positions")
+async def fund_positions():
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _fund_id(cur)
+            cur.execute("""
+                SELECT
+                    s.symbol, s.name, s.issuer,
+                    COUNT(tl.id)                                              AS lot_count,
+                    SUM(tl.quantity)                                          AS total_qty,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)
+                        / SUM(tl.quantity)                                    AS avg_cost,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)                 AS total_cost,
+                    MIN(tl.acquired_at)                                       AS first_acquired
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.id, s.symbol, s.name, s.issuer
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, (fid,))
+            rows = cur.fetchall()
+            total_cost = sum(float(r["total_cost"]) for r in rows) or 1
+            return [{
+                "symbol":         r["symbol"],
+                "name":           r["name"],
+                "issuer":         r["issuer"],
+                "lot_count":      r["lot_count"],
+                "total_qty":      float(r["total_qty"]),
+                "avg_cost":       float(r["avg_cost"]),
+                "total_cost":     float(r["total_cost"]),
+                "weight_pct":     float(r["total_cost"]) / total_cost * 100,
+                "first_acquired": str(r["first_acquired"])[:10] if r["first_acquired"] else None,
+            } for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/api/fund/activity")
+async def fund_activity():
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _fund_id(cur)
+            cur.execute("""
+                SELECT
+                    t.id, t.effective_date, t.category, t.description, t.posted_at,
+                    COALESCE(SUM(tl.debit),  0) AS total_debit,
+                    COALESCE(SUM(tl.credit), 0) AS total_credit
+                  FROM transactions t
+                  JOIN transaction_lines tl ON tl.transaction_id = t.id
+                 WHERE t.fund_id = %s
+                 GROUP BY t.id, t.effective_date, t.category, t.description, t.posted_at
+                 ORDER BY t.posted_at DESC
+                 LIMIT 25
+            """, (fid,))
+            rows = cur.fetchall()
+            return [{
+                "id":             str(r["id"]),
+                "effective_date": str(r["effective_date"]),
+                "category":       r["category"],
+                "description":    r["description"],
+                "posted_at":      r["posted_at"].isoformat() if r["posted_at"] else None,
+                "amount":         max(float(r["total_debit"]), float(r["total_credit"])),
+            } for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
 

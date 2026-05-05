@@ -2711,3 +2711,137 @@ body {
   /* TWRR badge stays on one line */
   .twrr-exact-badge { white-space: nowrap; }
 }
+
+/* ============================================================================
+   Fund Admin
+   ============================================================================ */
+
+/* ── Overview stat grid ── */
+.fund-overview-cards { padding: 16px 12px 4px; }
+
+.fund-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fund-stat-card {
+  background: #0e1d38;
+  border: 1px solid rgba(201,168,76,0.18);
+  border-radius: 10px;
+  padding: 14px 14px 12px;
+}
+
+.fund-stat-primary {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, #0e1d38 0%, #132847 100%);
+  border-color: rgba(201,168,76,0.35);
+}
+
+.fund-stat-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #c9a84c;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.fund-stat-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: #f0e8d0;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.fund-stat-md { font-size: 19px; }
+.fund-stat-sm { font-size: 22px; }
+
+.fund-stat-sub {
+  font-size: 11px;
+  color: #6b82a8;
+  margin-top: 4px;
+}
+
+/* ── Section headers ── */
+.fund-section-row {
+  padding: 20px 16px 6px;
+}
+
+/* ── Tables ── */
+.fund-table-wrap {
+  padding: 0 12px 4px;
+  overflow-x: auto;
+}
+
+.fund-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.fund-th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: #4a6080;
+  text-transform: uppercase;
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  white-space: nowrap;
+}
+.fund-th-num { text-align: right; }
+.fund-th-pct { text-align: right; }
+
+.fund-table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.1s;
+}
+.fund-table tbody tr:hover { background: rgba(201,168,76,0.05); }
+
+.fund-td-name  { padding: 9px 8px 9px 0; color: #e8e0d0; }
+.fund-td-dim   { color: #5a7090; font-size: 11px; }
+.fund-td-ticker { padding: 9px 8px 9px 0; color: #c9a84c; font-weight: 700; font-size: 12px; min-width: 60px; }
+.fund-td-num   { text-align: right; padding: 9px 0 9px 8px; color: #b0bdd0; font-variant-numeric: tabular-nums; }
+.fund-td-bold  { color: #e8e0d0; font-weight: 600; }
+.fund-td-pct   { text-align: right; padding: 9px 0 9px 8px; color: #7090b0; font-size: 11px; }
+.fund-td-lots  { text-align: right; padding: 9px 0 9px 8px; color: #4a6080; font-size: 11px; }
+.fund-td-date  { padding: 9px 8px 9px 0; color: #5a7090; font-size: 11px; white-space: nowrap; }
+.fund-td-cat   { padding: 9px 8px; white-space: nowrap; }
+.fund-td-desc  { padding: 9px 8px; color: #8090a8; font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Category pills */
+.fund-cat-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.07);
+  color: #8090a8;
+}
+.fund-cat-contribution { background: rgba(50,160,80,0.18); color: #4cc870; }
+.fund-cat-trade_buy    { background: rgba(80,120,201,0.18); color: #6090e8; }
+.fund-cat-trade_sell   { background: rgba(220,80,60,0.18);  color: #e06050; }
+.fund-cat-adjustment   { background: rgba(201,168,76,0.18); color: #c9a84c; }
+.fund-cat-transfer     { background: rgba(140,80,201,0.18); color: #b080e8; }
+
+/* Loading / error states */
+.fund-card-loading {
+  padding: 20px 0;
+  color: #3a5070;
+  font-size: 12px;
+}
+.fund-error {
+  padding: 20px 0;
+  color: #e06050;
+  font-size: 12px;
+}
+.fund-empty {
+  padding: 16px 0;
+  color: #3a5070;
+  font-size: 12px;
+}

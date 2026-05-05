@@ -491,6 +491,23 @@
     <span class="tab-label">Portfolio</span>
   </button>
 
+  <!-- Fund tab — briefcase / fund management -->
+  <button class="tab" data-target="view-fund">
+    <div class="tab-icon-wrap">
+      <span class="tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="7" width="20" height="14" rx="2"
+                stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+          <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"
+                stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          <line x1="2" y1="13" x2="22" y2="13" stroke="currentColor" stroke-width="1.9"/>
+          <line x1="10" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+    </div>
+    <span class="tab-label">Fund</span>
+  </button>
+
   <!-- Settings tab — horizontal sliders / tune -->
   <button class="tab" data-target="view-settings">
     <div class="tab-icon-wrap">
@@ -610,6 +627,45 @@
       Grok scans X and the web to surface macro themes,<br>
       sector rotations, and specific company ideas.
     </div>
+  </div>
+</section>
+
+<!-- ============ FUND ADMIN VIEW ============ -->
+<section id="view-fund" class="view">
+  <header class="header">
+    <div class="header-brand">
+      <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
+      <h1>Fund Admin</h1>
+    </div>
+  </header>
+
+  <!-- Fund Overview Cards -->
+  <div id="fund-overview-cards" class="fund-overview-cards">
+    <div class="fund-card-loading">Loading fund data…</div>
+  </div>
+
+  <!-- LP Table -->
+  <div class="fund-section-row">
+    <div class="label section-label">LIMITED PARTNERS</div>
+  </div>
+  <div id="fund-lps-wrap" class="fund-table-wrap">
+    <div class="fund-card-loading">—</div>
+  </div>
+
+  <!-- Positions Table -->
+  <div class="fund-section-row">
+    <div class="label section-label">PORTFOLIO POSITIONS</div>
+  </div>
+  <div id="fund-positions-wrap" class="fund-table-wrap">
+    <div class="fund-card-loading">—</div>
+  </div>
+
+  <!-- Activity -->
+  <div class="fund-section-row">
+    <div class="label section-label">RECENT ACTIVITY</div>
+  </div>
+  <div id="fund-activity-wrap" class="fund-table-wrap" style="margin-bottom:100px;">
+    <div class="fund-card-loading">—</div>
   </div>
 </section>
 
