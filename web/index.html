@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui12-20260502';
+    var EXPECTED = 'ui13-20260505';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui16">
+  <link rel="stylesheet" href="/app/style.css?v=ui17">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -630,12 +630,12 @@
   </div>
 </section>
 
-<!-- ============ FUND ADMIN VIEW ============ -->
+<!-- ============ FUND VIEW ============ -->
 <section id="view-fund" class="view">
   <header class="header">
     <div class="header-brand">
       <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
-      <h1>Fund Admin</h1>
+      <h1>Fund</h1>
     </div>
   </header>
 
@@ -652,42 +652,73 @@
     </div>
   </div>
 
-  <!-- Fund Overview Cards -->
-  <div id="fund-overview-cards" class="fund-overview-cards">
-    <div class="fund-card-loading">Loading fund data…</div>
+  <!-- Branch selector (hidden until authenticated) -->
+  <div id="fund-branch-selector" class="fund-branch-selector" style="display:none;">
+    <button class="fund-branch-btn active" data-branch="lp">LP Fund</button>
+    <button class="fund-branch-btn" data-branch="portfolio">My Portfolio</button>
   </div>
 
-  <!-- LP Table -->
-  <div class="fund-section-row">
-    <div class="label section-label">LIMITED PARTNERS</div>
-  </div>
-  <div id="fund-lps-wrap" class="fund-table-wrap">
-    <div class="fund-card-loading">—</div>
+  <!-- ── LP Fund branch ─────────────────────────────────────────────────── -->
+  <div id="fund-branch-lp" style="padding-bottom:100px;">
+    <!-- Fund Overview Cards -->
+    <div id="fund-overview-cards" class="fund-overview-cards">
+      <div class="fund-card-loading">Loading fund data…</div>
+    </div>
+
+    <!-- LP Table -->
+    <div class="fund-section-row">
+      <div class="label section-label">LIMITED PARTNERS</div>
+    </div>
+    <div id="fund-lps-wrap" class="fund-table-wrap">
+      <div class="fund-card-loading">—</div>
+    </div>
+
+    <!-- Positions Table -->
+    <div class="fund-section-row">
+      <div class="label section-label">PORTFOLIO POSITIONS</div>
+    </div>
+    <div id="fund-positions-wrap" class="fund-table-wrap">
+      <div class="fund-card-loading">—</div>
+    </div>
+
+    <!-- Activity -->
+    <div class="fund-section-row">
+      <div class="label section-label">RECENT ACTIVITY</div>
+    </div>
+    <div id="fund-activity-wrap" class="fund-table-wrap">
+      <div class="fund-card-loading">—</div>
+    </div>
+
+    <!-- GP Waterfall -->
+    <div class="fund-section-row" style="margin-top:24px;">
+      <div class="label section-label">GP WATERFALL &amp; CARRY</div>
+    </div>
+    <div id="fund-waterfall-wrap" class="fund-table-wrap">
+      <div class="fund-card-loading">—</div>
+    </div>
   </div>
 
-  <!-- Positions Table -->
-  <div class="fund-section-row">
-    <div class="label section-label">PORTFOLIO POSITIONS</div>
-  </div>
-  <div id="fund-positions-wrap" class="fund-table-wrap">
-    <div class="fund-card-loading">—</div>
+  <!-- ── My Portfolio branch ────────────────────────────────────────────── -->
+  <div id="fund-branch-portfolio" style="display:none; padding-bottom:100px;">
+    <div class="fund-portal-grid">
+
+      <div class="fund-portal-card" id="fund-open-tracker-btn">
+        <div class="fund-portal-card-icon">📊</div>
+        <div class="fund-portal-card-title">Portfolio Tracker</div>
+        <div class="fund-portal-card-sub">Paper portfolios, YTD performance &amp; Fidelity upload</div>
+        <div class="fund-portal-card-cta">Open Tracker →</div>
+      </div>
+
+      <div class="fund-portal-card fund-portal-card-dim">
+        <div class="fund-portal-card-icon">📄</div>
+        <div class="fund-portal-card-title">Quarterly Reports</div>
+        <div class="fund-portal-card-sub">LP statements &amp; performance summaries</div>
+        <div class="fund-portal-soon">Coming Soon</div>
+      </div>
+
+    </div>
   </div>
 
-  <!-- Activity -->
-  <div class="fund-section-row">
-    <div class="label section-label">RECENT ACTIVITY</div>
-  </div>
-  <div id="fund-activity-wrap" class="fund-table-wrap">
-    <div class="fund-card-loading">—</div>
-  </div>
-
-  <!-- GP Waterfall -->
-  <div class="fund-section-row" style="margin-top:24px;">
-    <div class="label section-label">GP WATERFALL &amp; CARRY</div>
-  </div>
-  <div id="fund-waterfall-wrap" class="fund-table-wrap" style="margin-bottom:100px;">
-    <div class="fund-card-loading">—</div>
-  </div>
 </section>
 
 <!-- ============ SETTINGS VIEW ============ -->
@@ -739,6 +770,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui16"></script>
+<script src="/app/app.js?v=ui17"></script>
 </body>
 </html>

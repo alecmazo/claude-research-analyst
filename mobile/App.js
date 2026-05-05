@@ -35,7 +35,16 @@ function PortfolioStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Portfolio"        component={PortfolioScreen} />
       <Stack.Screen name="PortfolioSummary" component={PortfolioSummaryScreen} />
-      <Stack.Screen name="PaperTracker"     component={PaperTrackerScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// Fund section: LP Fund management + Managed Portfolio tracker (both password-gated)
+function FundStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="FundHome"    component={FundScreen} />
+      <Stack.Screen name="FundTracker" component={PaperTrackerScreen} />
     </Stack.Navigator>
   );
 }
@@ -72,7 +81,7 @@ export default function App() {
         <Tab.Screen name="Intelligence" component={IntelligenceScreen} />
         <Tab.Screen name="Scan"         component={ScanScreen} />
         <Tab.Screen name="Portfolio"    component={PortfolioStack} />
-        <Tab.Screen name="Fund"         component={FundScreen} />
+        <Tab.Screen name="Fund"         component={FundStack} />
         <Tab.Screen name="Settings"     component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>

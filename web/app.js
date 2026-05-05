@@ -2782,7 +2782,8 @@ let _fundLoaded = false;
 // Called when the Fund tab is clicked.
 function openFundTab() {
   if (getFundToken()) {
-    // Already authenticated this session — load data directly.
+    // Already authenticated this session — show branch selector and load data.
+    document.getElementById('fund-branch-selector').style.display = 'flex';
     loadFund();
   } else {
     // Show the lock overlay; data loads after successful auth.
@@ -2794,6 +2795,9 @@ function showFundLock() {
   const overlay = document.getElementById('fund-lock-overlay');
   const input   = document.getElementById('fund-lock-input');
   const errEl   = document.getElementById('fund-lock-error');
+  // Hide branch selector while locked
+  const sel = document.getElementById('fund-branch-selector');
+  if (sel) sel.style.display = 'none';
   overlay.style.display = 'flex';
   errEl.style.display   = 'none';
   input.value           = '';
@@ -2802,42 +2806,70 @@ function showFundLock() {
 
 function hideFundLock() {
   document.getElementById('fund-lock-overlay').style.display = 'none';
+  // Reveal branch selector now that we're authenticated
+  const sel = document.getElementById('fund-branch-selector');
+  if (sel) sel.style.display = 'flex';
 }
 
 // Wire up the Unlock button (and Enter key) once the DOM is ready.
 document.addEventListener('DOMContentLoaded', () => {
+  // ── Fund lock button ─────────────────────────────────────────────────────
   const btn   = document.getElementById('fund-lock-btn');
   const input = document.getElementById('fund-lock-input');
-  if (!btn) return;
-
-  async function attemptFundAuth() {
-    const pw = input.value.trim();
-    if (!pw) return;
-    btn.disabled   = true;
-    btn.textContent = 'Checking…';
-    try {
-      const r = await fetch('/api/fund/auth', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
-        body:    JSON.stringify({ password: pw }),
-      });
-      if (!r.ok) throw new Error('wrong');
-      const { fund_token } = await r.json();
-      setFundToken(fund_token);
-      hideFundLock();
-      loadFund();
-    } catch {
-      document.getElementById('fund-lock-error').style.display = 'block';
-      input.value = '';
-      input.focus();
-    } finally {
-      btn.disabled    = false;
-      btn.textContent = 'Unlock';
+  if (btn) {
+    async function attemptFundAuth() {
+      const pw = input.value.trim();
+      if (!pw) return;
+      btn.disabled    = true;
+      btn.textContent = 'Checking…';
+      try {
+        const r = await fetch('/api/fund/auth', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
+          body:    JSON.stringify({ password: pw }),
+        });
+        if (!r.ok) throw new Error('wrong');
+        const { fund_token } = await r.json();
+        setFundToken(fund_token);
+        hideFundLock();
+        loadFund();
+      } catch {
+        document.getElementById('fund-lock-error').style.display = 'block';
+        input.value = '';
+        input.focus();
+      } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Unlock';
+      }
     }
+    btn.addEventListener('click', attemptFundAuth);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') attemptFundAuth(); });
   }
 
-  btn.addEventListener('click', attemptFundAuth);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') attemptFundAuth(); });
+  // ── Fund branch selector ─────────────────────────────────────────────────
+  document.querySelectorAll('.fund-branch-btn').forEach(branchBtn => {
+    branchBtn.addEventListener('click', () => {
+      const branch = branchBtn.dataset.branch;
+      document.querySelectorAll('.fund-branch-btn').forEach(b => b.classList.remove('active'));
+      branchBtn.classList.add('active');
+      document.getElementById('fund-branch-lp').style.display        = branch === 'lp'        ? 'block' : 'none';
+      document.getElementById('fund-branch-portfolio').style.display = branch === 'portfolio' ? 'block' : 'none';
+    });
+  });
+
+  // ── "Open Tracker" card in My Portfolio branch ───────────────────────────
+  const trackerCard = document.getElementById('fund-open-tracker-btn');
+  if (trackerCard) {
+    trackerCard.addEventListener('click', () => {
+      // Switch to the Portfolio view and activate the Tracker mode tab
+      showView('view-portfolio');
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.target === 'view-portfolio');
+      });
+      const trackerModeBtn = document.querySelector('[data-port-mode="tracker"]');
+      if (trackerModeBtn) trackerModeBtn.click();
+    });
+  }
 });
 
 async function loadFund() {
@@ -3018,12 +3050,21 @@ function renderFundActivity(activity) {
 }
 
 function renderFundWaterfall(w) {
-  const hurdle_pct  = (w.hurdle_pct  * 100).toFixed(0);
-  const carry_pct   = (w.carry_pct   * 100).toFixed(0);
-  const status      = w.hurdle_cleared
+  const hurdle_pct = (w.hurdle_pct * 100).toFixed(0);
+  const carry_pct  = (w.carry_pct  * 100).toFixed(0);
+  const status     = w.hurdle_cleared
     ? `<span class="wfall-badge wfall-cleared">✓ Hurdle cleared</span>`
     : `<span class="wfall-badge wfall-open">Hurdle not yet met</span>`;
 
+  // Approximation warning banner (shown when annual NAV snapshots aren't entered yet)
+  const approxWarning = w.data_source === 'approximation' ? `
+    <div class="wfall-approx-warning">
+      ⚠ Approximation — actual year-end NAVs not yet entered.
+      Carry is estimated using ${hurdle_pct}% × ${w.years_since_inception} yrs on committed capital.
+      Enter annual NAV snapshots for exact calculation.
+    </div>` : '';
+
+  // Per-LP breakdown rows
   const lpRows = (w.per_lp || []).map(lp => `
     <tr>
       <td class="fund-td-name">${lp.legal_name}</td>
@@ -3034,18 +3075,51 @@ function renderFundWaterfall(w) {
       <td class="fund-td-num fund-td-bold" style="color:#c9a84c">${fmt$(lp.nav_after_carry)}</td>
     </tr>`).join('');
 
+  // Annual snapshots table (shown when year-end NAVs have been entered)
+  const snapshots = w.annual_snapshots || [];
+  const snapshotTable = snapshots.length > 0 ? `
+    <div class="fund-section-row" style="margin-top:20px;">
+      <div class="label section-label" style="font-size:10px;">YEAR-BY-YEAR WATERFALL</div>
+    </div>
+    <table class="fund-table">
+      <thead>
+        <tr>
+          <th class="fund-th">Year</th>
+          <th class="fund-th fund-th-num">Start NAV</th>
+          <th class="fund-th fund-th-num">End NAV</th>
+          <th class="fund-th fund-th-num">Gross Profit</th>
+          <th class="fund-th fund-th-num">Hurdle</th>
+          <th class="fund-th fund-th-num">Carry Earned</th>
+          <th class="fund-th fund-th-num">GP Equity</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${snapshots.map(s => `
+        <tr>
+          <td class="fund-td-date">${s.year}</td>
+          <td class="fund-td-num">${fmt$(s.start_nav)}</td>
+          <td class="fund-td-num">${fmt$(s.end_nav)}</td>
+          <td class="fund-td-num" style="color:${s.gross_profit >= 0 ? '#c9a84c' : '#e05a4e'}">${fmt$(s.gross_profit)}</td>
+          <td class="fund-td-num">${fmt$(s.hurdle_amount)}</td>
+          <td class="fund-td-num" style="color:#c9a84c">${fmt$(s.carry_earned)}</td>
+          <td class="fund-td-num fund-td-bold">${fmt$(s.gp_equity_end)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : '';
+
   document.getElementById('fund-waterfall-wrap').innerHTML = `
+    ${approxWarning}
     <div class="wfall-summary">
       <div class="wfall-row">
         <span class="wfall-label">Structure</span>
-        <span class="wfall-value">${hurdle_pct}% hurdle · ${carry_pct}% carry · 100% catch-up</span>
+        <span class="wfall-value">${hurdle_pct}% annual hurdle · ${carry_pct}% carry · 100% catch-up</span>
       </div>
       <div class="wfall-row">
         <span class="wfall-label">Years since inception</span>
         <span class="wfall-value">${w.years_since_inception} yrs (as of ${w.as_of})</span>
       </div>
       <div class="wfall-row">
-        <span class="wfall-label">Preferred return (${hurdle_pct}% compound)</span>
+        <span class="wfall-label">Cumulative hurdle earned (${hurdle_pct}%/yr)</span>
         <span class="wfall-value">${fmt$(w.preferred_return)}</span>
       </div>
       <div class="wfall-row">
@@ -3085,5 +3159,6 @@ function renderFundWaterfall(w) {
         </tr>
       </thead>
       <tbody>${lpRows}</tbody>
-    </table>`;
+    </table>
+    ${snapshotTable}`;
 }

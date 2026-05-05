@@ -21,7 +21,8 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 BASE = pathlib.Path(__file__).parent
 
-MIGRATION = BASE / "migrations" / "0001_initial_schema.sql"
+MIGRATION  = BASE / "migrations" / "0001_initial_schema.sql"
+MIGRATION2 = BASE / "migrations" / "0002_annual_snapshots.sql"
 SEED_COA  = BASE / "seed"       / "0001_chart_of_accounts.sql"
 
 LOCAL_URL = "postgres://postgres:devpw@localhost:5432/dga_fund_dev"
@@ -98,12 +99,15 @@ def main():
 
     print(f"Connected ✓\n")
 
-    # 1. Apply migration
-    print("Step 1/3 — Applying schema migration...")
+    # 1. Apply migrations
+    print("Step 1/4 — Applying initial schema migration...")
     run_sql_file(conn, MIGRATION)
 
-    # 2. Insert fund row
-    print("\nStep 2/3 — Inserting DGA-I fund row...")
+    print("Step 2/4 — Applying annual snapshot migration (0002)...")
+    run_sql_file(conn, MIGRATION2)
+
+    # 3. Insert fund row
+    print("\nStep 3/4 — Inserting DGA-I fund row...")
     with conn.cursor() as cur:
         cur.execute(FUND_INSERT)
         row = cur.fetchone()
@@ -116,8 +120,8 @@ def main():
             print(f"  ✓ Fund already exists: id={fund_id}")
     conn.commit()
 
-    # 3. Seed chart of accounts
-    print(f"\nStep 3/3 — Seeding chart of accounts for fund {fund_id}...")
+    # 4. Seed chart of accounts
+    print(f"\nStep 4/4 — Seeding chart of accounts for fund {fund_id}...")
     # :fund_id is replaced with 'uuid-value' so :fund_id::uuid becomes 'uuid'::uuid
     run_sql_file(conn, SEED_COA, substitutions={"fund_id": f"'{fund_id}'"})
 
