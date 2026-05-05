@@ -234,7 +234,7 @@ document.querySelectorAll('[data-target]').forEach(el => {
     if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
     if (t === 'view-portfolio') rehydratePortfolioLastCard();
     if (t === 'view-settings') updateAppVersionCard();
-    if (t === 'view-fund') loadFund();
+    if (t === 'view-fund') openFundTab();
   });
 });
 
@@ -2767,16 +2767,93 @@ async function submitTrack() {
 }
 
 // ============================================================================
-// Fund Admin
 // ============================================================================
+// Fund Admin — auth gate + data loading
+// ============================================================================
+
+const FUND_TOKEN_KEY = 'dga_fund_token';
+
+function getFundToken()            { return localStorage.getItem(FUND_TOKEN_KEY) || ''; }
+function setFundToken(t)           { localStorage.setItem(FUND_TOKEN_KEY, t); }
+function clearFundToken()          { localStorage.removeItem(FUND_TOKEN_KEY); }
 
 let _fundLoaded = false;
 
-async function loadFund() {
-  if (_fundLoaded) return;   // only hit the DB once per page load
+// Called when the Fund tab is clicked.
+function openFundTab() {
+  if (getFundToken()) {
+    // Already authenticated this session — load data directly.
+    loadFund();
+  } else {
+    // Show the lock overlay; data loads after successful auth.
+    showFundLock();
+  }
+}
 
-  async function fetchJson(path) {
-    const r = await fetch(path, { headers: { 'x-auth-token': getToken() } });
+function showFundLock() {
+  const overlay = document.getElementById('fund-lock-overlay');
+  const input   = document.getElementById('fund-lock-input');
+  const errEl   = document.getElementById('fund-lock-error');
+  overlay.style.display = 'flex';
+  errEl.style.display   = 'none';
+  input.value           = '';
+  setTimeout(() => input.focus(), 80);
+}
+
+function hideFundLock() {
+  document.getElementById('fund-lock-overlay').style.display = 'none';
+}
+
+// Wire up the Unlock button (and Enter key) once the DOM is ready.
+document.addEventListener('DOMContentLoaded', () => {
+  const btn   = document.getElementById('fund-lock-btn');
+  const input = document.getElementById('fund-lock-input');
+  if (!btn) return;
+
+  async function attemptFundAuth() {
+    const pw = input.value.trim();
+    if (!pw) return;
+    btn.disabled   = true;
+    btn.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/fund/auth', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
+        body:    JSON.stringify({ password: pw }),
+      });
+      if (!r.ok) throw new Error('wrong');
+      const { fund_token } = await r.json();
+      setFundToken(fund_token);
+      hideFundLock();
+      loadFund();
+    } catch {
+      document.getElementById('fund-lock-error').style.display = 'block';
+      input.value = '';
+      input.focus();
+    } finally {
+      btn.disabled    = false;
+      btn.textContent = 'Unlock';
+    }
+  }
+
+  btn.addEventListener('click', attemptFundAuth);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') attemptFundAuth(); });
+});
+
+async function loadFund() {
+  if (_fundLoaded) return;
+
+  async function fundFetch(path) {
+    const r = await fetch(path, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (r.status === 403) {
+      // Fund token expired or revoked — re-show the lock screen.
+      clearFundToken();
+      _fundLoaded = false;
+      showFundLock();
+      throw new Error('fund_locked');
+    }
     if (!r.ok) {
       const body = await r.text().catch(() => '');
       throw new Error(`${r.status}${body ? ': ' + body : ''}`);
@@ -2785,25 +2862,28 @@ async function loadFund() {
   }
 
   try {
-    const [ov, lps, positions, activity] = await Promise.all([
-      fetchJson('/api/fund/overview'),
-      fetchJson('/api/fund/lps'),
-      fetchJson('/api/fund/positions'),
-      fetchJson('/api/fund/activity'),
+    const [ov, lps, positions, activity, waterfall] = await Promise.all([
+      fundFetch('/api/fund/overview'),
+      fundFetch('/api/fund/lps'),
+      fundFetch('/api/fund/positions'),
+      fundFetch('/api/fund/activity'),
+      fundFetch('/api/fund/waterfall'),
     ]);
 
     renderFundOverview(ov);
     renderFundLPs(lps, ov);
     renderFundPositions(positions);
     renderFundActivity(activity);
+    renderFundWaterfall(waterfall);
     _fundLoaded = true;
 
   } catch (e) {
+    if (e.message === 'fund_locked') return;  // lock screen shown — do nothing
     const msg = `<div class="fund-error">Unable to load fund data: ${e.message}</div>`;
-    document.getElementById('fund-overview-cards').innerHTML = msg;
-    document.getElementById('fund-lps-wrap').innerHTML      = msg;
-    document.getElementById('fund-positions-wrap').innerHTML = msg;
-    document.getElementById('fund-activity-wrap').innerHTML  = msg;
+    ['fund-overview-cards','fund-lps-wrap','fund-positions-wrap',
+     'fund-activity-wrap','fund-waterfall-wrap'].forEach(id => {
+      document.getElementById(id).innerHTML = msg;
+    });
   }
 }
 
@@ -2934,5 +3014,76 @@ function renderFundActivity(activity) {
         </tr>
       </thead>
       <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderFundWaterfall(w) {
+  const hurdle_pct  = (w.hurdle_pct  * 100).toFixed(0);
+  const carry_pct   = (w.carry_pct   * 100).toFixed(0);
+  const status      = w.hurdle_cleared
+    ? `<span class="wfall-badge wfall-cleared">✓ Hurdle cleared</span>`
+    : `<span class="wfall-badge wfall-open">Hurdle not yet met</span>`;
+
+  const lpRows = (w.per_lp || []).map(lp => `
+    <tr>
+      <td class="fund-td-name">${lp.legal_name}</td>
+      <td class="fund-td-num">${fmt$(lp.commitment)}</td>
+      <td class="fund-td-num">${fmt$(lp.preferred_return)}</td>
+      <td class="fund-td-num fund-carry-charge">−${fmt$(lp.carry_charge)}</td>
+      <td class="fund-td-num fund-td-bold">${fmt$(lp.net_gain)}</td>
+      <td class="fund-td-num fund-td-bold" style="color:#c9a84c">${fmt$(lp.nav_after_carry)}</td>
+    </tr>`).join('');
+
+  document.getElementById('fund-waterfall-wrap').innerHTML = `
+    <div class="wfall-summary">
+      <div class="wfall-row">
+        <span class="wfall-label">Structure</span>
+        <span class="wfall-value">${hurdle_pct}% hurdle · ${carry_pct}% carry · 100% catch-up</span>
+      </div>
+      <div class="wfall-row">
+        <span class="wfall-label">Years since inception</span>
+        <span class="wfall-value">${w.years_since_inception} yrs (as of ${w.as_of})</span>
+      </div>
+      <div class="wfall-row">
+        <span class="wfall-label">Preferred return (${hurdle_pct}% compound)</span>
+        <span class="wfall-value">${fmt$(w.preferred_return)}</span>
+      </div>
+      <div class="wfall-row">
+        <span class="wfall-label">Total gain</span>
+        <span class="wfall-value">${fmt$(w.total_gain)}</span>
+      </div>
+      <div class="wfall-row">
+        <span class="wfall-label">Hurdle status</span>
+        <span class="wfall-value">${status}</span>
+      </div>
+      <div class="wfall-row">
+        <span class="wfall-label">Carry pool (above hurdle)</span>
+        <span class="wfall-value">${fmt$(w.carry_pool)}</span>
+      </div>
+      <div class="wfall-row wfall-highlight">
+        <span class="wfall-label">GP accrued carry (${carry_pct}%)</span>
+        <span class="wfall-value wfall-gp">${fmt$(w.gp_accrued_carry)}</span>
+      </div>
+      <div class="wfall-row wfall-highlight">
+        <span class="wfall-label">LP net value (after carry)</span>
+        <span class="wfall-value" style="color:#c9a84c">${fmt$(w.lp_nav_after_carry)}</span>
+      </div>
+    </div>
+
+    <div class="fund-section-row" style="margin-top:16px;">
+      <div class="label section-label" style="font-size:10px;">PER-LP BREAKDOWN</div>
+    </div>
+    <table class="fund-table">
+      <thead>
+        <tr>
+          <th class="fund-th">LP</th>
+          <th class="fund-th fund-th-num">Contributed</th>
+          <th class="fund-th fund-th-num">Pref. Return</th>
+          <th class="fund-th fund-th-num">Carry Charge</th>
+          <th class="fund-th fund-th-num">Net Gain</th>
+          <th class="fund-th fund-th-num">Net Value</th>
+        </tr>
+      </thead>
+      <tbody>${lpRows}</tbody>
     </table>`;
 }

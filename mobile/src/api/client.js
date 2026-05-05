@@ -28,6 +28,7 @@ const BASE_URL_KEY  = '@dga_api_base_url';
 const GAMMA_KEY     = '@dga_gamma_enabled';
 const PASSWORD_KEY  = '@dga_password';             // plain-text password user entered
 const TOKEN_KEY     = '@dga_token_cache';          // HMAC token returned by /api/auth
+const FUND_TOKEN_KEY = '@dga_fund_token';          // fund-specific access token
 
 // Migrate stale `localhost` URLs that older builds saved to AsyncStorage.
 // On a real iPhone (TestFlight build) localhost is meaningless and every
@@ -118,6 +119,18 @@ export async function getStoredPassword() {
 
 export async function clearToken() {
   await AsyncStorage.removeItem(TOKEN_KEY);
+}
+
+// ── Fund token ────────────────────────────────────────────────────────────────
+export async function getFundToken() {
+  try { return (await AsyncStorage.getItem(FUND_TOKEN_KEY)) || ''; }
+  catch { return ''; }
+}
+export async function setFundToken(token) {
+  await AsyncStorage.setItem(FUND_TOKEN_KEY, token);
+}
+export async function clearFundToken() {
+  await AsyncStorage.removeItem(FUND_TOKEN_KEY);
 }
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
@@ -306,10 +319,33 @@ export const api = {
   },
 
   // ---------- Fund Admin ----------
-  fundOverview:  () => request('/api/fund/overview'),
-  fundLps:       () => request('/api/fund/lps'),
-  fundPositions: () => request('/api/fund/positions'),
-  fundActivity:  () => request('/api/fund/activity'),
+  // All fund data endpoints require the x-fund-token header (second auth layer).
+  // Call fundAuth(password) first, then fundOverview/Lps/Positions/Activity/Waterfall.
+  fundAuth: (password) => request('/api/fund/auth', {
+    method: 'POST',
+    body:   JSON.stringify({ password }),
+  }),
+
+  fundOverview: async () => {
+    const ft = await getFundToken();
+    return request('/api/fund/overview', { headers: { 'x-fund-token': ft } });
+  },
+  fundLps: async () => {
+    const ft = await getFundToken();
+    return request('/api/fund/lps', { headers: { 'x-fund-token': ft } });
+  },
+  fundPositions: async () => {
+    const ft = await getFundToken();
+    return request('/api/fund/positions', { headers: { 'x-fund-token': ft } });
+  },
+  fundActivity: async () => {
+    const ft = await getFundToken();
+    return request('/api/fund/activity', { headers: { 'x-fund-token': ft } });
+  },
+  fundWaterfall: async () => {
+    const ft = await getFundToken();
+    return request('/api/fund/waterfall', { headers: { 'x-fund-token': ft } });
+  },
 
   // Server build version (public — no auth required). Used by Settings to
   // show what's currently deployed and let the user verify the OTA update.

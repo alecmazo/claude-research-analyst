@@ -639,6 +639,19 @@
     </div>
   </header>
 
+  <!-- Fund lock overlay — shown until fund password is entered -->
+  <div id="fund-lock-overlay" class="fund-lock-overlay" style="display:none;">
+    <div class="fund-lock-card">
+      <div class="fund-lock-icon">🔒</div>
+      <h2 class="fund-lock-title">Fund Access</h2>
+      <p class="fund-lock-hint">Enter the fund password to continue.</p>
+      <input id="fund-lock-input" type="password" class="fund-lock-input"
+             placeholder="Fund password" autocomplete="current-password" />
+      <div id="fund-lock-error" class="fund-lock-error" style="display:none;">Incorrect password</div>
+      <button id="fund-lock-btn" class="fund-lock-btn">Unlock</button>
+    </div>
+  </div>
+
   <!-- Fund Overview Cards -->
   <div id="fund-overview-cards" class="fund-overview-cards">
     <div class="fund-card-loading">Loading fund data…</div>
@@ -664,7 +677,15 @@
   <div class="fund-section-row">
     <div class="label section-label">RECENT ACTIVITY</div>
   </div>
-  <div id="fund-activity-wrap" class="fund-table-wrap" style="margin-bottom:100px;">
+  <div id="fund-activity-wrap" class="fund-table-wrap">
+    <div class="fund-card-loading">—</div>
+  </div>
+
+  <!-- GP Waterfall -->
+  <div class="fund-section-row" style="margin-top:24px;">
+    <div class="label section-label">GP WATERFALL &amp; CARRY</div>
+  </div>
+  <div id="fund-waterfall-wrap" class="fund-table-wrap" style="margin-bottom:100px;">
     <div class="fund-card-loading">—</div>
   </div>
 </section>

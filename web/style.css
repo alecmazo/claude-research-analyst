@@ -2845,3 +2845,85 @@ body {
   color: #3a5070;
   font-size: 12px;
 }
+
+/* ── Fund lock overlay ───────────────────────────────────────────────────── */
+.fund-lock-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 15, 35, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(4px);
+}
+.fund-lock-card {
+  background: #0d1f38;
+  border: 1px solid rgba(201,168,76,0.35);
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: min(340px, 90vw);
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.fund-lock-icon  { font-size: 36px; margin-bottom: 12px; }
+.fund-lock-title { font-size: 18px; font-weight: 700; color: #f0e8d0; margin: 0 0 6px; }
+.fund-lock-hint  { font-size: 12px; color: #6a8aaa; margin: 0 0 20px; }
+.fund-lock-input {
+  width: 100%;
+  background: #081526;
+  border: 1px solid #1e3a5a;
+  border-radius: 8px;
+  color: #f0e8d0;
+  font-size: 15px;
+  padding: 11px 14px;
+  box-sizing: border-box;
+  outline: none;
+  margin-bottom: 8px;
+}
+.fund-lock-input:focus { border-color: #c9a84c; }
+.fund-lock-error {
+  font-size: 12px;
+  color: #e05a5a;
+  margin-bottom: 8px;
+}
+.fund-lock-btn {
+  width: 100%;
+  background: #c9a84c;
+  color: #0a1628;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 12px;
+  cursor: pointer;
+  margin-top: 4px;
+  letter-spacing: 0.5px;
+}
+.fund-lock-btn:hover    { background: #d9b85c; }
+.fund-lock-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Waterfall ───────────────────────────────────────────────────────────── */
+.wfall-summary {
+  background: #0a1628;
+  border: 1px solid #1e3a5a;
+  border-radius: 10px;
+  padding: 4px 0;
+  margin-bottom: 8px;
+}
+.wfall-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 16px;
+  border-bottom: 1px solid #0f2240;
+}
+.wfall-row:last-child { border-bottom: none; }
+.wfall-highlight { background: rgba(201,168,76,0.06); }
+.wfall-label  { font-size: 11px; color: #6a8aaa; text-transform: uppercase; letter-spacing: 0.4px; }
+.wfall-value  { font-size: 13px; color: #c0cfe0; font-weight: 600; }
+.wfall-gp     { color: #e8a060; }
+.wfall-badge  { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 20px; }
+.wfall-cleared { background: rgba(80,200,80,0.15); color: #60d060; }
+.wfall-open    { background: rgba(220,160,40,0.15); color: #e0a030; }
+.fund-carry-charge { color: #e05a5a; }

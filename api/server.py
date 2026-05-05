@@ -67,6 +67,28 @@ def _valid_token(token: str) -> bool:
     expected = _make_token(_portfolio_password())
     return hmac.compare_digest(token.strip(), expected)
 
+# Fund-specific auth — second layer on top of main auth.
+# FUND_PASSWORD defaults to "dgacapital"; set env var to change it independently.
+def _fund_password() -> str:
+    return os.environ.get("FUND_PASSWORD", "dgacapital").strip()
+
+def _make_fund_token() -> str:
+    """Deterministic fund token: HMAC of 'fund:<password>' with shared secret."""
+    return hmac.new(
+        _token_secret().encode(), f"fund:{_fund_password()}".encode(), hashlib.sha256
+    ).hexdigest()
+
+def _valid_fund_token(token: str) -> bool:
+    return hmac.compare_digest(token.strip(), _make_fund_token())
+
+def _require_fund_token(request: Request) -> None:
+    """Raise 403 if x-fund-token header (or fund_token query param) is missing/invalid."""
+    token = (request.headers.get("x-fund-token")
+             or request.query_params.get("fund_token")
+             or "")
+    if not _valid_fund_token(token):
+        raise HTTPException(status_code=403, detail="Fund access requires fund authentication")
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
@@ -116,6 +138,9 @@ def _save_job_index_entry(job_id: str, entry: dict) -> None:
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
+class FundAuthRequest(BaseModel):
+    password: str
 
 class AnalyzeRequest(BaseModel):
     ticker: str
@@ -1458,8 +1483,18 @@ def _fund_id(cur) -> str:
     return str(row["id"])
 
 
+@app.post("/api/fund/auth")
+async def fund_auth_endpoint(body: FundAuthRequest):
+    """Exchange the fund password for a fund-specific access token.
+    Requires the main app token (handled by middleware) + correct FUND_PASSWORD."""
+    if not hmac.compare_digest(body.password.strip(), _fund_password()):
+        raise HTTPException(status_code=401, detail="Incorrect fund password")
+    return {"fund_token": _make_fund_token()}
+
+
 @app.get("/api/fund/overview")
-async def fund_overview():
+async def fund_overview(request: Request):
+    _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -1517,7 +1552,8 @@ async def fund_overview():
 
 
 @app.get("/api/fund/lps")
-async def fund_lps():
+async def fund_lps(request: Request):
+    _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -1555,7 +1591,8 @@ async def fund_lps():
 
 
 @app.get("/api/fund/positions")
-async def fund_positions():
+async def fund_positions(request: Request):
+    _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -1593,7 +1630,8 @@ async def fund_positions():
 
 
 @app.get("/api/fund/activity")
-async def fund_activity():
+async def fund_activity(request: Request):
+    _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -1619,6 +1657,124 @@ async def fund_activity():
                 "posted_at":      r["posted_at"].isoformat() if r["posted_at"] else None,
                 "amount":         max(float(r["total_debit"]), float(r["total_credit"])),
             } for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/api/fund/waterfall")
+async def fund_waterfall(request: Request):
+    """GP carry / LP waterfall calculation as of today.
+
+    Waterfall (0% mgmt fee, hurdle h%, 100% catch-up, c% carry):
+      1. Return of capital          → 100% LP
+      2. Preferred return (compound) → 100% LP until hurdle met
+      3. GP catch-up                → 100% GP until GP has c% of total profits
+      4. Residual split             → (1-c)% LP / c% GP
+    Net result with full catch-up: GP = c% of total profits, LP = (1-c)%.
+    """
+    _require_fund_token(request)
+    from datetime import date as _date
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _fund_id(cur)
+
+            cur.execute("""
+                SELECT inception_date, carry_pct, hurdle_pct,
+                       COALESCE(catch_up_pct, 1.0) AS catch_up_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund = dict(cur.fetchone())
+            inception   = fund["inception_date"]
+            carry_pct   = float(fund["carry_pct"])
+            hurdle_pct  = float(fund["hurdle_pct"])
+            catch_up    = float(fund["catch_up_pct"])
+
+            cur.execute("""
+                SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
+                  FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
+            """, (fid,))
+            nav = float(cur.fetchone()["nav"])
+
+            cur.execute("""
+                SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
+                  FROM commitments c
+                  JOIN lps l ON l.id = c.lp_id
+                 WHERE l.fund_id = %s AND c.superseded_by IS NULL
+            """, (fid,))
+            contributions = float(cur.fetchone()["total"])
+
+            # Per-LP commitments (only LPs with actual commitments)
+            cur.execute("""
+                SELECT l.legal_name,
+                       COALESCE(SUM(c.commitment_amount), 0) AS commitment
+                  FROM lps l
+                  LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
+                 WHERE l.fund_id = %s AND l.status = 'active'
+                 GROUP BY l.id, l.legal_name
+                HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
+                 ORDER BY COALESCE(SUM(c.commitment_amount), 0) DESC
+            """, (fid,))
+            lp_rows = cur.fetchall()
+
+            # ── Waterfall math ────────────────────────────────────────────
+            today   = _date.today()
+            years   = (today - inception).days / 365.25
+            gain    = nav - contributions
+
+            # Compound preferred return on total contributions
+            preferred = contributions * ((1 + hurdle_pct) ** years - 1)
+            hurdle_cleared = gain >= preferred
+
+            if not hurdle_cleared:
+                gp_carry  = 0.0
+                lp_net    = gain
+                carry_pool = max(0.0, gain - preferred)
+            else:
+                # Full catch-up → GP gets exactly carry_pct of total profits
+                gp_carry  = gain * carry_pct
+                lp_net    = gain - gp_carry
+                carry_pool = gain - preferred
+
+            # Preferred return broken down by holding period
+            # (annual breakdown for display)
+            annual_hurdle = contributions * hurdle_pct
+
+            # Per-LP share
+            per_lp = []
+            for row in lp_rows:
+                commitment = float(row["commitment"])
+                share      = commitment / contributions if contributions else 0
+                per_lp.append({
+                    "legal_name":         row["legal_name"],
+                    "commitment":         commitment,
+                    "share_pct":          round(share * 100, 4),
+                    "preferred_return":   round(preferred * share, 2),
+                    "gross_gain":         round(gain * share, 2),
+                    "carry_charge":       round(gp_carry * share, 2),
+                    "net_gain":           round(lp_net * share, 2),
+                    "nav_after_carry":    round(commitment + lp_net * share, 2),
+                })
+
+            return {
+                "as_of":                  today.isoformat(),
+                "inception_date":         str(inception),
+                "years_since_inception":  round(years, 2),
+                "contributions":          round(contributions, 2),
+                "nav":                    round(nav, 2),
+                "total_gain":             round(gain, 2),
+                "hurdle_pct":             hurdle_pct,
+                "carry_pct":              carry_pct,
+                "catch_up_pct":           catch_up,
+                "preferred_return":       round(preferred, 2),
+                "annual_hurdle_amount":   round(annual_hurdle, 2),
+                "hurdle_cleared":         hurdle_cleared,
+                "carry_pool":             round(carry_pool, 2),
+                "gp_accrued_carry":       round(gp_carry, 2),
+                "lp_net_gain":            round(lp_net, 2),
+                "lp_nav_after_carry":     round(contributions + lp_net, 2),
+                "per_lp":                 per_lp,
+            }
     finally:
         conn.close()
 
