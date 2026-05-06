@@ -358,6 +358,47 @@ export const api = {
     return request(`/api/fund/waterfall${qs}`, { headers: { 'x-fund-token': ft } });
   },
 
+  // Import Fidelity CSV positions for a fund.
+  // fileUri / fileName / mimeType come from expo-document-picker.
+  fundImportPositions: async ({ fileUri, fileName, mimeType, fundId }) => {
+    const ft   = await getFundToken();
+    const base = await getBaseUrl();
+    const token = await getToken();
+    const form = new FormData();
+    form.append('file', { uri: fileUri, name: fileName || 'positions.csv', type: mimeType || 'text/csv' });
+    if (fundId) form.append('fund_id', fundId);
+    const resp = await fetch(`${base}/api/fund/import-positions`, {
+      method: 'POST',
+      headers: { 'x-auth-token': token, 'x-fund-token': ft },
+      body: form,
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      throw new Error(txt || `HTTP ${resp.status}`);
+    }
+    return resp.json();
+  },
+
+  // Import cap table CSV/XLSX for a fund.
+  fundImportCaptable: async ({ fileUri, fileName, mimeType, fundId }) => {
+    const ft   = await getFundToken();
+    const base = await getBaseUrl();
+    const token = await getToken();
+    const form = new FormData();
+    form.append('file', { uri: fileUri, name: fileName || 'captable.csv', type: mimeType || 'text/csv' });
+    if (fundId) form.append('fund_id', fundId);
+    const resp = await fetch(`${base}/api/fund/import-captable`, {
+      method: 'POST',
+      headers: { 'x-auth-token': token, 'x-fund-token': ft },
+      body: form,
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      throw new Error(txt || `HTTP ${resp.status}`);
+    }
+    return resp.json();
+  },
+
   // Server build version (public — no auth required). Used by Settings to
   // show what's currently deployed and let the user verify the OTA update.
   getBuild: async () => {

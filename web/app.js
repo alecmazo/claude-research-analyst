@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui15-20260506';
+const DGA_BUILD = 'ui16-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3125,16 +3125,41 @@ function renderFundPositions(positions) {
     document.getElementById('fund-positions-wrap').innerHTML = '<div class="fund-empty">No open positions.</div>';
     return;
   }
-  const rows = positions.map(p => `
+  const totalMktVal = positions.reduce((s, p) => s + (p.market_value || 0), 0);
+  const rows = positions.map(p => {
+    const hasMkt = p.market_value != null;
+    const gainColor = (p.unrealized_gain || 0) >= 0 ? '#4cc870' : '#e06050';
+    const mktWt = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : '—';
+    return `
     <tr>
       <td class="fund-td-ticker">${p.symbol}</td>
       <td class="fund-td-name fund-td-dim">${p.name}</td>
       <td class="fund-td-num">${Number(p.total_qty).toLocaleString()}</td>
       <td class="fund-td-num">${fmt$(p.avg_cost)}</td>
-      <td class="fund-td-num fund-td-bold">${fmt$(p.total_cost)}</td>
-      <td class="fund-td-pct">${p.weight_pct.toFixed(1)}%</td>
+      <td class="fund-td-num">${fmt$(p.total_cost)}</td>
+      <td class="fund-td-num" style="color:#c9a84c">${hasMkt ? fmt$(p.last_price) : '—'}</td>
+      <td class="fund-td-num fund-td-bold">${hasMkt ? fmt$(p.market_value) : '—'}</td>
+      <td class="fund-td-num" style="color:${gainColor}">${hasMkt ? fmt$(p.unrealized_gain) : '—'}</td>
+      <td class="fund-td-pct">${mktWt}</td>
       <td class="fund-td-lots">${p.lot_count > 1 ? p.lot_count + ' lots' : '1 lot'}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+
+  // Summary footer row
+  const totalCost = positions.reduce((s, p) => s + (p.total_cost || 0), 0);
+  const totalGain = positions.reduce((s, p) => s + (p.unrealized_gain || 0), 0);
+  const gainColor = totalGain >= 0 ? '#4cc870' : '#e06050';
+  const footer = totalMktVal > 0 ? `
+    <tr style="border-top:1px solid rgba(201,168,76,0.2);">
+      <td class="fund-td-ticker" style="color:#6a8aaa; font-size:10px; font-weight:600;">TOTAL</td>
+      <td></td><td></td><td></td>
+      <td class="fund-td-num fund-td-bold">${fmt$(totalCost)}</td>
+      <td></td>
+      <td class="fund-td-num fund-td-bold" style="color:#c9a84c">${fmt$(totalMktVal)}</td>
+      <td class="fund-td-num" style="color:${gainColor}">${fmt$(totalGain)}</td>
+      <td></td><td></td>
+    </tr>` : '';
+
   document.getElementById('fund-positions-wrap').innerHTML = `
     <table class="fund-table">
       <thead>
@@ -3143,12 +3168,15 @@ function renderFundPositions(positions) {
           <th class="fund-th">Name</th>
           <th class="fund-th fund-th-num">Qty</th>
           <th class="fund-th fund-th-num">Avg Cost</th>
-          <th class="fund-th fund-th-num">Total Cost</th>
-          <th class="fund-th fund-th-pct">Weight</th>
+          <th class="fund-th fund-th-num">Cost Basis</th>
+          <th class="fund-th fund-th-num" style="color:#c9a84c">Last Price</th>
+          <th class="fund-th fund-th-num" style="color:#c9a84c">Mkt Value</th>
+          <th class="fund-th fund-th-num">Unrealized</th>
+          <th class="fund-th fund-th-pct">Wt%</th>
           <th class="fund-th">Lots</th>
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows}${footer}</tbody>
     </table>`;
 }
 
@@ -3293,4 +3321,146 @@ function renderFundWaterfall(w) {
       <tbody>${lpRows}</tbody>
     </table>
     ${snapshotTable}`;
+}
+
+// ── Import Positions (Fidelity CSV) ──────────────────────────────────────────
+function triggerPositionsUpload() {
+  const el = document.getElementById('positions-file-input');
+  if (el) el.click();
+}
+
+async function handlePositionsUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('positions-import-status');
+  statusEl.textContent = '⏳ Uploading positions…';
+  statusEl.className = 'fund-import-status fund-import-status-loading';
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    if (_activeFundId) form.append('fund_id', _activeFundId);
+
+    const r = await fetch(`${API_BASE}/api/fund/import-positions`, {
+      method: 'POST',
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+      body: form,
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+
+    const n = body.imported || 0;
+    const mkt = body.market_value_total != null ? ` · Market value: ${fmt$(body.market_value_total)}` : '';
+    statusEl.textContent = `✓ Imported ${n} positions${mkt}`;
+    statusEl.className = 'fund-import-status fund-import-status-ok';
+    // Reload positions table
+    _fundLoaded = false;
+    loadFund();
+  } catch (e) {
+    statusEl.textContent = `✗ Import failed: ${e.message}`;
+    statusEl.className = 'fund-import-status fund-import-status-err';
+  }
+  input.value = '';   // reset so same file can be re-uploaded
+}
+
+// ── Import Cap Table (CSV or XLSX) ───────────────────────────────────────────
+function triggerCaptableUpload() {
+  const el = document.getElementById('captable-file-input');
+  if (el) el.click();
+}
+
+async function handleCaptableUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('captable-import-status');
+  statusEl.textContent = '⏳ Uploading cap table…';
+  statusEl.className = 'fund-import-status fund-import-status-loading';
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    if (_activeFundId) form.append('fund_id', _activeFundId);
+
+    const r = await fetch(`${API_BASE}/api/fund/import-captable`, {
+      method: 'POST',
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+      body: form,
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+
+    const n = body.imported || 0;
+    statusEl.textContent = `✓ Imported ${n} LP records`;
+    statusEl.className = 'fund-import-status fund-import-status-ok';
+    _fundLoaded = false;
+    loadFund();
+  } catch (e) {
+    statusEl.textContent = `✗ Import failed: ${e.message}`;
+    statusEl.className = 'fund-import-status fund-import-status-err';
+  }
+  input.value = '';
+}
+
+// ── Create New Fund ───────────────────────────────────────────────────────────
+function toggleCreateFundForm() {
+  const form = document.getElementById('create-fund-form');
+  if (!form) return;
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  const statusEl = document.getElementById('create-fund-status');
+  if (statusEl) statusEl.textContent = '';
+}
+
+async function submitCreateFund() {
+  const name     = (document.getElementById('cf-name')?.value || '').trim();
+  const short    = (document.getElementById('cf-short')?.value || '').trim();
+  const inception= (document.getElementById('cf-inception')?.value || '').trim();
+  const mgmt     = parseFloat(document.getElementById('cf-mgmt')?.value || '2');
+  const carry    = parseFloat(document.getElementById('cf-carry')?.value || '20');
+  const hurdle   = parseFloat(document.getElementById('cf-hurdle')?.value || '8');
+  const statusEl = document.getElementById('create-fund-status');
+
+  if (!name || !short || !inception) {
+    statusEl.textContent = '✗ Name, short name, and inception date are required.';
+    statusEl.className = 'fund-import-status fund-import-status-err';
+    return;
+  }
+
+  statusEl.textContent = '⏳ Creating fund…';
+  statusEl.className = 'fund-import-status fund-import-status-loading';
+
+  try {
+    const r = await fetch(`${API_BASE}/api/fund/admin/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-auth-token': getToken(),
+        'x-fund-token': getFundToken(),
+      },
+      body: JSON.stringify({
+        name,
+        short_name: short,
+        inception_date: inception,
+        mgmt_fee_pct: mgmt / 100,
+        carry_pct: carry / 100,
+        hurdle_pct: hurdle / 100,
+        status: 'active',
+      }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+
+    statusEl.textContent = `✓ Fund "${name}" created!`;
+    statusEl.className = 'fund-import-status fund-import-status-ok';
+    // Clear form
+    ['cf-name','cf-short','cf-inception','cf-mgmt','cf-carry','cf-hurdle']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    // Reload fund list
+    setTimeout(() => {
+      toggleCreateFundForm();
+      loadFundList();
+    }, 1200);
+  } catch (e) {
+    statusEl.textContent = `✗ ${e.message}`;
+    statusEl.className = 'fund-import-status fund-import-status-err';
+  }
 }

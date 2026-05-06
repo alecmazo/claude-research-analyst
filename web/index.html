@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui14-20260506';
+    var EXPECTED = 'ui16-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui19">
+  <link rel="stylesheet" href="/app/style.css?v=ui20">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -552,6 +552,28 @@
       <div id="fund-list-cards" class="fund-list-cards">
         <div class="fund-card-loading">Loading funds…</div>
       </div>
+      <!-- Create New Fund form (toggled by button) -->
+      <div style="padding:0 16px 8px;">
+        <button id="create-fund-toggle-btn" class="fund-import-btn" onclick="toggleCreateFundForm()">+ Create New Fund</button>
+      </div>
+      <div id="create-fund-form" style="display:none; padding:0 16px 20px;">
+        <div class="fund-import-form">
+          <div class="fund-import-form-title">New Fund Details</div>
+          <input id="cf-name" class="fund-import-input" type="text" placeholder="Fund Name (e.g. DGA Capital Fund II, LP)" />
+          <input id="cf-short" class="fund-import-input" type="text" placeholder="Short Name (e.g. DGAF-II)" />
+          <input id="cf-inception" class="fund-import-input" type="text" placeholder="Inception Date (YYYY-MM-DD)" />
+          <div style="display:flex; gap:8px;">
+            <input id="cf-mgmt" class="fund-import-input" type="number" placeholder="Mgmt Fee % (e.g. 2)" step="0.1" style="flex:1;" />
+            <input id="cf-carry" class="fund-import-input" type="number" placeholder="Carry % (e.g. 20)" step="1" style="flex:1;" />
+            <input id="cf-hurdle" class="fund-import-input" type="number" placeholder="Hurdle % (e.g. 8)" step="1" style="flex:1;" />
+          </div>
+          <div style="display:flex; gap:8px; margin-top:4px;">
+            <button class="fund-import-btn fund-import-btn-primary" onclick="submitCreateFund()" style="flex:1;">Create Fund</button>
+            <button class="fund-import-btn" onclick="toggleCreateFundForm()" style="flex:1;">Cancel</button>
+          </div>
+          <div id="create-fund-status" class="fund-import-status"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Fund Detail View (hidden until a fund is selected) -->
@@ -571,17 +593,23 @@
       </div>
 
       <!-- LP Table -->
-      <div class="fund-section-row">
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
         <div class="label section-label">LIMITED PARTNERS</div>
+        <button class="fund-import-btn" onclick="triggerCaptableUpload()">↑ Import Cap Table</button>
       </div>
+      <input type="file" id="captable-file-input" accept=".csv,.xlsx,.xls" style="display:none;" onchange="handleCaptableUpload(this)">
+      <div id="captable-import-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
       <div id="fund-lps-wrap" class="fund-table-wrap">
         <div class="fund-card-loading">—</div>
       </div>
 
       <!-- Positions Table -->
-      <div class="fund-section-row">
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
         <div class="label section-label">PORTFOLIO POSITIONS</div>
+        <button class="fund-import-btn" onclick="triggerPositionsUpload()">↑ Import Positions</button>
       </div>
+      <input type="file" id="positions-file-input" accept=".csv" style="display:none;" onchange="handlePositionsUpload(this)">
+      <div id="positions-import-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
       <div id="fund-positions-wrap" class="fund-table-wrap">
         <div class="fund-card-loading">—</div>
       </div>

@@ -3155,3 +3155,69 @@ body {
   padding: 10px 14px;
   margin-bottom: 12px;
 }
+
+/* ── Import buttons + status ─────────────────────────────────────────────── */
+.fund-import-btn {
+  background: transparent;
+  border: 1px solid rgba(201,168,76,0.35);
+  border-radius: 6px;
+  color: #c9a84c;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+.fund-import-btn:hover {
+  border-color: #c9a84c;
+  background: rgba(201,168,76,0.08);
+  color: #f0d080;
+}
+.fund-import-btn-primary {
+  background: #c9a84c;
+  color: #0a1628;
+  border-color: #c9a84c;
+}
+.fund-import-btn-primary:hover {
+  background: #d9b85c;
+  color: #0a1628;
+}
+.fund-import-status {
+  font-size: 11px;
+  min-height: 18px;
+  transition: color 0.2s;
+}
+.fund-import-status-loading { color: #6a8aaa; }
+.fund-import-status-ok      { color: #4cc870; }
+.fund-import-status-err     { color: #e05a5a; }
+
+/* ── Create New Fund form ────────────────────────────────────────────────── */
+.fund-import-form {
+  background: #0e1d38;
+  border: 1px solid rgba(201,168,76,0.25);
+  border-radius: 10px;
+  padding: 16px;
+}
+.fund-import-form-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #4a6080;
+  margin-bottom: 12px;
+}
+.fund-import-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #081526;
+  border: 1px solid #1e3a5a;
+  border-radius: 7px;
+  color: #f0e8d0;
+  font-size: 13px;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+  outline: none;
+}
+.fund-import-input:focus { border-color: #c9a84c; }

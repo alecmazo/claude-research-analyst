@@ -22,8 +22,259 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import csv
+import io
+import time
 import hashlib
 import hmac
+
+# ── yfinance (optional — for live price fetching) ─────────────────────────────
+try:
+    import yfinance as yf
+    _YFINANCE_OK = True
+except ImportError:
+    _YFINANCE_OK = False
+
+# ── openpyxl (optional — for XLSX cap-table uploads) ─────────────────────────
+try:
+    import openpyxl
+    _OPENPYXL_OK = True
+except ImportError:
+    _OPENPYXL_OK = False
+
+# ── Live-price cache  (TTL: 15 min) ──────────────────────────────────────────
+_price_cache: dict = {}  # { symbol: (price, fetched_at) }
+_PRICE_CACHE_TTL = 900   # seconds
+
+def _fetch_prices(symbols: list) -> dict:
+    """Return {symbol: last_price} for the given list, using a 15-min cache.
+    Falls back to None for any symbol that can't be priced."""
+    if not _YFINANCE_OK or not symbols:
+        return {}
+    now   = time.time()
+    out   = {}
+    fetch = []
+    for sym in symbols:
+        clean = sym.rstrip('*').rstrip('**')
+        if clean in _price_cache:
+            p, ts = _price_cache[clean]
+            if now - ts < _PRICE_CACHE_TTL:
+                out[sym] = p
+                continue
+        fetch.append((sym, clean))
+
+    for sym, clean in fetch:
+        # Fidelity money-market funds are always $1 NAV
+        if 'SPAXX' in clean or 'FDRXX' in clean or 'SPRXX' in clean:
+            _price_cache[clean] = (1.0, now)
+            out[sym] = 1.0
+            continue
+        try:
+            t = yf.Ticker(clean)
+            p = t.fast_info.last_price
+            price = float(p) if p and float(p) > 0 else None
+        except Exception:
+            price = None
+        _price_cache[clean] = (price, now)
+        out[sym] = price
+
+    return out
+
+
+# ── Embedded chart-of-accounts rows  (replaces reading the seed .sql file) ───
+# Matches apps/fund/db/seed/0001_chart_of_accounts.sql exactly.
+_FUND_COA = [
+    # code,  name,                                    type
+    ('1010', 'Cash — Operating Account',              'asset'),
+    ('1020', 'Cash — Brokerage',                      'asset'),
+    ('1030', 'Cash — Money Market',                   'asset'),
+    ('1100', 'Securities at Cost',                    'asset'),
+    ('1110', 'Mark-to-Market Adjustment',             'asset'),
+    ('1200', 'Subscriptions Receivable',              'asset'),
+    ('1210', 'Dividends Receivable',                  'asset'),
+    ('1220', 'Interest Receivable',                   'asset'),
+    ('1300', 'Prepaid Expenses',                      'asset'),
+    ('2010', 'Trade Settlement Payable',              'liability'),
+    ('2100', 'Accrued Management Fee',                'liability'),
+    ('2110', 'Accrued Performance Fee (Carry)',       'liability'),
+    ('2200', 'Distributions Payable',                 'liability'),
+    ('2300', 'Accrued Expenses — Audit',              'liability'),
+    ('2310', 'Accrued Expenses — Legal',              'liability'),
+    ('2320', 'Accrued Expenses — Fund Admin',         'liability'),
+    ('2330', 'Accrued Expenses — Other',              'liability'),
+    ('3000', 'Capital — General Partner',             'equity'),
+    ('3100', 'Capital — Limited Partners (control)',  'equity'),
+    ('3900', 'Retained Earnings',                     'equity'),
+    ('4100', 'Realized Gain — Long-Term',             'income'),
+    ('4110', 'Realized Gain — Short-Term',            'income'),
+    ('4200', 'Unrealized Gain (Mark-to-Market)',      'income'),
+    ('4300', 'Dividend Income',                       'income'),
+    ('4400', 'Interest Income',                       'income'),
+    ('4900', 'Other Income',                          'income'),
+    ('5100', 'Management Fee Expense',                'expense'),
+    ('5200', 'Audit Fee',                             'expense'),
+    ('5210', 'Legal Fees',                            'expense'),
+    ('5220', 'Fund Administration Fees',              'expense'),
+    ('5230', 'Custody Fees',                          'expense'),
+    ('5240', 'Brokerage Commissions',                 'expense'),
+    ('5300', 'Realized Loss — Long-Term',             'expense'),
+    ('5310', 'Realized Loss — Short-Term',            'expense'),
+    ('5400', 'Unrealized Loss (Mark-to-Market)',      'expense'),
+    ('5900', 'Other Fund Expenses',                   'expense'),
+    ('6100', 'Performance Allocation Expense',        'expense'),
+    ('6200', 'Performance Allocation Reversal',       'contra'),
+]
+
+
+def _parse_fidelity_csv(content: str) -> list:
+    """Parse a Fidelity Account Positions CSV export.
+    Returns a list of position dicts ready for DB import."""
+    positions = []
+    lines = content.splitlines()
+    # Fidelity CSVs have a header row but may have extra blank/disclaimer lines.
+    # Find the real header row that contains 'Symbol'.
+    header_idx = None
+    for i, line in enumerate(lines):
+        if 'Symbol' in line and 'Account' in line:
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    reader = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
+
+    def parse_dollar(s: str):
+        if not s:
+            return None
+        s = str(s).replace('$', '').replace(',', '').replace('+', '').strip()
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    for row in reader:
+        sym = (row.get('Symbol') or '').strip()
+        if not sym:
+            continue
+        desc = (row.get('Description') or '').strip()
+        # Stop at Fidelity disclaimer lines
+        if len(sym) > 12 or (desc and 'Brokerage services' in desc):
+            break
+
+        qty_str  = (row.get('Quantity') or '').strip()
+        is_mm    = 'SPAXX' in sym or 'FDRXX' in sym or not qty_str
+
+        if is_mm:
+            val = parse_dollar(row.get('Current Value'))
+            if val:
+                positions.append({
+                    'symbol':     sym.rstrip('*'),
+                    'name':       desc or 'Money Market',
+                    'quantity':   val,
+                    'avg_cost':   1.0,
+                    'cost_basis': val,
+                    'last_price': 1.0,
+                    'lot_type':   (row.get('Type') or 'Cash').strip(),
+                    'is_cash':    True,
+                })
+            continue
+
+        try:
+            qty = float(qty_str.replace(',', ''))
+        except ValueError:
+            continue
+
+        last_price      = parse_dollar(row.get('Last Price'))
+        avg_cost        = parse_dollar(row.get('Average Cost Basis'))
+        cost_basis_total= parse_dollar(row.get('Cost Basis Total'))
+        if cost_basis_total is None and avg_cost and qty:
+            cost_basis_total = avg_cost * qty
+
+        positions.append({
+            'symbol':     sym,
+            'name':       desc,
+            'quantity':   qty,
+            'avg_cost':   avg_cost   or 0.0,
+            'cost_basis': cost_basis_total or 0.0,
+            'last_price': last_price,
+            'lot_type':   (row.get('Type') or 'Cash').strip(),
+            'is_cash':    False,
+        })
+
+    return positions
+
+
+def _parse_captable(content: bytes, filename: str) -> list:
+    """Parse a cap-table CSV or XLSX.
+    Expected columns (case-insensitive): LP Name, Commitment Amount,
+    Entity Type (optional), Effective Date (optional).
+    Returns list of dicts."""
+    rows = []
+    fname_lower = (filename or '').lower()
+
+    if fname_lower.endswith('.xlsx') or fname_lower.endswith('.xls'):
+        if not _OPENPYXL_OK:
+            raise HTTPException(400, "openpyxl not installed — upload a CSV instead")
+        wb  = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws  = wb.active
+        raw = [[str(c.value or '').strip() for c in row] for row in ws.iter_rows()]
+    else:
+        text = content.decode('utf-8', errors='replace')
+        raw  = [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text))]
+
+    if not raw:
+        return []
+
+    # Find header row
+    header = []
+    data_start = 0
+    for i, row in enumerate(raw):
+        joined = ' '.join(row).lower()
+        if 'lp name' in joined or 'legal name' in joined or 'name' in joined:
+            header = [h.lower().strip() for h in row]
+            data_start = i + 1
+            break
+
+    if not header:
+        raise HTTPException(400, "Could not find header row in cap table. "
+            "Expected columns: 'LP Name', 'Commitment Amount'")
+
+    def col(row, *names):
+        for n in names:
+            for i, h in enumerate(header):
+                if n.lower() in h:
+                    return row[i] if i < len(row) else ''
+        return ''
+
+    for row in raw[data_start:]:
+        if not any(row):
+            continue
+        name = col(row, 'lp name', 'legal name', 'name')
+        amt_str = col(row, 'commitment', 'amount', 'capital')
+        if not name or not amt_str:
+            continue
+        try:
+            amt = float(str(amt_str).replace('$','').replace(',','').strip())
+        except ValueError:
+            continue
+        if amt <= 0:
+            continue
+
+        etype   = col(row, 'entity type', 'type') or 'individual'
+        eff_date= col(row, 'effective date', 'date') or str(datetime.utcnow().date())
+        # Normalise entity_type to allowed values
+        etype_lower = etype.lower().strip()
+        valid_etypes = ('individual','joint','llc','trust','ira','corp','partnership','foundation','other')
+        etype = etype_lower if etype_lower in valid_etypes else 'individual'
+
+        rows.append({
+            'legal_name':    name.strip(),
+            'entity_type':   etype,
+            'commitment':    amt,
+            'effective_date':eff_date.strip() or str(datetime.utcnow().date()),
+        })
+
+    return rows
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -141,6 +392,15 @@ def _save_job_index_entry(job_id: str, entry: dict) -> None:
 
 class FundAuthRequest(BaseModel):
     password: str
+
+class CreateFundRequest(BaseModel):
+    name:           str                 # 'DGA Capital Fund II, LP'
+    short_name:     str                 # 'DGA-II'
+    inception_date: str                 # 'YYYY-MM-DD'
+    fiscal_year_end: str | None = None  # defaults to Dec 31 of inception year
+    mgmt_fee_pct:   float = 0.02
+    carry_pct:      float = 0.25
+    hurdle_pct:     float = 0.08
 
 class AnalyzeRequest(BaseModel):
     ticker: str
@@ -353,7 +613,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui15-20260506"
+WEB_BUILD_VERSION = "ui16-20260506"
 
 
 @app.get("/api/build")
@@ -1690,17 +1950,43 @@ async def fund_positions(request: Request, fund_id: str = None):
             """, (fid,))
             rows = cur.fetchall()
             total_cost = sum(float(r["total_cost"]) for r in rows) or 1
-            return [{
-                "symbol":         r["symbol"],
-                "name":           r["name"],
-                "issuer":         r["issuer"],
-                "lot_count":      r["lot_count"],
-                "total_qty":      float(r["total_qty"]),
-                "avg_cost":       float(r["avg_cost"]),
-                "total_cost":     float(r["total_cost"]),
-                "weight_pct":     float(r["total_cost"]) / total_cost * 100,
-                "first_acquired": str(r["first_acquired"])[:10] if r["first_acquired"] else None,
-            } for r in rows]
+
+            # Fetch live prices for all symbols
+            symbols = [r["symbol"] for r in rows if r["symbol"]]
+            prices  = _fetch_prices(symbols)
+
+            result = []
+            total_mkt = 0.0
+            for r in rows:
+                sym       = r["symbol"]
+                qty       = float(r["total_qty"])
+                avg_cost  = float(r["avg_cost"])
+                tot_cost  = float(r["total_cost"])
+                last_p    = prices.get(sym)
+                mkt_val   = (qty * last_p) if last_p else None
+                if mkt_val:
+                    total_mkt += mkt_val
+                result.append({
+                    "symbol":        sym,
+                    "name":          r["name"],
+                    "issuer":        r["issuer"],
+                    "lot_count":     r["lot_count"],
+                    "total_qty":     qty,
+                    "avg_cost":      avg_cost,
+                    "total_cost":    tot_cost,
+                    "last_price":    round(last_p, 4) if last_p else None,
+                    "market_value":  round(mkt_val, 2) if mkt_val else None,
+                    "unrealized_gain": round(mkt_val - tot_cost, 2) if mkt_val else None,
+                    "weight_pct":    tot_cost / total_cost * 100,
+                    "first_acquired":str(r["first_acquired"])[:10] if r["first_acquired"] else None,
+                })
+
+            # Patch market-based weight_pct if we have prices
+            if total_mkt > 0:
+                for item in result:
+                    if item["market_value"] is not None:
+                        item["market_weight_pct"] = round(item["market_value"] / total_mkt * 100, 2)
+            return result
     finally:
         conn.close()
 
@@ -1979,6 +2265,295 @@ async def fund_waterfall(request: Request, fund_id: str = None):
                     "annual_snapshots":     [],
                     "per_lp":               per_lp,
                 }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Fund Admin — management endpoints (create, import positions, import cap table)
+# ---------------------------------------------------------------------------
+
+def _seed_coa_for_fund(cur, fund_id: str) -> None:
+    """Insert the standard chart-of-accounts for a new fund (idempotent)."""
+    cur.execute("SELECT COUNT(*) AS n FROM accounts WHERE fund_id = %s", (fund_id,))
+    if cur.fetchone()["n"] > 0:
+        return  # already seeded
+    for code, name, atype in _FUND_COA:
+        cur.execute("""
+            INSERT INTO accounts (fund_id, code, name, type)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (fund_id, code) DO NOTHING
+        """, (fund_id, code, name, atype))
+
+
+@app.post("/api/fund/admin/create")
+async def fund_admin_create(request: Request, body: CreateFundRequest):
+    """Create a new fund + seed its chart of accounts.
+    Idempotent on short_name — re-calling with the same short_name updates
+    the fund name but does not touch the CoA."""
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Derive fiscal year end from inception year if not supplied
+            fy_end = body.fiscal_year_end
+            if not fy_end:
+                yr = body.inception_date[:4]
+                fy_end = f"{yr}-12-31"
+
+            cur.execute("""
+                INSERT INTO funds (
+                    name, short_name, structure, domicile, base_ccy,
+                    inception_date, fiscal_year_end,
+                    mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                    carry_pct, hurdle_pct, catch_up_pct,
+                    max_lps, status
+                ) VALUES (
+                    %s, %s, '3c1', 'DE', 'USD',
+                    %s, %s,
+                    %s, 'committed', 'quarterly',
+                    %s, %s, 1.00,
+                    99, 'open'
+                )
+                ON CONFLICT (short_name) DO UPDATE
+                    SET name = EXCLUDED.name,
+                        updated_at = NOW()
+                RETURNING id
+            """, (body.name, body.short_name, body.inception_date, fy_end,
+                  body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct))
+            fid = str(cur.fetchone()["id"])
+            _seed_coa_for_fund(cur, fid)
+        conn.commit()
+        return {"fund_id": fid, "name": body.name, "short_name": body.short_name}
+    finally:
+        conn.close()
+
+
+@app.post("/api/fund/import-positions")
+async def fund_import_positions(
+    request: Request,
+    fund_id: str = Form(None),
+    file: UploadFile = File(...),
+):
+    """Upload a Fidelity Account Positions CSV (or XLSX) to refresh the
+    fund's open tax-lot positions.
+
+    Flow:
+     1. Parse CSV → list of {symbol, name, qty, avg_cost, last_price, ...}
+     2. Upsert securities records
+     3. Close all existing open lots (without a hard delete — immutable ledger)
+     4. Create a single 'adjustment' transaction with balanced double-entry:
+          Dr. 1100 Securities at Cost  (one line per security)
+          Dr. 1030 Cash — Money Market (for MM positions)
+          Cr. 3000 Capital — GP        (single balancing credit)
+     5. Insert new tax_lots pointing at that transaction
+    """
+    _require_fund_token(request)
+    raw = await file.read()
+    # Handle both CSV and XLSX uploads
+    if (file.filename or '').lower().endswith(('.xlsx', '.xls')):
+        if not _OPENPYXL_OK:
+            raise HTTPException(400, "openpyxl not installed — upload a .csv file")
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        ws = wb.active
+        header = [str(c.value or '').strip() for c in next(ws.iter_rows())]
+        lines  = [header] + [
+            [str(c.value or '').strip() for c in row] for row in ws.iter_rows(min_row=2)
+        ]
+        content = '\n'.join(','.join(r) for r in lines)
+    else:
+        content = raw.decode('utf-8', errors='replace')
+
+    positions = _parse_fidelity_csv(content)
+    if not positions:
+        raise HTTPException(400, "No valid positions found in file. "
+            "Expected a Fidelity Account Positions CSV export.")
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+
+            # ── Fetch CoA accounts ─────────────────────────────────────────
+            cur.execute("""
+                SELECT code, id FROM accounts
+                 WHERE fund_id = %s AND code IN ('1020','1030','1100','3000')
+            """, (fid,))
+            acct_map = {r["code"]: str(r["id"]) for r in cur.fetchall()}
+            sec_acct  = acct_map.get("1100")
+            mm_acct   = acct_map.get("1030") or acct_map.get("1020")
+            cap_acct  = acct_map.get("3000")
+            if not sec_acct or not cap_acct:
+                raise HTTPException(500, "Chart of accounts not found — "
+                    "run /api/fund/admin/create first")
+
+            # ── Upsert securities ─────────────────────────────────────────
+            sec_ids = {}
+            for p in positions:
+                sym = p["symbol"]
+                cur.execute("""
+                    INSERT INTO securities (symbol, name, asset_class, is_public)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name
+                    RETURNING id
+                """, (sym, p["name"] or sym,
+                      "cash" if p["is_cash"] else "equity"))
+                sec_ids[sym] = str(cur.fetchone()["id"])
+
+            # ── Close all existing open lots ──────────────────────────────
+            cur.execute("""
+                UPDATE tax_lots SET closed_at = NOW()
+                 WHERE fund_id = %s AND closed_at IS NULL
+            """, (fid,))
+
+            # ── Create balancing adjustment transaction ────────────────────
+            today = datetime.utcnow().date().isoformat()
+            cur.execute("""
+                INSERT INTO transactions
+                    (fund_id, effective_date, category, description)
+                VALUES (%s, %s, 'adjustment', 'Position import from Fidelity CSV')
+                RETURNING id
+            """, (fid, today))
+            txn_id = str(cur.fetchone()["id"])
+
+            # Build lines: one Dr per position, one Cr total
+            total_cost = 0.0
+            line_num   = 1
+            for p in positions:
+                cost = float(p["cost_basis"])
+                if cost <= 0:
+                    continue
+                total_cost += cost
+                acct = mm_acct if p["is_cash"] else sec_acct
+                if not acct:
+                    continue
+                cur.execute("""
+                    INSERT INTO transaction_lines
+                        (transaction_id, line_number, account_id, debit, security_id)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (txn_id, line_num, acct, round(cost, 4),
+                      sec_ids.get(p["symbol"])))
+                line_num += 1
+
+            # Balancing credit to Capital — GP
+            if total_cost > 0:
+                cur.execute("""
+                    INSERT INTO transaction_lines
+                        (transaction_id, line_number, account_id, credit)
+                    VALUES (%s, %s, %s, %s)
+                """, (txn_id, line_num, cap_acct, round(total_cost, 4)))
+
+            # ── Insert new tax_lots ───────────────────────────────────────
+            for p in positions:
+                cur.execute("""
+                    INSERT INTO tax_lots
+                        (fund_id, security_id, acquired_at,
+                         quantity, cost_basis_per_unit, open_transaction_id)
+                    VALUES (%s, %s, NOW(), %s, %s, %s)
+                """, (fid, sec_ids[p["symbol"]],
+                      float(p["quantity"]),
+                      float(p["avg_cost"]) if p["avg_cost"] else 0.0,
+                      txn_id))
+
+        conn.commit()
+
+        # Fetch prices for imported symbols
+        symbols = [p["symbol"] for p in positions if not p["is_cash"]]
+        prices  = _fetch_prices(symbols)
+        market_value = sum(
+            float(p["quantity"]) * (prices.get(p["symbol"]) or float(p.get("last_price") or 0))
+            for p in positions
+        )
+
+        return {
+            "fund_id":            fid,
+            "imported":           len(positions),
+            "positions_imported": len(positions),
+            "market_value_total": round(market_value, 2),
+            "message": f"Successfully imported {len(positions)} position lots.",
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/fund/import-captable")
+async def fund_import_captable(
+    request: Request,
+    fund_id: str = Form(None),
+    file: UploadFile = File(...),
+):
+    """Upload a cap-table CSV or XLSX to set/update LP records and commitments.
+
+    Expected columns (case-insensitive):
+        LP Name, Commitment Amount, Entity Type (opt), Effective Date (opt)
+
+    On re-upload, existing LPs are matched by legal_name (case-insensitive).
+    New commitments supersede the previous commitment for each LP.
+    """
+    _require_fund_token(request)
+    raw  = await file.read()
+    rows = _parse_captable(raw, file.filename or '')
+    if not rows:
+        raise HTTPException(400, "No valid LP rows found in file. "
+            "Expected columns: 'LP Name', 'Commitment Amount'")
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            imported = 0
+            for row in rows:
+                # Upsert LP by (fund_id, legal_name)
+                cur.execute("""
+                    INSERT INTO lps (fund_id, legal_name, entity_type,
+                                     accred_type, status)
+                    VALUES (%s, %s, %s, 'net_worth', 'active')
+                    ON CONFLICT DO NOTHING
+                    RETURNING id
+                """, (fid, row["legal_name"], row["entity_type"]))
+                result = cur.fetchone()
+                if result:
+                    lp_id = str(result["id"])
+                else:
+                    cur.execute("""
+                        SELECT id FROM lps
+                         WHERE fund_id = %s
+                           AND LOWER(legal_name) = LOWER(%s)
+                    """, (fid, row["legal_name"]))
+                    r = cur.fetchone()
+                    if not r:
+                        continue
+                    lp_id = str(r["id"])
+
+                # Supersede existing active commitment
+                cur.execute("""
+                    SELECT id FROM commitments
+                     WHERE lp_id = %s AND fund_id = %s AND superseded_by IS NULL
+                """, (lp_id, fid))
+                old = cur.fetchone()
+
+                cur.execute("""
+                    INSERT INTO commitments
+                        (lp_id, fund_id, commitment_amount, effective_date)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (lp_id, fid, row["commitment"], row["effective_date"]))
+                new_cmt_id = str(cur.fetchone()["id"])
+
+                if old:
+                    cur.execute("""
+                        UPDATE commitments SET superseded_by = %s WHERE id = %s
+                    """, (new_cmt_id, str(old["id"])))
+
+                imported += 1
+
+        conn.commit()
+        return {
+            "fund_id":      fid,
+            "imported":     imported,
+            "lps_imported": imported,
+            "message":      f"Imported {imported} LP records.",
+        }
     finally:
         conn.close()
 

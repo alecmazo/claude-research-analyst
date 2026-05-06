@@ -90,6 +90,12 @@ export default function FundScreen({ navigation }) {
   const [ytdError,       setYtdError]       = useState(null);
   const [ytdSnapshots,   setYtdSnapshots]   = useState([]);
 
+  // ── Fund import state ────────────────────────────────────────────────────
+  const [importPosStatus,  setImportPosStatus]  = useState(null);  // {ok, msg}
+  const [importCtStatus,   setImportCtStatus]   = useState(null);  // {ok, msg}
+  const [importPosLoading, setImportPosLoading] = useState(false);
+  const [importCtLoading,  setImportCtLoading]  = useState(false);
+
   // ── Rebalance state ──────────────────────────────────────────────────────
   const [rebalFile,         setRebalFile]         = useState(null);
   const [rebalReuseCache,   setRebalReuseCache]   = useState(true);
@@ -204,6 +210,67 @@ export default function FundScreen({ navigation }) {
       if (!res.canceled && res.assets?.[0]) setter(res.assets[0]);
     } catch (e) {
       Alert.alert('File picker error', e.message);
+    }
+  };
+
+  // ── Fund: import positions (Fidelity CSV) ───────────────────────────────
+  const importPositions = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const asset = res.assets[0];
+      setImportPosLoading(true);
+      setImportPosStatus(null);
+      const data = await api.fundImportPositions({
+        fileUri:  asset.uri,
+        fileName: asset.name,
+        mimeType: asset.mimeType,
+        fundId:   activeFundId,
+      });
+      const n   = data.imported || 0;
+      const mkt = data.market_value_total != null ? ` · Mkt ${fmt$(data.market_value_total)}` : '';
+      setImportPosStatus({ ok: true, msg: `✓ Imported ${n} positions${mkt}` });
+      // Reload positions
+      const fresh = await api.fundPositions(activeFundId);
+      setPositions(Array.isArray(fresh) ? fresh : []);
+    } catch (e) {
+      setImportPosStatus({ ok: false, msg: `✗ ${e.message}` });
+    } finally {
+      setImportPosLoading(false);
+    }
+  };
+
+  // ── Fund: import cap table (CSV or XLSX) ─────────────────────────────────
+  const importCaptable = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'application/csv',
+               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+               'application/vnd.ms-excel', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const asset = res.assets[0];
+      setImportCtLoading(true);
+      setImportCtStatus(null);
+      const data = await api.fundImportCaptable({
+        fileUri:  asset.uri,
+        fileName: asset.name,
+        mimeType: asset.mimeType,
+        fundId:   activeFundId,
+      });
+      const n = data.imported || 0;
+      setImportCtStatus({ ok: true, msg: `✓ Imported ${n} LP records` });
+      // Reload LPs
+      const fresh = await api.fundLps(activeFundId);
+      setLps(Array.isArray(fresh) ? fresh : []);
+    } catch (e) {
+      setImportCtStatus({ ok: false, msg: `✗ ${e.message}` });
+    } finally {
+      setImportCtLoading(false);
     }
   };
 
@@ -793,8 +860,29 @@ export default function FundScreen({ navigation }) {
 
   function LPsPanel() {
     const lpOnly = lps.filter(l => l.commitment > 0);
-    if (!lpOnly.length) return <Text style={s.emptyText}>No LP records found.</Text>;
     return (
+      <View>
+        {/* Import cap table button */}
+        <View style={s.importRow}>
+          <TouchableOpacity
+            style={[s.importBtn, importCtLoading && s.importBtnDisabled]}
+            onPress={importCaptable}
+            disabled={importCtLoading}
+            activeOpacity={0.7}
+          >
+            <Text style={s.importBtnText}>
+              {importCtLoading ? '⏳ Importing…' : '↑ Import Cap Table'}
+            </Text>
+          </TouchableOpacity>
+          {importCtStatus && (
+            <Text style={[s.importStatus, importCtStatus.ok ? s.importStatusOk : s.importStatusErr]}>
+              {importCtStatus.msg}
+            </Text>
+          )}
+        </View>
+        {!lpOnly.length ? (
+          <Text style={s.emptyText}>No LP records found.</Text>
+        ) : (
       <View style={s.tableWrap}>
         <View style={[s.tableRow, s.tableHeader]}>
           <Text style={[s.th, { flex: 1.4 }]}>LP</Text>
@@ -820,32 +908,98 @@ export default function FundScreen({ navigation }) {
           <Text style={[s.td, s.tdRight, s.tdDim, { flex: 0.6 }]}>100%</Text>
         </View>
       </View>
+        )}
+      </View>
     );
   }
 
   function PositionsPanel() {
-    if (!positions.length) return <Text style={s.emptyText}>No open positions.</Text>;
+    const totalMktVal = positions.reduce((s, p) => s + (p.market_value || 0), 0);
     return (
-      <View style={s.tableWrap}>
-        <View style={[s.tableRow, s.tableHeader]}>
-          <Text style={[s.th, { flex: 1 }]}>Symbol</Text>
-          <Text style={[s.th, s.thRight]}>Qty</Text>
-          <Text style={[s.th, s.thRight]}>Avg $</Text>
-          <Text style={[s.th, s.thRight]}>Cost</Text>
-          <Text style={[s.th, s.thRight, { flex: 0.6 }]}>Wt%</Text>
+      <View>
+        {/* Import button row */}
+        <View style={s.importRow}>
+          <TouchableOpacity
+            style={[s.importBtn, importPosLoading && s.importBtnDisabled]}
+            onPress={importPositions}
+            disabled={importPosLoading}
+            activeOpacity={0.7}
+          >
+            <Text style={s.importBtnText}>
+              {importPosLoading ? '⏳ Importing…' : '↑ Import Positions'}
+            </Text>
+          </TouchableOpacity>
+          {importPosStatus && (
+            <Text style={[s.importStatus, importPosStatus.ok ? s.importStatusOk : s.importStatusErr]}>
+              {importPosStatus.msg}
+            </Text>
+          )}
         </View>
-        {positions.map((p, i) => (
-          <View key={p.symbol + i} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-            <View style={[{ flex: 1 }, s.symbolCell]}>
-              <Text style={s.symbolText}>{p.symbol}</Text>
-              {p.lot_count > 1 && <Text style={s.lotBadge}>{p.lot_count}L</Text>}
+
+        {!positions.length ? (
+          <Text style={s.emptyText}>No open positions.</Text>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={s.tableWrap}>
+              <View style={[s.tableRow, s.tableHeader]}>
+                <Text style={[s.th, { width: 64 }]}>Symbol</Text>
+                <Text style={[s.th, s.thRight, { width: 56 }]}>Qty</Text>
+                <Text style={[s.th, s.thRight, { width: 64 }]}>Avg $</Text>
+                <Text style={[s.th, s.thRight, { width: 72 }]}>Cost</Text>
+                <Text style={[s.th, s.thRight, { width: 64, color: '#c9a84c' }]}>Last $</Text>
+                <Text style={[s.th, s.thRight, { width: 80, color: '#c9a84c' }]}>Mkt Val</Text>
+                <Text style={[s.th, s.thRight, { width: 72 }]}>P/L</Text>
+                <Text style={[s.th, s.thRight, { width: 48 }]}>Wt%</Text>
+              </View>
+              {positions.map((p, i) => {
+                const hasMkt   = p.market_value != null;
+                const plColor  = (p.unrealized_gain || 0) >= 0 ? '#4cc870' : '#e06050';
+                const mktWt    = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : '—';
+                return (
+                  <View key={p.symbol + i} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
+                    <View style={[{ width: 64 }, s.symbolCell]}>
+                      <Text style={s.symbolText}>{p.symbol}</Text>
+                      {p.lot_count > 1 && <Text style={s.lotBadge}>{p.lot_count}L</Text>}
+                    </View>
+                    <Text style={[s.td, s.tdRight, { width: 56 }]}>{Number(p.total_qty).toLocaleString()}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 64 }]}>${Math.round(p.avg_cost).toLocaleString('en-US')}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 72 }]}>{fmt$(p.total_cost)}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 64, color: '#c9a84c' }]}>
+                      {hasMkt ? `$${p.last_price?.toFixed(2)}` : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: hasMkt ? '#c9a84c' : '#b0bdd0' }]}>
+                      {hasMkt ? fmt$(p.market_value) : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, { width: 72, color: hasMkt ? plColor : '#4a6080' }]}>
+                      {hasMkt ? fmt$(p.unrealized_gain) : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, s.tdDim, { width: 48 }]}>{mktWt}</Text>
+                  </View>
+                );
+              })}
+              {/* Total footer */}
+              {totalMktVal > 0 && (
+                <View style={[s.tableRow, { borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.2)' }]}>
+                  <Text style={[s.td, { width: 64, color: '#4a6080', fontSize: 9, fontWeight: '700' }]}>TOTAL</Text>
+                  <Text style={[s.td, s.tdRight, { width: 56 }]}></Text>
+                  <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 72 }]}>
+                    {fmt$(positions.reduce((acc, p) => acc + (p.total_cost || 0), 0))}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: '#c9a84c' }]}>
+                    {fmt$(totalMktVal)}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 72,
+                    color: positions.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0) >= 0 ? '#4cc870' : '#e06050' }]}>
+                    {fmt$(positions.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0))}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 48 }]}></Text>
+                </View>
+              )}
             </View>
-            <Text style={[s.td, s.tdRight]}>{Number(p.total_qty).toLocaleString()}</Text>
-            <Text style={[s.td, s.tdRight]}>${Math.round(p.avg_cost).toLocaleString('en-US')}</Text>
-            <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(p.total_cost)}</Text>
-            <Text style={[s.td, s.tdRight, s.tdDim, { flex: 0.6 }]}>{p.weight_pct.toFixed(1)}%</Text>
-          </View>
-        ))}
+          </ScrollView>
+        )}
       </View>
     );
   }
@@ -1456,6 +1610,22 @@ const s = StyleSheet.create({
   symbolCell: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   symbolText: { fontSize: 12, fontWeight: '700', color: colors.gold },
   lotBadge:   { fontSize: 8, backgroundColor: 'rgba(201,168,76,0.2)', color: colors.gold, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' },
+
+  // Import row (Positions + LPs tabs)
+  importRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, flexWrap: 'wrap',
+  },
+  importBtn: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)', borderRadius: 7,
+    backgroundColor: 'transparent',
+  },
+  importBtnDisabled: { opacity: 0.5 },
+  importBtnText: { fontSize: 11, fontWeight: '700', color: '#c9a84c', letterSpacing: 0.2 },
+  importStatus: { fontSize: 11 },
+  importStatusOk:  { color: '#4cc870' },
+  importStatusErr: { color: '#e06050' },
 
   // Activity
   activityWrap:  { padding: 14 },
