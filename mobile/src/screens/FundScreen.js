@@ -26,15 +26,13 @@ import { colors } from '../components/theme';
 import { api, getFundToken, setFundToken, clearFundToken } from '../api/client';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// All dollar amounts on the fund/portfolio pages display as whole dollars (no cents).
 const fmt$ = (n) => {
   if (n == null) return '—';
-  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-const fmt$0 = (n) => {
-  if (n == null) return '—';
   const abs = Math.abs(n);
-  return (n < 0 ? '−$' : '$') + abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return (n < 0 ? '−$' : '$') + Math.round(abs).toLocaleString('en-US', { maximumFractionDigits: 0 });
 };
+const fmt$0 = fmt$;  // alias — both render whole dollars
 const fmtPct = (n, decimals = 1) => {
   if (n == null) return '—';
   const sign = n >= 0 ? '+' : '';
@@ -579,7 +577,7 @@ export default function FundScreen({ navigation }) {
               {p.lot_count > 1 && <Text style={s.lotBadge}>{p.lot_count}L</Text>}
             </View>
             <Text style={[s.td, s.tdRight]}>{Number(p.total_qty).toLocaleString()}</Text>
-            <Text style={[s.td, s.tdRight]}>${Number(p.avg_cost).toFixed(2)}</Text>
+            <Text style={[s.td, s.tdRight]}>${Math.round(p.avg_cost).toLocaleString('en-US')}</Text>
             <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(p.total_cost)}</Text>
             <Text style={[s.td, s.tdRight, s.tdDim, { flex: 0.6 }]}>{p.weight_pct.toFixed(1)}%</Text>
           </View>

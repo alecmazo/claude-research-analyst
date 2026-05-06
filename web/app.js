@@ -1660,12 +1660,9 @@ function _renderUnifiedYtdResult(data) {
 
   const fmtUSD0 = (v) => {
     const abs = Math.abs(v ?? 0);
-    return (v < 0 ? '−' : '') + '$' + abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return (v < 0 ? '−' : '') + '$' + Math.round(abs).toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
-  const fmtUSD2 = (v) => {
-    const abs = Math.abs(v ?? 0);
-    return (v < 0 ? '−' : '') + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
+  const fmtUSD2 = fmtUSD0;  // no cents on portfolio page
   const fmtPct  = (v, d=2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(d)}%`;
   const fmtSh   = (n) => n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   const cls     = (v) => v == null ? '' : v >= 0 ? 'green' : 'red';
@@ -1746,7 +1743,7 @@ function _renderUnifiedYtdResult(data) {
     return `<tr>
       <td class="flow-date">${f.date}</td>
       <td class="flow-action">${f.action}</td>
-      <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : '−'}$${Math.abs(f.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+      <td class="flow-amt ${cls2}">${f.amount >= 0 ? '+' : '−'}$${Math.round(Math.abs(f.amount)).toLocaleString('en-US', {maximumFractionDigits:0})}</td>
     </tr>`;
   }).join('');
   // Show unique action types seen in the CSV (diagnostic — helps verify flow capture)
@@ -2925,9 +2922,11 @@ async function loadFund() {
   }
 }
 
+// All fund/portfolio dollar amounts display as whole dollars (no cents).
 function fmt$(n) {
   if (n == null) return '—';
-  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const abs = Math.abs(n);
+  return (n < 0 ? '−$' : '$') + Math.round(abs).toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 function fmtPct(n, decimals = 1) {
   if (n == null) return '—';
@@ -3007,7 +3006,7 @@ function renderFundPositions(positions) {
       <td class="fund-td-ticker">${p.symbol}</td>
       <td class="fund-td-name fund-td-dim">${p.name}</td>
       <td class="fund-td-num">${Number(p.total_qty).toLocaleString()}</td>
-      <td class="fund-td-num">$${Number(p.avg_cost).toFixed(2)}</td>
+      <td class="fund-td-num">${fmt$(p.avg_cost)}</td>
       <td class="fund-td-num fund-td-bold">${fmt$(p.total_cost)}</td>
       <td class="fund-td-pct">${p.weight_pct.toFixed(1)}%</td>
       <td class="fund-td-lots">${p.lot_count > 1 ? p.lot_count + ' lots' : '1 lot'}</td>
