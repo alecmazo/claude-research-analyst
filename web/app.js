@@ -1538,58 +1538,19 @@ async function sendYtdEmail() {
 async function loadLiveBenchmark() {
   const wrap = document.getElementById('tracker-live-info');
   const card = document.getElementById('tracker-live-card');
-  const histCard = document.getElementById('history-upload-card');
   if (!wrap) return;
-
-  // The Tracker page is independent of the Live Rebalance tab — the YTD
-  // upload card and snapshot history are always visible. The user can run
-  // an accurate cash-flow + transaction-adjusted YTD just by uploading the
-  // two CSVs and entering Jan 1 value, with no prior live-rebalance step.
-  if (histCard) histCard.style.display = '';
-  loadYtdSnapshots();
 
   try {
     const data = await api.getLiveBenchmark();
     const live = data?.live_portfolio;
     if (!live) {
       wrap.innerHTML = `<div class="tracker-live-empty">
-        Live benchmark will be set automatically the first time you calculate
-        an accurate YTD below — no need to run a separate rebalance.
+        No live portfolio yet. Upload Fidelity CSVs in
+        <strong>Fund → My Portfolio</strong> to set the benchmark.
       </div>`;
       card?.classList.remove('clickable');
       card?.removeAttribute('role');
       return;
-    }
-
-    // Auto-render the most recent YTD result if one exists
-    if (histCard) {
-      // If a previous unified-YTD upload was persisted, re-render it from
-      // live.account_history (which now also stores the attribution rows).
-      const h = live.account_history;
-      if (h && h.attribution) {
-        _renderUnifiedYtdResult({
-          md_return_pct:       h.md_return_pct,
-          twrr_return_pct:     h.twrr_return_pct    ?? null,
-          begin_value:         h.begin_value,
-          end_value:           h.end_value,
-          emv_source:          h.emv_source || 'positions_csv',
-          net_flow:            h.net_flow,
-          flow_count:          h.flow_count,
-          trade_count:         h.trade_count,
-          dividend_count:      h.dividend_count,
-          attribution:         h.attribution,
-          flows:               h.flows               || [],
-          unique_actions:      h.unique_actions      || [],
-          monthly_chart:       h.monthly_chart       || null,
-          monthly_chart_error: h.monthly_chart_error || null,
-          has_monthly_perf:    h.has_monthly_perf    ?? false,
-          // total / explained recomputed from rows so it matches even if not stored
-          total_dollar_gain: (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0),
-          explained_pct:     h.begin_value
-            ? (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0) / h.begin_value * 100
-            : 0,
-        });
-      }
     }
 
     const n = (live.holdings || []).length;
@@ -2785,10 +2746,18 @@ function openFundTab() {
     // Already authenticated this session — show branch selector and load data.
     document.getElementById('fund-branch-selector').style.display = 'flex';
     loadFund();
+    _loadMyPortfolioData();
   } else {
     // Show the lock overlay; data loads after successful auth.
     showFundLock();
   }
+}
+
+// Load My Portfolio data (YTD snapshots + rehydrate last result).
+// Safe to call any time; only acts on visible elements.
+function _loadMyPortfolioData() {
+  loadYtdSnapshots();
+  _rehydrateYtdResult();
 }
 
 function showFundLock() {
@@ -2809,6 +2778,8 @@ function hideFundLock() {
   // Reveal branch selector now that we're authenticated
   const sel = document.getElementById('fund-branch-selector');
   if (sel) sel.style.display = 'flex';
+  // Pre-load My Portfolio data so snapshots + result are ready
+  _loadMyPortfolioData();
 }
 
 // Wire up the Unlock button (and Enter key) once the DOM is ready.
@@ -2854,6 +2825,10 @@ document.addEventListener('DOMContentLoaded', () => {
       branchBtn.classList.add('active');
       document.getElementById('fund-branch-lp').style.display        = branch === 'lp'        ? 'block' : 'none';
       document.getElementById('fund-branch-portfolio').style.display = branch === 'portfolio' ? 'block' : 'none';
+      if (branch === 'portfolio') {
+        loadYtdSnapshots();
+        _rehydrateYtdResult();
+      }
     });
   });
 
@@ -2871,6 +2846,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// Re-render the most recent YTD result (from persisted account_history) so
+// the attribution table is visible immediately when switching to My Portfolio.
+async function _rehydrateYtdResult() {
+  try {
+    const data = await api.getLiveBenchmark();
+    const h = data?.live_portfolio?.account_history;
+    if (!h || !h.attribution) return;
+    _renderUnifiedYtdResult({
+      md_return_pct:       h.md_return_pct,
+      twrr_return_pct:     h.twrr_return_pct    ?? null,
+      begin_value:         h.begin_value,
+      end_value:           h.end_value,
+      emv_source:          h.emv_source || 'positions_csv',
+      net_flow:            h.net_flow,
+      flow_count:          h.flow_count,
+      trade_count:         h.trade_count,
+      dividend_count:      h.dividend_count,
+      attribution:         h.attribution,
+      flows:               h.flows               || [],
+      unique_actions:      h.unique_actions      || [],
+      monthly_chart:       h.monthly_chart       || null,
+      monthly_chart_error: h.monthly_chart_error || null,
+      has_monthly_perf:    h.has_monthly_perf    ?? false,
+      total_dollar_gain: (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0),
+      explained_pct: h.begin_value
+        ? (h.attribution || []).reduce((s,a) => s + (a.dollar_gain || 0), 0) / h.begin_value * 100
+        : 0,
+    });
+  } catch (_) { /* non-fatal — no previous run */ }
+}
 
 async function loadFund() {
   if (_fundLoaded) return;

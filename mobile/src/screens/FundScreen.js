@@ -8,7 +8,8 @@
  *
  * Two branches (top selector):
  *   LP Fund       — multi-LP fund with NAV, waterfall, carry calculations
- *   My Portfolio  — navigates to PaperTrackerScreen (Fidelity upload / YTD)
+ *   My Portfolio  — Fidelity CSV upload, Modified Dietz YTD, per-stock
+ *                   attribution, past runs, paper portfolios link
  *
  * Sub-tabs (LP Fund branch): Overview | LPs | Positions | Activity | Waterfall
  */
@@ -16,9 +17,10 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, RefreshControl, TextInput,
   StyleSheet, ActivityIndicator, TouchableOpacity,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import * as DocumentPicker from 'expo-document-picker';
 import AppHeader from '../components/AppHeader';
 import { colors } from '../components/theme';
 import { api, getFundToken, setFundToken, clearFundToken } from '../api/client';
@@ -28,6 +30,11 @@ const fmt$ = (n) => {
   if (n == null) return '—';
   return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+const fmt$0 = (n) => {
+  if (n == null) return '—';
+  const abs = Math.abs(n);
+  return (n < 0 ? '−$' : '$') + abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
+};
 const fmtPct = (n, decimals = 1) => {
   if (n == null) return '—';
   const sign = n >= 0 ? '+' : '';
@@ -35,6 +42,8 @@ const fmtPct = (n, decimals = 1) => {
 };
 const fmtCat = (cat) =>
   (cat || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+const pctColor = (x) =>
+  x == null ? '#8090a8' : x > 0 ? '#16A34A' : x < 0 ? '#DC2626' : '#8090a8';
 
 const BRANCHES = ['LP Fund', 'My Portfolio'];
 const LP_TABS  = ['Overview', 'LPs', 'Positions', 'Activity', 'Waterfall'];
@@ -50,7 +59,7 @@ export default function FundScreen({ navigation }) {
   const [branch,    setBranch]    = useState('LP Fund');
   const [activeTab, setActiveTab] = useState('Overview');
 
-  // ── Data state ───────────────────────────────────────────────────────────
+  // ── LP Fund data state ───────────────────────────────────────────────────
   const [overview,   setOverview]  = useState(null);
   const [lps,        setLps]       = useState([]);
   const [positions,  setPositions] = useState([]);
@@ -59,6 +68,16 @@ export default function FundScreen({ navigation }) {
   const [loading,    setLoading]   = useState(false);
   const [refreshing, setRefreshing]= useState(false);
   const [error,      setError]     = useState(null);
+
+  // ── My Portfolio (YTD) state ─────────────────────────────────────────────
+  const [ytdPosFile,     setYtdPosFile]     = useState(null);
+  const [ytdActFile,     setYtdActFile]     = useState(null);
+  const [ytdMonthlyFile, setYtdMonthlyFile] = useState(null);
+  const [ytdBeginValue,  setYtdBeginValue]  = useState('');
+  const [ytdSubmitting,  setYtdSubmitting]  = useState(false);
+  const [ytdResult,      setYtdResult]      = useState(null);
+  const [ytdError,       setYtdError]       = useState(null);
+  const [ytdSnapshots,   setYtdSnapshots]   = useState([]);
 
   // ── Check token on focus ─────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
@@ -74,7 +93,7 @@ export default function FundScreen({ navigation }) {
 
   // When unlocked, load data
   useFocusEffect(useCallback(() => {
-    if (!locked) loadData();
+    if (!locked) { loadData(); loadYtdSnapshots(); }
   }, [locked])); // eslint-disable-line
 
   // ── Auth submit ──────────────────────────────────────────────────────────
@@ -89,7 +108,6 @@ export default function FundScreen({ navigation }) {
       setPassword('');
       setLocked(false);
     } catch (e) {
-      // server returns 403 for wrong fund password — won't trigger main-auth retry
       setAuthError(true);
       setPassword('');
     } finally {
@@ -97,7 +115,7 @@ export default function FundScreen({ navigation }) {
     }
   };
 
-  // ── Data loading ─────────────────────────────────────────────────────────
+  // ── LP Fund data loading ─────────────────────────────────────────────────
   const loadData = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setLoading(true);
     setError(null);
@@ -127,7 +145,80 @@ export default function FundScreen({ navigation }) {
     }
   }, []);
 
-  const onRefresh = () => { setRefreshing(true); loadData(true); };
+  // ── YTD snapshots ────────────────────────────────────────────────────────
+  const loadYtdSnapshots = useCallback(async () => {
+    try {
+      const data = await api.listYtdSnapshots();
+      setYtdSnapshots(Array.isArray(data?.snapshots) ? data.snapshots : []);
+    } catch (_) {}
+  }, []);
+
+  // ── File picker ──────────────────────────────────────────────────────────
+  const pickCsv = async (setter) => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (!res.canceled && res.assets?.[0]) setter(res.assets[0]);
+    } catch (e) {
+      Alert.alert('File picker error', e.message);
+    }
+  };
+
+  // ── YTD compute ──────────────────────────────────────────────────────────
+  const submitYtd = async () => {
+    if (!ytdPosFile || !ytdActFile) {
+      setYtdError('Positions and Activity CSVs are required.');
+      return;
+    }
+    setYtdSubmitting(true);
+    setYtdError(null);
+    setYtdResult(null);
+    try {
+      const data = await api.computeUnifiedYtd({
+        positionsUri:  ytdPosFile.uri,
+        positionsName: ytdPosFile.name,
+        positionsType: ytdPosFile.mimeType,
+        activityUri:   ytdActFile.uri,
+        activityName:  ytdActFile.name,
+        activityType:  ytdActFile.mimeType,
+        ...(ytdMonthlyFile ? {
+          monthlyPerfUri:  ytdMonthlyFile.uri,
+          monthlyPerfName: ytdMonthlyFile.name,
+          monthlyPerfType: ytdMonthlyFile.mimeType,
+        } : {}),
+        beginValue: ytdBeginValue ? parseFloat(ytdBeginValue) : null,
+      });
+      setYtdResult(data);
+      loadYtdSnapshots();
+    } catch (e) {
+      setYtdError(e.message || 'Computation failed.');
+    } finally {
+      setYtdSubmitting(false);
+    }
+  };
+
+  // ── Delete YTD snapshot ──────────────────────────────────────────────────
+  const deleteSnapshot = (id) => {
+    Alert.alert(
+      'Delete run?',
+      'This YTD snapshot will be permanently deleted.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: async () => {
+          try {
+            await api.deleteYtdSnapshot(id);
+            loadYtdSnapshots();
+          } catch (e) {
+            Alert.alert('Error', e.message);
+          }
+        }},
+      ]
+    );
+  };
+
+  const onRefresh = () => { setRefreshing(true); loadData(true); loadYtdSnapshots(); };
 
   // ── Lock screen ──────────────────────────────────────────────────────────
   if (locked) {
@@ -170,22 +261,205 @@ export default function FundScreen({ navigation }) {
   }
 
   // ── Branch: My Portfolio ─────────────────────────────────────────────────
+  function FileRow({ label, file, onPick, required }) {
+    return (
+      <TouchableOpacity style={s.fileRow} onPress={onPick} activeOpacity={0.75}>
+        <View style={s.fileRowLeft}>
+          <Text style={s.fileRowLabel}>
+            {label}
+            {required && <Text style={s.fileRowReq}> *</Text>}
+          </Text>
+          <Text style={s.fileRowName} numberOfLines={1}>
+            {file ? file.name : 'Tap to select CSV'}
+          </Text>
+        </View>
+        <View style={[s.fileRowIcon, file && s.fileRowIconDone]}>
+          <Text style={{ fontSize: 14 }}>{file ? '✓' : '+'}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
   function MyPortfolioPanel() {
     return (
       <View style={s.portfolioBranch}>
+
+        {/* ── YTD Upload card ──────────────────────────────────────────── */}
+        <View style={s.ytdCard}>
+          <View style={s.ytdCardHead}>
+            <Text style={s.ytdCardTitle}>YTD ATTRIBUTION</Text>
+            <View style={s.ytdBadge}>
+              <Text style={s.ytdBadgeText}>MODIFIED DIETZ</Text>
+            </View>
+          </View>
+          <Text style={s.ytdCardDesc}>
+            Upload Fidelity CSVs to compute cash-flow adjusted returns with per-stock attribution.
+          </Text>
+
+          <FileRow
+            label="Account Positions"
+            file={ytdPosFile}
+            onPick={() => pickCsv(setYtdPosFile)}
+            required
+          />
+          <FileRow
+            label="Account Activity"
+            file={ytdActFile}
+            onPick={() => pickCsv(setYtdActFile)}
+            required
+          />
+          <FileRow
+            label="Monthly Performance"
+            file={ytdMonthlyFile}
+            onPick={() => pickCsv(setYtdMonthlyFile)}
+          />
+
+          <View style={s.beginValueRow}>
+            <Text style={s.beginValueLabel}>Jan 1 Value (optional if monthly CSV provided)</Text>
+            <TextInput
+              style={s.beginValueInput}
+              value={ytdBeginValue}
+              onChangeText={setYtdBeginValue}
+              placeholder="e.g. 250000"
+              placeholderTextColor="#3a5070"
+              keyboardType="numeric"
+            />
+          </View>
+
+          {ytdError ? (
+            <Text style={s.ytdError}>{ytdError}</Text>
+          ) : null}
+
+          <TouchableOpacity
+            style={[s.ytdBtn, ytdSubmitting && { opacity: 0.6 }]}
+            onPress={submitYtd}
+            disabled={ytdSubmitting}
+          >
+            {ytdSubmitting
+              ? <ActivityIndicator color={colors.navy} size="small" />
+              : <Text style={s.ytdBtnText}>Compute YTD Return + Attribution</Text>}
+          </TouchableOpacity>
+        </View>
+
+        {/* ── YTD Result card ───────────────────────────────────────────── */}
+        {ytdResult && (
+          <View style={s.ytdResultCard}>
+            <Text style={s.ytdSectionLabel}>LATEST RUN</Text>
+
+            {/* Return metrics */}
+            <View style={s.ytdMetricsRow}>
+              <View style={s.ytdMetric}>
+                <Text style={s.ytdMetricKey}>YTD RETURN</Text>
+                <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.md_return_pct) }]}>
+                  {fmtPct(ytdResult.md_return_pct, 2)}
+                </Text>
+              </View>
+              {ytdResult.twrr_return_pct != null && (
+                <View style={s.ytdMetric}>
+                  <Text style={s.ytdMetricKey}>TWRR</Text>
+                  <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.twrr_return_pct) }]}>
+                    {fmtPct(ytdResult.twrr_return_pct, 2)}
+                  </Text>
+                </View>
+              )}
+              {ytdResult.spy_return_pct != null && (
+                <View style={s.ytdMetric}>
+                  <Text style={s.ytdMetricKey}>SPY YTD</Text>
+                  <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.spy_return_pct) }]}>
+                    {fmtPct(ytdResult.spy_return_pct, 2)}
+                  </Text>
+                </View>
+              )}
+              <View style={s.ytdMetric}>
+                <Text style={s.ytdMetricKey}>TOTAL GAIN</Text>
+                <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.total_dollar_gain) }]}>
+                  {fmt$0(ytdResult.total_dollar_gain)}
+                </Text>
+              </View>
+            </View>
+
+            {ytdResult.net_flow != null && (
+              <Text style={s.ytdSubNote}>
+                Net flow: {ytdResult.net_flow >= 0 ? '+' : ''}{fmt$0(ytdResult.net_flow)}
+                {ytdResult.begin_value ? `  ·  Begin: ${fmt$0(ytdResult.begin_value)}` : ''}
+              </Text>
+            )}
+
+            {/* Attribution tornado */}
+            {(ytdResult.attribution || []).length > 0 && (
+              <YtdAttribView
+                items={ytdResult.attribution}
+                portfolioReturn={ytdResult.md_return_pct ?? 0}
+              />
+            )}
+
+            {/* Attribution table */}
+            {(ytdResult.attribution || []).length > 0 && (
+              <>
+                <Text style={[s.ytdSectionLabel, { marginTop: 14 }]}>
+                  POSITIONS · sorted by contribution
+                </Text>
+                <View style={s.attrTableHead}>
+                  <Text style={[s.attrTh, { flex: 1.3, textAlign: 'left' }]}>Ticker</Text>
+                  <Text style={s.attrTh}>$ Gain</Text>
+                  <Text style={s.attrTh}>Contrib</Text>
+                </View>
+                {(ytdResult.attribution || [])
+                  .slice()
+                  .sort((a, b) => (b.contribution_pct ?? -999) - (a.contribution_pct ?? -999))
+                  .map((a) => (
+                    <YtdHoldingRow key={a.ticker} a={a} />
+                  ))}
+              </>
+            )}
+          </View>
+        )}
+
+        {/* ── Past runs card ────────────────────────────────────────────── */}
+        {ytdSnapshots.length > 0 && (
+          <View style={s.snapsCard}>
+            <Text style={s.ytdSectionLabel}>PAST RUNS ({ytdSnapshots.length})</Text>
+            {ytdSnapshots.map((snap, i) => (
+              <View key={snap.id} style={[s.snapRow, i > 0 && s.snapRowBorder]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.snapDate}>{snap.uploaded_at?.slice(0, 16).replace('T', '  ')}</Text>
+                  <Text style={s.snapMeta}>
+                    {snap.positions_count} positions
+                    {snap.anchor_date ? `  ·  from ${snap.anchor_date}` : ''}
+                  </Text>
+                </View>
+                <View style={s.snapRight}>
+                  <Text style={[s.snapReturn, { color: pctColor(snap.md_return_pct) }]}>
+                    {fmtPct(snap.md_return_pct, 2)}
+                  </Text>
+                  <TouchableOpacity
+                    style={s.snapDeleteBtn}
+                    onPress={() => deleteSnapshot(snap.id)}
+                  >
+                    <Text style={s.snapDeleteText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* ── Paper Portfolios portal ───────────────────────────────────── */}
         <View style={s.portfolioCard}>
-          <Text style={s.portfolioCardTitle}>📊  Managed Portfolio</Text>
+          <Text style={s.portfolioCardTitle}>📌  Paper Portfolios</Text>
           <Text style={s.portfolioCardDesc}>
-            Upload Fidelity CSVs to compute Modified Dietz YTD returns,
-            per-stock attribution, and benchmark comparisons.
+            Intelligence brief baskets tracked vs SPY and your live portfolio
+            from the day they were locked in.
           </Text>
           <TouchableOpacity
             style={s.portfolioBtn}
             onPress={() => navigation.navigate('FundTracker')}
           >
-            <Text style={s.portfolioBtnText}>Open Portfolio Tracker →</Text>
+            <Text style={s.portfolioBtnText}>Open Paper Portfolios →</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Quarterly Reports ─────────────────────────────────────────── */}
         <View style={s.portfolioCard}>
           <Text style={s.portfolioCardTitle}>📧  Quarterly Reports</Text>
           <Text style={s.portfolioCardDesc}>
@@ -196,6 +470,7 @@ export default function FundScreen({ navigation }) {
             <Text style={[s.portfolioBtnText, { color: '#6a8aaa' }]}>Coming soon</Text>
           </View>
         </View>
+
       </View>
     );
   }
@@ -432,7 +707,10 @@ export default function FundScreen({ navigation }) {
           <TouchableOpacity
             key={b}
             style={[s.branchBtn, branch === b && s.branchBtnActive]}
-            onPress={() => setBranch(b)}
+            onPress={() => {
+              setBranch(b);
+              if (b === 'My Portfolio') loadYtdSnapshots();
+            }}
           >
             <Text style={[s.branchBtnText, branch === b && s.branchBtnTextActive]}>{b}</Text>
           </TouchableOpacity>
@@ -440,10 +718,20 @@ export default function FundScreen({ navigation }) {
       </View>
 
       {branch === 'My Portfolio' ? (
-        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}>
-          <MyPortfolioPanel />
-        </ScrollView>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+        >
+          <ScrollView
+            style={s.scroll}
+            contentContainerStyle={s.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <MyPortfolioPanel />
+          </ScrollView>
+        </KeyboardAvoidingView>
       ) : (
         <>
           {/* LP Fund sub-tabs */}
@@ -489,6 +777,77 @@ export default function FundScreen({ navigation }) {
   );
 }
 
+// ── YTD sub-components (outside FundScreen for perf) ─────────────────────────
+function YtdAttribView({ items, portfolioReturn }) {
+  if (!items.length) return null;
+  const haveContrib = items.some(h => h.contribution_pct != null);
+  if (!haveContrib) return null;
+  const sorted  = [...items].sort((a, b) => (b.contribution_pct ?? -999) - (a.contribution_pct ?? -999));
+  const maxAbs  = Math.max(...sorted.map(h => Math.abs(h.contribution_pct ?? 0)), 0.01);
+  const retColor = portfolioReturn >= 0 ? '#16A34A' : '#DC2626';
+  return (
+    <View style={as.wrap}>
+      <View style={as.summaryRow}>
+        <View style={[as.pill, { backgroundColor: portfolioReturn >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)' }]}>
+          <Text style={[as.pillText, { color: retColor }]}>
+            Portfolio: {portfolioReturn >= 0 ? '+' : ''}{portfolioReturn.toFixed(2)}%
+          </Text>
+        </View>
+        <Text style={as.hint}>attribution</Text>
+      </View>
+      {sorted.map(h => {
+        const v     = h.contribution_pct ?? 0;
+        const isPos = v >= 0;
+        const wPct  = Math.abs(v) / maxAbs * 50;
+        return (
+          <View key={h.ticker} style={as.row}>
+            <Text style={as.ticker} numberOfLines={1}>{h.ticker}</Text>
+            <View style={as.track}>
+              <View style={as.axis} />
+              {isPos
+                ? <View style={[as.barPos, { width: `${wPct}%` }]} />
+                : <View style={[as.barNeg, { width: `${wPct}%`, right: '50%' }]} />
+              }
+            </View>
+            <View style={as.valBlock}>
+              <Text style={[as.val, { color: isPos ? '#16A34A' : '#DC2626' }]}>
+                {isPos ? '+' : ''}{v.toFixed(2)}%
+              </Text>
+              {h.dollar_gain != null && (
+                <Text style={as.sub}>
+                  {h.dollar_gain >= 0 ? '+' : '−'}${Math.abs(h.dollar_gain).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </Text>
+              )}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function YtdHoldingRow({ a }) {
+  const cGain   = a.dollar_gain    == null ? '#8090a8' : a.dollar_gain    >= 0 ? '#16A34A' : '#DC2626';
+  const cContrib= a.contribution_pct== null ? '#8090a8' : a.contribution_pct >= 0 ? '#16A34A' : '#DC2626';
+  const gainStr = a.dollar_gain == null
+    ? '—'
+    : `${a.dollar_gain >= 0 ? '+' : '−'}$${Math.abs(a.dollar_gain).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  const contribStr = a.contribution_pct == null
+    ? '—'
+    : `${a.contribution_pct >= 0 ? '+' : ''}${a.contribution_pct.toFixed(2)}%`;
+  return (
+    <View style={as.holdRow}>
+      <View style={[{ flex: 1.3 }, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+        {a.price_missing && <Text style={as.missingBadge}>?</Text>}
+        {a.is_mm         && <Text style={as.mmBadge}>CASH</Text>}
+        <Text style={as.holdTicker}>{a.ticker}</Text>
+      </View>
+      <Text style={[as.holdNum, { color: cGain }]}>{gainStr}</Text>
+      <Text style={[as.holdNum, as.holdContrib, { color: cContrib }]}>{contribStr}</Text>
+    </View>
+  );
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   screen:        { flex: 1, backgroundColor: colors.navy },
@@ -496,7 +855,7 @@ const s = StyleSheet.create({
   scrollContent: { paddingBottom: 40 },
 
   center:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  loadingText: { color: colors.midGray, marginTop: 12, fontSize: 13 },
+  loadingText: { color: '#4a6080', marginTop: 12, fontSize: 13 },
   errorText:   { color: '#e05a4e', textAlign: 'center', marginBottom: 16 },
   retryBtn:    { backgroundColor: 'rgba(201,168,76,.15)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: colors.gold },
   retryText:   { color: colors.gold, fontWeight: '700', fontSize: 14 },
@@ -528,8 +887,61 @@ const s = StyleSheet.create({
   subTabText:       { fontSize: 10, fontWeight: '600', color: '#4a6080', letterSpacing: 0.2 },
   subTabTextActive: { color: colors.gold },
 
-  // My Portfolio branch
-  portfolioBranch:    { padding: 14 },
+  // My Portfolio branch container
+  portfolioBranch: { padding: 14 },
+
+  // YTD Upload card
+  ytdCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
+  ytdCardHead:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  ytdCardTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, color: colors.gold },
+  ytdBadge:     { backgroundColor: 'rgba(201,168,76,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
+  ytdBadgeText: { fontSize: 9, fontWeight: '800', color: colors.gold, letterSpacing: 0.5 },
+  ytdCardDesc:  { fontSize: 11, color: '#4a6080', lineHeight: 16, marginBottom: 14 },
+
+  // File picker rows
+  fileRow:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#081526', borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', padding: 10, marginBottom: 8, gap: 10 },
+  fileRowLeft:  { flex: 1 },
+  fileRowLabel: { fontSize: 10, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 2 },
+  fileRowReq:   { color: colors.gold },
+  fileRowName:  { fontSize: 12, color: '#c0d0e0', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  fileRowIcon:  { width: 28, height: 28, borderRadius: 6, backgroundColor: '#1e3a5a', alignItems: 'center', justifyContent: 'center' },
+  fileRowIconDone: { backgroundColor: 'rgba(22,163,74,0.25)' },
+
+  // Begin value
+  beginValueRow:   { marginBottom: 12, marginTop: 4 },
+  beginValueLabel: { fontSize: 10, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 6 },
+  beginValueInput: { backgroundColor: '#081526', borderWidth: 1, borderColor: '#1e3a5a', borderRadius: 8, color: '#f0e8d0', fontSize: 14, padding: 10 },
+
+  // YTD compute button
+  ytdBtn:     { backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
+  ytdBtnText: { color: colors.navy, fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
+  ytdError:   { color: '#e05a4e', fontSize: 12, marginBottom: 10, lineHeight: 16 },
+
+  // YTD Result card
+  ytdResultCard:   { backgroundColor: '#0a1a30', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(22,163,74,0.25)' },
+  ytdSectionLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, color: '#3a5070', marginBottom: 10 },
+  ytdMetricsRow:   { flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
+  ytdMetric:       { flex: 1, minWidth: 70, backgroundColor: '#0e1d38', borderRadius: 8, padding: 9, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  ytdMetricKey:    { fontSize: 8, fontWeight: '800', letterSpacing: 0.8, color: '#3a5070', marginBottom: 3 },
+  ytdMetricVal:    { fontSize: 14, fontWeight: '800', color: '#f0e8d0' },
+  ytdSubNote:      { fontSize: 10, color: '#3a5070', marginBottom: 10, lineHeight: 15 },
+
+  // Attribution table headers
+  attrTableHead:   { flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: '#1e3a5a', marginBottom: 2 },
+  attrTh:          { flex: 1, fontSize: 9, fontWeight: '700', letterSpacing: 0.6, color: '#3a5070', textAlign: 'right' },
+
+  // Past runs (snapshots) card
+  snapsCard:    { backgroundColor: '#0e1d38', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
+  snapRow:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+  snapRowBorder:{ borderTopWidth: 1, borderTopColor: '#1e3a5a' },
+  snapDate:     { fontSize: 12, fontWeight: '700', color: '#c0d0e0', letterSpacing: 0.2 },
+  snapMeta:     { fontSize: 10, color: '#3a5070', marginTop: 2 },
+  snapRight:    { alignItems: 'flex-end', gap: 6 },
+  snapReturn:   { fontSize: 15, fontWeight: '800' },
+  snapDeleteBtn:{ backgroundColor: 'rgba(220,38,38,0.12)', borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 },
+  snapDeleteText:{ fontSize: 10, fontWeight: '700', color: '#DC2626' },
+
+  // Portal cards (paper portfolios / quarterly reports)
   portfolioCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)' },
   portfolioCardTitle: { fontSize: 15, fontWeight: '700', color: '#f0e8d0', marginBottom: 8 },
   portfolioCardDesc:  { fontSize: 12, color: '#6a8aaa', lineHeight: 18, marginBottom: 14 },
@@ -593,4 +1005,31 @@ const s = StyleSheet.create({
   wfallSubhead:  { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#3a5070', marginBottom: 4, paddingHorizontal: 14 },
   wfallWarn:     { backgroundColor: 'rgba(220,160,40,0.1)', borderWidth: 1, borderColor: 'rgba(220,160,40,0.3)', borderRadius: 8, padding: 12, marginBottom: 12 },
   wfallWarnText: { fontSize: 11, color: '#e0a030', lineHeight: 16 },
+});
+
+// Styles for YtdAttribView / YtdHoldingRow (light-on-dark, matching fund theme)
+const as = StyleSheet.create({
+  wrap:       { marginVertical: 10 },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  pill:       { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 5 },
+  pillText:   { fontWeight: '800', fontSize: 12 },
+  hint:       { fontSize: 10, color: '#3a5070', fontStyle: 'italic' },
+
+  row:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, gap: 6 },
+  ticker:   { width: 52, fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 0.3 },
+  track:    { flex: 1, height: 14, position: 'relative', justifyContent: 'center' },
+  axis:     { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: '#1e3a5a' },
+  barPos:   { position: 'absolute', left: '50%', height: 10, backgroundColor: 'rgba(22,163,74,0.8)', borderRadius: 2 },
+  barNeg:   { position: 'absolute', height: 10, backgroundColor: 'rgba(220,38,38,0.8)', borderRadius: 2 },
+  valBlock: { width: 70, alignItems: 'flex-end' },
+  val:      { fontSize: 11, fontWeight: '800' },
+  sub:      { fontSize: 9, color: '#3a5070', marginTop: 1 },
+
+  // Holding rows
+  holdRow:      { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#0f2240', alignItems: 'center' },
+  holdTicker:   { fontSize: 12, fontWeight: '700', color: colors.gold },
+  holdNum:      { flex: 1, fontSize: 11, fontWeight: '700', textAlign: 'right' },
+  holdContrib:  { fontSize: 12 },
+  missingBadge: { fontSize: 9, fontWeight: '800', color: '#e8a060', backgroundColor: 'rgba(232,160,96,0.15)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
+  mmBadge:      { fontSize: 9, fontWeight: '800', color: '#6090e8', backgroundColor: 'rgba(96,144,232,0.15)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
 });

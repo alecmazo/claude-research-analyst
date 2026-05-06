@@ -297,67 +297,9 @@
       <div class="label">LIVE BENCHMARK</div>
       <div id="tracker-live-info" class="tracker-live-info">
         <div class="tracker-live-empty">
-          No live portfolio yet. Upload your portfolio on the Live Rebalance tab to set a benchmark.
+          No live portfolio yet. Upload Fidelity CSVs in Fund → My Portfolio to set the benchmark.
         </div>
       </div>
-    </div>
-
-    <!-- Account history upload — Modified Dietz YTD accuracy -->
-    <!-- Past YTD runs (snapshot history) -->
-    <div class="card" id="ytd-snapshots-card" style="display:none;">
-      <div class="label">PAST YTD RUNS</div>
-      <p class="hint" style="margin-bottom:8px;">
-        Every YTD calculation is saved here. Click any run to re-open the full
-        attribution with that snapshot's holdings &amp; values.
-      </p>
-      <div id="ytd-snapshots-list"></div>
-    </div>
-
-    <div class="card" id="history-upload-card" style="display:none;">
-      <div class="label">ACCURATE YTD &mdash; CASH-FLOW &amp; TRANSACTION ADJUSTED</div>
-      <p class="hint" style="margin-bottom:12px;">
-        Upload both Fidelity CSVs to compute a Modified Dietz YTD return and a
-        per-stock attribution that factors in partial sales, new buys, dividends,
-        and the actual Jan 1 position. Today's account value is auto-extracted
-        from the Positions CSV (positions × current prices + money market).
-      </p>
-      <div class="history-upload-how">
-        <span class="history-upload-how-label">How to export from Fidelity:</span>
-        Positions CSV — Accounts &amp; Trade → Positions → Download CSV ·
-        Activity CSV — Accounts &amp; Trade → History → Jan 1–today → Download CSV
-      </div>
-      <div class="history-fields">
-        <div class="history-field-row">
-          <label class="history-field-label" for="history-begin-value">
-            Jan 1 Portfolio Value&nbsp;($)
-            <span class="history-optional-badge">optional w/ perf CSV</span>
-          </label>
-          <input type="number" id="history-begin-value" class="history-value-input"
-                 placeholder="e.g. 3628719" min="1" step="1">
-          <div class="history-field-hint">Skip this field if you upload an Investment Income Balance CSV below — the starting balance is read from it automatically.</div>
-        </div>
-        <div class="history-field-row" style="margin-top:10px;">
-          <label class="history-field-label" for="history-positions-file">Account Positions CSV (Current Holdings)</label>
-          <input type="file" id="history-positions-file" accept=".csv,.txt" class="history-file-input">
-        </div>
-        <div class="history-field-row" style="margin-top:10px;">
-          <label class="history-field-label" for="history-file">Account History CSV (YTD transactions)</label>
-          <input type="file" id="history-file" accept=".csv,.txt" class="history-file-input">
-        </div>
-        <div class="history-field-row" style="margin-top:10px;">
-          <label class="history-field-label" for="history-monthly-perf-file">
-            Investment Income Balance CSV
-            <span class="history-optional-badge">optional</span>
-          </label>
-          <input type="file" id="history-monthly-perf-file" accept=".csv,.txt" class="history-file-input">
-          <div class="history-field-hint">Fidelity Investment Income &amp; Balance summary — provides exact month-end balances for accurate chart &amp; TWRR. Export: Accounts &amp; Trade → Statements → Monthly Statement → Download CSV</div>
-        </div>
-      </div>
-      <button id="history-upload-btn" class="btn-primary" style="margin-top:14px;width:100%;">
-        Calculate YTD &amp; Attribution
-      </button>
-      <div id="history-upload-status" class="history-upload-status" style="display:none;"></div>
-      <div id="history-result-box" class="history-result-box" style="display:none;"></div>
     </div>
 
     <!-- Detail view (inline expansion) -->
@@ -700,12 +642,72 @@
 
   <!-- ── My Portfolio branch ────────────────────────────────────────────── -->
   <div id="fund-branch-portfolio" style="display:none; padding-bottom:100px;">
-    <div class="fund-portal-grid">
+
+    <!-- Past YTD runs (snapshot history) — shown when ≥1 run exists -->
+    <div class="card" id="ytd-snapshots-card" style="display:none;">
+      <div class="label">PAST YTD RUNS</div>
+      <p class="hint" style="margin-bottom:8px;">
+        Every YTD calculation is saved here. Click any run to re-open the full
+        attribution with that snapshot's holdings &amp; values.
+      </p>
+      <div id="ytd-snapshots-list"></div>
+    </div>
+
+    <!-- Accurate YTD upload — always visible in My Portfolio -->
+    <div class="card" id="history-upload-card">
+      <div class="label">ACCURATE YTD &mdash; CASH-FLOW &amp; TRANSACTION ADJUSTED</div>
+      <p class="hint" style="margin-bottom:12px;">
+        Upload both Fidelity CSVs to compute a Modified Dietz YTD return and a
+        per-stock attribution that factors in partial sales, new buys, dividends,
+        and the actual Jan 1 position. Today's account value is auto-extracted
+        from the Positions CSV (positions × current prices + money market).
+      </p>
+      <div class="history-upload-how">
+        <span class="history-upload-how-label">How to export from Fidelity:</span>
+        Positions CSV — Accounts &amp; Trade → Positions → Download CSV ·
+        Activity CSV — Accounts &amp; Trade → History → Jan 1–today → Download CSV
+      </div>
+      <div class="history-fields">
+        <div class="history-field-row">
+          <label class="history-field-label" for="history-begin-value">
+            Jan 1 Portfolio Value&nbsp;($)
+            <span class="history-optional-badge">optional w/ perf CSV</span>
+          </label>
+          <input type="number" id="history-begin-value" class="history-value-input"
+                 placeholder="e.g. 3628719" min="1" step="1">
+          <div class="history-field-hint">Skip this field if you upload an Investment Income Balance CSV below — the starting balance is read from it automatically.</div>
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="history-positions-file">Account Positions CSV (Current Holdings)</label>
+          <input type="file" id="history-positions-file" accept=".csv,.txt" class="history-file-input">
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="history-file">Account History CSV (YTD transactions)</label>
+          <input type="file" id="history-file" accept=".csv,.txt" class="history-file-input">
+        </div>
+        <div class="history-field-row" style="margin-top:10px;">
+          <label class="history-field-label" for="history-monthly-perf-file">
+            Investment Income Balance CSV
+            <span class="history-optional-badge">optional</span>
+          </label>
+          <input type="file" id="history-monthly-perf-file" accept=".csv,.txt" class="history-file-input">
+          <div class="history-field-hint">Fidelity Investment Income &amp; Balance summary — provides exact month-end balances for accurate chart &amp; TWRR. Export: Accounts &amp; Trade → Statements → Monthly Statement → Download CSV</div>
+        </div>
+      </div>
+      <button id="history-upload-btn" class="btn-primary" style="margin-top:14px;width:100%;">
+        Calculate YTD &amp; Attribution
+      </button>
+      <div id="history-upload-status" class="history-upload-status" style="display:none;"></div>
+      <div id="history-result-box" class="history-result-box" style="display:none;"></div>
+    </div>
+
+    <!-- Portal cards: Paper Portfolios + Quarterly Reports -->
+    <div class="fund-portal-grid" style="margin-top:8px;">
 
       <div class="fund-portal-card" id="fund-open-tracker-btn">
-        <div class="fund-portal-card-icon">📊</div>
-        <div class="fund-portal-card-title">Portfolio Tracker</div>
-        <div class="fund-portal-card-sub">Paper portfolios, YTD performance &amp; Fidelity upload</div>
+        <div class="fund-portal-card-icon">📌</div>
+        <div class="fund-portal-card-title">Paper Portfolios</div>
+        <div class="fund-portal-card-sub">Intelligence brief baskets tracked vs SPY &amp; your live portfolio</div>
         <div class="fund-portal-card-cta">Open Tracker →</div>
       </div>
 
