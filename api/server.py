@@ -1664,12 +1664,18 @@ async def fund_activity(request: Request):
 
 @app.get("/api/fund/waterfall")
 async def fund_waterfall(request: Request):
-    """GP carry / LP waterfall — annual hurdle model.
+    """GP carry / LP waterfall — high-watermark model.
 
-    Hurdle: 5% per year on the starting NAV of each calendar year.
-    Carry:  25% of profits above the annual hurdle, with 100% GP catch-up.
-    GP equity rollover: carry is reinvested into GP equity each year rather
-    than paid out in cash (specific to this fund's arrangement).
+    Carry model:
+      • The hurdle ($100 K/yr fixed) is a per-year GATE: if the year's gross
+        profit exceeds the hurdle, the GP is entitled to carry.
+      • Carry amount  = (year_end_NAV − high_watermark) × carry_pct (25 %).
+      • High-watermark starts at  contributions + hurdle  (inception year),
+        then advances to the highest end-NAV ever recorded.
+      • HWM only moves up; years where end_NAV < HWM earn zero carry even if
+        the year was profitable.
+      • All carry is rolled into GP fractional equity (never paid out as cash),
+        so the GP's dollar stake = accum_fraction × current_NAV at any moment.
 
     Data source priority:
       1. fund_annual_snapshots (exact year-by-year actuals — preferred)
@@ -1738,43 +1744,87 @@ async def fund_waterfall(request: Request):
             nav = float(cur.fetchone()["nav"])
 
             if has_snapshots:
-                # ── Exact annual calculation from year-by-year snapshots ───
-                total_carry_earned  = sum(float(r["carry_earned"])  for r in annual_rows)
-                total_carry_paid    = sum(float(r["carry_paid"])    for r in annual_rows)
-                total_carry_rolled  = sum(float(r["carry_rolled"])  for r in annual_rows)
-                total_hurdle_earned = sum(float(r["hurdle_amount"]) for r in annual_rows)
-                gp_equity_current   = float(annual_rows[-1]["gp_equity_end"]) if annual_rows else 0.0
-                last_year           = annual_rows[-1]["year"]
-                last_end_nav        = float(annual_rows[-1]["end_nav"])
+                # ── Exact annual calculation from year-by-year snapshots ─────
+                #
+                # GP equity model: carry is issued as fractional ownership each
+                # year carry is earned.  The GP's dollar stake at any date is:
+                #   gp_equity = accum_fraction × current_NAV
+                # (co-investment: the stake moves with NAV, not a fixed dollar).
+                #
+                # High-watermark:
+                #   HWM_initial = contributions + hurdle_amount  (inception gate)
+                #   HWM advances to end_NAV whenever end_NAV > HWM
+                #
+                annual_hurdle_fixed = float(annual_rows[0]["hurdle_amount"])   # $100 K
+                last_row            = annual_rows[-1]
+                last_year           = last_row["year"]
+                last_end_nav        = float(last_row["end_nav"])
+                last_gp_equity      = float(last_row["gp_equity_end"])
+                last_accum_frac     = last_gp_equity / last_end_nav if last_end_nav else 0.0
+
                 years_since         = (today - inception).days / 365.25
-
-                # Current year (partial) — pro-rata estimate based on fixed $100K/yr hurdle
-                # Use same fixed annual hurdle amount as the snapshots (100k/yr)
-                annual_hurdle_fixed = float(annual_rows[0]["hurdle_amount"]) if annual_rows else 100_000.0
-                cur_year_days       = (today - _date(last_year + 1, 1, 1)).days
-                cur_year_frac       = max(0.0, cur_year_days / 365.25)
-                cur_year_hurdle     = annual_hurdle_fixed * cur_year_frac
-                cur_year_gain       = nav - last_end_nav
-                cur_year_carry      = max(0.0, (cur_year_gain - cur_year_hurdle) * carry_pct) if cur_year_gain > cur_year_hurdle else 0.0
-
                 total_gain          = nav - contributions
-                # GP accrued carry = all historical carry rolled + this year's estimate
-                gp_accrued_carry    = total_carry_rolled + cur_year_carry
-                lp_net_gain         = total_gain - gp_accrued_carry
-                hurdle_cleared      = total_carry_earned > 0  # any year generated carry
+
+                # ── Reconstruct HWM per row for the year-by-year table ───────
+                # HWM_initial = first year start_nav + hurdle  (= 2,000,000 + 100,000 = 2,100,000)
+                # Using start_nav (total fund including GP) rather than LP contributions alone.
+                hwm = float(annual_rows[0]["start_nav"]) + annual_hurdle_fixed   # inception gate
+                snapshot_rows_out = []
+                hwm_at_end = hwm  # tracks the running HWM
+                for r in annual_rows:
+                    end_nav_r  = float(r["end_nav"])
+                    gp_eq_r    = float(r["gp_equity_end"])
+                    accum_frac_r = gp_eq_r / end_nav_r if end_nav_r else 0.0
+                    row_hwm    = hwm  # HWM at start of this year (threshold to exceed)
+                    snapshot_rows_out.append({
+                        "year":             r["year"],
+                        "start_nav":        float(r["start_nav"]),
+                        "end_nav":          end_nav_r,
+                        "gross_profit":     float(r["gross_profit"]),
+                        "hurdle_amount":    float(r["hurdle_amount"]),
+                        "carry_earned":     float(r["carry_earned"]),
+                        "gp_equity_end":    round(gp_eq_r, 2),
+                        "accum_gp_pct":     round(accum_frac_r * 100, 4),
+                        "hwm_threshold":    round(row_hwm, 2),
+                    })
+                    if end_nav_r > hwm:
+                        hwm = end_nav_r
+                hwm_at_end = hwm   # current HWM after all completed years
+
+                # ── Current year (partial) carry estimate ────────────────────
+                # HWM = hwm_at_end (highest end_NAV in recorded history)
+                # New carry is earned only if nav > HWM AND gain > pro-rata hurdle
+                cur_year_days      = (today - _date(last_year + 1, 1, 1)).days
+                cur_year_frac      = max(0.0, cur_year_days / 365.25)
+                cur_year_hurdle    = annual_hurdle_fixed * cur_year_frac
+                cur_year_gain      = nav - last_end_nav
+                cur_year_new_carry = 0.0
+                if cur_year_gain > cur_year_hurdle and nav > hwm_at_end:
+                    cur_year_new_carry = (nav - hwm_at_end) * carry_pct
+
+                # ── GP equity at current NAV ──────────────────────────────────
+                # Base: last accum fraction × current NAV (stake moves with NAV)
+                # Plus: any new carry earned in partial current year
+                gp_equity_base   = last_accum_frac * nav
+                gp_accrued_carry = gp_equity_base + cur_year_new_carry
+                gp_equity_pct    = (gp_accrued_carry / nav * 100) if nav else 0.0
+                lp_nav_after_carry = nav - gp_accrued_carry
+
+                # ── Carry history summary ─────────────────────────────────────
+                total_carry_earned = sum(float(r["carry_earned"]) for r in annual_rows)
+                carry_years        = [r["year"] for r in annual_rows if float(r["carry_earned"]) > 0]
+                hurdle_cleared     = len(carry_years) > 0
 
                 per_lp = []
                 for row in lp_rows:
                     commitment = float(row["commitment"])
                     share      = commitment / contributions if contributions else 0
                     per_lp.append({
-                        "legal_name":       row["legal_name"],
-                        "commitment":       commitment,
-                        "share_pct":        round(share * 100, 4),
-                        "preferred_return": round(total_hurdle_earned * share, 2),
-                        "carry_charge":     round(gp_accrued_carry * share, 2),
-                        "net_gain":         round(lp_net_gain * share, 2),
-                        "nav_after_carry":  round(commitment + lp_net_gain * share, 2),
+                        "legal_name":      row["legal_name"],
+                        "commitment":      commitment,
+                        "share_pct":       round(share * 100, 4),
+                        "carry_charge":    round(gp_accrued_carry * share, 2),
+                        "nav_after_carry": round(lp_nav_after_carry * share, 2),
                     })
 
                 return {
@@ -1788,34 +1838,21 @@ async def fund_waterfall(request: Request):
                     "hurdle_pct":            hurdle_pct,
                     "carry_pct":             carry_pct,
                     "catch_up_pct":          catch_up,
-                    # Waterfall summary fields (same shape as approximation path)
-                    "preferred_return":      round(total_hurdle_earned, 2),
+                    # Waterfall summary
                     "hurdle_cleared":        hurdle_cleared,
-                    "carry_pool":            round(total_carry_earned, 2),
+                    "carry_years":           carry_years,
+                    "high_watermark":        round(hwm_at_end, 2),
+                    "total_carry_earned_hist": round(total_carry_earned, 2),
                     "gp_accrued_carry":      round(gp_accrued_carry, 2),
-                    "lp_net_gain":           round(lp_net_gain, 2),
-                    "lp_nav_after_carry":    round(contributions + lp_net_gain, 2),
-                    # Detail fields
-                    "total_carry_earned":    round(total_carry_earned, 2),
-                    "total_carry_paid":      round(total_carry_paid, 2),
-                    "total_carry_rolled":    round(total_carry_rolled, 2),
-                    "gp_equity_current":     round(gp_equity_current, 2),
-                    "cur_year_hurdle":       round(cur_year_hurdle, 2),
+                    "gp_equity_pct":         round(gp_equity_pct, 4),
+                    "lp_nav_after_carry":    round(lp_nav_after_carry, 2),
+                    # Current-year estimates
                     "cur_year_gain":         round(cur_year_gain, 2),
-                    "cur_year_carry_est":    round(cur_year_carry, 2),
+                    "cur_year_hurdle":       round(cur_year_hurdle, 2),
+                    "cur_year_new_carry":    round(cur_year_new_carry, 2),
                     # Year-by-year table
-                    "annual_snapshots": [{
-                        "year":          r["year"],
-                        "start_nav":     float(r["start_nav"]),
-                        "end_nav":       float(r["end_nav"]),
-                        "hurdle_amount": float(r["hurdle_amount"]),
-                        "gross_profit":  float(r["gross_profit"]),
-                        "carry_earned":  float(r["carry_earned"]),
-                        "carry_rolled":  float(r["carry_rolled"]),
-                        "gp_equity_end": float(r["gp_equity_end"]),
-                        "notes":         r["notes"],
-                    } for r in annual_rows],
-                    "per_lp": per_lp,
+                    "annual_snapshots":      snapshot_rows_out,
+                    "per_lp":                per_lp,
                 }
 
             else:

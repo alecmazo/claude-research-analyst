@@ -612,10 +612,14 @@ export default function FundScreen({ navigation }) {
 
   function WaterfallPanel() {
     if (!waterfall) return <Text style={s.emptyText}>No waterfall data.</Text>;
-    const w = waterfall;
-    const hPct = (w.hurdle_pct * 100).toFixed(0);
-    const cPct = (w.carry_pct  * 100).toFixed(0);
-    const isApprox = w.data_source === 'approximation';
+    const w         = waterfall;
+    const cPct      = (w.carry_pct * 100).toFixed(0);
+    const isApprox  = w.data_source === 'approximation';
+    const gpPct     = w.gp_equity_pct != null ? w.gp_equity_pct.toFixed(2) + '%' : '—';
+    const carryYrs  = (w.carry_years || []).join(', ') || 'None';
+    const curCarryNote = w.cur_year_new_carry > 0
+      ? ` + ${fmt$(w.cur_year_new_carry)} est.`
+      : '';
 
     return (
       <View style={s.wfallWrap}>
@@ -623,52 +627,78 @@ export default function FundScreen({ navigation }) {
           <View style={s.wfallWarn}>
             <Text style={s.wfallWarnText}>
               ⚠ Approximate — annual NAV snapshots not yet entered.
-              Figures use simple annual hurdle × {w.years_since_inception?.toFixed(1)} yrs.
+              Figures use simple hurdle × {w.years_since_inception?.toFixed(1)} yrs.
             </Text>
           </View>
         )}
 
+        {/* Summary card */}
         <View style={s.wfallCard}>
-          <WRow label="Structure"         value={`${hPct}% annual hurdle · ${cPct}% carry`} />
-          <WRow label="GP equity (rolled)" value={fmt$(w.gp_accrued_carry)} valueColor="#e8a060" />
-          <WRow label="LP net value"       value={fmt$(w.lp_nav_after_carry)} valueColor={colors.gold} highlight />
-          <WRow label="Total fund NAV"     value={fmt$(w.nav)} last />
+          <WRow label="Structure"
+                value={`$100K/yr hurdle · ${cPct}% carry above HWM`} />
+          <WRow label="Total fund gain"
+                value={fmt$(w.total_gain)} />
+          <WRow label="High-watermark"
+                value={fmt$(w.high_watermark)} />
+          <WRow label={`Years carry earned`}
+                value={carryYrs} />
+          <WRow label={`GP equity (${gpPct}${curCarryNote})`}
+                value={fmt$(w.gp_accrued_carry)} valueColor="#e8a060" highlight />
+          <WRow label="LP net value (after carry)"
+                value={fmt$(w.lp_nav_after_carry)} valueColor={colors.gold} highlight />
+          <WRow label="Total fund NAV"
+                value={fmt$(w.nav)} last />
         </View>
 
+        {/* Year-by-year table */}
         {(w.annual_snapshots || []).length > 0 && (
           <>
             <Text style={s.wfallSubhead}>YEAR-BY-YEAR</Text>
             <View style={s.tableWrap}>
               <View style={[s.tableRow, s.tableHeader]}>
-                <Text style={[s.th, { flex: 0.6 }]}>Year</Text>
-                <Text style={[s.th, s.thRight]}>Gain</Text>
-                <Text style={[s.th, s.thRight]}>Hurdle</Text>
+                <Text style={[s.th, { flex: 0.55 }]}>Yr</Text>
+                <Text style={[s.th, s.thRight]}>Profit</Text>
+                <Text style={[s.th, s.thRight]}>HWM</Text>
                 <Text style={[s.th, s.thRight]}>Carry</Text>
-                <Text style={[s.th, s.thRight]}>GP Eq.</Text>
+                <Text style={[s.th, s.thRight]}>GP $</Text>
+                <Text style={[s.th, s.thRight, { flex: 0.7 }]}>GP %</Text>
               </View>
-              {w.annual_snapshots.map((snap, i) => (
-                <View key={snap.year} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-                  <Text style={[s.td, { flex: 0.6, color: colors.gold, fontWeight:'700' }]}>{snap.year}</Text>
-                  <Text style={[s.td, s.tdRight]}>{fmt$(snap.gross_profit)}</Text>
-                  <Text style={[s.td, s.tdRight]}>{fmt$(snap.hurdle_amount)}</Text>
-                  <Text style={[s.td, s.tdRight, { color: '#e8a060' }]}>{fmt$(snap.carry_earned)}</Text>
-                  <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(snap.gp_equity_end)}</Text>
-                </View>
-              ))}
+              {w.annual_snapshots.map((snap, i) => {
+                const carryColor = snap.carry_earned > 0 ? '#e8a060' : '#3a5070';
+                return (
+                  <View key={snap.year} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
+                    <Text style={[s.td, { flex: 0.55, color: colors.gold, fontWeight:'700' }]}>{snap.year}</Text>
+                    <Text style={[s.td, s.tdRight, { color: snap.gross_profit >= 0 ? '#a0b890' : '#e06050' }]}>
+                      {fmt$(snap.gross_profit)}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, s.tdDim]}>{fmt$(snap.hwm_threshold)}</Text>
+                    <Text style={[s.td, s.tdRight, { color: carryColor, fontWeight: snap.carry_earned > 0 ? '700' : '400' }]}>
+                      {snap.carry_earned > 0 ? fmt$(snap.carry_earned) : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, { color: '#e8a060', fontWeight: '700' }]}>
+                      {fmt$(snap.gp_equity_end)}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, { color: '#e8a060', flex: 0.7 }]}>
+                      {snap.accum_gp_pct != null ? snap.accum_gp_pct.toFixed(2) + '%' : '—'}
+                    </Text>
+                  </View>
+                );
+              })}
             </View>
           </>
         )}
 
+        {/* Per-LP table */}
         <Text style={s.wfallSubhead}>PER-LP AFTER CARRY</Text>
         <View style={s.tableWrap}>
           <View style={[s.tableRow, s.tableHeader]}>
-            <Text style={[s.th, { flex: 0.8 }]}>LP</Text>
-            <Text style={[s.th, s.thRight]}>Carry −</Text>
+            <Text style={[s.th, { flex: 1 }]}>LP</Text>
+            <Text style={[s.th, s.thRight]}>GP Carry −</Text>
             <Text style={[s.th, s.thRight]}>Net Value</Text>
           </View>
           {(w.per_lp || []).map((lp, i) => (
             <View key={lp.legal_name} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-              <Text style={[s.td, { flex: 0.8 }]}>{lp.legal_name}</Text>
+              <Text style={[s.td, { flex: 1 }]} numberOfLines={1}>{lp.legal_name}</Text>
               <Text style={[s.td, s.tdRight, { color: '#e06050' }]}>−{fmt$(lp.carry_charge)}</Text>
               <Text style={[s.td, s.tdRight, s.tdBold, { color: colors.gold }]}>{fmt$(lp.nav_after_carry)}</Text>
             </View>

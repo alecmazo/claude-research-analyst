@@ -3058,9 +3058,6 @@ function renderFundActivity(activity) {
 function renderFundWaterfall(w) {
   const hurdle_pct = (w.hurdle_pct * 100).toFixed(0);
   const carry_pct  = (w.carry_pct  * 100).toFixed(0);
-  const status     = w.hurdle_cleared
-    ? `<span class="wfall-badge wfall-cleared">✓ Hurdle cleared</span>`
-    : `<span class="wfall-badge wfall-open">Hurdle not yet met</span>`;
 
   // Approximation warning banner (shown when annual NAV snapshots aren't entered yet)
   const approxWarning = w.data_source === 'approximation' ? `
@@ -3075,9 +3072,7 @@ function renderFundWaterfall(w) {
     <tr>
       <td class="fund-td-name">${lp.legal_name}</td>
       <td class="fund-td-num">${fmt$(lp.commitment)}</td>
-      <td class="fund-td-num">${fmt$(lp.preferred_return)}</td>
       <td class="fund-td-num fund-carry-charge">−${fmt$(lp.carry_charge)}</td>
-      <td class="fund-td-num fund-td-bold">${fmt$(lp.net_gain)}</td>
       <td class="fund-td-num fund-td-bold" style="color:#c9a84c">${fmt$(lp.nav_after_carry)}</td>
     </tr>`).join('');
 
@@ -3094,58 +3089,68 @@ function renderFundWaterfall(w) {
           <th class="fund-th fund-th-num">Start NAV</th>
           <th class="fund-th fund-th-num">End NAV</th>
           <th class="fund-th fund-th-num">Gross Profit</th>
-          <th class="fund-th fund-th-num">Hurdle</th>
+          <th class="fund-th fund-th-num">HWM Threshold</th>
           <th class="fund-th fund-th-num">Carry Earned</th>
-          <th class="fund-th fund-th-num">GP Equity</th>
+          <th class="fund-th fund-th-num">GP Equity $</th>
+          <th class="fund-th fund-th-num">GP Equity %</th>
         </tr>
       </thead>
       <tbody>
-        ${snapshots.map(s => `
+        ${snapshots.map(s => {
+          const carryColor = s.carry_earned > 0 ? '#c9a84c' : '#4a5568';
+          const profitColor = s.gross_profit >= 0 ? '#c9a84c' : '#e05a4e';
+          return `
         <tr>
-          <td class="fund-td-date">${s.year}</td>
+          <td class="fund-td-date" style="font-weight:700">${s.year}</td>
           <td class="fund-td-num">${fmt$(s.start_nav)}</td>
-          <td class="fund-td-num">${fmt$(s.end_nav)}</td>
-          <td class="fund-td-num" style="color:${s.gross_profit >= 0 ? '#c9a84c' : '#e05a4e'}">${fmt$(s.gross_profit)}</td>
-          <td class="fund-td-num">${fmt$(s.hurdle_amount)}</td>
-          <td class="fund-td-num" style="color:#c9a84c">${fmt$(s.carry_earned)}</td>
-          <td class="fund-td-num fund-td-bold">${fmt$(s.gp_equity_end)}</td>
-        </tr>`).join('')}
+          <td class="fund-td-num" style="font-weight:700">${fmt$(s.end_nav)}</td>
+          <td class="fund-td-num" style="color:${profitColor}">${fmt$(s.gross_profit)}</td>
+          <td class="fund-td-num" style="color:#6080a0">${fmt$(s.hwm_threshold)}</td>
+          <td class="fund-td-num" style="color:${carryColor};font-weight:${s.carry_earned > 0 ? '700' : '400'}">${s.carry_earned > 0 ? fmt$(s.carry_earned) : '—'}</td>
+          <td class="fund-td-num fund-td-bold" style="color:#e8a060">${fmt$(s.gp_equity_end)}</td>
+          <td class="fund-td-num" style="color:#e8a060">${s.accum_gp_pct != null ? s.accum_gp_pct.toFixed(2) + '%' : '—'}</td>
+        </tr>`;
+        }).join('')}
       </tbody>
     </table>` : '';
+
+  // Carry-year badges
+  const carryYears  = (w.carry_years || []).join(', ') || 'None';
+  const hwmFmt      = fmt$(w.high_watermark);
+  const gpPct       = w.gp_equity_pct != null ? w.gp_equity_pct.toFixed(2) + '%' : '—';
+  const curYearNote = w.cur_year_new_carry > 0
+    ? ` + ${fmt$(w.cur_year_new_carry)} est. ${new Date().getFullYear()} carry`
+    : '';
 
   document.getElementById('fund-waterfall-wrap').innerHTML = `
     ${approxWarning}
     <div class="wfall-summary">
       <div class="wfall-row">
         <span class="wfall-label">Structure</span>
-        <span class="wfall-value">${hurdle_pct}% annual hurdle · ${carry_pct}% carry · 100% catch-up</span>
+        <span class="wfall-value">$100K/yr hurdle · ${carry_pct}% carry above high-watermark</span>
       </div>
       <div class="wfall-row">
         <span class="wfall-label">Years since inception</span>
         <span class="wfall-value">${w.years_since_inception} yrs (as of ${w.as_of})</span>
       </div>
       <div class="wfall-row">
-        <span class="wfall-label">Cumulative hurdle earned (${hurdle_pct}%/yr)</span>
-        <span class="wfall-value">${fmt$(w.preferred_return)}</span>
-      </div>
-      <div class="wfall-row">
-        <span class="wfall-label">Total gain</span>
+        <span class="wfall-label">Total fund gain</span>
         <span class="wfall-value">${fmt$(w.total_gain)}</span>
       </div>
       <div class="wfall-row">
-        <span class="wfall-label">Hurdle status</span>
-        <span class="wfall-value">${status}</span>
+        <span class="wfall-label">High-watermark (current)</span>
+        <span class="wfall-value">${hwmFmt}</span>
       </div>
       <div class="wfall-row">
-        <span class="wfall-label">Carry pool (above hurdle)</span>
-        <span class="wfall-value">${fmt$(w.carry_pool)}</span>
+        <span class="wfall-label">Years carry was earned</span>
+        <span class="wfall-value">${carryYears}</span>
       </div>
       <div class="wfall-row wfall-highlight">
-        <span class="wfall-label">GP accrued carry (${carry_pct}%)</span>
+        <span class="wfall-label">GP equity (${gpPct} of NAV${curYearNote})</span>
         <span class="wfall-value wfall-gp">${fmt$(w.gp_accrued_carry)}</span>
       </div>
       <div class="wfall-row wfall-highlight">
-        <span class="wfall-label">LP net value (after carry)</span>
+        <span class="wfall-label">LP net value (after GP carry)</span>
         <span class="wfall-value" style="color:#c9a84c">${fmt$(w.lp_nav_after_carry)}</span>
       </div>
     </div>
@@ -3158,9 +3163,7 @@ function renderFundWaterfall(w) {
         <tr>
           <th class="fund-th">LP</th>
           <th class="fund-th fund-th-num">Contributed</th>
-          <th class="fund-th fund-th-num">Pref. Return</th>
-          <th class="fund-th fund-th-num">Carry Charge</th>
-          <th class="fund-th fund-th-num">Net Gain</th>
+          <th class="fund-th fund-th-num">GP Carry −</th>
           <th class="fund-th fund-th-num">Net Value</th>
         </tr>
       </thead>
