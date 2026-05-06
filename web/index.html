@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui13-20260505';
+    var EXPECTED = 'ui14-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui17">
+  <link rel="stylesheet" href="/app/style.css?v=ui19">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -225,72 +225,7 @@
     <span></span>
   </header>
 
-  <!-- Mode toggle: Live Rebalance ↔ Tracker -->
-  <div class="port-mode-toggle">
-    <button class="port-mode-btn active" data-port-mode="rebalance">Live Rebalance</button>
-    <button class="port-mode-btn" data-port-mode="tracker">Tracker</button>
-  </div>
-
-  <!-- ── REBALANCE MODE ──────────────────────────────────────────── -->
-  <div id="port-mode-rebalance">
-  <div class="card">
-    <div class="label">UPLOAD PORTFOLIO</div>
-    <p class="hint">
-      CSV or XLSX with columns: <strong>Ticker</strong>, <strong>Weight</strong> (%), <strong>Optimized</strong>.
-      The Optimized column (if present) is ignored on input.
-    </p>
-    <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" class="file-input">
-    <div id="portfolio-file-info" class="file-info"></div>
-  </div>
-
-  <!-- Strategy selector removed — every run produces all three strategies
-       (Current Portfolio, High Conviction, All-In Top 3) side-by-side. -->
-  <input type="hidden" id="strategy-list" value="current">
-
-  <div class="card">
-    <div class="gamma-row" style="margin-top:0;padding-top:0;border-top:none;">
-      <label class="gamma-label" for="portfolio-reuse">Reuse cached reports (faster)</label>
-      <label class="toggle-switch">
-        <input type="checkbox" id="portfolio-reuse" checked>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <p class="hint" id="portfolio-reuse-hint">
-      ON: reuses existing per-ticker reports from the server (fast, cheap).
-      OFF: <strong>clears the local report cache first</strong> and re-runs every ticker through Grok — use when you want the latest news folded in.
-    </p>
-    <div class="gamma-row">
-      <label class="gamma-label" for="portfolio-gamma">Generate Gamma Presentations</label>
-      <label class="toggle-switch">
-        <input type="checkbox" id="portfolio-gamma">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
-  </div>
-
-  <div class="card" id="portfolio-progress-card" style="display:none;">
-    <div class="label">STATUS</div>
-    <div id="portfolio-status-text" class="portfolio-status">Queued…</div>
-    <div id="portfolio-result" style="display:none;"></div>
-    <div id="portfolio-error" class="error-box" style="display:none;"></div>
-    <button id="portfolio-download-btn" class="btn-primary full-width" style="display:none;">Download DGA-portfolio.xlsx</button>
-  </div>
-
-  <!-- Persistent last-result card. Populated from localStorage on tab activation. -->
-  <div class="card" id="portfolio-last-card" style="display:none;">
-    <div class="label">LAST PORTFOLIO RUN</div>
-    <div class="last-portfolio-date" id="portfolio-last-date"></div>
-    <div id="portfolio-last-result"></div>
-    <div class="last-portfolio-actions">
-      <button id="portfolio-last-view-btn" class="btn-secondary">View Summary →</button>
-      <button id="portfolio-last-download-btn" class="btn-primary">Download xlsx</button>
-    </div>
-  </div>
-  </div><!-- /port-mode-rebalance -->
-
-  <!-- ── TRACKER MODE ────────────────────────────────────────────── -->
-  <div id="port-mode-tracker" style="display:none;">
+  <!-- ── LIVE BENCHMARK / YTD TRACKER ─────────────────────────────── -->
 
     <!-- Live benchmark info -->
     <div class="card" id="tracker-live-card">
@@ -356,19 +291,6 @@
       </div>
     </div>
 
-    <!-- Paper portfolio list (below YTD detail / email section) -->
-    <div class="card">
-      <div class="label">PAPER PORTFOLIOS</div>
-      <p class="hint">
-        Forward-tracked baskets locked in from Intelligence briefs. Each one is benchmarked against
-        SPY and your live portfolio from the day it was created.
-      </p>
-      <div id="tracker-list">
-        <div class="empty">Loading…</div>
-      </div>
-    </div>
-
-  </div><!-- /port-mode-tracker -->
 </section>
 
 <!-- ============ PORTFOLIO SUMMARY VIEW (last Grok roll-up) ============ -->
@@ -496,11 +418,20 @@
 
   <!-- Strategic intelligence card -->
   <div class="card">
-    <div class="label">STRATEGIC LOOKBACK (3-5 YR HORIZON)</div>
-    <div class="intel-horizon-row">
-      <button class="intel-horizon-pill active" data-days="30">30 days</button>
-      <button class="intel-horizon-pill" data-days="60">60 days</button>
-      <button class="intel-horizon-pill" data-days="90">90 days</button>
+    <div class="label">STRATEGIC LOOKBACK — SECTOR ANALYSIS (3–5 YR HORIZON)</div>
+    <p class="hint" style="margin-bottom:10px;">
+      Select a sector to identify 10–15 companies with the most asymmetric return potential.
+      <strong>Best Mix</strong> picks the top cross-sector opportunities.
+    </p>
+    <div class="intel-horizon-row intel-sector-row">
+      <button class="intel-horizon-pill active" data-sector="Tech">Tech</button>
+      <button class="intel-horizon-pill" data-sector="Energy">Energy</button>
+      <button class="intel-horizon-pill" data-sector="Healthcare">Healthcare</button>
+      <button class="intel-horizon-pill" data-sector="Financials">Financials</button>
+      <button class="intel-horizon-pill" data-sector="Consumer">Consumer</button>
+      <button class="intel-horizon-pill" data-sector="Industrials">Industrials</button>
+      <button class="intel-horizon-pill" data-sector="Real Estate">Real Estate</button>
+      <button class="intel-horizon-pill intel-bestmix-pill" data-sector="Best Mix">✦ Best Mix</button>
     </div>
     <button id="intel-run-btn" class="btn-primary full-width" style="margin-top:14px;">
       💡 Run Intelligence
@@ -565,9 +496,22 @@
     <div class="intel-empty-icon">💡</div>
     <div class="intel-empty-title">No intelligence brief yet</div>
     <div class="intel-empty-sub">
-      Select a lookback window and tap Run Intelligence.<br>
-      Grok scans X and the web to surface macro themes,<br>
-      sector rotations, and specific company ideas.
+      Select a sector and tap Run Intelligence.<br>
+      Grok identifies 10–15 companies with the most asymmetric<br>
+      return potential in that sector.
+    </div>
+  </div>
+
+  <!-- Paper Portfolios section -->
+  <div class="card" style="margin-top:16px;">
+    <div class="label">PAPER PORTFOLIOS</div>
+    <p class="hint" style="margin-bottom:8px;">
+      Forward-tracked baskets locked in from Intelligence briefs. Each one is benchmarked against
+      SPY and your live portfolio from the day it was created.
+      Click any portfolio to view its full detail &amp; chart.
+    </p>
+    <div id="tracker-list">
+      <div class="empty">Loading…</div>
     </div>
   </div>
 </section>
@@ -601,44 +545,65 @@
   </div>
 
   <!-- ── LP Fund branch ─────────────────────────────────────────────────── -->
-  <div id="fund-branch-lp" style="padding-bottom:100px;">
-    <!-- Fund Overview Cards -->
-    <div id="fund-overview-cards" class="fund-overview-cards">
-      <div class="fund-card-loading">Loading fund data…</div>
+  <div id="fund-branch-lp">
+
+    <!-- Fund List View (shown by default; hidden when a fund is selected) -->
+    <div id="fund-list-view" style="padding:16px 0 100px;">
+      <div id="fund-list-cards" class="fund-list-cards">
+        <div class="fund-card-loading">Loading funds…</div>
+      </div>
     </div>
 
-    <!-- LP Table -->
-    <div class="fund-section-row">
-      <div class="label section-label">LIMITED PARTNERS</div>
-    </div>
-    <div id="fund-lps-wrap" class="fund-table-wrap">
-      <div class="fund-card-loading">—</div>
-    </div>
+    <!-- Fund Detail View (hidden until a fund is selected) -->
+    <div id="fund-detail-view" style="display:none; padding-bottom:100px;">
 
-    <!-- Positions Table -->
-    <div class="fund-section-row">
-      <div class="label section-label">PORTFOLIO POSITIONS</div>
-    </div>
-    <div id="fund-positions-wrap" class="fund-table-wrap">
-      <div class="fund-card-loading">—</div>
-    </div>
+      <!-- Back navigation + fund name breadcrumb -->
+      <div class="fund-detail-nav">
+        <button id="fund-back-btn" class="fund-back-btn">
+          ← All Funds
+        </button>
+        <span id="fund-detail-name" class="fund-detail-name"></span>
+      </div>
 
-    <!-- Activity -->
-    <div class="fund-section-row">
-      <div class="label section-label">RECENT ACTIVITY</div>
-    </div>
-    <div id="fund-activity-wrap" class="fund-table-wrap">
-      <div class="fund-card-loading">—</div>
-    </div>
+      <!-- Fund Overview Cards -->
+      <div id="fund-overview-cards" class="fund-overview-cards">
+        <div class="fund-card-loading">Loading fund data…</div>
+      </div>
 
-    <!-- GP Waterfall -->
-    <div class="fund-section-row" style="margin-top:24px;">
-      <div class="label section-label">GP WATERFALL &amp; CARRY</div>
-    </div>
-    <div id="fund-waterfall-wrap" class="fund-table-wrap">
-      <div class="fund-card-loading">—</div>
-    </div>
-  </div>
+      <!-- LP Table -->
+      <div class="fund-section-row">
+        <div class="label section-label">LIMITED PARTNERS</div>
+      </div>
+      <div id="fund-lps-wrap" class="fund-table-wrap">
+        <div class="fund-card-loading">—</div>
+      </div>
+
+      <!-- Positions Table -->
+      <div class="fund-section-row">
+        <div class="label section-label">PORTFOLIO POSITIONS</div>
+      </div>
+      <div id="fund-positions-wrap" class="fund-table-wrap">
+        <div class="fund-card-loading">—</div>
+      </div>
+
+      <!-- Activity -->
+      <div class="fund-section-row">
+        <div class="label section-label">RECENT ACTIVITY</div>
+      </div>
+      <div id="fund-activity-wrap" class="fund-table-wrap">
+        <div class="fund-card-loading">—</div>
+      </div>
+
+      <!-- GP Waterfall -->
+      <div class="fund-section-row" style="margin-top:24px;">
+        <div class="label section-label">GP WATERFALL &amp; CARRY</div>
+      </div>
+      <div id="fund-waterfall-wrap" class="fund-table-wrap">
+        <div class="fund-card-loading">—</div>
+      </div>
+
+    </div><!-- /fund-detail-view -->
+  </div><!-- /fund-branch-lp -->
 
   <!-- ── My Portfolio branch ────────────────────────────────────────────── -->
   <div id="fund-branch-portfolio" style="display:none; padding-bottom:100px;">
@@ -701,23 +666,68 @@
       <div id="history-result-box" class="history-result-box" style="display:none;"></div>
     </div>
 
-    <!-- Portal cards: Paper Portfolios + Quarterly Reports -->
-    <div class="fund-portal-grid" style="margin-top:8px;">
+    <!-- ── RUN REBALANCE ──────────────────────────────────────────── -->
+    <div class="card">
+      <div class="label">UPLOAD PORTFOLIO</div>
+      <p class="hint">
+        CSV or XLSX with columns: <strong>Ticker</strong>, <strong>Weight</strong> (%), <strong>Optimized</strong>.
+        The Optimized column (if present) is ignored on input.
+      </p>
+      <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" class="file-input">
+      <div id="portfolio-file-info" class="file-info"></div>
+    </div>
 
-      <div class="fund-portal-card" id="fund-open-tracker-btn">
-        <div class="fund-portal-card-icon">📌</div>
-        <div class="fund-portal-card-title">Paper Portfolios</div>
-        <div class="fund-portal-card-sub">Intelligence brief baskets tracked vs SPY &amp; your live portfolio</div>
-        <div class="fund-portal-card-cta">Open Tracker →</div>
+    <input type="hidden" id="strategy-list" value="current">
+
+    <div class="card">
+      <div class="gamma-row" style="margin-top:0;padding-top:0;border-top:none;">
+        <label class="gamma-label" for="portfolio-reuse">Reuse cached reports (faster)</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="portfolio-reuse" checked>
+          <span class="toggle-slider"></span>
+        </label>
       </div>
+      <p class="hint" id="portfolio-reuse-hint">
+        ON: reuses existing per-ticker reports from the server (fast, cheap).
+        OFF: <strong>clears the local report cache first</strong> and re-runs every ticker through Grok — use when you want the latest news folded in.
+      </p>
+      <div class="gamma-row">
+        <label class="gamma-label" for="portfolio-gamma">Generate Gamma Presentations</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="portfolio-gamma">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
+    </div>
 
+    <div class="card" id="portfolio-progress-card" style="display:none;">
+      <div class="label">STATUS</div>
+      <div id="portfolio-status-text" class="portfolio-status">Queued…</div>
+      <div id="portfolio-result" style="display:none;"></div>
+      <div id="portfolio-error" class="error-box" style="display:none;"></div>
+      <button id="portfolio-download-btn" class="btn-primary full-width" style="display:none;">Download DGA-portfolio.xlsx</button>
+    </div>
+
+    <!-- Persistent last-result card -->
+    <div class="card" id="portfolio-last-card" style="display:none;">
+      <div class="label">LAST PORTFOLIO RUN</div>
+      <div class="last-portfolio-date" id="portfolio-last-date"></div>
+      <div id="portfolio-last-result"></div>
+      <div class="last-portfolio-actions">
+        <button id="portfolio-last-view-btn" class="btn-secondary">View Summary →</button>
+        <button id="portfolio-last-download-btn" class="btn-primary">Download xlsx</button>
+      </div>
+    </div>
+
+    <!-- Portal cards: Quarterly Reports -->
+    <div class="fund-portal-grid" style="margin-top:8px;">
       <div class="fund-portal-card fund-portal-card-dim">
         <div class="fund-portal-card-icon">📄</div>
         <div class="fund-portal-card-title">Quarterly Reports</div>
         <div class="fund-portal-card-sub">LP statements &amp; performance summaries</div>
         <div class="fund-portal-soon">Coming Soon</div>
       </div>
-
     </div>
   </div>
 
@@ -772,6 +782,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui17"></script>
+<script src="/app/app.js?v=ui19"></script>
 </body>
 </html>

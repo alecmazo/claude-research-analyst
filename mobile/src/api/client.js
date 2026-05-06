@@ -234,8 +234,8 @@ export const api = {
   getLatestScan: ()      => request('/api/scan/latest'),
 
   // ---------- Market Intelligence ----------
-  startIntelligence: (days = 30) => request('/api/intelligence', {
-    method: 'POST', body: JSON.stringify({ days }),
+  startIntelligence: (sector = 'Tech') => request('/api/intelligence', {
+    method: 'POST', body: JSON.stringify({ sector }),
   }),
   getIntelligenceJob:    (jobId) => request(`/api/intelligence/${jobId}`),
   getLatestIntelligence: ()      => request('/api/intelligence/latest'),
@@ -320,31 +320,42 @@ export const api = {
 
   // ---------- Fund Admin ----------
   // All fund data endpoints require the x-fund-token header (second auth layer).
-  // Call fundAuth(password) first, then fundOverview/Lps/Positions/Activity/Waterfall.
+  // Call fundAuth(password) first, then use fundList/fundOverview/etc.
+  // All data endpoints accept an optional fundId parameter to select a specific
+  // fund; omit it to use the server default (DGA-I / FUND_ID env var).
   fundAuth: (password) => request('/api/fund/auth', {
     method: 'POST',
     body:   JSON.stringify({ password }),
   }),
 
-  fundOverview: async () => {
+  fundList: async () => {
     const ft = await getFundToken();
-    return request('/api/fund/overview', { headers: { 'x-fund-token': ft } });
+    return request('/api/fund/list', { headers: { 'x-fund-token': ft } });
   },
-  fundLps: async () => {
+  fundOverview: async (fundId) => {
     const ft = await getFundToken();
-    return request('/api/fund/lps', { headers: { 'x-fund-token': ft } });
+    const qs = fundId ? `?fund_id=${encodeURIComponent(fundId)}` : '';
+    return request(`/api/fund/overview${qs}`, { headers: { 'x-fund-token': ft } });
   },
-  fundPositions: async () => {
+  fundLps: async (fundId) => {
     const ft = await getFundToken();
-    return request('/api/fund/positions', { headers: { 'x-fund-token': ft } });
+    const qs = fundId ? `?fund_id=${encodeURIComponent(fundId)}` : '';
+    return request(`/api/fund/lps${qs}`, { headers: { 'x-fund-token': ft } });
   },
-  fundActivity: async () => {
+  fundPositions: async (fundId) => {
     const ft = await getFundToken();
-    return request('/api/fund/activity', { headers: { 'x-fund-token': ft } });
+    const qs = fundId ? `?fund_id=${encodeURIComponent(fundId)}` : '';
+    return request(`/api/fund/positions${qs}`, { headers: { 'x-fund-token': ft } });
   },
-  fundWaterfall: async () => {
+  fundActivity: async (fundId) => {
     const ft = await getFundToken();
-    return request('/api/fund/waterfall', { headers: { 'x-fund-token': ft } });
+    const qs = fundId ? `?fund_id=${encodeURIComponent(fundId)}` : '';
+    return request(`/api/fund/activity${qs}`, { headers: { 'x-fund-token': ft } });
+  },
+  fundWaterfall: async (fundId) => {
+    const ft = await getFundToken();
+    const qs = fundId ? `?fund_id=${encodeURIComponent(fundId)}` : '';
+    return request(`/api/fund/waterfall${qs}`, { headers: { 'x-fund-token': ft } });
   },
 
   // Server build version (public — no auth required). Used by Settings to

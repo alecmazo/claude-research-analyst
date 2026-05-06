@@ -175,7 +175,7 @@ class PortfolioJobStatus(BaseModel):
 
 
 class IntelligenceRequest(BaseModel):
-    days: int = 30   # lookback window in days: 30 | 60 | 90
+    sector: str = "Tech"  # sector focus: Tech, Energy, Healthcare, Financials, Consumer, Industrials, Materials, Real Estate, Best Mix
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +353,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui13-20260505"
+WEB_BUILD_VERSION = "ui15-20260506"
 
 
 @app.get("/api/build")
@@ -910,11 +910,11 @@ def get_scan_status(job_id: str):
 # Intelligence — macro → sector → company idea generation
 # ---------------------------------------------------------------------------
 
-def _run_intelligence(job_id: str, days: int) -> None:
+def _run_intelligence(job_id: str, sector: str) -> None:
     with _ijobs_lock:
         _ijobs[job_id]["status"] = "running"
     try:
-        result = analyst.run_market_intelligence(days)
+        result = analyst.run_market_intelligence(sector)
         with _ijobs_lock:
             _ijobs[job_id]["status"] = "done" if result.get("ok") else "failed"
             _ijobs[job_id]["result"] = result
@@ -930,8 +930,8 @@ def _run_intelligence(job_id: str, days: int) -> None:
 
 @app.post("/api/intelligence")
 def start_intelligence(req: IntelligenceRequest, background_tasks: BackgroundTasks):
-    """Start a market intelligence run for the given lookback window (days)."""
-    days = max(7, min(90, req.days))
+    """Start a market intelligence run for the given sector focus."""
+    sector = (req.sector or "Tech").strip()
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
     with _ijobs_lock:
@@ -939,11 +939,11 @@ def start_intelligence(req: IntelligenceRequest, background_tasks: BackgroundTas
             "job_id": job_id,
             "status": "queued",
             "created_at": now,
-            "days": days,
+            "sector": sector,
             "result": None,
             "error": None,
         }
-    background_tasks.add_task(_run_intelligence, job_id, days)
+    background_tasks.add_task(_run_intelligence, job_id, sector)
     return _ijobs[job_id]
 
 
@@ -1483,6 +1483,81 @@ def _fund_id(cur) -> str:
     return str(row["id"])
 
 
+def _resolve_fund_id(cur, fund_id: str = None) -> str:
+    """Return fund UUID: use caller-supplied fund_id if provided and valid,
+    otherwise fall back to the default (env FUND_ID / DGA-I)."""
+    if fund_id:
+        cur.execute("SELECT id FROM funds WHERE id = %s", (fund_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Fund {fund_id!r} not found")
+        return str(row["id"])
+    return _fund_id(cur)
+
+
+@app.get("/api/fund/list")
+async def fund_list(request: Request):
+    """Return a lightweight summary of every fund in the DB.
+    Used by the multi-fund selector UI to show all funds before drilling in."""
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, short_name, inception_date, status,
+                       mgmt_fee_pct, carry_pct, hurdle_pct
+                  FROM funds
+                 ORDER BY inception_date ASC
+            """)
+            funds = [dict(r) for r in cur.fetchall()]
+
+            result = []
+            for f in funds:
+                fid = str(f["id"])
+                # NAV
+                cur.execute("""
+                    SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
+                      FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
+                """, (fid,))
+                nav = float(cur.fetchone()["nav"])
+
+                # LP count
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM lps WHERE fund_id=%s AND status='active'",
+                    (fid,))
+                lp_count = cur.fetchone()["n"]
+
+                # Contributions
+                cur.execute("""
+                    SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
+                      FROM commitments c JOIN lps l ON l.id = c.lp_id
+                     WHERE l.fund_id = %s AND c.superseded_by IS NULL
+                """, (fid,))
+                contributions = float(cur.fetchone()["total"])
+
+                gain = nav - contributions
+                gain_pct = (gain / contributions * 100) if contributions else 0.0
+
+                result.append({
+                    "id":             fid,
+                    "name":           f["name"],
+                    "short_name":     f["short_name"],
+                    "inception_date": str(f["inception_date"]),
+                    "status":         f["status"],
+                    "mgmt_fee_pct":   float(f["mgmt_fee_pct"]),
+                    "carry_pct":      float(f["carry_pct"]),
+                    "hurdle_pct":     float(f["hurdle_pct"]),
+                    "nav":            round(nav, 2),
+                    "contributions":  round(contributions, 2),
+                    "total_gain":     round(gain, 2),
+                    "gain_pct":       round(gain_pct, 2),
+                    "lp_count":       lp_count,
+                })
+            return result
+    finally:
+        conn.close()
+
+
 @app.post("/api/fund/auth")
 async def fund_auth_endpoint(body: FundAuthRequest):
     """Exchange the fund password for a fund-specific access token.
@@ -1494,12 +1569,12 @@ async def fund_auth_endpoint(body: FundAuthRequest):
 
 
 @app.get("/api/fund/overview")
-async def fund_overview(request: Request):
+async def fund_overview(request: Request, fund_id: str = None):
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            fid = _fund_id(cur)
+            fid = _resolve_fund_id(cur, fund_id)
             cur.execute("""
                 SELECT name, short_name, inception_date, status,
                        mgmt_fee_pct, carry_pct, hurdle_pct, catch_up_pct
@@ -1553,12 +1628,12 @@ async def fund_overview(request: Request):
 
 
 @app.get("/api/fund/lps")
-async def fund_lps(request: Request):
+async def fund_lps(request: Request, fund_id: str = None):
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            fid = _fund_id(cur)
+            fid = _resolve_fund_id(cur, fund_id)
             cur.execute("""
                 SELECT
                     l.id, l.legal_name, l.entity_type, l.onboarded_at,
@@ -1592,12 +1667,12 @@ async def fund_lps(request: Request):
 
 
 @app.get("/api/fund/positions")
-async def fund_positions(request: Request):
+async def fund_positions(request: Request, fund_id: str = None):
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            fid = _fund_id(cur)
+            fid = _resolve_fund_id(cur, fund_id)
             cur.execute("""
                 SELECT
                     s.symbol, s.name, s.issuer,
@@ -1631,12 +1706,12 @@ async def fund_positions(request: Request):
 
 
 @app.get("/api/fund/activity")
-async def fund_activity(request: Request):
+async def fund_activity(request: Request, fund_id: str = None):
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            fid = _fund_id(cur)
+            fid = _resolve_fund_id(cur, fund_id)
             cur.execute("""
                 SELECT
                     t.id, t.effective_date, t.category, t.description, t.posted_at,
@@ -1663,7 +1738,7 @@ async def fund_activity(request: Request):
 
 
 @app.get("/api/fund/waterfall")
-async def fund_waterfall(request: Request):
+async def fund_waterfall(request: Request, fund_id: str = None):
     """GP carry / LP waterfall — high-watermark model.
 
     Carry model:
@@ -1686,7 +1761,7 @@ async def fund_waterfall(request: Request):
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            fid = _fund_id(cur)
+            fid = _resolve_fund_id(cur, fund_id)
 
             cur.execute("""
                 SELECT inception_date, carry_pct, hurdle_pct,

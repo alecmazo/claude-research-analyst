@@ -1,15 +1,18 @@
 /**
- * IntelligenceScreen — DGA Capital Market Intelligence
+ * IntelligenceScreen — DGA Capital Market Intelligence + Ideas
  *
- * Runs a Grok-powered macro → sector → company idea generation pass
- * over the past 30, 60, or 90 days of X + web news.
+ * Runs a Grok-powered sector-focused analysis to identify 10–15 companies
+ * with the most asymmetric return potential in the selected sector.
+ * "Best Mix" finds the best cross-sector opportunities.
  *
  * Flow:
  *  1. On focus: load latest persisted result (if any)
- *  2. User selects time horizon (30 / 60 / 90 days) via pill toggle
+ *  2. User selects sector via pill toggle (Tech, Energy, Healthcare, etc.)
  *  3. Taps "Run Intelligence" → POST /api/intelligence → polls job
  *  4. Results rendered as markdown; **TICKER** tokens become tappable
  *     chips that navigate to the Research tab with the ticker pre-filled
+ *  5. "Track Brief" locks tickers into a paper portfolio (visible below)
+ *  6. Paper Portfolios section shows all locked briefs → navigate to tracker
  */
 import React, { useState, useCallback, useRef } from 'react';
 import {
@@ -23,16 +26,21 @@ import { api } from '../api/client';
 import AppHeader from '../components/AppHeader';
 import { colors, mdStyles, haptics, formatDate } from '../design';
 
-const HORIZON_OPTIONS = [
-  { label: '30 days', value: 30 },
-  { label: '60 days', value: 60 },
-  { label: '90 days', value: 90 },
+const SECTOR_OPTIONS = [
+  { label: 'Tech',        value: 'Tech' },
+  { label: 'Energy',      value: 'Energy' },
+  { label: 'Healthcare',  value: 'Healthcare' },
+  { label: 'Financials',  value: 'Financials' },
+  { label: 'Consumer',    value: 'Consumer' },
+  { label: 'Industrials', value: 'Industrials' },
+  { label: 'Real Estate', value: 'Real Estate' },
+  { label: '✦ Best Mix',  value: 'Best Mix', isBestMix: true },
 ];
 
 const POLL_INTERVAL_MS = 3000;
 
 export default function IntelligenceScreen({ navigation }) {
-  const [days, setDays]           = useState(30);
+  const [sector, setSector]       = useState('Tech');
   const [running, setRunning]     = useState(false);
   const [result, setResult]       = useState(null);   // last completed result
   const [resultKind, setResultKind] = useState(null); // 'intel' | 'brief'
@@ -121,7 +129,7 @@ export default function IntelligenceScreen({ navigation }) {
     setError(null);
     setStatus('Queued — starting shortly…');
     try {
-      const job = await api.startIntelligence(days);
+      const job = await api.startIntelligence(sector);
       startPolling(job.job_id, 'intel');
     } catch (err) {
       haptics.onError();
@@ -177,7 +185,7 @@ export default function IntelligenceScreen({ navigation }) {
     const tickers = result.tickers.slice(0, 20);  // clamp at 20
     Alert.alert(
       'Lock in paper portfolio?',
-      `Equal-weight ${tickers.length} tickers from this ${result.days}-day brief. Today's closing prices become cost basis. You can adjust weights on the web.`,
+      `Equal-weight ${tickers.length} tickers from this ${result.sector || result.days + 'd' || 'brief'}. Today's closing prices become cost basis. You can adjust weights on the web.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Lock In', onPress: async () => {
@@ -187,24 +195,20 @@ export default function IntelligenceScreen({ navigation }) {
               const today = new Date().toLocaleDateString('en-US',
                 { month: 'short', day: 'numeric' });
               await api.createTracker({
-                name: `Brief — ${today}, ${result.days}D`,
+                name: `${result.sector || 'Brief'} — ${today}`,
                 holdings: tickers.map(t => ({ ticker: t, weight: eq })),
                 source: {
-                  lookback_days: result.days,
+                  sector: result.sector || null,
                   brief_generated_at: result.generated_at,
                 },
               });
               haptics.onSuccess();
               Alert.alert(
                 'Locked in',
-                'Paper portfolio created. View it on Portfolio → Tracker.',
+                'Paper portfolio created. View it in Paper Portfolios below.',
                 [
                   { text: 'OK' },
-                  { text: 'View Now', onPress: () => {
-                      navigation.getParent()?.navigate('Portfolio', {
-                        screen: 'PaperTracker',
-                      });
-                  }},
+                  { text: 'View Now', onPress: () => navigation.navigate('PaperTracker') },
                 ]
               );
             } catch (e) {
@@ -303,18 +307,31 @@ export default function IntelligenceScreen({ navigation }) {
           ) : null}
         </View>
 
-        {/* ── Config card (long-horizon Intelligence brief) ── */}
+        {/* ── Config card (sector-focused Intelligence brief) ── */}
         <View style={[styles.card, styles.strategicCard]}>
-          <Text style={styles.cardLabel}>STRATEGIC LOOKBACK</Text>
-          <View style={styles.horizonRow}>
-            {HORIZON_OPTIONS.map(opt => (
+          <Text style={styles.cardLabel}>STRATEGIC LOOKBACK — SECTOR ANALYSIS</Text>
+          <Text style={styles.sectorHint}>
+            Select a sector for 10–15 companies with the most asymmetric return potential.
+          </Text>
+          <View style={styles.sectorRow}>
+            {SECTOR_OPTIONS.map(opt => (
               <TouchableOpacity
                 key={opt.value}
-                style={[styles.pill, days === opt.value && styles.pillActive]}
-                onPress={() => !running && !briefRunning && setDays(opt.value)}
+                style={[
+                  styles.pill,
+                  sector === opt.value && styles.pillActive,
+                  opt.isBestMix && styles.pillBestMix,
+                  sector === opt.value && opt.isBestMix && styles.pillBestMixActive,
+                ]}
+                onPress={() => !running && !briefRunning && setSector(opt.value)}
                 activeOpacity={0.75}
               >
-                <Text style={[styles.pillText, days === opt.value && styles.pillTextActive]}>
+                <Text style={[
+                  styles.pillText,
+                  sector === opt.value && styles.pillTextActive,
+                  opt.isBestMix && styles.pillBestMixText,
+                  sector === opt.value && opt.isBestMix && styles.pillBestMixTextActive,
+                ]}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -370,7 +387,7 @@ export default function IntelligenceScreen({ navigation }) {
                 <Text style={styles.resultDays}>
                   {resultKind === 'brief'
                     ? (result.date_str || 'Today')
-                    : `${result.days}-day lookback`}
+                    : (result.sector || (result.days ? `${result.days}d` : 'Strategic'))}
                 </Text>
               </View>
               <Text style={styles.resultDate}>{formatDate(result.generated_at)}</Text>
@@ -392,11 +409,29 @@ export default function IntelligenceScreen({ navigation }) {
               Tap <Text style={{ fontWeight: '700' }}>Generate Daily Brief</Text> for a Goldman-style PM
               morning note: overnight tape, today's catalysts, actionable
               names.{'\n\n'}
-              Or pick a lookback window and tap <Text style={{ fontWeight: '700' }}>Run Intelligence</Text>{' '}
-              for a 3-5yr strategic view.
+              Or select a sector and tap <Text style={{ fontWeight: '700' }}>Run Intelligence</Text>{' '}
+              for 10–15 companies with the most asymmetric return potential.
             </Text>
           </View>
         ) : null}
+
+        {/* ── Paper Portfolios portal ── */}
+        <View style={styles.paperPortfolioCard}>
+          <Text style={styles.paperPortfolioTitle}>📌 Paper Portfolios</Text>
+          <Text style={styles.paperPortfolioDesc}>
+            Intelligence brief baskets tracked vs SPY and your live portfolio.
+            Lock in any brief with "Track Brief" to start tracking.
+          </Text>
+          <TouchableOpacity
+            style={styles.paperPortfolioBtn}
+            onPress={() => navigation.navigate('PaperTracker')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="trending-up-outline" size={16} color={colors.navy} style={{ marginRight: 8 }} />
+            <Text style={styles.paperPortfolioBtnText}>View Paper Portfolios →</Text>
+          </TouchableOpacity>
+        </View>
+
       </ScrollView>
     </View>
   );
@@ -433,11 +468,20 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  // ── Horizon pills ──
-  horizonRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  // ── Sector hint ──
+  sectorHint: {
+    fontSize: 12,
+    color: colors.midGray,
+    lineHeight: 17,
+    marginBottom: 12,
+    marginTop: -4,
+  },
+
+  // ── Sector pills (wrap to multiple lines) ──
+  sectorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   pill: {
-    flex: 1,
-    height: 40,
+    height: 34,
+    paddingHorizontal: 14,
     borderRadius: 8,
     borderWidth: 1.5,
     borderColor: colors.lightGray,
@@ -450,11 +494,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gold,
   },
   pillText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: colors.midGray,
   },
   pillTextActive: {
+    color: colors.navy,
+    fontWeight: '800',
+  },
+  // Best Mix pill stands out
+  pillBestMix: {
+    backgroundColor: colors.navy,
+    borderColor: colors.navy,
+  },
+  pillBestMixText: {
+    color: colors.gold,
+    fontWeight: '700',
+  },
+  pillBestMixActive: {
+    backgroundColor: colors.gold,
+    borderColor: colors.gold,
+  },
+  pillBestMixTextActive: {
     color: colors.navy,
     fontWeight: '800',
   },
@@ -624,6 +685,48 @@ const styles = StyleSheet.create({
     color: colors.midGray,
     textAlign: 'center',
     lineHeight: 20,
+  },
+
+  // ── Paper Portfolios portal card ──
+  paperPortfolioCard: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.navy,
+  },
+  paperPortfolioTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.navy,
+    letterSpacing: 0.3,
+    marginBottom: 6,
+  },
+  paperPortfolioDesc: {
+    fontSize: 12,
+    color: colors.midGray,
+    lineHeight: 17,
+    marginBottom: 14,
+  },
+  paperPortfolioBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.gold,
+    borderRadius: 8,
+    paddingVertical: 12,
+  },
+  paperPortfolioBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.navy,
+    letterSpacing: 0.5,
   },
 });
 

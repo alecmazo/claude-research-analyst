@@ -80,11 +80,12 @@ body {
       0 1px 2px rgba(0,0,0,0.1);
   }
 
-  /* ── 30 / 60 / 90 day horizon pills ── */
+  /* ── Sector horizon pills ── */
   .intel-horizon-pill {
-    height: 26px;
-    font-size: 10px;
+    height: 30px;
+    font-size: 11px;
     font-weight: 600;
+    padding: 0 10px;
   }
   .intel-horizon-row {
     gap: 6px;
@@ -1445,20 +1446,27 @@ body {
 /* ── Horizon pill toggle ── */
 .intel-horizon-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 2px;
 }
+/* Sector pill row wraps to multiple lines */
+.intel-sector-row {
+  flex-wrap: wrap;
+}
 .intel-horizon-pill {
-  flex: 1;
-  height: 40px;
+  flex: 1 1 auto;
+  min-width: fit-content;
+  height: 36px;
+  padding: 0 12px;
   border-radius: 8px;
   border: 1.5px solid var(--light-gray);
   background: var(--off-white);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--mid-gray);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
+  white-space: nowrap;
 }
 .intel-horizon-pill:hover {
   border-color: var(--gold);
@@ -1469,6 +1477,19 @@ body {
   border-color: var(--gold);
   color: var(--navy);
   font-weight: 800;
+}
+/* Best Mix pill stands out with a special style */
+.intel-bestmix-pill {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--gold);
+  font-weight: 700;
+}
+.intel-bestmix-pill.active,
+.intel-bestmix-pill:hover {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--navy);
 }
 
 /* ── Status text while running ── */
@@ -2844,6 +2865,114 @@ body {
   padding: 16px 0;
   color: #3a5070;
   font-size: 12px;
+}
+
+/* ── Fund list view ──────────────────────────────────────────────────────── */
+.fund-list-cards {
+  padding: 0 16px;
+}
+.fund-list-hint {
+  font-size: 11px;
+  color: #3a5070;
+  letter-spacing: 0.3px;
+  margin-bottom: 12px;
+}
+.fund-summary-card {
+  background: #0e1d38;
+  border: 1px solid rgba(201,168,76,0.25);
+  border-left: 3px solid #c9a84c;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.fund-summary-card:hover {
+  background: #122540;
+  border-color: rgba(201,168,76,0.5);
+}
+.fund-summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.fund-summary-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #f0e8d0;
+  margin-bottom: 3px;
+}
+.fund-summary-short {
+  font-size: 11px;
+  color: #4a6080;
+}
+.fund-summary-status {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.fund-summary-status.active  { color: #4cc870; border-color: #4cc870; }
+.fund-summary-status.closed  { color: #6a8aaa; border-color: #6a8aaa; }
+.fund-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.fund-summary-metric {
+  background: #081526;
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 7px;
+  padding: 7px 8px;
+}
+.fund-summary-metric-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #3a5070;
+  margin-bottom: 3px;
+}
+.fund-summary-metric-value {
+  font-size: 13px;
+  font-weight: 800;
+  color: #f0e8d0;
+}
+.fund-summary-cta {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c9a84c;
+  text-align: right;
+}
+
+/* ── Fund detail nav (back button) ───────────────────────────────────────── */
+.fund-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(201,168,76,0.15);
+  background: #060f1e;
+}
+.fund-back-btn {
+  background: none;
+  border: none;
+  color: #c9a84c;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.fund-back-btn:hover { color: #f0d080; }
+.fund-detail-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #6a8aaa;
 }
 
 /* ── Fund lock overlay ───────────────────────────────────────────────────── */

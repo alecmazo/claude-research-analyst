@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui12-20260502';
+const DGA_BUILD = 'ui15-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -175,7 +175,7 @@ const api = {
   getScanJob: (id) => apiGet(`/api/scan/${id}`),
   getLatestScan: () => apiGet('/api/scan/latest'),
   // Intelligence
-  startIntelligence: (days) => apiPost('/api/intelligence', { days }),
+  startIntelligence: (sector) => apiPost('/api/intelligence', { sector }),
   getIntelligenceJob: (id) => apiGet(`/api/intelligence/${id}`),
   getLatestIntelligence: () => apiGet('/api/intelligence/latest'),
   // Daily Brief (Goldman-style PM morning note)
@@ -232,7 +232,8 @@ document.querySelectorAll('[data-target]').forEach(el => {
     const t = el.dataset.target;
     showView(t);
     if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
-    if (t === 'view-portfolio') rehydratePortfolioLastCard();
+    if (t === 'view-portfolio') { rehydratePortfolioLastCard(); loadLiveBenchmark(); }
+    if (t === 'view-intelligence') loadTrackers();
     if (t === 'view-settings') updateAppVersionCard();
     if (t === 'view-fund') openFundTab();
   });
@@ -1153,17 +1154,17 @@ setInterval(checkServer, 30000);
 // INTELLIGENCE — macro → sector → company idea generation
 // ============================================================================
 
-let _intelDays = 30;
+let _intelSector = 'Tech';
 let _intelPollTimer = null;
 let _briefPollTimer = null;
 
 function initIntelligence() {
-  // Horizon pill wiring
+  // Sector pill wiring
   document.querySelectorAll('.intel-horizon-pill').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.intel-horizon-pill').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      _intelDays = parseInt(btn.dataset.days, 10);
+      _intelSector = btn.dataset.sector || btn.dataset.days || 'Tech';
     });
   });
 
@@ -1219,7 +1220,7 @@ async function runIntelligence() {
   };
 
   try {
-    const job = await api.startIntelligence(_intelDays);
+    const job = await api.startIntelligence(_intelSector);
     _intelPollTimer = setInterval(async () => {
       try {
         const j = await api.getIntelligenceJob(job.job_id);
@@ -1335,11 +1336,11 @@ function renderIntelResult(data, kind = 'intel') {
     }
   }
 
-  // Sub-label: lookback for intel, today's date for brief
+  // Sub-label: sector for intel, today's date for brief
   document.getElementById('intel-days-label').textContent =
     kind === 'brief'
       ? (data.date_str || 'Today')
-      : `${data.days}-day lookback`;
+      : (data.sector || (data.days ? `${data.days}d` : 'Strategic'));
   document.getElementById('intel-generated-at').textContent =
     data.generated_at ? formatDate(data.generated_at) : '';
 
@@ -1384,22 +1385,9 @@ let _trackerCache = [];
 let _trackerExpandedId = null;
 
 function initTracker() {
-  // Mode toggle on Portfolio tab
-  document.querySelectorAll('.port-mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.portMode;
-      document.querySelectorAll('.port-mode-btn').forEach(b =>
-        b.classList.toggle('active', b === btn));
-      document.getElementById('port-mode-rebalance').style.display =
-        mode === 'rebalance' ? '' : 'none';
-      document.getElementById('port-mode-tracker').style.display =
-        mode === 'tracker' ? '' : 'none';
-      if (mode === 'tracker') {
-        loadTrackers();
-        loadLiveBenchmark();
-      }
-    });
-  });
+  // Load tracker and benchmark on Portfolio tab activation
+  loadTrackers();
+  loadLiveBenchmark();
 
   // "Track this brief" button on Intelligence view
   document.getElementById('intel-track-btn')?.addEventListener('click', openTrackModal);
@@ -2117,12 +2105,19 @@ async function loadTrackers() {
 function renderTrackerList() {
   const list = document.getElementById('tracker-list');
   if (!_trackerCache.length) {
-    list.innerHTML = `<div class="empty">No paper portfolios yet. Generate an Intelligence brief, then tap <strong>📌 Track This Brief</strong>.</div>`;
+    list.innerHTML = `<div class="empty">No paper portfolios yet. Generate an Intelligence brief, then tap <strong>📌 Track This Brief</strong> to lock in a portfolio.</div>`;
     return;
   }
   list.innerHTML = _trackerCache.map(p => trackerRowHtml(p)).join('');
   list.querySelectorAll('.tracker-row').forEach(el => {
-    el.addEventListener('click', () => openTrackerDetail(el.dataset.id));
+    el.addEventListener('click', () => {
+      // Navigate to Portfolio tab where the detail card lives
+      showView('view-portfolio');
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.target === 'view-portfolio');
+      });
+      openTrackerDetail(el.dataset.id);
+    });
   });
 }
 
@@ -2704,17 +2699,19 @@ async function submitTrack() {
       name,
       holdings,
       source: {
-        lookback_days: _latestBrief?.days,
+        sector: _latestBrief?.sector || null,
+        lookback_days: _latestBrief?.days || null,
         brief_generated_at: _latestBrief?.generated_at,
       },
     });
     closeTrackModal();
-    // Switch to Portfolio → Tracker mode and refresh
-    showView('view-portfolio');
+    // Reload the paper portfolio list (now in Ideas view)
+    loadTrackers();
+    // Switch to Ideas view so user can see the new portfolio
+    showView('view-intelligence');
     document.querySelectorAll('.tab').forEach(t => {
-      t.classList.toggle('active', t.dataset.target === 'view-portfolio');
+      t.classList.toggle('active', t.dataset.target === 'view-intelligence');
     });
-    document.querySelector('.port-mode-btn[data-port-mode="tracker"]')?.click();
   } catch (err) {
     errEl.textContent = err.message;
     errEl.style.display = 'block';
@@ -2735,14 +2732,15 @@ function getFundToken()            { return localStorage.getItem(FUND_TOKEN_KEY)
 function setFundToken(t)           { localStorage.setItem(FUND_TOKEN_KEY, t); }
 function clearFundToken()          { localStorage.removeItem(FUND_TOKEN_KEY); }
 
-let _fundLoaded = false;
+let _fundLoaded   = false;
+let _activeFundId = null;   // UUID of the currently-open fund (null = list view)
 
 // Called when the Fund tab is clicked.
 function openFundTab() {
   if (getFundToken()) {
     // Already authenticated this session — show branch selector and load data.
     document.getElementById('fund-branch-selector').style.display = 'flex';
-    loadFund();
+    loadFundList();
     _loadMyPortfolioData();
   } else {
     // Show the lock overlay; data loads after successful auth.
@@ -2775,8 +2773,38 @@ function hideFundLock() {
   // Reveal branch selector now that we're authenticated
   const sel = document.getElementById('fund-branch-selector');
   if (sel) sel.style.display = 'flex';
-  // Pre-load My Portfolio data so snapshots + result are ready
+  // Load fund list + My Portfolio data
+  loadFundList();
   _loadMyPortfolioData();
+}
+
+// Show the fund list view (hide detail view)
+function showFundListView() {
+  _activeFundId = null;
+  _fundLoaded   = false;
+  const listEl   = document.getElementById('fund-list-view');
+  const detailEl = document.getElementById('fund-detail-view');
+  if (listEl)   listEl.style.display   = '';
+  if (detailEl) detailEl.style.display = 'none';
+}
+
+// Show the detail view for a specific fund
+function showFundDetailView(fundId, fundName) {
+  _activeFundId = fundId;
+  _fundLoaded   = false;
+  const listEl   = document.getElementById('fund-list-view');
+  const detailEl = document.getElementById('fund-detail-view');
+  if (listEl)   listEl.style.display   = 'none';
+  if (detailEl) detailEl.style.display = '';
+  const nameEl = document.getElementById('fund-detail-name');
+  if (nameEl) nameEl.textContent = fundName || '';
+  // Reset loading state for the detail containers
+  ['fund-overview-cards','fund-lps-wrap','fund-positions-wrap',
+   'fund-activity-wrap','fund-waterfall-wrap'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<div class="fund-card-loading">Loading…</div>';
+  });
+  loadFund();
 }
 
 // Wire up the Unlock button (and Enter key) once the DOM is ready.
@@ -2814,6 +2842,15 @@ document.addEventListener('DOMContentLoaded', () => {
     input.addEventListener('keydown', e => { if (e.key === 'Enter') attemptFundAuth(); });
   }
 
+  // ── Fund back button ─────────────────────────────────────────────────────
+  const backBtn = document.getElementById('fund-back-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      showFundListView();
+      loadFundList();
+    });
+  }
+
   // ── Fund branch selector ─────────────────────────────────────────────────
   document.querySelectorAll('.fund-branch-btn').forEach(branchBtn => {
     branchBtn.addEventListener('click', () => {
@@ -2822,6 +2859,11 @@ document.addEventListener('DOMContentLoaded', () => {
       branchBtn.classList.add('active');
       document.getElementById('fund-branch-lp').style.display        = branch === 'lp'        ? 'block' : 'none';
       document.getElementById('fund-branch-portfolio').style.display = branch === 'portfolio' ? 'block' : 'none';
+      if (branch === 'lp') {
+        // When returning to LP Fund branch always show list view first
+        showFundListView();
+        loadFundList();
+      }
       if (branch === 'portfolio') {
         loadYtdSnapshots();
         _rehydrateYtdResult();
@@ -2829,17 +2871,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── "Open Tracker" card in My Portfolio branch ───────────────────────────
+  // ── "Open Paper Portfolios" card — navigates to Ideas tab ────────────────
   const trackerCard = document.getElementById('fund-open-tracker-btn');
   if (trackerCard) {
     trackerCard.addEventListener('click', () => {
-      // Switch to the Portfolio view and activate the Tracker mode tab
-      showView('view-portfolio');
+      showView('view-intelligence');
       document.querySelectorAll('.tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.target === 'view-portfolio');
+        t.classList.toggle('active', t.dataset.target === 'view-intelligence');
       });
-      const trackerModeBtn = document.querySelector('[data-port-mode="tracker"]');
-      if (trackerModeBtn) trackerModeBtn.click();
     });
   }
 });
@@ -2875,8 +2914,92 @@ async function _rehydrateYtdResult() {
   } catch (_) { /* non-fatal — no previous run */ }
 }
 
+async function loadFundList() {
+  const listEl = document.getElementById('fund-list-cards');
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="fund-card-loading">Loading funds…</div>';
+
+  async function fundFetch(path) {
+    const r = await fetch(path, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (r.status === 403) {
+      clearFundToken();
+      showFundLock();
+      throw new Error('fund_locked');
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      throw new Error(`${r.status}${body ? ': ' + body : ''}`);
+    }
+    return r.json();
+  }
+
+  try {
+    const funds = await fundFetch('/api/fund/list');
+    if (!funds.length) {
+      listEl.innerHTML = '<div class="fund-card-loading">No funds found in database.</div>';
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="fund-list-hint">Select a fund to view details</div>
+      ${funds.map(f => {
+        const gainColor  = f.total_gain >= 0 ? '#c9a84c' : '#e05a4e';
+        const statusCls  = (f.status || 'active').toLowerCase() === 'active' ? 'active' : 'closed';
+        const statusLbl  = (f.status || 'active').toUpperCase();
+        const econLabel  = `${(f.mgmt_fee_pct * 100).toFixed(0)} &amp; ${(f.carry_pct * 100).toFixed(0)}`;
+        return `
+        <div class="fund-summary-card" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}">
+          <div class="fund-summary-header">
+            <div>
+              <div class="fund-summary-name">${escHtml(f.name)}</div>
+              <div class="fund-summary-short">${escHtml(f.short_name)}  ·  est. ${f.inception_date?.slice(0,4)}</div>
+            </div>
+            <span class="fund-summary-status ${statusCls}">${statusLbl}</span>
+          </div>
+          <div class="fund-summary-metrics">
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">NAV</div>
+              <div class="fund-summary-metric-value">${fmt$(f.nav)}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">GAIN</div>
+              <div class="fund-summary-metric-value" style="color:${gainColor}">${fmtPct(f.gain_pct)}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">LPs</div>
+              <div class="fund-summary-metric-value">${f.lp_count}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">ECONOMICS</div>
+              <div class="fund-summary-metric-value">${econLabel}</div>
+            </div>
+          </div>
+          <div class="fund-summary-cta">View Details →</div>
+        </div>`;
+      }).join('')}`;
+
+    // Wire click handlers on each card
+    listEl.querySelectorAll('.fund-summary-card').forEach(card => {
+      card.addEventListener('click', () => {
+        showFundDetailView(card.dataset.fundId, card.dataset.fundName);
+      });
+    });
+  } catch (e) {
+    if (e.message === 'fund_locked') return;
+    listEl.innerHTML = `<div class="fund-error">Unable to load funds: ${e.message}</div>`;
+  }
+}
+
+function escHtml(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 async function loadFund() {
   if (_fundLoaded) return;
+
+  // Build query string with active fund ID if set
+  const qs = _activeFundId ? `?fund_id=${encodeURIComponent(_activeFundId)}` : '';
 
   async function fundFetch(path) {
     const r = await fetch(path, {
@@ -2898,11 +3021,11 @@ async function loadFund() {
 
   try {
     const [ov, lps, positions, activity, waterfall] = await Promise.all([
-      fundFetch('/api/fund/overview'),
-      fundFetch('/api/fund/lps'),
-      fundFetch('/api/fund/positions'),
-      fundFetch('/api/fund/activity'),
-      fundFetch('/api/fund/waterfall'),
+      fundFetch(`/api/fund/overview${qs}`),
+      fundFetch(`/api/fund/lps${qs}`),
+      fundFetch(`/api/fund/positions${qs}`),
+      fundFetch(`/api/fund/activity${qs}`),
+      fundFetch(`/api/fund/waterfall${qs}`),
     ]);
 
     renderFundOverview(ov);
@@ -2917,7 +3040,8 @@ async function loadFund() {
     const msg = `<div class="fund-error">Unable to load fund data: ${e.message}</div>`;
     ['fund-overview-cards','fund-lps-wrap','fund-positions-wrap',
      'fund-activity-wrap','fund-waterfall-wrap'].forEach(id => {
-      document.getElementById(id).innerHTML = msg;
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = msg;
     });
   }
 }

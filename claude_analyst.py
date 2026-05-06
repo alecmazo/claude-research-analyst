@@ -1246,89 +1246,130 @@ Output format rules:
 - Aim for the highest expected-value ideas — bold contrarian calls are welcome if grounded in data
 - Every section must be populated; if a sector has no genuine opportunity, name a different one"""
 
-_INTEL_USER_TEMPLATE = """\
+_INTEL_SECTOR_USER_TEMPLATE = """\
 DATE: {today}
-LOOKBACK_WINDOW: Past {days} days
+SECTOR_FOCUS: {sector}
 INVESTMENT_HORIZON: 3–5 years
 
-You are generating a market intelligence brief for DGA Capital's portfolio team. Use live web and X search to find what has actually happened in the past {days} days, then synthesize it into the highest-conviction investment ideas.
+You are generating a sector-focused investment intelligence brief for DGA Capital. Use live web and X search to analyze the {sector} sector and identify 10–15 companies with the most asymmetric return potential right now.
+
+"Asymmetric return potential" means: bounded downside, outsized upside from a specific catalyst or structural change that the market is currently underpricing.
 
 Use EXACTLY this format:
 
 ---
 
-## MACRO ENVIRONMENT
+## {sector_upper}: CURRENT SETUP
 
-*What the dominant macro forces are right now and how they affect U.S. equities.*
+*What is driving the {sector} sector right now — macro, regulatory, technological, or competitive changes that create asymmetric opportunity.*
 
-- [THEME 1]: [1–2 sentences. Specific figures, dates, Fed language, data releases.]
-- [THEME 2]: [1–2 sentences.]
-- [THEME 3 — Geopolitical / Trade / FX if relevant]: [1–2 sentences.]
-
----
-
-## SECTOR OPPORTUNITIES
-
-*Three sectors with the best risk-adjusted setup over the next 12–24 months based on what has changed in the past {days} days.*
-
-### 1. [SECTOR NAME]
-**Thesis:** [2–3 sentences — why now, what changed, what the catalyst is]
-**Risk:** [1 sentence]
-
-### 2. [SECTOR NAME]
-**Thesis:** [2–3 sentences]
-**Risk:** [1 sentence]
-
-### 3. [SECTOR NAME]
-**Thesis:** [2–3 sentences]
-**Risk:** [1 sentence]
+- [KEY DRIVER 1]: [2–3 sentences with specific data, dates, catalysts]
+- [KEY DRIVER 2]: [2–3 sentences]
+- [KEY DRIVER 3]: [2–3 sentences]
 
 ---
 
-## SPECIFIC NAMES TO RESEARCH
+## TOP 10–15 NAMES: MOST ASYMMETRIC RETURN POTENTIAL
 
-*5–8 individual companies where the macro + sector setup converges with a company-specific catalyst. Each must have a clear reason it is actionable NOW (i.e., something has changed in the past {days} days or is about to).*
+*Ranked by conviction — highest conviction first. Each name must have a SPECIFIC catalyst or mispricing thesis grounded in recent facts. Be direct and investment-focused.*
 
 **TICKER**
 **Company:** [Full name]
-**Why now:** [2–3 sentences — what changed recently, why the market may be mispricing it, what the catalyst is]
-**Expected value driver:** [1 sentence — what drives 3–5 year upside]
-**Key risk:** [1 sentence]
+**Thesis:** [2–3 sentences — what is the market missing? what changes from here? what is the specific asymmetric setup?]
+**Catalyst:** [1 sentence — what triggers the upside in 6–18 months]
+**Risk:** [1 sentence — what breaks the thesis]
+**Upside / Downside:** [estimated range, e.g. "2–3× upside vs 20% downside if thesis holds"]
 
-[Repeat for each company — always start the block with **TICKER** on its own line]
+[Repeat for each company — always start each block with **TICKER** on its own line]
 
 ---
 
-## CONTRARIAN WATCH
+## SECTOR RISK FACTORS
 
-*1–2 unloved or heavily-shorted names where the negative narrative may be overdone. Include only if you have genuine conviction from recent data.*
+*2–3 risks that could impair the entire sector thesis.*
+
+- [RISK 1]
+- [RISK 2]
+- [RISK 3 if applicable]
+"""
+
+_INTEL_BESTMIX_USER_TEMPLATE = """\
+DATE: {today}
+PORTFOLIO_TYPE: Best Mix — Cross-Sector High Conviction
+INVESTMENT_HORIZON: 3–5 years
+
+You are building DGA Capital's highest-conviction portfolio of 10–15 stocks spanning ALL sectors. These should be the BEST asymmetric opportunities in the entire market right now — not the most popular names, but the most mispriced given current macro, sector, and company-level catalysts.
+
+"Asymmetric return potential" means: bounded downside, outsized upside. You are looking for situations where the market is wrong or slow to price in structural change. Use live web and X search to ground every pick in recent, verifiable facts.
+
+Use EXACTLY this format:
+
+---
+
+## CURRENT MARKET REGIME
+
+*Brief (3–5 bullet) view of macro conditions that frame WHY these are the best cross-sector opportunities today.*
+
+- [KEY THEME 1]: [2 sentences — specific figures, dates]
+- [KEY THEME 2]: [2 sentences]
+- [KEY THEME 3]: [2 sentences]
+- [KEY THEME 4 if relevant]: [2 sentences]
+
+---
+
+## BEST MIX: 10–15 HIGHEST CONVICTION NAMES
+
+*The most asymmetric return opportunities across all sectors. At least 5 different sectors must be represented. Ranked by conviction — highest first.*
 
 **TICKER**
-**Company:** [Full name]
-**Contrarian case:** [2 sentences — what the market is wrong about and why]
+**Company:** [Full name] | **Sector:** [sector name]
+**Thesis:** [2–3 sentences — specific mispricing, catalyst, what the market is getting wrong]
+**Upside / Downside:** [estimated range]
+**Key Catalyst:** [1 sentence]
+**Key Risk:** [1 sentence]
+
+[Repeat for each name — always start each block with **TICKER** on its own line]
+
+---
+
+## PORTFOLIO NOTES
+
+*1–2 sentences on sector concentration, correlation, and the single biggest portfolio-level risk in this mix.*
 """
 
 
-def run_market_intelligence(days: int = 30) -> dict:
-    """Run a macro→sector→company intelligence scan via Grok live search.
+def run_market_intelligence(sector: str = "Tech") -> dict:
+    """Run a sector-focused intelligence scan via Grok live search.
+
+    Args:
+        sector: Sector to focus on (Tech, Energy, Healthcare, Financials,
+                Consumer, Industrials, Materials, Real Estate, Best Mix).
+                "Best Mix" generates a cross-sector high-conviction portfolio.
 
     Returns:
         {
             "ok": bool,
-            "days": int,
+            "sector": str,
             "generated_at": str (ISO),
             "markdown": str,
             "tickers": list[str],   # parsed from **TICKER** tokens
             "error": str | None,
         }
     """
-    days = max(7, min(90, int(days)))
+    sector = (sector or "Tech").strip()
     today = datetime.now().strftime("%Y-%m-%d")
     now_iso = datetime.utcnow().isoformat()
 
-    user_msg = _INTEL_USER_TEMPLATE.format(today=today, days=days)
+    if sector.lower() in ("best mix", "best_mix"):
+        user_msg = _INTEL_BESTMIX_USER_TEMPLATE.format(today=today)
+    else:
+        user_msg = _INTEL_SECTOR_USER_TEMPLATE.format(
+            today=today,
+            sector=sector,
+            sector_upper=sector.upper(),
+        )
 
-    print(f"🧠 Running market intelligence (lookback {days} days)…")
+    print(f"🧠 Running market intelligence (sector: {sector})…")
 
     try:
         markdown = call_grok(
@@ -1341,7 +1382,7 @@ def run_market_intelligence(days: int = 30) -> dict:
         print(f"❌ Intelligence scan failed: {exc}")
         return {
             "ok": False,
-            "days": days,
+            "sector": sector,
             "generated_at": now_iso,
             "markdown": "",
             "tickers": [],
@@ -1357,7 +1398,7 @@ def run_market_intelligence(days: int = 30) -> dict:
 
     payload = {
         "ok": True,
-        "days": days,
+        "sector": sector,
         "generated_at": now_iso,
         "markdown": markdown,
         "tickers": tickers,

@@ -13,17 +13,21 @@
  *
  * Sub-tabs (LP Fund branch): Overview | LPs | Positions | Activity | Waterfall
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, RefreshControl, TextInput,
   StyleSheet, ActivityIndicator, TouchableOpacity,
-  KeyboardAvoidingView, Platform, Alert,
+  KeyboardAvoidingView, Platform, Alert, Switch, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
+import { Ionicons } from '@expo/vector-icons';
 import AppHeader from '../components/AppHeader';
 import { colors } from '../components/theme';
 import { api, getFundToken, setFundToken, clearFundToken } from '../api/client';
+
+const LAST_PORTFOLIO_KEY = '@dga_last_portfolio';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // All dollar amounts on the fund/portfolio pages display as whole dollars (no cents).
@@ -57,6 +61,15 @@ export default function FundScreen({ navigation }) {
   const [branch,    setBranch]    = useState('LP Fund');
   const [activeTab, setActiveTab] = useState('Overview');
 
+  // ── Multi-fund list state ────────────────────────────────────────────────
+  // activeFundId = null  → show the fund list summary view
+  // activeFundId = <id>  → show full detail (sub-tabs) for that fund
+  const [fundList,       setFundList]       = useState([]);
+  const [fundListLoading,setFundListLoading]= useState(false);
+  const [fundListError,  setFundListError]  = useState(null);
+  const [activeFundId,   setActiveFundId]   = useState(null);
+  const [activeFundName, setActiveFundName] = useState('');
+
   // ── LP Fund data state ───────────────────────────────────────────────────
   const [overview,   setOverview]  = useState(null);
   const [lps,        setLps]       = useState([]);
@@ -77,6 +90,16 @@ export default function FundScreen({ navigation }) {
   const [ytdError,       setYtdError]       = useState(null);
   const [ytdSnapshots,   setYtdSnapshots]   = useState([]);
 
+  // ── Rebalance state ──────────────────────────────────────────────────────
+  const [rebalFile,         setRebalFile]         = useState(null);
+  const [rebalReuseCache,   setRebalReuseCache]   = useState(true);
+  const [rebalGenerateGamma,setRebalGenerateGamma]= useState(false);
+  const [rebalSubmitting,   setRebalSubmitting]   = useState(false);
+  const [rebalJob,          setRebalJob]          = useState(null);
+  const [rebalError,        setRebalError]        = useState(null);
+  const [lastRebal,         setLastRebal]         = useState(null);
+  const rebalPollRef = useRef(null);
+
   // ── Check token on focus ─────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -89,9 +112,9 @@ export default function FundScreen({ navigation }) {
     return () => { active = false; };
   }, []));
 
-  // When unlocked, load data
+  // When unlocked, load fund list (and YTD snapshots for My Portfolio)
   useFocusEffect(useCallback(() => {
-    if (!locked) { loadData(); loadYtdSnapshots(); }
+    if (!locked) { loadFundList(); loadYtdSnapshots(); }
   }, [locked])); // eslint-disable-line
 
   // ── Auth submit ──────────────────────────────────────────────────────────
@@ -113,17 +136,37 @@ export default function FundScreen({ navigation }) {
     }
   };
 
-  // ── LP Fund data loading ─────────────────────────────────────────────────
-  const loadData = useCallback(async (isRefresh = false) => {
+  // ── Fund list loading ────────────────────────────────────────────────────
+  const loadFundList = useCallback(async () => {
+    setFundListLoading(true);
+    setFundListError(null);
+    try {
+      const list = await api.fundList();
+      setFundList(Array.isArray(list) ? list : []);
+    } catch (e) {
+      if (e.message?.includes('403')) {
+        await clearFundToken();
+        setLocked(true);
+        return;
+      }
+      setFundListError(e.message || 'Failed to load funds');
+    } finally {
+      setFundListLoading(false);
+    }
+  }, []);
+
+  // ── LP Fund detail loading ───────────────────────────────────────────────
+  const loadData = useCallback(async (isRefresh = false, fundId = null) => {
     if (!isRefresh) setLoading(true);
     setError(null);
     try {
+      const fid = fundId || activeFundId;
       const [ov, lpData, posData, actData, wfall] = await Promise.all([
-        api.fundOverview(),
-        api.fundLps(),
-        api.fundPositions(),
-        api.fundActivity(),
-        api.fundWaterfall(),
+        api.fundOverview(fid),
+        api.fundLps(fid),
+        api.fundPositions(fid),
+        api.fundActivity(fid),
+        api.fundWaterfall(fid),
       ]);
       setOverview(ov);
       setLps(Array.isArray(lpData) ? lpData : []);
@@ -216,7 +259,135 @@ export default function FundScreen({ navigation }) {
     );
   };
 
-  const onRefresh = () => { setRefreshing(true); loadData(true); loadYtdSnapshots(); };
+  const onRefresh = () => {
+    setRefreshing(true);
+    if (activeFundId) {
+      loadData(true, activeFundId);
+    } else {
+      loadFundList();
+    }
+    loadYtdSnapshots();
+  };
+
+  // Open a specific fund's detail view
+  const openFundDetail = (fund) => {
+    setActiveFundId(fund.id);
+    setActiveFundName(fund.name || fund.short_name || 'Fund');
+    setActiveTab('Overview');
+    setOverview(null);
+    setLps([]);
+    setPositions([]);
+    setActivity([]);
+    setWaterfall(null);
+    loadData(false, fund.id);
+  };
+
+  // Back to fund list
+  const closeFundDetail = () => {
+    setActiveFundId(null);
+    setActiveFundName('');
+  };
+
+  // ── Rebalance functions ──────────────────────────────────────────────────
+  const pickRebalFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result?.canceled) return;
+      const asset = result?.assets?.[0] || (result?.uri ? result : null);
+      if (!asset?.uri) {
+        Alert.alert('No file selected', 'Could not read the selected file. Try again.');
+        return;
+      }
+      setRebalFile({
+        uri:      asset.uri,
+        name:     asset.name     || 'portfolio.csv',
+        mimeType: asset.mimeType || asset.type || 'application/octet-stream',
+        size:     asset.size,
+      });
+      setRebalJob(null);
+      setRebalError(null);
+    } catch (err) {
+      Alert.alert('Could not pick file', err.message || String(err));
+    }
+  };
+
+  const startRebal = async () => {
+    if (!rebalFile) {
+      Alert.alert('No file selected', 'Please choose a portfolio CSV or XLSX first.');
+      return;
+    }
+    setRebalSubmitting(true);
+    setRebalError(null);
+    setRebalJob(null);
+    try {
+      const resp = await api.startPortfolio({
+        fileUri:      rebalFile.uri,
+        fileName:     rebalFile.name,
+        mimeType:     rebalFile.mimeType,
+        strategy:     'current',
+        reuseExisting: rebalReuseCache,
+        generateGamma: rebalGenerateGamma,
+      });
+      setRebalJob(resp);
+      if (rebalPollRef.current) clearInterval(rebalPollRef.current);
+      rebalPollRef.current = setInterval(() => pollRebalJob(resp.job_id), 4000);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      setRebalError(msg);
+    } finally {
+      setRebalSubmitting(false);
+    }
+  };
+
+  const pollRebalJob = async (jobId) => {
+    try {
+      const j = await api.getPortfolioJob(jobId);
+      setRebalJob(j);
+      if (j.status === 'done') {
+        clearInterval(rebalPollRef.current);
+        rebalPollRef.current = null;
+        const payload = {
+          job_id: jobId,
+          n_tickers: j.n_tickers,
+          strategy: j.strategy,
+          completed_at: new Date().toISOString(),
+          result: j.result,
+        };
+        AsyncStorage.setItem(LAST_PORTFOLIO_KEY, JSON.stringify(payload)).catch(() => {});
+        setLastRebal(payload);
+      } else if (j.status === 'failed') {
+        clearInterval(rebalPollRef.current);
+        rebalPollRef.current = null;
+      }
+    } catch (err) {
+      clearInterval(rebalPollRef.current);
+      setRebalError(err.message);
+    }
+  };
+
+  const openRebalDownload = async () => {
+    if (!rebalJob?.job_id) return;
+    const url = await api.portfolioDownloadUrl(rebalJob.job_id);
+    Linking.openURL(url);
+  };
+
+  const openLastRebalDownload = async () => {
+    if (!lastRebal?.job_id) return;
+    const url = await api.portfolioDownloadUrl(lastRebal.job_id);
+    Linking.openURL(url);
+  };
+
+  // Load last rebal on focus
+  useFocusEffect(useCallback(() => {
+    AsyncStorage.getItem(LAST_PORTFOLIO_KEY)
+      .then(raw => { if (raw) setLastRebal(JSON.parse(raw)); })
+      .catch(() => {});
+    return () => { if (rebalPollRef.current) clearInterval(rebalPollRef.current); };
+  }, []));
 
   // ── Lock screen ──────────────────────────────────────────────────────────
   if (locked) {
@@ -442,20 +613,113 @@ export default function FundScreen({ navigation }) {
           </View>
         )}
 
-        {/* ── Paper Portfolios portal ───────────────────────────────────── */}
-        <View style={s.portfolioCard}>
-          <Text style={s.portfolioCardTitle}>📌  Paper Portfolios</Text>
-          <Text style={s.portfolioCardDesc}>
-            Intelligence brief baskets tracked vs SPY and your live portfolio
-            from the day they were locked in.
+        {/* ── Run Rebalance section ─────────────────────────────────────── */}
+        <View style={s.rebalCard}>
+          <Text style={s.rebalCardTitle}>RUN REBALANCE</Text>
+          <Text style={s.rebalCardDesc}>
+            Upload a portfolio CSV/XLSX (Ticker + Weight columns) to run the AI rebalance analysis.
           </Text>
-          <TouchableOpacity
-            style={s.portfolioBtn}
-            onPress={() => navigation.navigate('FundTracker')}
-          >
-            <Text style={s.portfolioBtnText}>Open Paper Portfolios →</Text>
+
+          {/* File picker */}
+          <TouchableOpacity style={s.rebalFilePicker} onPress={pickRebalFile} activeOpacity={0.8}>
+            <Ionicons name="document-attach-outline" size={20} color={colors.gold} />
+            <Text style={s.rebalFilePickerText} numberOfLines={1}>
+              {rebalFile ? rebalFile.name : 'Choose Portfolio File'}
+            </Text>
           </TouchableOpacity>
+
+          {/* Toggles */}
+          <View style={s.rebalToggleRow}>
+            <Text style={s.rebalToggleLabel}>Reuse cached reports (faster)</Text>
+            <Switch
+              value={rebalReuseCache}
+              onValueChange={setRebalReuseCache}
+              trackColor={{ false: '#1e3a5f', true: colors.gold }}
+              thumbColor="#fff"
+            />
+          </View>
+          <View style={s.rebalToggleRow}>
+            <Text style={s.rebalToggleLabel}>Generate Gamma Presentations</Text>
+            <Switch
+              value={rebalGenerateGamma}
+              onValueChange={setRebalGenerateGamma}
+              trackColor={{ false: '#1e3a5f', true: colors.gold }}
+              thumbColor="#fff"
+            />
+          </View>
+
+          {/* Run button */}
+          <TouchableOpacity
+            style={[s.rebalRunBtn, (!rebalFile || rebalSubmitting ||
+              (rebalJob && rebalJob.status !== 'done' && rebalJob.status !== 'failed'))
+              && { opacity: 0.5 }]}
+            onPress={startRebal}
+            disabled={!rebalFile || rebalSubmitting ||
+              (rebalJob && rebalJob.status !== 'done' && rebalJob.status !== 'failed')}
+          >
+            {rebalSubmitting
+              ? <ActivityIndicator color={colors.navy} size="small" />
+              : <Text style={s.rebalRunBtnText}>RUN REBALANCE</Text>}
+          </TouchableOpacity>
+
+          {/* Progress / result */}
+          {rebalJob && (
+            <View style={{ marginTop: 12 }}>
+              {(rebalJob.status === 'queued' || rebalJob.status === 'running') && rebalJob.progress ? (
+                <View>
+                  <View style={s.rebalProgressTrack}>
+                    <View style={[s.rebalProgressFill, { width: `${Math.round((rebalJob.progress.pct ?? 0) * 100)}%` }]} />
+                  </View>
+                  <Text style={s.rebalProgressLabel} numberOfLines={1}>
+                    {rebalJob.progress.label || 'Analyzing…'}
+                  </Text>
+                </View>
+              ) : null}
+              {rebalJob.status === 'done' && (
+                <Text style={s.rebalStatusDone}>✅ Done — {rebalJob.n_tickers} tickers analyzed</Text>
+              )}
+              {rebalJob.status === 'failed' && (
+                <Text style={s.rebalStatusFail}>❌ Failed</Text>
+              )}
+              {rebalError && <Text style={s.rebalStatusFail}>{rebalError}</Text>}
+              {rebalJob.status === 'done' && (
+                <TouchableOpacity style={s.rebalRunBtn} onPress={openRebalDownload}>
+                  <Ionicons name="document-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
+                  <Text style={s.rebalRunBtnText}>Download DGA-portfolio.xlsx</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
+
+        {/* ── Last Rebalance Run (persisted) ────────────────────────────── */}
+        {lastRebal && !rebalJob && (
+          <View style={s.rebalLastCard}>
+            <Text style={s.rebalCardTitle}>LAST PORTFOLIO RUN</Text>
+            <Text style={s.rebalLastMeta}>
+              {lastRebal.completed_at ? new Date(lastRebal.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+              {lastRebal.n_tickers ? `  ·  ${lastRebal.n_tickers} tickers` : ''}
+            </Text>
+            <View style={s.rebalLastActions}>
+              <TouchableOpacity
+                style={[s.rebalRunBtn, { flex: 1 }]}
+                onPress={() => navigation.navigate('PortfolioSummary')}
+              >
+                <Ionicons name="document-text-outline" size={15} color={colors.navy} style={{ marginRight: 5 }} />
+                <Text style={s.rebalRunBtnText}>View Summary</Text>
+              </TouchableOpacity>
+              {lastRebal.job_id && (
+                <TouchableOpacity
+                  style={[s.rebalRunBtn, { flex: 1 }]}
+                  onPress={openLastRebalDownload}
+                >
+                  <Ionicons name="download-outline" size={15} color={colors.navy} style={{ marginRight: 5 }} />
+                  <Text style={s.rebalRunBtnText}>Download xlsx</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
 
         {/* ── Quarterly Reports ─────────────────────────────────────────── */}
         <View style={s.portfolioCard}>
@@ -724,10 +988,109 @@ export default function FundScreen({ navigation }) {
     return { color: m[cat] || '#8090a8' };
   }
 
+  // ── Fund List View ───────────────────────────────────────────────────────
+  function FundListView() {
+    if (fundListLoading) {
+      return (
+        <View style={s.center}>
+          <ActivityIndicator color={colors.gold} size="large" />
+          <Text style={s.loadingText}>Loading funds…</Text>
+        </View>
+      );
+    }
+    if (fundListError) {
+      return (
+        <View style={s.center}>
+          <Text style={s.errorText}>{fundListError}</Text>
+          <TouchableOpacity style={s.retryBtn} onPress={loadFundList}>
+            <Text style={s.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    if (!fundList.length) {
+      return (
+        <View style={s.center}>
+          <Text style={s.emptyText}>No funds found in database.</Text>
+          <TouchableOpacity style={s.retryBtn} onPress={loadFundList}>
+            <Text style={s.retryText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return (
+      <ScrollView
+        style={s.scroll}
+        contentContainerStyle={[s.scrollContent, { padding: 14 }]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={s.fundListHint}>Select a fund to view details</Text>
+        {fundList.map((fund) => {
+          const gainColor = fund.total_gain >= 0 ? colors.gold : '#e05a4e';
+          const statusColor = fund.status === 'active' ? '#4cc870' : '#6a8aaa';
+          return (
+            <TouchableOpacity
+              key={fund.id}
+              style={s.fundCard}
+              onPress={() => openFundDetail(fund)}
+              activeOpacity={0.82}
+            >
+              {/* Fund name + status badge */}
+              <View style={s.fundCardHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.fundCardName} numberOfLines={1}>{fund.name}</Text>
+                  <Text style={s.fundCardShort}>{fund.short_name}  ·  est. {fund.inception_date?.slice(0, 4)}</Text>
+                </View>
+                <View style={[s.fundStatusBadge, { borderColor: statusColor }]}>
+                  <Text style={[s.fundStatusText, { color: statusColor }]}>
+                    {(fund.status || 'active').toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Key metrics row */}
+              <View style={s.fundCardMetrics}>
+                <View style={s.fundCardMetric}>
+                  <Text style={s.fundCardMetricLabel}>NAV</Text>
+                  <Text style={s.fundCardMetricValue}>{fmt$(fund.nav)}</Text>
+                </View>
+                <View style={s.fundCardMetric}>
+                  <Text style={s.fundCardMetricLabel}>GAIN</Text>
+                  <Text style={[s.fundCardMetricValue, { color: gainColor }]}>
+                    {fmtPct(fund.gain_pct)}
+                  </Text>
+                </View>
+                <View style={s.fundCardMetric}>
+                  <Text style={s.fundCardMetricLabel}>LPs</Text>
+                  <Text style={s.fundCardMetricValue}>{fund.lp_count}</Text>
+                </View>
+                <View style={s.fundCardMetric}>
+                  <Text style={s.fundCardMetricLabel}>ECONOMICS</Text>
+                  <Text style={s.fundCardMetricValue}>
+                    {(fund.mgmt_fee_pct * 100).toFixed(0)}/{(fund.carry_pct * 100).toFixed(0)}
+                  </Text>
+                </View>
+              </View>
+
+              {/* CTA */}
+              <View style={s.fundCardCta}>
+                <Text style={s.fundCardCtaText}>View Details →</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    );
+  }
+
   // ── Main render ──────────────────────────────────────────────────────────
   return (
     <View style={s.screen}>
-      <AppHeader title="Fund Admin" subtitle="DGA Capital Fund I, LP" />
+      <AppHeader
+        title="Fund Admin"
+        subtitle={activeFundId ? activeFundName : 'DGA Capital'}
+      />
 
       {/* Top branch selector */}
       <View style={s.branchBar}>
@@ -737,6 +1100,10 @@ export default function FundScreen({ navigation }) {
             style={[s.branchBtn, branch === b && s.branchBtnActive]}
             onPress={() => {
               setBranch(b);
+              if (b === 'LP Fund') {
+                // If switching back to LP Fund, go to list view
+                if (activeFundId) closeFundDetail();
+              }
               if (b === 'My Portfolio') loadYtdSnapshots();
             }}
           >
@@ -760,9 +1127,17 @@ export default function FundScreen({ navigation }) {
             <MyPortfolioPanel />
           </ScrollView>
         </KeyboardAvoidingView>
-      ) : (
+      ) : activeFundId ? (
+        /* ── Fund Detail View (sub-tabs) ─────────────────────────────── */
         <>
-          {/* LP Fund sub-tabs */}
+          {/* Back button + sub-tabs */}
+          <View style={s.detailNavBar}>
+            <TouchableOpacity style={s.backBtn} onPress={closeFundDetail}>
+              <Ionicons name="chevron-back" size={16} color={colors.gold} />
+              <Text style={s.backBtnText}>All Funds</Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={s.subTabBar}>
             {LP_TABS.map(tab => (
               <TouchableOpacity
@@ -783,7 +1158,7 @@ export default function FundScreen({ navigation }) {
           ) : error ? (
             <View style={s.center}>
               <Text style={s.errorText}>{error}</Text>
-              <TouchableOpacity style={s.retryBtn} onPress={() => loadData()}>
+              <TouchableOpacity style={s.retryBtn} onPress={() => loadData(false, activeFundId)}>
                 <Text style={s.retryText}>Retry</Text>
               </TouchableOpacity>
             </View>
@@ -800,6 +1175,9 @@ export default function FundScreen({ navigation }) {
             </ScrollView>
           )}
         </>
+      ) : (
+        /* ── Fund List View ──────────────────────────────────────────── */
+        <FundListView />
       )}
     </View>
   );
@@ -975,6 +1353,74 @@ const s = StyleSheet.create({
   portfolioCardDesc:  { fontSize: 12, color: '#6a8aaa', lineHeight: 18, marginBottom: 14 },
   portfolioBtn:       { backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: colors.gold },
   portfolioBtnText:   { color: colors.navy, fontWeight: '700', fontSize: 13 },
+
+  // Rebalance section styles
+  rebalCard: {
+    backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)',
+  },
+  rebalLastCard: {
+    backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)',
+  },
+  rebalCardTitle:  { fontSize: 10, fontWeight: '800', letterSpacing: 1.5, color: colors.gold, marginBottom: 8 },
+  rebalCardDesc:   { fontSize: 12, color: '#6a8aaa', lineHeight: 17, marginBottom: 12 },
+  rebalFilePicker: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14,
+    borderWidth: 1.5, borderColor: 'rgba(201,168,76,0.3)', borderStyle: 'dashed',
+    borderRadius: 10, backgroundColor: 'rgba(201,168,76,0.05)', marginBottom: 12,
+  },
+  rebalFilePickerText: { fontSize: 13, fontWeight: '600', color: '#c9d8e8', flex: 1 },
+  rebalToggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 8, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)',
+  },
+  rebalToggleLabel: { fontSize: 13, fontWeight: '600', color: '#c9d8e8', flex: 1, marginRight: 12 },
+  rebalRunBtn: {
+    backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 13,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    marginTop: 12,
+  },
+  rebalRunBtnText: { color: colors.navy, fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
+  rebalProgressTrack: {
+    height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3,
+    overflow: 'hidden', marginBottom: 6,
+  },
+  rebalProgressFill: { height: '100%', backgroundColor: colors.gold, borderRadius: 3 },
+  rebalProgressLabel: { fontSize: 12, color: '#6a8aaa', marginBottom: 4 },
+  rebalStatusDone: { fontSize: 13, fontWeight: '600', color: '#4ade80', marginBottom: 4 },
+  rebalStatusFail: { fontSize: 13, color: '#f87171', marginBottom: 4 },
+  rebalLastMeta: { fontSize: 12, color: '#6a8aaa', marginBottom: 10 },
+  rebalLastActions: { flexDirection: 'row', gap: 10 },
+
+  // Fund list view
+  fundListHint: { fontSize: 11, color: '#3a5070', marginBottom: 12, letterSpacing: 0.3 },
+  fundCard: {
+    backgroundColor: '#0e1d38',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(201,168,76,0.25)',
+    borderLeftWidth: 3,
+    borderLeftColor: colors.gold,
+  },
+  fundCardHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  fundCardName:      { fontSize: 15, fontWeight: '800', color: '#f0e8d0', marginBottom: 3 },
+  fundCardShort:     { fontSize: 11, color: '#4a6080' },
+  fundStatusBadge:   { borderWidth: 1, borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2, marginLeft: 8, marginTop: 2 },
+  fundStatusText:    { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+  fundCardMetrics:   { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  fundCardMetric:    { flex: 1, backgroundColor: '#081526', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  fundCardMetricLabel:{ fontSize: 8, fontWeight: '700', color: '#3a5070', letterSpacing: 0.6, marginBottom: 3 },
+  fundCardMetricValue:{ fontSize: 13, fontWeight: '800', color: '#f0e8d0' },
+  fundCardCta:       { alignSelf: 'flex-end' },
+  fundCardCtaText:   { fontSize: 12, fontWeight: '700', color: colors.gold },
+
+  // Fund detail navigation bar (back button)
+  detailNavBar:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.15)', paddingHorizontal: 12, paddingVertical: 8 },
+  backBtn:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  backBtnText:   { fontSize: 13, fontWeight: '700', color: colors.gold },
 
   // Overview
   overviewWrap: { padding: 14 },

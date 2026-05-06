@@ -39,12 +39,22 @@ function PortfolioStack() {
   );
 }
 
-// Fund section: LP Fund management + Managed Portfolio tracker (both password-gated)
+// Intelligence (Ideas) stack — includes PaperTracker so it lives under Ideas tab
+function IntelligenceStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="IntelligenceHome" component={IntelligenceScreen} />
+      <Stack.Screen name="PaperTracker"     component={PaperTrackerScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// Fund section: LP Fund management + Managed Portfolio (both password-gated)
 function FundStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="FundHome"    component={FundScreen} />
-      <Stack.Screen name="FundTracker" component={PaperTrackerScreen} />
+      <Stack.Screen name="FundHome"        component={FundScreen} />
+      <Stack.Screen name="PortfolioSummary" component={PortfolioSummaryScreen} />
     </Stack.Navigator>
   );
 }
@@ -78,7 +88,7 @@ export default function App() {
         screenOptions={{ headerShown: false }}
       >
         <Tab.Screen name="Research"     component={HomeStack} />
-        <Tab.Screen name="Intelligence" component={IntelligenceScreen} />
+        <Tab.Screen name="Intelligence" component={IntelligenceStack} />
         <Tab.Screen name="Scan"         component={ScanScreen} />
         <Tab.Screen name="Portfolio"    component={PortfolioStack} />
         <Tab.Screen name="Fund"         component={FundStack} />
