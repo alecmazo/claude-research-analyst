@@ -613,7 +613,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui16-20260506"
+WEB_BUILD_VERSION = "ui17-20260506"
 
 
 @app.get("/api/build")
@@ -1795,6 +1795,13 @@ async def fund_list(request: Request):
                 """, (fid,))
                 contributions = float(cur.fetchone()["total"])
 
+                # Position count (open lots, distinct securities)
+                cur.execute("""
+                    SELECT COUNT(DISTINCT security_id) AS n
+                      FROM tax_lots WHERE fund_id=%s AND closed_at IS NULL
+                """, (fid,))
+                position_count = cur.fetchone()["n"]
+
                 gain = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
 
@@ -1812,6 +1819,7 @@ async def fund_list(request: Request):
                     "total_gain":     round(gain, 2),
                     "gain_pct":       round(gain_pct, 2),
                     "lp_count":       lp_count,
+                    "position_count": position_count,
                 })
             return result
     finally:

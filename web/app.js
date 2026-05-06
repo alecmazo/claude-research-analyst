@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui16-20260506';
+const DGA_BUILD = 'ui17-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -2969,6 +2969,10 @@ async function loadFundList() {
             <div class="fund-summary-metric">
               <div class="fund-summary-metric-label">LPs</div>
               <div class="fund-summary-metric-value">${f.lp_count}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">POSITIONS</div>
+              <div class="fund-summary-metric-value">${f.position_count || 0}</div>
             </div>
             <div class="fund-summary-metric">
               <div class="fund-summary-metric-label">ECONOMICS</div>
