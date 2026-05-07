@@ -3221,3 +3221,140 @@ body {
   outline: none;
 }
 .fund-import-input:focus { border-color: #c9a84c; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK THEME — full app matches mobile's navy/dark-card palette
+   Mobile reference: screen=#0A1628 / branchBar=#060f1e / cards=#0e1d38 /
+   inputs=#081526 / borders=#1e3a5a / text-primary=#c0cfe0 / text-sec=#6a8aaa
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Page */
+html, body { background: #060f1e; color: #c0cfe0; }
+
+/* Cards */
+.card {
+  background: #0e1d38;
+  border: 1px solid rgba(201,168,76,0.15);
+  box-shadow: 0 2px 16px rgba(0,0,0,0.4);
+}
+
+/* Generic text helpers */
+.label          { color: #4a6080; }
+.hint           { color: #6a8aaa; }
+.empty          { color: #3a5070; }
+.chevron        { color: #3a5070; }
+.badge          { background: #122a50; color: #6a8aaa; }
+.badge.gold     { background: #c9a84c; color: #0a1628; }
+
+/* Settings / About text */
+.page-title     { color: #e0d8c8; }
+.server-info    { color: #8090a8; }
+.server-info strong { color: #c0cfe0; }
+.about-line     { color: #8090a8; }
+.version-info   { color: #8090a8; }
+.version-info strong { color: #c0cfe0; }
+
+/* Reports list */
+.reports-table         { background: #0e1d38; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+.reports-col-header    { border-bottom-color: rgba(255,255,255,0.05); color: #3a5070; }
+.report-row            { border-top-color: rgba(255,255,255,0.04); }
+.report-row:hover      { background: rgba(201,168,76,0.05); }
+.report-row:active     { background: rgba(201,168,76,0.09); }
+.rr-ticker             { color: #d8d0c0; }
+.rr-price              { color: #c0cfe0; }
+.rr-target             { color: #8090a8; }
+.rr-chev               { color: #2a4060; }
+.rr-date               { color: #3a5070; }
+.rr-price-missing      { color: #2a4060; }
+.rr-target-missing     { color: #2a4060; }
+
+/* Main input */
+#ticker-input {
+  background: #081526;
+  border-color: #1e3a5a;
+  color: #e8e0d0;
+}
+#ticker-input:focus { border-color: #c9a84c; }
+#ticker-input::placeholder { color: #3a5070; }
+
+/* Secondary button */
+.btn-secondary              { color: #c9a84c; border-color: rgba(201,168,76,0.35); }
+.btn-secondary:hover        { background: rgba(201,168,76,0.08); color: #f0d080; box-shadow: none; }
+.btn-secondary:disabled     { opacity: 0.4; }
+
+/* Analysis / steps */
+.analysis-title             { color: #e0d8c8; }
+.analysis-subtitle          { color: #6a8aaa; }
+.steps li                   { border-bottom-color: rgba(255,255,255,0.05); color: #6a8aaa; }
+.steps li.active            { color: #c0cfe0; }
+.steps li.done              { color: #9aa8b8; }
+
+/* Progress bar (in-flight rebalance) */
+.ppt-bar                    { background: #1e3a5a; }
+.ppt-label                  { color: #c0cfe0; }
+.ppt-counter                { color: #5a7090; }
+.ppt-tallies                { color: #3a5070; }
+
+/* Result / error boxes */
+.result-box                 { background: #091c34; }
+.result-box .row            { color: #9aacbf; }
+.result-box .row strong     { color: #d8d0c0; }
+.error-box {
+  background: rgba(239,68,68,0.10);
+  border: 1px solid rgba(239,68,68,0.28);
+  color: #f87171;
+}
+
+/* Report viewer */
+.generated-at {
+  background: #091c34;
+  border-bottom-color: rgba(255,255,255,0.05);
+  color: #3a5070;
+}
+.report-content              { color: #c0cfe0; }
+.report-content h1           { color: #e8e0d0; }
+.report-content h2           { color: #e0d8c8; }
+.report-content h3           { color: #b0bdd0; }
+.report-content strong       { color: #e0d8c8; }
+.report-content table {
+  background: #091c34;
+  border-color: #1e3a5a;
+}
+.report-content table td {
+  border-top-color: rgba(255,255,255,0.05);
+  color: #a0b0c8;
+}
+.report-content table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.report-content blockquote   { background: rgba(201,168,76,0.08); }
+.report-content code         { background: #1a3050; color: #c9a84c; }
+.report-content hr           { border-top-color: rgba(255,255,255,0.06); }
+
+/* Portfolio / file inputs */
+.file-input {
+  background: #081526;
+  border-color: #1e3a5a;
+  color: #8090a8;
+}
+.file-info { color: #6a8aaa; }
+.strategy-option {
+  border-color: #1e3a5a;
+  background: #081526;
+}
+.strategy-title   { color: #c0cfe0; }
+.strategy-desc    { color: #6a8aaa; }
+.portfolio-status { color: #c0cfe0; }
+.strategy-result  { background: #091c34; border-color: #1e3a5a; }
+.strategy-result.primary { background: rgba(201,168,76,0.07); }
+.strategy-result-title   { color: #c0cfe0; }
+.strategy-result-count   { color: #4a6080; }
+
+/* YTD / history */
+.history-upload-status { color: #6a8aaa; }
+.ytd-snap-row { border-bottom-color: rgba(255,255,255,0.05); }
+.ytd-snap-row:hover { background: rgba(201,168,76,0.05); }
+.ytd-snap-date { color: #8090a8; }
+.ytd-snap-meta { color: #4a6080; }
+.ytd-snap-return { color: #8090a8; }
+.ytd-stat { background: #091c34; }
+.ytd-stat-label { color: #4a6080; }
+.ytd-stat-val   { color: #c0cfe0; }

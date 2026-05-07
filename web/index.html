@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui18-20260506';
+    var EXPECTED = 'ui19-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui22">
+  <link rel="stylesheet" href="/app/style.css?v=ui23">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -614,11 +614,12 @@
         <div class="fund-card-loading">—</div>
       </div>
 
-      <!-- Activity -->
-      <div class="fund-section-row">
-        <div class="label section-label">RECENT ACTIVITY</div>
+      <!-- Activity (collapsible) -->
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;" onclick="toggleFundActivity()" id="fund-activity-header">
+        <div class="label section-label" style="margin:0;">RECENT ACTIVITY</div>
+        <span id="fund-activity-chevron" style="color:#4a6080; font-size:14px; transition:transform 0.2s; padding-right:4px;">▾</span>
       </div>
-      <div id="fund-activity-wrap" class="fund-table-wrap">
+      <div id="fund-activity-wrap" class="fund-table-wrap" style="display:none;">
         <div class="fund-card-loading">—</div>
       </div>
 
@@ -810,6 +811,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui19"></script>
+<script src="/app/app.js?v=ui20"></script>
 </body>
 </html>

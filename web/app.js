@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui18-20260506';
+const DGA_BUILD = 'ui19-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -2791,6 +2791,7 @@ function showFundListView() {
 // Show the detail view for a specific fund
 function showFundDetailView(fundId, fundName) {
   _activeFundId = fundId;
+  _activityCollapsed = true;   // reset to collapsed for each fund
   _fundLoaded   = false;
   const listEl   = document.getElementById('fund-list-view');
   const detailEl = document.getElementById('fund-detail-view');
@@ -3182,6 +3183,16 @@ function renderFundPositions(positions) {
       </thead>
       <tbody>${rows}${footer}</tbody>
     </table>`;
+}
+
+// ── Collapsible activity toggle ───────────────────────────────────────────────
+let _activityCollapsed = true;
+function toggleFundActivity() {
+  _activityCollapsed = !_activityCollapsed;
+  const wrap = document.getElementById('fund-activity-wrap');
+  const chev = document.getElementById('fund-activity-chevron');
+  if (wrap) wrap.style.display = _activityCollapsed ? 'none' : 'block';
+  if (chev) chev.style.transform = _activityCollapsed ? '' : 'rotate(180deg)';
 }
 
 function renderFundActivity(activity) {

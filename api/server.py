@@ -243,7 +243,7 @@ def _parse_fidelity_csv(content: str) -> list:
     return positions
 
 
-def _parse_captable(content: bytes, filename: str) -> list:
+def _parse_captable(content: bytes, filename: str) -> tuple:
     """Parse a cap-table CSV or XLSX.
 
     Accepted column layouts (case-insensitive):
@@ -395,7 +395,50 @@ def _parse_captable(content: bytes, filename: str) -> list:
                 'contribution_year': None,
             })
 
-    return out
+    # ── Scan remaining rows for economics (col C = index 2) ──────────────────
+    # After the last LP data row (data_start + len(out) ish) look for rows
+    # where column A/B contains a fee/carry/hurdle label and column C contains
+    # a percentage value.  Handles both "20%" and "0.20" formats.
+    economics = {}
+
+    def _parse_pct(s):
+        """Return a fraction 0–1 from '20%' or '0.20' or '20', or None."""
+        s = str(s or '').replace('%', '').replace('$', '').replace(',', '').strip()
+        try:
+            v = float(s)
+        except (ValueError, TypeError):
+            return None
+        # If value looks like a whole-number percentage (e.g. 20 → 0.20), convert.
+        # We treat values > 1 as already-in-percent form.
+        return v / 100 if v > 1 else v
+
+    econ_keywords = {
+        'mgmt_fee_pct':  ('management fee', 'mgmt fee', 'management', 'mgmt', 'annual fee'),
+        'carry_pct':     ('carry', 'carried interest', 'performance fee', 'incentive fee',
+                          'performance allocation'),
+        'hurdle_pct':    ('hurdle', 'preferred return', 'pref return', 'preferred',
+                          'hurdle rate', 'pref'),
+    }
+
+    # scan ALL rows — look for any row where col C looks like a pct
+    # and the label (col A or B) matches a known keyword
+    for row in raw[data_start:]:
+        if len(row) < 3:
+            continue
+        label_text = ' '.join(str(c).lower() for c in row[:3] if c)
+        col_c_val  = row[2].strip() if len(row) > 2 else ''
+
+        pct = _parse_pct(col_c_val)
+        if pct is None or pct <= 0 or pct >= 1:
+            continue  # only accept 0 < pct < 1
+
+        for key, kws in econ_keywords.items():
+            if key not in economics:  # first match wins
+                if any(kw in label_text for kw in kws):
+                    economics[key] = round(pct, 6)
+                    break
+
+    return out, economics
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -734,7 +777,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui18-20260506"
+WEB_BUILD_VERSION = "ui19-20260506"
 
 
 @app.get("/api/build")
@@ -2620,7 +2663,7 @@ async def fund_import_captable(
     """
     _require_fund_token(request)
     raw  = await file.read()
-    rows = _parse_captable(raw, file.filename or '')
+    rows, economics = _parse_captable(raw, file.filename or '')
     if not rows:
         raise HTTPException(400, "No valid LP rows found in file. "
             "Expected a column containing 'LP Name' and contribution amounts "
@@ -2730,17 +2773,49 @@ async def fund_import_captable(
 
                 imported += 1
 
+            # ── Apply fund economics extracted from the cap table ─────────────
+            econ_applied = {}
+            if economics:
+                update_parts = []
+                update_vals  = []
+                for col, key in [
+                    ("mgmt_fee_pct", "mgmt_fee_pct"),
+                    ("carry_pct",    "carry_pct"),
+                    ("hurdle_pct",   "hurdle_pct"),
+                ]:
+                    if key in economics:
+                        update_parts.append(f"{col} = %s")
+                        update_vals.append(economics[key])
+                        econ_applied[key] = economics[key]
+                if update_parts:
+                    update_vals.append(fid)
+                    cur.execute(
+                        f"UPDATE funds SET {', '.join(update_parts)} WHERE id = %s",
+                        update_vals,
+                    )
+
         conn.commit()
         year_note = ""
         contrib_years = [r["contribution_year"] for r in rows if r.get("contribution_year")]
         if contrib_years:
             year_note = f" (contributions from {min(contrib_years)}–{max(contrib_years)})"
-        return {
+        resp: dict = {
             "fund_id":      fid,
             "imported":     imported,
             "lps_imported": imported,
             "message":      f"Imported {imported} LP records{year_note}.",
         }
+        if econ_applied:
+            resp["economics_applied"] = econ_applied
+            parts = []
+            if "mgmt_fee_pct" in econ_applied:
+                parts.append(f"mgmt fee {econ_applied['mgmt_fee_pct']*100:.2f}%")
+            if "carry_pct" in econ_applied:
+                parts.append(f"carry {econ_applied['carry_pct']*100:.0f}%")
+            if "hurdle_pct" in econ_applied:
+                parts.append(f"hurdle {econ_applied['hurdle_pct']*100:.0f}%")
+            resp["message"] += f" Fund economics updated: {', '.join(parts)}."
+        return resp
     finally:
         conn.close()
 
