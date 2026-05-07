@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui22-20260506';
+const DGA_BUILD = 'ui23-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -2956,7 +2956,9 @@ async function loadFundList() {
         const statusLbl  = (f.status || 'active').toUpperCase();
         const econLabel  = `${(f.mgmt_fee_pct * 100).toFixed(0)} &amp; ${(f.carry_pct * 100).toFixed(0)}`;
         return `
-        <div class="fund-summary-card" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}">
+        <div class="fund-summary-card" style="position:relative;" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}">
+          <button class="fund-delete-btn" title="Delete fund" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}"
+                  onclick="event.stopPropagation(); confirmDeleteFund('${f.id}', '${escHtml(f.name)}')">✕</button>
           <div class="fund-summary-header">
             <div>
               <div class="fund-summary-name">${escHtml(f.name)}</div>
@@ -3410,8 +3412,7 @@ async function handleCaptableUpload(input) {
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
 
-    const n = body.imported || 0;
-    statusEl.textContent = `✓ Imported ${n} LP records`;
+    statusEl.textContent = `✓ ${body.message || `Imported ${body.imported || 0} LP records`}`;
     statusEl.className = 'fund-import-status fund-import-status-ok';
     _fundLoaded = false;
     loadFund();
@@ -3457,6 +3458,63 @@ async function handleAnnualNavUpload(input) {
     statusEl.className = 'fund-import-status fund-import-status-err';
   }
   input.value = '';
+}
+
+// ── Delete Fund ───────────────────────────────────────────────────────────────
+async function confirmDeleteFund(fundId, fundName) {
+  const ok = window.confirm(
+    `Delete "${fundName}"?\n\nThis will permanently erase the fund and ALL its data — LPs, positions, transactions, and waterfall history.\n\nThis action CANNOT be undone. Continue?`
+  );
+  if (!ok) return;
+  try {
+    const r = await fetch(
+      `${API_BASE}/api/fund/admin/delete?fund_id=${encodeURIComponent(fundId)}`,
+      { method: 'DELETE',
+        headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() } }
+    );
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    loadFundList();
+  } catch (e) {
+    alert(`Delete failed: ${e.message}`);
+  }
+}
+
+// ── Export Fund to Excel ───────────────────────────────────────────────────────
+async function exportFundExcel() {
+  const statusEl = document.getElementById('fund-export-status');
+  if (statusEl) {
+    statusEl.textContent = '⏳ Generating Excel file…';
+    statusEl.className = 'fund-import-status fund-import-status-loading';
+  }
+  try {
+    const qs = _activeFundId ? `?fund_id=${encodeURIComponent(_activeFundId)}` : '';
+    const r = await fetch(`${API_BASE}/api/fund/export-excel${qs}`, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${r.status}`);
+    }
+    // Trigger browser download
+    const blob = await r.blob();
+    const disp  = r.headers.get('content-disposition') || '';
+    const match = disp.match(/filename="([^"]+)"/);
+    const fname = match ? match[1] : 'Fund_Export.xlsx';
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    a.href = url; a.download = fname; a.click();
+    URL.revokeObjectURL(url);
+    if (statusEl) {
+      statusEl.textContent = `✓ Downloaded ${fname}`;
+      statusEl.className = 'fund-import-status fund-import-status-ok';
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = `✗ Export failed: ${e.message}`;
+      statusEl.className = 'fund-import-status fund-import-status-err';
+    }
+  }
 }
 
 // ── Create New Fund ───────────────────────────────────────────────────────────

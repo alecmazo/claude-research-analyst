@@ -3251,3 +3251,76 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 #view-fund .btn-secondary      { color: #c9a84c; border-color: rgba(201,168,76,0.35); }
 #view-fund .btn-secondary:hover { background: rgba(201,168,76,0.08); color: #f0d080; box-shadow: none; }
 #view-fund .btn-secondary:disabled { opacity: 0.4; }
+
+/* ── My Portfolio tab — strategy result cards & pills ─────────────────── */
+#view-fund .strategy-result {
+  background: #0d1f38;
+  border-color: rgba(255,255,255,0.07);
+}
+#view-fund .strategy-result.primary {
+  background: rgba(201,168,76,0.07);
+  border-color: rgba(201,168,76,0.28);
+}
+#view-fund .strategy-result-title { color: #e0d8c8; }
+#view-fund .strategy-result-count { color: #3a5070; }
+#view-fund .pill {
+  background: #081526;
+  border-color: rgba(255,255,255,0.09);
+  color: #c0cfe0;
+}
+#view-fund .pill strong { color: #c9a84c; }
+
+/* ── My Portfolio tab — YTD / history ─────────────────────────────────── */
+#view-fund .ytd-snap-row           { border-bottom-color: rgba(255,255,255,0.05); }
+#view-fund .ytd-snap-row:hover     { background: rgba(201,168,76,0.05); }
+#view-fund .ytd-snap-date          { color: #8090a8; }
+#view-fund .ytd-snap-meta          { color: #4a6080; }
+#view-fund .ytd-snap-return        { color: #8090a8; }
+#view-fund .ytd-stat               { background: #091c34; }
+#view-fund .ytd-stat-label         { color: #4a6080; }
+#view-fund .ytd-stat-val           { color: #c0cfe0; }
+#view-fund .history-upload-status  { color: #6a8aaa; }
+
+/* ── My Portfolio tab — file inputs, status, results ─────────────────── */
+#view-fund .file-input  { background: #081526; border-color: #1e3a5a; color: #8090a8; }
+#view-fund .file-info   { color: #6a8aaa; }
+#view-fund .portfolio-status { color: #c0cfe0; }
+#view-fund .result-box  { background: #091c34; }
+#view-fund .result-box .row        { color: #9aacbf; }
+#view-fund .result-box .row strong { color: #d8d0c0; }
+#view-fund .error-box {
+  background: rgba(239,68,68,0.10);
+  border: 1px solid rgba(239,68,68,0.28);
+  color: #f87171;
+}
+#view-fund .ppt-bar                { background: #1e3a5a; }
+#view-fund .ppt-label              { color: #c0cfe0; }
+#view-fund .ppt-counter            { color: #5a7090; }
+#view-fund .last-portfolio-date    { color: #6a8aaa; }
+
+/* ── Fund list — delete X button ─────────────────────────────────────── */
+.fund-delete-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220,60,60,0.15);
+  color: rgba(220,80,80,0.7);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+  z-index: 2;
+}
+.fund-delete-btn:hover {
+  background: rgba(220,60,60,0.4);
+  color: #ff6060;
+}

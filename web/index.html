@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui22-20260506';
+    var EXPECTED = 'ui23-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui25">
+  <link rel="stylesheet" href="/app/style.css?v=ui26">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -595,7 +595,7 @@
       <!-- LP Table -->
       <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
         <div class="label section-label">LIMITED PARTNERS</div>
-        <button class="fund-import-btn" onclick="triggerCaptableUpload()">↑ Import Cap Table</button>
+        <button class="fund-import-btn" onclick="triggerCaptableUpload()">↑ Import Cap Table &amp; Annual NAV</button>
       </div>
       <input type="file" id="captable-file-input" accept=".csv,.xlsx,.xls" style="display:none;" onchange="handleCaptableUpload(this)">
       <div id="captable-import-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
@@ -626,13 +626,17 @@
       <!-- GP Waterfall -->
       <div class="fund-section-row" style="margin-top:24px;">
         <div class="label section-label">GP WATERFALL &amp; CARRY</div>
-        <button class="fund-import-btn" onclick="triggerAnnualNavUpload()">↑ Import Annual NAV</button>
-        <input id="annual-nav-file-input" type="file" accept=".csv,.xlsx,.xls"
-               style="display:none;" onchange="handleAnnualNavUpload(this)">
       </div>
-      <div id="fund-annual-nav-status" class="fund-import-status" style="margin:4px 0 8px;"></div>
       <div id="fund-waterfall-wrap" class="fund-table-wrap">
         <div class="fund-card-loading">—</div>
+      </div>
+
+      <!-- Export -->
+      <div style="margin-top:28px; padding-bottom:12px;">
+        <button class="fund-lock-btn" style="width:100%; font-size:13px;" onclick="exportFundExcel()">
+          ⬇ Export Fund Data to Excel
+        </button>
+        <div id="fund-export-status" class="fund-import-status" style="margin-top:6px;"></div>
       </div>
 
     </div><!-- /fund-detail-view -->
@@ -815,6 +819,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui23"></script>
+<script src="/app/app.js?v=ui24"></script>
 </body>
 </html>

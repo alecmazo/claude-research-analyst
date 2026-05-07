@@ -277,7 +277,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
         raw  = [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text))]
 
     if not raw:
-        return [], {}
+        return [], {}, None
 
     import re as _re
 
@@ -287,11 +287,27 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
         except (ValueError, TypeError):
             return None
 
+    # ── Global scan: "Fund Established | year" (any row, any layout) ─────────
+    fund_established_year = None
+    for _row in raw:
+        if len(_row) < 2:
+            continue
+        _lbl = str(_row[0]).lower().strip()
+        if 'fund established' in _lbl or ('established' in _lbl and 'fund' in _lbl):
+            try:
+                _yr = int(float(str(_row[1]).replace(',', '').strip()))
+                if 2000 <= _yr <= 2099:
+                    fund_established_year = _yr
+                    break
+            except (ValueError, TypeError):
+                pass
+
     # ── Layout C: transposed key-value (single LP, labels in col A, values in col B) ──
     # Detects files like:
     #   Row N:   "LP Name"              | "EM"
     #   Row N+1: "initial contribution" | "$1,400,000"
     #   Row N+2: "Economics"            | "0/25, 5% hurdle"
+    #   Row N+3: "Fund Established"     | "2016"
     for i, row in enumerate(raw):
         if len(row) < 2:
             continue
@@ -317,30 +333,59 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
             continue
 
         # ── Parse Layout C ────────────────────────────────────────────────────
-        lp_name    = b
-        commitment = None
+        # LP names: scan horizontally from col B onwards until an empty cell.
+        # "LP Name | partner1 | partner2 | partner3"  → 3 LPs
+        lp_names = []
+        for ci in range(1, len(row)):
+            nm = str(row[ci]).strip()
+            if not nm:
+                break       # stop at first empty cell
+            lp_names.append(nm)
+
+        # Per-LP contributions live in the NEXT KEY-VALUE row whose label
+        # contains "contribution"/"committed"/"initial".  If values are in
+        # matching columns they map 1:1; a single value applies to all LPs.
         eff_date   = str(datetime.utcnow().date())
         econ_str   = ''
+        lp_amts    = {}   # col_index → amount
         for row2 in raw[i + 1:]:
             if not row2 or not str(row2[0]).strip():
                 continue
             lbl = str(row2[0]).lower().strip()
-            val = str(row2[1]).strip() if len(row2) > 1 else ''
-            if any(kw in lbl for kw in ('contribution', 'committed', 'initial')) and commitment is None:
-                v = _parse_money_inner(val)
-                if v and v > 0:
-                    commitment = v
+            if any(kw in lbl for kw in ('contribution', 'committed', 'initial', 'capital commit')):
+                # Collect amounts from each LP column (col 1…len(lp_names))
+                for ci, _nm in enumerate(lp_names, 1):
+                    raw_val = row2[ci] if ci < len(row2) else ''
+                    v = _parse_money_inner(raw_val)
+                    if v and v > 0:
+                        lp_amts[ci] = v
+                # If only one amount found and multiple LPs, apply to LP at col 1
+                if not lp_amts:
+                    # Try any cell in the row
+                    for ci2 in range(1, len(row2)):
+                        v = _parse_money_inner(row2[ci2])
+                        if v and v > 0:
+                            lp_amts[1] = v
+                            break
             elif any(kw in lbl for kw in ('economics', 'econ', 'fee structure', 'terms')):
-                econ_str = val
-            elif any(kw in lbl for kw in ('date', 'effective', 'inception')) and val:
-                eff_date = val
+                econ_str = str(row2[1]).strip() if len(row2) > 1 else ''
+            elif any(kw in lbl for kw in ('date', 'effective', 'inception')) and len(row2) > 1:
+                raw_date = str(row2[1]).strip()
+                if raw_date:
+                    # Normalize bare year → YYYY-01-01
+                    if _re.fullmatch(r'\d{4}', raw_date):
+                        raw_date = raw_date + '-01-01'
+                    eff_date = raw_date
 
         lp_rows_c = []
-        if lp_name and commitment and commitment > 0:
+        for ci, nm in enumerate(lp_names, 1):
+            amt = lp_amts.get(ci)
+            if not amt or amt <= 0:
+                continue
             lp_rows_c.append({
-                'legal_name':        lp_name,
+                'legal_name':        nm,
                 'entity_type':       'individual',
-                'commitment':        commitment,
+                'commitment':        amt,
                 'effective_date':    eff_date,
                 'contribution_year': None,
             })
@@ -356,7 +401,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
             if hm:
                 economics_c['hurdle_pct'] = round(float(hm.group(1)) / 100, 6)
 
-        return lp_rows_c, economics_c
+        return lp_rows_c, economics_c, fund_established_year
 
     # ── Find header row ───────────────────────────────────────────────────────
     header = []
@@ -517,7 +562,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
                     economics[key] = round(pct, 6)
                     break
 
-    return out, economics
+    return out, economics, fund_established_year
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -856,7 +901,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui22-20260506"
+WEB_BUILD_VERSION = "ui23-20260506"
 
 
 @app.get("/api/build")
@@ -2742,11 +2787,13 @@ async def fund_import_captable(
     """
     _require_fund_token(request)
     raw  = await file.read()
-    rows, economics = _parse_captable(raw, file.filename or '')
+    rows, economics, fund_estab_year = _parse_captable(raw, file.filename or '')
     if not rows:
         raise HTTPException(400, "No valid LP rows found in file. "
             "Expected a column containing 'LP Name' and contribution amounts "
             "(either a 'Commitment Amount' column or year columns like '2024', '2025').")
+    # Also parse annual NAV rows from the same file (waterfall data)
+    nav_rows = _parse_annual_nav(raw, file.filename or '')
 
     conn = _fund_conn()
     try:
@@ -2852,26 +2899,54 @@ async def fund_import_captable(
 
                 imported += 1
 
-            # ── Apply fund economics extracted from the cap table ─────────────
+            # ── Apply fund economics + Fund Established date ─────────────────
             econ_applied = {}
-            if economics:
-                update_parts = []
-                update_vals  = []
-                for col, key in [
-                    ("mgmt_fee_pct", "mgmt_fee_pct"),
-                    ("carry_pct",    "carry_pct"),
-                    ("hurdle_pct",   "hurdle_pct"),
-                ]:
-                    if key in economics:
-                        update_parts.append(f"{col} = %s")
-                        update_vals.append(economics[key])
-                        econ_applied[key] = economics[key]
-                if update_parts:
-                    update_vals.append(fid)
-                    cur.execute(
-                        f"UPDATE funds SET {', '.join(update_parts)} WHERE id = %s",
-                        update_vals,
-                    )
+            fund_updates = []
+            fund_vals    = []
+            for col, key in [
+                ("mgmt_fee_pct", "mgmt_fee_pct"),
+                ("carry_pct",    "carry_pct"),
+                ("hurdle_pct",   "hurdle_pct"),
+            ]:
+                if key in economics:
+                    fund_updates.append(f"{col} = %s")
+                    fund_vals.append(economics[key])
+                    econ_applied[key] = economics[key]
+            if fund_estab_year:
+                fund_updates.append("inception_date = %s")
+                fund_vals.append(f"{fund_estab_year}-01-01")
+            if fund_updates:
+                fund_vals.append(fid)
+                cur.execute(
+                    f"UPDATE funds SET {', '.join(fund_updates)} WHERE id = %s",
+                    fund_vals,
+                )
+
+            # ── Import annual NAV rows (waterfall) ───────────────────────────
+            nav_imported = 0
+            for r in nav_rows:
+                cur.execute("""
+                    INSERT INTO fund_annual_snapshots
+                        (fund_id, year, start_nav, end_nav, contributions,
+                         hurdle_amount, gross_profit, carry_earned,
+                         carry_paid, carry_rolled, gp_equity_end)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (fund_id, year) DO UPDATE
+                        SET start_nav      = EXCLUDED.start_nav,
+                            end_nav        = EXCLUDED.end_nav,
+                            contributions  = EXCLUDED.contributions,
+                            hurdle_amount  = EXCLUDED.hurdle_amount,
+                            gross_profit   = EXCLUDED.gross_profit,
+                            carry_earned   = EXCLUDED.carry_earned,
+                            carry_paid     = EXCLUDED.carry_paid,
+                            carry_rolled   = EXCLUDED.carry_rolled,
+                            gp_equity_end  = EXCLUDED.gp_equity_end,
+                            updated_at     = NOW()
+                """, (fid, r['year'], r['start_nav'], r['end_nav'],
+                      r['contributions'], r['hurdle_amount'], r['gross_profit'],
+                      r['carry_earned'], r['carry_paid'], r['carry_rolled'],
+                      r['gp_equity_end']))
+                nav_imported += 1
 
         conn.commit()
         year_note = ""
@@ -2882,8 +2957,13 @@ async def fund_import_captable(
             "fund_id":      fid,
             "imported":     imported,
             "lps_imported": imported,
-            "message":      f"Imported {imported} LP records{year_note}.",
+            "nav_rows_imported": nav_imported,
+            "message":      f"Imported {imported} LP record(s){year_note}.",
         }
+        if nav_imported:
+            resp["message"] += f" {nav_imported} annual NAV rows loaded."
+        if fund_estab_year:
+            resp["message"] += f" Fund established {fund_estab_year}."
         if econ_applied:
             resp["economics_applied"] = econ_applied
             parts = []
@@ -3090,6 +3170,453 @@ async def fund_import_annual_nav(
         }
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Fund administration — delete
+# ---------------------------------------------------------------------------
+
+@app.delete("/api/fund/admin/delete")
+async def fund_admin_delete(request: Request, fund_id: str):
+    """Permanently delete a fund and all its associated data (cascade)."""
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("SELECT name FROM funds WHERE id = %s", (fid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Fund not found")
+            name = row["name"]
+            cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
+        conn.commit()
+        return {"deleted": fid, "name": name}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Fund export — Excel workbook
+# ---------------------------------------------------------------------------
+
+@app.get("/api/fund/export-excel")
+async def fund_export_excel(request: Request, fund_id: str = None):
+    """Generate a comprehensive Excel workbook for the fund and return it
+    as a downloadable .xlsx file.
+
+    Sheets:
+      1. Fund Summary    — key metrics & economics overview
+      2. Portfolio       — all positions with live prices & P/L
+      3. Limited Partners — LP commitments & current values
+      4. Annual Waterfall — year-by-year hurdle / carry / GP equity
+      5. Transactions    — recent activity log
+    """
+    _require_fund_token(request)
+    if not _OPENPYXL_OK:
+        raise HTTPException(400, "openpyxl not installed on this server")
+
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from fastapi.responses import StreamingResponse
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+
+            # ── Fund metadata ─────────────────────────────────────────────────
+            cur.execute("""
+                SELECT name, short_name, inception_date, status,
+                       mgmt_fee_pct, carry_pct, hurdle_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund = dict(cur.fetchone())
+
+            # ── Market NAV ────────────────────────────────────────────────────
+            nav = _fund_market_nav(cur, fid)
+
+            # ── Positions ─────────────────────────────────────────────────────
+            cur.execute("""
+                SELECT s.symbol, s.name AS sec_name, s.asset_class,
+                       SUM(tl.quantity) AS qty,
+                       SUM(tl.quantity * tl.cost_basis_per_unit)
+                         / NULLIF(SUM(tl.quantity), 0)  AS avg_cost,
+                       SUM(tl.quantity * tl.cost_basis_per_unit) AS cost_basis
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.symbol, s.name, s.asset_class
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, (fid,))
+            positions = [dict(r) for r in cur.fetchall()]
+            symbols   = [p['symbol'] for p in positions if p['symbol']]
+            prices    = _fetch_prices(symbols)
+
+            # ── LPs ───────────────────────────────────────────────────────────
+            cur.execute("""
+                SELECT l.legal_name, l.entity_type,
+                       COALESCE(SUM(c.commitment_amount), 0) AS commitment
+                  FROM lps l
+                  LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
+                 WHERE l.fund_id = %s AND l.status = 'active'
+                 GROUP BY l.id, l.legal_name, l.entity_type
+                HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
+                 ORDER BY commitment DESC
+            """, (fid,))
+            lps = [dict(r) for r in cur.fetchall()]
+            total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
+
+            # ── Annual snapshots ──────────────────────────────────────────────
+            try:
+                cur.execute("""
+                    SELECT year, start_nav, end_nav, contributions,
+                           hurdle_amount, gross_profit, carry_earned,
+                           carry_paid, carry_rolled, gp_equity_end
+                      FROM fund_annual_snapshots
+                     WHERE fund_id = %s ORDER BY year ASC
+                """, (fid,))
+                snapshots = [dict(r) for r in cur.fetchall()]
+            except Exception:
+                snapshots = []
+
+            # ── Recent transactions ───────────────────────────────────────────
+            cur.execute("""
+                SELECT t.effective_date, t.category, t.description,
+                       ROUND(SUM(CASE WHEN tl.debit  > 0 THEN tl.debit  ELSE 0 END), 2) AS total_debit,
+                       ROUND(SUM(CASE WHEN tl.credit > 0 THEN tl.credit ELSE 0 END), 2) AS total_credit
+                  FROM transactions t
+                  JOIN transaction_lines tl ON tl.transaction_id = t.id
+                 WHERE t.fund_id = %s
+                 GROUP BY t.id, t.effective_date, t.category, t.description
+                 ORDER BY t.effective_date DESC
+                 LIMIT 200
+            """, (fid,))
+            txns = [dict(r) for r in cur.fetchall()]
+
+    finally:
+        conn.close()
+
+    # ── Build workbook ────────────────────────────────────────────────────────
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)   # remove default sheet
+
+    # ── Style helpers ─────────────────────────────────────────────────────────
+    NAVY  = '0E1D38'
+    GOLD  = 'C9A84C'
+    LGRAY = 'F4F6F9'
+    WHITE = 'FFFFFF'
+    DKGRAY= '444444'
+    GREEN = '1A7F40'
+    RED   = 'CC3333'
+
+    thin = Side(style='thin', color='CCCCCC')
+    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def fill(hex_color):
+        return PatternFill('solid', fgColor=hex_color)
+
+    def hdr_font(size=10, color=GOLD):
+        return Font(bold=True, color=color, size=size, name='Calibri')
+
+    def body_font(size=10, bold=False, color=DKGRAY):
+        return Font(bold=bold, size=size, color=color, name='Calibri')
+
+    def center():
+        return Alignment(horizontal='center', vertical='center')
+
+    def right():
+        return Alignment(horizontal='right', vertical='center')
+
+    def apply_row(ws, row_idx, values, formats=None, bg=None, bold=False,
+                  font_color=DKGRAY):
+        for ci, val in enumerate(values, 1):
+            cell = ws.cell(row=row_idx, column=ci, value=val)
+            cell.font   = Font(bold=bold, size=10, color=font_color, name='Calibri')
+            cell.border = bdr
+            if bg:
+                cell.fill = fill(bg)
+            if formats and ci - 1 < len(formats) and formats[ci - 1]:
+                cell.number_format = formats[ci - 1]
+                cell.alignment = right()
+            else:
+                cell.alignment = Alignment(vertical='center', wrap_text=False)
+
+    def write_header(ws, row_idx, cols, bg=NAVY):
+        for ci, col in enumerate(cols, 1):
+            cell = ws.cell(row=row_idx, column=ci, value=col)
+            cell.font      = hdr_font()
+            cell.fill      = fill(bg)
+            cell.border    = bdr
+            cell.alignment = center()
+        ws.row_dimensions[row_idx].height = 18
+
+    def auto_width(ws, min_w=10, max_w=40):
+        for col in ws.columns:
+            best = min_w
+            for cell in col:
+                try:
+                    best = max(best, len(str(cell.value or '')) + 2)
+                except Exception:
+                    pass
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(best, max_w)
+
+    def section_title(ws, row_idx, text, span):
+        cell = ws.cell(row=row_idx, column=1, value=text)
+        cell.font      = Font(bold=True, size=11, color=NAVY, name='Calibri')
+        cell.fill      = fill('E8F0F8')
+        cell.border    = bdr
+        cell.alignment = Alignment(horizontal='left', vertical='center')
+        ws.merge_cells(start_row=row_idx, start_column=1,
+                       end_row=row_idx, end_column=span)
+        ws.row_dimensions[row_idx].height = 16
+
+    today_str = datetime.utcnow().strftime('%B %d, %Y')
+    FMT_USD   = '$#,##0.00'
+    FMT_USD0  = '$#,##0'
+    FMT_PCT   = '0.00%'
+    FMT_PCT1  = '0.0%'
+    FMT_NUM   = '#,##0.##'
+    FMT_DATE  = 'YYYY-MM-DD'
+
+    # ── Sheet 1: Fund Summary ─────────────────────────────────────────────────
+    ws1 = wb.create_sheet('Fund Summary')
+    ws1.sheet_view.showGridLines = False
+
+    # Big title
+    t = ws1.cell(row=1, column=1, value=fund['name'])
+    t.font = Font(bold=True, size=16, color=NAVY, name='Calibri')
+    ws1.merge_cells('A1:D1')
+    ws1.row_dimensions[1].height = 28
+
+    sub = ws1.cell(row=2, column=1, value=f'DGA Capital — Fund Report  |  As of {today_str}')
+    sub.font = Font(size=10, color='888888', name='Calibri')
+    ws1.merge_cells('A2:D2')
+
+    # Fund Information section
+    r = 4
+    section_title(ws1, r, 'FUND INFORMATION', 4); r += 1
+    rows_info = [
+        ('Fund Name',       fund['name'],          None, None),
+        ('Short Name',      fund['short_name'],     None, None),
+        ('Inception Date',  str(fund.get('inception_date', '')), None, None),
+        ('Status',          fund.get('status', '').title(), None, None),
+    ]
+    for label, val, _, __ in rows_info:
+        apply_row(ws1, r, [label, val, '', ''], bg=WHITE if r % 2 == 0 else LGRAY)
+        ws1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY, name='Calibri')
+        r += 1
+
+    # Performance section
+    r += 1
+    section_title(ws1, r, 'PERFORMANCE', 4); r += 1
+    total_gain = nav - total_committed
+    gain_pct   = (total_gain / total_committed) if total_committed else 0.0
+    perf_rows = [
+        ('Current NAV (Market Value)',  nav,             FMT_USD0),
+        ('Total LP Contributions',      total_committed, FMT_USD0),
+        ('Total Fund Gain / (Loss)',    total_gain,      FMT_USD0),
+        ('Gain % on Contributions',     gain_pct,        FMT_PCT),
+    ]
+    for i, (label, val, fmt) in enumerate(perf_rows):
+        bg = LGRAY if i % 2 == 0 else WHITE
+        apply_row(ws1, r, [label, val, '', ''],
+                  formats=[None, fmt, None, None], bg=bg)
+        ws1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY, name='Calibri')
+        vcolor = GREEN if (label == 'Total Fund Gain / (Loss)' and total_gain >= 0) else \
+                 RED   if (label == 'Total Fund Gain / (Loss)' and total_gain < 0)  else DKGRAY
+        ws1.cell(row=r, column=2).font = Font(bold=True, size=10, color=vcolor, name='Calibri')
+        r += 1
+
+    # Economics section
+    r += 1
+    section_title(ws1, r, 'FUND ECONOMICS', 4); r += 1
+    econ_rows = [
+        ('Management Fee',   float(fund.get('mgmt_fee_pct', 0)), FMT_PCT),
+        ('Carried Interest', float(fund.get('carry_pct', 0)),    FMT_PCT),
+        ('Hurdle Rate',      float(fund.get('hurdle_pct', 0)),   FMT_PCT),
+    ]
+    for i, (label, val, fmt) in enumerate(econ_rows):
+        bg = LGRAY if i % 2 == 0 else WHITE
+        apply_row(ws1, r, [label, val, '', ''],
+                  formats=[None, fmt, None, None], bg=bg)
+        ws1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY, name='Calibri')
+        r += 1
+
+    # Overview section
+    r += 1
+    section_title(ws1, r, 'PORTFOLIO OVERVIEW', 4); r += 1
+    total_cost = sum(float(p['cost_basis'] or 0) for p in positions)
+    total_mktval = sum(
+        float(p['qty'] or 0) * (prices.get(p['symbol']) or float(p['avg_cost'] or 0))
+        for p in positions
+    )
+    ov_rows = [
+        ('Number of LPs',           len(lps),           None),
+        ('Number of Positions',     len(positions),      None),
+        ('Total Cost Basis',        total_cost,          FMT_USD0),
+        ('Total Market Value',      total_mktval,        FMT_USD0),
+        ('Unrealized P/L',          total_mktval - total_cost, FMT_USD0),
+    ]
+    for i, (label, val, fmt) in enumerate(ov_rows):
+        bg = LGRAY if i % 2 == 0 else WHITE
+        fmts = [None, fmt, None, None] if fmt else None
+        apply_row(ws1, r, [label, val, '', ''], formats=fmts, bg=bg)
+        ws1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY, name='Calibri')
+        r += 1
+
+    ws1.column_dimensions['A'].width = 28
+    ws1.column_dimensions['B'].width = 22
+    ws1.column_dimensions['C'].width = 18
+    ws1.column_dimensions['D'].width = 18
+
+    # ── Sheet 2: Portfolio Positions ─────────────────────────────────────────
+    ws2 = wb.create_sheet('Portfolio Positions')
+    ws2.sheet_view.showGridLines = False
+    ws2.freeze_panes = 'A2'
+
+    pos_cols = ['Symbol', 'Security Name', 'Asset Class', 'Shares',
+                'Avg Cost', 'Cost Basis', 'Last Price', 'Market Value',
+                'Unrealized P/L', 'P/L %', 'Weight %']
+    write_header(ws2, 1, pos_cols)
+
+    total_mv   = 0.0
+    total_cb   = 0.0
+    total_unrl = 0.0
+    for i, p in enumerate(positions):
+        qty      = float(p['qty'] or 0)
+        avg_cost = float(p['avg_cost'] or 0)
+        cb       = float(p['cost_basis'] or 0)
+        last     = prices.get(p['symbol']) or avg_cost
+        mv       = qty * last
+        unrl     = mv - cb
+        pl_pct   = (unrl / cb) if cb else 0.0
+        wt_pct   = (mv / nav) if nav else 0.0
+        total_mv   += mv
+        total_cb   += cb
+        total_unrl += unrl
+        bg = WHITE if i % 2 == 0 else LGRAY
+        vals  = [p['symbol'], p['sec_name'], p['asset_class'],
+                 qty, avg_cost, cb, last, mv, unrl, pl_pct, wt_pct]
+        fmts  = [None, None, None, FMT_NUM,
+                 FMT_USD, FMT_USD0, FMT_USD, FMT_USD0,
+                 FMT_USD0, FMT_PCT1, FMT_PCT1]
+        apply_row(ws2, i + 2, vals, formats=fmts, bg=bg)
+        pl_c = ws2.cell(row=i + 2, column=9)
+        pl_c.font = Font(size=10, color=GREEN if unrl >= 0 else RED, name='Calibri')
+
+    # Totals row
+    tr = len(positions) + 2
+    totals = ['TOTAL', '', '', '', '', total_cb, '', total_mv, total_unrl, '', '']
+    apply_row(ws2, tr, totals,
+              formats=[None, None, None, None, None, FMT_USD0, None,
+                       FMT_USD0, FMT_USD0, None, None],
+              bg=NAVY, bold=True, font_color=GOLD)
+
+    auto_width(ws2)
+    ws2.column_dimensions['B'].width = 38
+
+    # ── Sheet 3: Limited Partners ─────────────────────────────────────────────
+    ws3 = wb.create_sheet('Limited Partners')
+    ws3.sheet_view.showGridLines = False
+    ws3.freeze_panes = 'A2'
+
+    lp_cols = ['LP Name', 'Entity Type', 'Commitment ($)',
+               'Current Value ($)', 'NAV Share %']
+    write_header(ws3, 1, lp_cols)
+
+    for i, lp in enumerate(lps):
+        cmt   = float(lp['commitment'])
+        share = (cmt / total_committed) if total_committed else 0.0
+        cur_v = nav * share
+        bg = WHITE if i % 2 == 0 else LGRAY
+        apply_row(ws3, i + 2,
+                  [lp['legal_name'], lp.get('entity_type', '').title(), cmt, cur_v, share],
+                  formats=[None, None, FMT_USD0, FMT_USD0, FMT_PCT],
+                  bg=bg)
+
+    if lps:
+        tr3 = len(lps) + 2
+        apply_row(ws3, tr3,
+                  ['TOTAL', '', total_committed, nav, 1.0],
+                  formats=[None, None, FMT_USD0, FMT_USD0, FMT_PCT],
+                  bg=NAVY, bold=True, font_color=GOLD)
+
+    auto_width(ws3)
+    ws3.column_dimensions['A'].width = 30
+
+    # ── Sheet 4: Annual Waterfall ─────────────────────────────────────────────
+    if snapshots:
+        ws4 = wb.create_sheet('Annual Waterfall')
+        ws4.sheet_view.showGridLines = False
+        ws4.freeze_panes = 'A2'
+
+        wf_cols = ['Year', 'Jan 1 NAV', 'Dec 31 NAV', 'Contributions',
+                   'Hurdle Amount', 'Gross Profit', 'Carry Earned',
+                   'Carry Rolled', 'GP Equity (Year End)', 'Accum GP %']
+        write_header(ws4, 1, wf_cols)
+
+        for i, s in enumerate(snapshots):
+            end_nav  = float(s['end_nav'] or 0)
+            gp_eq    = float(s['gp_equity_end'] or 0)
+            accum_pct = (gp_eq / end_nav) if end_nav else 0.0
+            bg = WHITE if i % 2 == 0 else LGRAY
+            apply_row(ws4, i + 2,
+                      [s['year'],
+                       float(s['start_nav']),   float(s['end_nav']),
+                       float(s['contributions']), float(s['hurdle_amount']),
+                       float(s['gross_profit']),  float(s['carry_earned']),
+                       float(s['carry_rolled']),  gp_eq,
+                       accum_pct],
+                      formats=[None, FMT_USD0, FMT_USD0, FMT_USD0,
+                               FMT_USD0, FMT_USD0, FMT_USD0,
+                               FMT_USD0, FMT_USD0, FMT_PCT1],
+                      bg=bg)
+            carry_c = ws4.cell(row=i + 2, column=7)
+            carry_c.font = Font(size=10, name='Calibri',
+                                color=GREEN if float(s['carry_earned']) > 0 else DKGRAY)
+
+        auto_width(ws4)
+
+    # ── Sheet 5: Transaction History ─────────────────────────────────────────
+    ws5 = wb.create_sheet('Transaction History')
+    ws5.sheet_view.showGridLines = False
+    ws5.freeze_panes = 'A2'
+
+    tx_cols = ['Date', 'Category', 'Description', 'Debit', 'Credit']
+    write_header(ws5, 1, tx_cols)
+
+    for i, t in enumerate(txns):
+        bg = WHITE if i % 2 == 0 else LGRAY
+        apply_row(ws5, i + 2,
+                  [str(t['effective_date']),
+                   str(t.get('category', '') or '').replace('_', ' ').title(),
+                   t.get('description', '') or '',
+                   float(t.get('total_debit', 0) or 0),
+                   float(t.get('total_credit', 0) or 0)],
+                  formats=[None, None, None, FMT_USD0, FMT_USD0],
+                  bg=bg)
+
+    auto_width(ws5)
+    ws5.column_dimensions['C'].width = 40
+
+    # ── Freeze, set tab colors ────────────────────────────────────────────────
+    ws1.sheet_properties.tabColor = GOLD
+    for ws in [ws2, ws3, ws5]:
+        ws.sheet_properties.tabColor = NAVY
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    safe = fund.get('short_name', 'Fund').replace('/', '-').replace('\\', '-')
+    fname = f"{safe}_Report_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
