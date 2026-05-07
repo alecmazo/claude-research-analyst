@@ -909,7 +909,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui31-20260506"
+WEB_BUILD_VERSION = "ui32-20260506"
 
 
 @app.get("/api/build")
@@ -2817,35 +2817,37 @@ async def fund_import_captable(
             cash_acct = acct_map.get("1020") or acct_map.get("1010")
             lp_cap_acct = acct_map.get("3100")  # Capital — LP
 
-            # ── Wipe existing LP rows for this fund, then reimport clean ─────
-            # Discover every table that FK-references lps.id and delete those
-            # child rows first so the DELETE FROM lps won't hit FK violations.
+            # ── Wipe existing LP + commitment rows for this fund ─────────────
+            # Delete in dependency order (children before parents) to avoid FK
+            # violations. Only touch tables that the cap-table import owns.
+            # Nullable lp_id references (transaction_lines, accounts, users)
+            # are NULLed rather than deleted so those rows are preserved.
             cur.execute("""
-                SELECT kcu.table_name, kcu.column_name
-                  FROM information_schema.table_constraints       tc
-                  JOIN information_schema.key_column_usage        kcu
-                       ON  kcu.constraint_name = tc.constraint_name
-                       AND kcu.table_schema    = tc.table_schema
-                  JOIN information_schema.referential_constraints rc
-                       ON  rc.constraint_name  = tc.constraint_name
-                       AND rc.constraint_schema = tc.table_schema
-                  JOIN information_schema.key_column_usage        ccu
-                       ON  ccu.constraint_name = rc.unique_constraint_name
-                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                   AND ccu.table_name     = 'lps'
-                   AND ccu.column_name    = 'id'
-            """)
-            fk_refs = [(r["table_name"], r["column_name"]) for r in cur.fetchall()]
-
-            cur.execute("SELECT id FROM lps WHERE fund_id = %s", (fid,))
-            existing_lp_ids = [str(r["id"]) for r in cur.fetchall()]
-            if existing_lp_ids:
-                for tbl, col in fk_refs:
-                    cur.execute(
-                        f'DELETE FROM "{tbl}" WHERE "{col}" = ANY(%s::uuid[])',
-                        (existing_lp_ids,)
-                    )
-                cur.execute("DELETE FROM lps WHERE fund_id = %s", (fid,))
+                UPDATE transaction_lines SET lp_id = NULL
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+            """, (fid,))
+            cur.execute("""
+                UPDATE accounts SET lp_id = NULL
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+            """, (fid,))
+            cur.execute("""
+                UPDATE users SET lp_id = NULL
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+            """, (fid,))
+            # Delete leaf tables with NOT NULL lp_id FK (deepest first)
+            for tbl in ("lp_statements", "carry_allocations",
+                        "mgmt_fee_allocations", "nav_snapshot_lp",
+                        "distribution_allocations", "capital_call_allocations",
+                        "lp_annual_snapshots"):
+                cur.execute(
+                    f"DELETE FROM {tbl} WHERE lp_id IN "
+                    f"(SELECT id FROM lps WHERE fund_id = %s)",
+                    (fid,)
+                )
+            # commitments has its own fund_id — delete directly
+            cur.execute("DELETE FROM commitments WHERE fund_id = %s", (fid,))
+            # Now lps has no remaining FK children — safe to delete
+            cur.execute("DELETE FROM lps WHERE fund_id = %s", (fid,))
 
             # ── Insert fresh LP rows ──────────────────────────────────────────
             imported = 0
@@ -3187,94 +3189,6 @@ async def fund_admin_delete(request: Request, fund_id: str):
             cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
         conn.commit()
         return {"deleted": fid, "name": name}
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Admin: deduplicate LP rows (one-shot repair)
-# ---------------------------------------------------------------------------
-
-@app.post("/api/fund/admin/dedup-lps")
-async def fund_admin_dedup_lps(request: Request, fund_id: str = None):
-    """Remove duplicate LP rows that share the same (fund_id, legal_name).
-
-    For each group of duplicates the newest row (highest created_at) is kept.
-    Commitments, lp_annual_snapshots, and any other FK rows are re-pointed to
-    the survivor before the duplicates are deleted.
-    """
-    _require_fund_token(request)
-    conn = _fund_conn()
-    try:
-        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            if fund_id:
-                fid = _resolve_fund_id(cur, fund_id)
-                cur.execute("""
-                    SELECT fund_id, LOWER(legal_name) AS name_key,
-                           array_agg(id ORDER BY created_at DESC) AS ids
-                      FROM lps
-                     WHERE fund_id = %s
-                     GROUP BY fund_id, LOWER(legal_name)
-                    HAVING COUNT(*) > 1
-                """, (fid,))
-            else:
-                cur.execute("""
-                    SELECT fund_id, LOWER(legal_name) AS name_key,
-                           array_agg(id ORDER BY created_at DESC) AS ids
-                      FROM lps
-                     GROUP BY fund_id, LOWER(legal_name)
-                    HAVING COUNT(*) > 1
-                """)
-
-            groups = cur.fetchall()
-            if not groups:
-                conn.commit()
-                return {"duplicates_removed": 0, "message": "No duplicate LPs found."}
-
-            # Discover every table+column that FK-references lps.id dynamically.
-            # This covers all 10+ child tables without hardcoding any.
-            cur.execute("""
-                SELECT kcu.table_name, kcu.column_name
-                  FROM information_schema.table_constraints       tc
-                  JOIN information_schema.key_column_usage        kcu
-                       ON  kcu.constraint_name = tc.constraint_name
-                       AND kcu.table_schema    = tc.table_schema
-                  JOIN information_schema.referential_constraints rc
-                       ON  rc.constraint_name  = tc.constraint_name
-                       AND rc.constraint_schema = tc.table_schema
-                  JOIN information_schema.key_column_usage        ccu
-                       ON  ccu.constraint_name = rc.unique_constraint_name
-                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                   AND ccu.table_name     = 'lps'
-                   AND ccu.column_name    = 'id'
-            """)
-            fk_refs = [(r["table_name"], r["column_name"]) for r in cur.fetchall()]
-
-            removed = 0
-            for g in groups:
-                keeper_id = str(g["ids"][0])          # newest row survives
-                dupe_ids  = [str(x) for x in g["ids"][1:]]
-
-                # Re-point every child table to the surviving LP
-                for tbl, col in fk_refs:
-                    cur.execute(
-                        f'UPDATE "{tbl}" SET "{col}" = %s WHERE "{col}" = ANY(%s::uuid[])',
-                        (keeper_id, dupe_ids)
-                    )
-
-                # Now safe to delete the duplicates
-                cur.execute(
-                    "DELETE FROM lps WHERE id = ANY(%s::uuid[])",
-                    (dupe_ids,)
-                )
-                removed += len(dupe_ids)
-
-        conn.commit()
-        return {"duplicates_removed": removed,
-                "message": f"Removed {removed} duplicate LP row(s)."}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(500, str(e))
     finally:
         conn.close()
 

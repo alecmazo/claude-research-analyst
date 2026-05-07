@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui31-20260506';
+const DGA_BUILD = 'ui32-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3513,34 +3513,6 @@ async function confirmDeleteFund(fundId, fundName) {
   }
 }
 
-// ── Deduplicate LP rows ────────────────────────────────────────────────────────
-async function dedupLPs() {
-  const statusEl = document.getElementById('captable-import-status');
-  if (statusEl) {
-    statusEl.textContent = '⏳ Removing duplicates…';
-    statusEl.className = 'fund-import-status fund-import-status-loading';
-  }
-  try {
-    const fid = _activeFundId;
-    const url = `/api/fund/admin/dedup-lps${fid ? '?fund_id=' + encodeURIComponent(fid) : ''}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() }
-    });
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.detail || 'Error');
-    if (statusEl) {
-      statusEl.textContent = j.message || `Removed ${j.duplicates_removed} duplicate(s).`;
-      statusEl.className = 'fund-import-status fund-import-status-ok';
-    }
-    if (j.duplicates_removed > 0) loadFund();   // refresh LP table
-  } catch (err) {
-    if (statusEl) {
-      statusEl.textContent = '✗ ' + err.message;
-      statusEl.className = 'fund-import-status fund-import-status-error';
-    }
-  }
-}
 
 // ── Export Fund to Excel ───────────────────────────────────────────────────────
 async function exportFundExcel() {

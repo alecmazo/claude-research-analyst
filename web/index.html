@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui31-20260506';
+    var EXPECTED = 'ui32-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui34">
+  <link rel="stylesheet" href="/app/style.css?v=ui35">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -593,12 +593,9 @@
       </div>
 
       <!-- LP Table -->
-      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
         <div class="label section-label">LIMITED PARTNERS</div>
-        <div style="display:flex; gap:6px; align-items:center;">
-          <button class="fund-import-btn" onclick="dedupLPs()" title="Remove duplicate LP rows">⊘ Dedup</button>
-          <button class="fund-import-btn" onclick="triggerCaptableUpload()">↑ Import Cap Table &amp; Annual NAV</button>
-        </div>
+        <button class="fund-import-btn" onclick="triggerCaptableUpload()">↑ Import Cap Table &amp; Annual NAV</button>
       </div>
       <input type="file" id="captable-file-input" accept=".csv,.xlsx,.xls" style="display:none;" onchange="handleCaptableUpload(this)">
       <div id="captable-import-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
@@ -820,6 +817,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui32"></script>
+<script src="/app/app.js?v=ui33"></script>
 </body>
 </html>
