@@ -901,7 +901,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui24-20260506"
+WEB_BUILD_VERSION = "ui25-20260506"
 
 
 @app.get("/api/build")
@@ -3205,6 +3205,75 @@ async def fund_admin_delete(request: Request, fund_id: str):
             cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
         conn.commit()
         return {"deleted": fid, "name": name}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Admin: deduplicate LP rows (one-shot repair)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fund/admin/dedup-lps")
+async def fund_admin_dedup_lps(request: Request, fund_id: str = None):
+    """Remove duplicate LP rows that share the same (fund_id, legal_name).
+
+    For each group of duplicates the newest row (highest created_at) is kept.
+    Commitments, lp_annual_snapshots, and any other FK rows are re-pointed to
+    the survivor before the duplicates are deleted.
+    """
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            if fund_id:
+                fid = _resolve_fund_id(cur, fund_id)
+                cur.execute("""
+                    SELECT fund_id, LOWER(legal_name) AS name_key,
+                           array_agg(id ORDER BY created_at DESC) AS ids
+                      FROM lps
+                     WHERE fund_id = %s
+                     GROUP BY fund_id, LOWER(legal_name)
+                    HAVING COUNT(*) > 1
+                """, (fid,))
+            else:
+                cur.execute("""
+                    SELECT fund_id, LOWER(legal_name) AS name_key,
+                           array_agg(id ORDER BY created_at DESC) AS ids
+                      FROM lps
+                     GROUP BY fund_id, LOWER(legal_name)
+                    HAVING COUNT(*) > 1
+                """)
+
+            groups = cur.fetchall()
+            removed = 0
+            for g in groups:
+                keeper_id  = str(g["ids"][0])          # newest row survives
+                dupe_ids   = [str(x) for x in g["ids"][1:]]
+
+                # Re-point commitments
+                cur.execute("""
+                    UPDATE commitments SET lp_id = %s
+                     WHERE lp_id = ANY(%s::uuid[])
+                """, (keeper_id, dupe_ids))
+
+                # Re-point lp_annual_snapshots (if table exists)
+                cur.execute("""
+                    UPDATE lp_annual_snapshots SET lp_id = %s
+                     WHERE lp_id = ANY(%s::uuid[])
+                """, (keeper_id, dupe_ids))
+
+                # Delete duplicate LP rows
+                cur.execute("""
+                    DELETE FROM lps WHERE id = ANY(%s::uuid[])
+                """, (dupe_ids,))
+                removed += len(dupe_ids)
+
+        conn.commit()
+        return {"duplicates_removed": removed,
+                "message": f"Removed {removed} duplicate LP row(s)."}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, str(e))
     finally:
         conn.close()
 

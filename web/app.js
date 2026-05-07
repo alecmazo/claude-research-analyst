@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui24-20260506';
+const DGA_BUILD = 'ui25-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3477,6 +3477,36 @@ async function confirmDeleteFund(fundId, fundName) {
     loadFundList();
   } catch (e) {
     alert(`Delete failed: ${e.message}`);
+  }
+}
+
+// ── Deduplicate LP rows ────────────────────────────────────────────────────────
+async function dedupLPs() {
+  const statusEl = document.getElementById('captable-import-status');
+  if (statusEl) {
+    statusEl.textContent = '⏳ Removing duplicates…';
+    statusEl.className = 'fund-import-status fund-import-status-loading';
+  }
+  try {
+    const fid = window._activeFundId;
+    const tok = localStorage.getItem('fund_token');
+    const url = `/api/fund/admin/dedup-lps${fid ? '?fund_id=' + encodeURIComponent(fid) : ''}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: tok ? { 'X-Fund-Token': tok } : {}
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.detail || 'Error');
+    if (statusEl) {
+      statusEl.textContent = j.message || `Removed ${j.duplicates_removed} duplicate(s).`;
+      statusEl.className = 'fund-import-status fund-import-status-ok';
+    }
+    if (j.duplicates_removed > 0) loadFundLPs();   // refresh LP table
+  } catch (err) {
+    if (statusEl) {
+      statusEl.textContent = '✗ ' + err.message;
+      statusEl.className = 'fund-import-status fund-import-status-error';
+    }
   }
 }
 
