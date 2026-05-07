@@ -11,7 +11,20 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui34-20260506';
+const DGA_BUILD = 'ui35-20260506';
+
+// Console diagnostic helper: open DevTools and run `fundDiag()` to see DB state.
+window.fundDiag = async function () {
+  const r = await fetch('/api/fund/diagnostic', {
+    headers: {
+      'x-auth-token': localStorage.getItem('dga_auth_token') || '',
+      'x-fund-token': localStorage.getItem('dga_fund_token') || '',
+    },
+  });
+  const j = await r.json().catch(() => ({}));
+  console.log('[fundDiag]', j);
+  return j;
+};
 ;(function(){
   let alreadyTried = false;
   try {

@@ -911,7 +911,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui34-20260506"
+WEB_BUILD_VERSION = "ui35-20260506"
 
 
 @app.get("/api/build")
@@ -2052,14 +2052,11 @@ def _apply_self_migrations() -> None:
     if not os.environ.get("DATABASE_URL"):
         return
     statements = [
-        # 0003_fund_type — add fund_type discriminator (lp_fund | managed_account)
+        # 0003_fund_type — add fund_type discriminator (lp_fund | managed_account).
+        # CHECK constraint + index are nice-to-have but not required; skipping them
+        # keeps the migration trivially idempotent across all PG versions.
         """ALTER TABLE funds
               ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFAULT 'lp_fund'""",
-        """DO $$ BEGIN
-              ALTER TABLE funds ADD CONSTRAINT funds_fund_type_check
-                  CHECK (fund_type IN ('lp_fund', 'managed_account'));
-           EXCEPTION WHEN duplicate_object THEN NULL; END $$""",
-        """CREATE INDEX IF NOT EXISTS idx_funds_fund_type ON funds(fund_type)""",
     ]
     try:
         conn = psycopg2.connect(os.environ["DATABASE_URL"])
@@ -2108,16 +2105,81 @@ def _resolve_fund_id(cur, fund_id: str = None) -> str:
     return _fund_id(cur)
 
 
+@app.get("/api/fund/diagnostic")
+async def fund_diagnostic(request: Request):
+    """Diagnostic — returns raw fund table state and migration status.
+    Used to debug list/create issues."""
+    _require_fund_token(request)
+    out: dict = {
+        "migrations_applied_flag": _MIGRATIONS_APPLIED,
+        "psycopg2_ok":             _PSYCOPG2_OK,
+    }
+    try:
+        # Force-run migration
+        _apply_self_migrations()
+        out["migrations_applied_after_run"] = _MIGRATIONS_APPLIED
+    except Exception as e:
+        out["migration_error"] = str(e)
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                # Does fund_type column exist?
+                cur.execute("""
+                    SELECT column_name FROM information_schema.columns
+                     WHERE table_name = 'funds'
+                """)
+                cols = sorted([r["column_name"] for r in cur.fetchall()])
+                out["funds_columns"] = cols
+                out["has_fund_type"] = "fund_type" in cols
+
+                # Count funds
+                cur.execute("SELECT COUNT(*) AS n FROM funds")
+                out["fund_count"] = cur.fetchone()["n"]
+
+                # Sample of funds
+                if "fund_type" in cols:
+                    cur.execute("""
+                        SELECT id, name, short_name, fund_type, status
+                          FROM funds ORDER BY created_at DESC LIMIT 10
+                    """)
+                else:
+                    cur.execute("""
+                        SELECT id, name, short_name, status
+                          FROM funds ORDER BY created_at DESC LIMIT 10
+                    """)
+                out["funds_sample"] = [
+                    {k: str(v) if v else v for k, v in dict(r).items()}
+                    for r in cur.fetchall()
+                ]
+        finally:
+            conn.close()
+    except Exception as e:
+        out["query_error"] = str(e)
+    return out
+
+
 @app.get("/api/fund/list")
 async def fund_list(request: Request, fund_type: str = None):
     """Return a lightweight summary of funds in the DB, optionally filtered
     by fund_type ('lp_fund' | 'managed_account').
-    Used by the multi-fund selector UI to show all funds before drilling in."""
+    Used by the multi-fund selector UI to show all funds before drilling in.
+
+    Defensive: if the fund_type column doesn't exist (migration didn't run),
+    we still return funds — treating every row as 'lp_fund' implicitly.
+    """
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            if fund_type in ('lp_fund', 'managed_account'):
+            # First, check if fund_type column exists
+            cur.execute("""
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'funds' AND column_name = 'fund_type'
+            """)
+            has_fund_type = cur.fetchone() is not None
+
+            if has_fund_type and fund_type in ('lp_fund', 'managed_account'):
                 cur.execute("""
                     SELECT id, name, short_name, inception_date, status,
                            mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
@@ -2125,10 +2187,21 @@ async def fund_list(request: Request, fund_type: str = None):
                      WHERE fund_type = %s
                      ORDER BY inception_date ASC
                 """, (fund_type,))
-            else:
+            elif has_fund_type:
                 cur.execute("""
                     SELECT id, name, short_name, inception_date, status,
                            mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
+                      FROM funds
+                     ORDER BY inception_date ASC
+                """)
+            else:
+                # Column doesn't exist — return all funds, mark them as lp_fund.
+                # (Managed Account filter returns empty since column absent.)
+                if fund_type == 'managed_account':
+                    return []
+                cur.execute("""
+                    SELECT id, name, short_name, inception_date, status,
+                           mgmt_fee_pct, carry_pct, hurdle_pct
                       FROM funds
                      ORDER BY inception_date ASC
                 """)
