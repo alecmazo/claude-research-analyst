@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui33-20260506';
+const DGA_BUILD = 'ui34-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -2792,6 +2792,166 @@ function _loadMyPortfolioData() {
   _rehydrateYtdResult();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Managed Account list/detail view (mirrors LP fund list/detail pattern)
+// ─────────────────────────────────────────────────────────────────────────────
+let _activeAccountId = null;     // UUID of currently-open managed account
+
+function showAccountListView() {
+  _activeAccountId = null;
+  const listEl   = document.getElementById('account-list-view');
+  const detailEl = document.getElementById('account-detail-view');
+  if (listEl)   listEl.style.display   = '';
+  if (detailEl) detailEl.style.display = 'none';
+}
+
+function showAccountDetailView(accountId, accountName) {
+  _activeAccountId = accountId;
+  const listEl   = document.getElementById('account-list-view');
+  const detailEl = document.getElementById('account-detail-view');
+  const titleEl  = document.getElementById('account-detail-name');
+  if (listEl)   listEl.style.display   = 'none';
+  if (detailEl) detailEl.style.display = '';
+  if (titleEl)  titleEl.textContent    = accountName || 'Account';
+  // Load existing YTD/portfolio data for this account context
+  _loadMyPortfolioData();
+}
+
+async function loadAccountList() {
+  const listEl = document.getElementById('account-list-cards');
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="fund-card-loading">Loading accounts…</div>';
+  try {
+    const r = await fetch('/api/fund/list?fund_type=managed_account', {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (r.status === 403) {
+      clearFundToken();
+      showFundLock();
+      return;
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      throw new Error(`${r.status}${body ? ': ' + body : ''}`);
+    }
+    const accounts = await r.json();
+    if (!accounts.length) {
+      listEl.innerHTML = `
+        <div class="fund-list-hint">No managed accounts yet.</div>
+        <div class="fund-card-loading" style="padding:30px 16px;">
+          Click <strong>+ Create New Account</strong> below to add your first managed account.
+        </div>`;
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="fund-list-hint">Select an account to view details</div>
+      ${accounts.map(f => {
+        const gainColor = f.total_gain >= 0 ? '#c9a84c' : '#e05a4e';
+        return `
+        <div class="fund-summary-card" data-account-id="${f.id}" data-account-name="${escHtml(f.name)}">
+          <div class="fund-summary-header">
+            <div>
+              <div class="fund-summary-name">${escHtml(f.name)}</div>
+              <div class="fund-summary-short">${escHtml(f.short_name)}  ·  est. ${(f.inception_date||'').slice(0,4)}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+              <span class="fund-summary-status active">ACTIVE</span>
+              <button class="fund-delete-btn" title="Delete account"
+                      onclick="event.stopPropagation(); confirmDeleteFund('${f.id}', '${escHtml(f.name)}')">✕</button>
+            </div>
+          </div>
+          <div class="fund-summary-metrics">
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">NAV</div>
+              <div class="fund-summary-metric-value">${fmt$(f.nav)}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">GAIN</div>
+              <div class="fund-summary-metric-value" style="color:${gainColor}">${fmtPct(f.gain_pct)}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">POS</div>
+              <div class="fund-summary-metric-value">${f.position_count || 0}</div>
+            </div>
+            <div class="fund-summary-metric">
+              <div class="fund-summary-metric-label">FEE</div>
+              <div class="fund-summary-metric-value">${(f.mgmt_fee_pct * 100).toFixed(1)}%</div>
+            </div>
+          </div>
+          <div class="fund-summary-cta">View Details →</div>
+        </div>`;
+      }).join('')}`;
+    listEl.querySelectorAll('.fund-summary-card').forEach(card => {
+      card.addEventListener('click', () => {
+        showAccountDetailView(card.dataset.accountId, card.dataset.accountName);
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = `<div class="fund-card-loading" style="color:#e05a4e;">Could not load accounts: ${err.message}</div>`;
+  }
+}
+
+function toggleCreateAccountForm() {
+  const form = document.getElementById('create-account-form');
+  if (!form) return;
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitCreateAccount() {
+  const name      = (document.getElementById('ca-name')?.value || '').trim();
+  const short     = (document.getElementById('ca-short')?.value || '').trim();
+  const inception = (document.getElementById('ca-inception')?.value || '').trim();
+  const mgmt      = parseFloat(document.getElementById('ca-mgmt')?.value || '1');
+  const statusEl  = document.getElementById('create-account-status');
+
+  // Normalize date: accept "2024", "2024-1-1", "2024-01-01"
+  let inc = inception;
+  if (/^\d{4}$/.test(inception)) {
+    inc = inception + '-01-01';
+  } else {
+    const m = inception.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) inc = `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  }
+
+  if (!name || !short || !inc) {
+    statusEl.textContent = '✗ Name, short name, and inception date are required.';
+    statusEl.className = 'fund-import-status fund-import-status-err';
+    return;
+  }
+  statusEl.textContent = '⏳ Creating account…';
+  statusEl.className = 'fund-import-status fund-import-status-loading';
+  try {
+    const r = await fetch('/api/fund/admin/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-auth-token': getToken(),
+        'x-fund-token': getFundToken(),
+      },
+      body: JSON.stringify({
+        name, short_name: short,
+        inception_date: inc,
+        mgmt_fee_pct: mgmt / 100,
+        carry_pct: 0, hurdle_pct: 0,
+        fund_type: 'managed_account',
+      }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    statusEl.textContent = `✓ Account "${name}" created!`;
+    statusEl.className = 'fund-import-status fund-import-status-ok';
+    ['ca-name','ca-short','ca-inception','ca-mgmt']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    setTimeout(() => {
+      toggleCreateAccountForm();
+      loadAccountList();
+    }, 800);
+  } catch (e) {
+    statusEl.textContent = `✗ ${e.message}`;
+    statusEl.className = 'fund-import-status fund-import-status-err';
+  }
+}
+
 function showFundLock() {
   const overlay = document.getElementById('fund-lock-overlay');
   const input   = document.getElementById('fund-lock-input');
@@ -2903,8 +3063,9 @@ document.addEventListener('DOMContentLoaded', () => {
         loadFundList();
       }
       if (branch === 'portfolio') {
-        loadYtdSnapshots();
-        _rehydrateYtdResult();
+        // Always show the account list first; user clicks into a specific account
+        showAccountListView();
+        loadAccountList();
       }
     });
   });
@@ -3571,8 +3732,14 @@ async function submitCreateFund() {
   const hurdle   = parseFloat(document.getElementById('cf-hurdle')?.value || '8');
   const statusEl = document.getElementById('create-fund-status');
 
-  // Accept bare year ("2017") → normalize to "2017-01-01"
-  const inceptionNorm = /^\d{4}$/.test(inception) ? inception + '-01-01' : inception;
+  // Normalize the inception date: accept "2017", "2017-1-1", "2017-01-01"
+  let inceptionNorm = inception;
+  if (/^\d{4}$/.test(inception)) {
+    inceptionNorm = inception + '-01-01';
+  } else {
+    const m = inception.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) inceptionNorm = `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  }
 
   if (!name || !short || !inceptionNorm) {
     statusEl.textContent = '✗ Name, short name, and inception date are required.';

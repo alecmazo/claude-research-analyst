@@ -24,6 +24,7 @@ from typing import Any
 
 import csv
 import io
+import re
 import time
 import hashlib
 import hmac
@@ -910,7 +911,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui33-20260506"
+WEB_BUILD_VERSION = "ui34-20260506"
 
 
 @app.get("/api/build")
@@ -2662,41 +2663,94 @@ async def fund_admin_create(request: Request, body: CreateFundRequest):
     Idempotent on short_name — re-calling with the same short_name updates
     the fund name but does not touch the CoA."""
     _require_fund_token(request)
+
+    # Force-run migration up-front so fund_type column definitely exists
+    _apply_self_migrations()
+
+    # Normalize the inception date — accept "2017", "2017-1-1", "2017-01-01"
+    inc = (body.inception_date or '').strip()
+    if re.fullmatch(r'\d{4}', inc):
+        inc = f"{inc}-01-01"
+    else:
+        m = re.fullmatch(r'(\d{4})-(\d{1,2})-(\d{1,2})', inc)
+        if m:
+            inc = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', inc):
+        raise HTTPException(400, f"Invalid inception_date {body.inception_date!r} — use YYYY-MM-DD")
+
+    fy_end = body.fiscal_year_end
+    if not fy_end:
+        fy_end = f"{inc[:4]}-12-31"
+    ftype = body.fund_type if body.fund_type in ('lp_fund', 'managed_account') else 'lp_fund'
+
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            # Derive fiscal year end from inception year if not supplied
-            fy_end = body.fiscal_year_end
-            if not fy_end:
-                yr = body.inception_date[:4]
-                fy_end = f"{yr}-12-31"
+            try:
+                cur.execute("""
+                    INSERT INTO funds (
+                        name, short_name, structure, domicile, base_ccy,
+                        inception_date, fiscal_year_end,
+                        mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                        carry_pct, hurdle_pct, catch_up_pct,
+                        max_lps, status, fund_type
+                    ) VALUES (
+                        %s, %s, '3c1', 'DE', 'USD',
+                        %s, %s,
+                        %s, 'committed', 'quarterly',
+                        %s, %s, 1.00,
+                        99, 'open', %s
+                    )
+                    ON CONFLICT (short_name) DO UPDATE
+                        SET name      = EXCLUDED.name,
+                            fund_type = EXCLUDED.fund_type,
+                            updated_at = NOW()
+                    RETURNING id
+                """, (body.name, body.short_name, inc, fy_end,
+                      body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct, ftype))
+            except Exception as e:
+                # Most likely cause: fund_type column missing because the
+                # auto-migration silently failed. Fall back to the legacy
+                # INSERT shape (no fund_type) so the user can still create funds.
+                conn.rollback()
+                msg = str(e).lower()
+                if 'fund_type' in msg or 'column' in msg:
+                    cur.execute("""
+                        INSERT INTO funds (
+                            name, short_name, structure, domicile, base_ccy,
+                            inception_date, fiscal_year_end,
+                            mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                            carry_pct, hurdle_pct, catch_up_pct,
+                            max_lps, status
+                        ) VALUES (
+                            %s, %s, '3c1', 'DE', 'USD',
+                            %s, %s,
+                            %s, 'committed', 'quarterly',
+                            %s, %s, 1.00,
+                            99, 'open'
+                        )
+                        ON CONFLICT (short_name) DO UPDATE
+                            SET name = EXCLUDED.name,
+                                updated_at = NOW()
+                        RETURNING id
+                    """, (body.name, body.short_name, inc, fy_end,
+                          body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct))
+                else:
+                    raise HTTPException(500, f"Insert failed: {e}")
 
-            ftype = body.fund_type if body.fund_type in ('lp_fund', 'managed_account') else 'lp_fund'
-            cur.execute("""
-                INSERT INTO funds (
-                    name, short_name, structure, domicile, base_ccy,
-                    inception_date, fiscal_year_end,
-                    mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
-                    carry_pct, hurdle_pct, catch_up_pct,
-                    max_lps, status, fund_type
-                ) VALUES (
-                    %s, %s, '3c1', 'DE', 'USD',
-                    %s, %s,
-                    %s, 'committed', 'quarterly',
-                    %s, %s, 1.00,
-                    99, 'open', %s
-                )
-                ON CONFLICT (short_name) DO UPDATE
-                    SET name      = EXCLUDED.name,
-                        fund_type = EXCLUDED.fund_type,
-                        updated_at = NOW()
-                RETURNING id
-            """, (body.name, body.short_name, body.inception_date, fy_end,
-                  body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct, ftype))
-            fid = str(cur.fetchone()["id"])
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(500, "Insert returned no row")
+            fid = str(row["id"])
             _seed_coa_for_fund(cur, fid)
         conn.commit()
-        return {"fund_id": fid, "name": body.name, "short_name": body.short_name}
+        return {"fund_id": fid, "name": body.name, "short_name": body.short_name,
+                "fund_type": ftype}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, f"Create fund failed: {e}")
     finally:
         conn.close()
 
