@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui38-20260507';
+    var EXPECTED = 'ui39-20260507';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -543,6 +543,8 @@
     <button class="fund-branch-btn active" data-branch="lp">LP Fund</button>
     <button class="fund-branch-btn" data-branch="portfolio">Managed Account</button>
   </div>
+  <!-- DB status — shows live fund counts so you can verify data is there -->
+  <div id="fund-db-status" style="display:none; padding:4px 16px 0; font-size:11px; color:#4a6080; letter-spacing:0.5px;"></div>
 
   <!-- ── LP Fund branch ─────────────────────────────────────────────────── -->
   <div id="fund-branch-lp">
@@ -860,6 +862,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui39"></script>
+<script src="/app/app.js?v=ui40"></script>
 </body>
 </html>

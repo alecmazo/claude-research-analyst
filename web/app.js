@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui38-20260507';
+const DGA_BUILD = 'ui39-20260507';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -2806,39 +2806,74 @@ let _fundLoaded   = false;
 let _activeFundId = null;   // UUID of the currently-open fund (null = list view)
 
 // Called when the Fund tab is clicked.
+// Always resets to LP Fund branch — simplest, most reliable behaviour.
 function openFundTab() {
   if (getFundToken()) {
-    // Already authenticated — show branch selector
-    const sel = document.getElementById('fund-branch-selector');
-    if (sel) sel.style.display = 'flex';
-
-    // Determine which branch is currently "active" (user may have previously
-    // clicked Managed Account). Re-apply the display state so the correct
-    // branch panel is visible and re-load its data.
-    const activeBtn = document.querySelector('.fund-branch-btn.active');
-    const branch = activeBtn?.dataset.branch || 'lp';
-
-    if (branch === 'portfolio') {
-      // Make sure the portfolio panel is visible and LP is hidden
-      const lpEl   = document.getElementById('fund-branch-lp');
-      const portEl = document.getElementById('fund-branch-portfolio');
-      if (lpEl)   lpEl.style.display   = 'none';
-      if (portEl) portEl.style.display = 'block';
-      showAccountListView();
-      loadAccountList();
-    } else {
-      // Make sure LP panel is visible and portfolio is hidden
-      const lpEl   = document.getElementById('fund-branch-lp');
-      const portEl = document.getElementById('fund-branch-portfolio');
-      if (lpEl)   lpEl.style.display   = 'block';
-      if (portEl) portEl.style.display = 'none';
-      showFundListView();
-      loadFundList();
-    }
-    _loadMyPortfolioData();
+    _showFundAuthenticated();
   } else {
-    // Show the lock overlay; data loads after successful auth.
     showFundLock();
+  }
+}
+
+// Show the fund UI after authentication — always starts on LP Fund list.
+function _showFundAuthenticated() {
+  // Show branch selector
+  const sel = document.getElementById('fund-branch-selector');
+  if (sel) sel.style.display = 'flex';
+
+  // Always land on LP Fund branch
+  _switchFundBranch('lp');
+
+  // Show DB status line
+  _refreshFundDbStatus();
+}
+
+// Hard-switch to a branch ('lp' or 'portfolio') and load its data.
+function _switchFundBranch(branch) {
+  const lpEl   = document.getElementById('fund-branch-lp');
+  const portEl = document.getElementById('fund-branch-portfolio');
+
+  // Sync display
+  if (lpEl)   lpEl.style.display   = branch === 'lp'        ? 'block' : 'none';
+  if (portEl) portEl.style.display = branch === 'portfolio'  ? 'block' : 'none';
+
+  // Sync active button
+  document.querySelectorAll('.fund-branch-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.branch === branch);
+  });
+
+  // Load data for the visible branch
+  if (branch === 'lp') {
+    showFundListView();
+    loadFundList();
+  } else {
+    showAccountListView();
+    loadAccountList();
+  }
+}
+
+// Fetch both fund counts and show a tiny status line (e.g. "2 LP funds · 1 managed account")
+async function _refreshFundDbStatus() {
+  const el = document.getElementById('fund-db-status');
+  if (!el) return;
+  try {
+    const headers = { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() };
+    const [lpRes, maRes] = await Promise.all([
+      fetch('/api/fund/list?fund_type=lp_fund',         { headers }).then(r => r.ok ? r.json() : []),
+      fetch('/api/fund/list?fund_type=managed_account', { headers }).then(r => r.ok ? r.json() : []),
+    ]);
+    const lpCount = Array.isArray(lpRes) ? lpRes.length : 0;
+    const maCount = Array.isArray(maRes) ? maRes.length : 0;
+    el.style.display = 'block';
+    if (lpCount === 0 && maCount === 0) {
+      el.textContent = 'No funds in database yet — use + Create New Fund to add one.';
+      el.style.color = '#e05a4e';
+    } else {
+      el.textContent = `DB: ${lpCount} LP fund${lpCount !== 1 ? 's' : ''} · ${maCount} managed account${maCount !== 1 ? 's' : ''}`;
+      el.style.color = '#4a6080';
+    }
+  } catch (_) {
+    el.style.display = 'none';
   }
 }
 
@@ -3031,19 +3066,7 @@ function showFundLock() {
 
 function hideFundLock() {
   document.getElementById('fund-lock-overlay').style.display = 'none';
-  // Reveal branch selector
-  const sel = document.getElementById('fund-branch-selector');
-  if (sel) sel.style.display = 'flex';
-  // Always start on LP Fund branch after unlocking
-  const lpEl   = document.getElementById('fund-branch-lp');
-  const portEl = document.getElementById('fund-branch-portfolio');
-  if (lpEl)   lpEl.style.display   = 'block';
-  if (portEl) portEl.style.display = 'none';
-  document.querySelectorAll('.fund-branch-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.branch === 'lp');
-  });
-  showFundListView();
-  loadFundList();
+  _showFundAuthenticated();
   _loadMyPortfolioData();
 }
 
@@ -3124,21 +3147,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Fund branch selector ─────────────────────────────────────────────────
   document.querySelectorAll('.fund-branch-btn').forEach(branchBtn => {
     branchBtn.addEventListener('click', () => {
-      const branch = branchBtn.dataset.branch;
-      document.querySelectorAll('.fund-branch-btn').forEach(b => b.classList.remove('active'));
-      branchBtn.classList.add('active');
-      document.getElementById('fund-branch-lp').style.display        = branch === 'lp'        ? 'block' : 'none';
-      document.getElementById('fund-branch-portfolio').style.display = branch === 'portfolio' ? 'block' : 'none';
-      if (branch === 'lp') {
-        // When returning to LP Fund branch always show list view first
-        showFundListView();
-        loadFundList();
-      }
-      if (branch === 'portfolio') {
-        // Always show the account list first; user clicks into a specific account
-        showAccountListView();
-        loadAccountList();
-      }
+      _switchFundBranch(branchBtn.dataset.branch);
     });
   });
 
