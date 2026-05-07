@@ -11,9 +11,9 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui35-20260506';
+const DGA_BUILD = 'ui36-20260507';
 
-// Console diagnostic helper: open DevTools and run `fundDiag()` to see DB state.
+// Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
   const r = await fetch('/api/fund/diagnostic', {
     headers: {
@@ -24,6 +24,21 @@ window.fundDiag = async function () {
   const j = await r.json().catch(() => ({}));
   console.log('[fundDiag]', j);
   return j;
+};
+// Test the list endpoint directly — run fundListDiag() or fundListDiag('managed_account')
+window.fundListDiag = async function (fundType = 'lp_fund') {
+  const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
+  const r = await fetch('/api/fund/list' + qs, {
+    headers: {
+      'x-auth-token': localStorage.getItem('dga_auth_token') || '',
+      'x-fund-token': localStorage.getItem('dga_fund_token') || '',
+    },
+  });
+  const body = await r.text();
+  let parsed;
+  try { parsed = JSON.parse(body); } catch (_) { parsed = body; }
+  console.log(`[fundListDiag fund_type=${fundType}] status=${r.status}`, parsed);
+  return parsed;
 };
 ;(function(){
   let alreadyTried = false;
@@ -2790,6 +2805,8 @@ function openFundTab() {
   if (getFundToken()) {
     // Already authenticated this session — show branch selector and load data.
     document.getElementById('fund-branch-selector').style.display = 'flex';
+    // Always reset to list view so cards are visible (not hidden behind detail view)
+    showFundListView();
     loadFundList();
     _loadMyPortfolioData();
   } else {
@@ -2848,6 +2865,7 @@ async function loadAccountList() {
       throw new Error(`${r.status}${body ? ': ' + body : ''}`);
     }
     const accounts = await r.json();
+    console.log(`[loadAccountList] API returned ${accounts.length} account(s)`, accounts);
     if (!accounts.length) {
       listEl.innerHTML = `
         <div class="fund-list-hint">No managed accounts yet.</div>
@@ -2957,7 +2975,13 @@ async function submitCreateAccount() {
       .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     setTimeout(() => {
       toggleCreateAccountForm();
+      showAccountListView();
       loadAccountList();
+      // Scroll to top of account list so the new card is visible
+      setTimeout(() => {
+        const el = document.getElementById('account-list-view');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 400);
     }, 800);
   } catch (e) {
     statusEl.textContent = `✗ ${e.message}`;
@@ -2983,7 +3007,8 @@ function hideFundLock() {
   // Reveal branch selector now that we're authenticated
   const sel = document.getElementById('fund-branch-selector');
   if (sel) sel.style.display = 'flex';
-  // Load fund list + My Portfolio data
+  // Ensure LP Fund list view is visible, then load
+  showFundListView();
   loadFundList();
   _loadMyPortfolioData();
 }
@@ -3150,8 +3175,9 @@ async function loadFundList(fundType = 'lp_fund') {
   try {
     const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
     const funds = await fundFetch('/api/fund/list' + qs);
+    console.log(`[loadFundList fund_type=${fundType}] API returned ${funds.length} fund(s)`, funds);
     if (!funds.length) {
-      listEl.innerHTML = '<div class="fund-card-loading">No funds found in database.</div>';
+      listEl.innerHTML = '<div class="fund-card-loading">No funds yet. Use <strong>+ Create New Fund</strong> below to add one.</div>';
       return;
     }
     listEl.innerHTML = `
@@ -3790,10 +3816,16 @@ async function submitCreateFund() {
     // Clear form
     ['cf-name','cf-short','cf-inception','cf-mgmt','cf-carry','cf-hurdle']
       .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-    // Reload fund list
+    // Reload fund list and scroll cards into view so user can see the new card
     setTimeout(() => {
       toggleCreateFundForm();
+      showFundListView();
       loadFundList();
+      // Scroll to top of card list so the new card is visible
+      setTimeout(() => {
+        const el = document.getElementById('fund-list-view');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 400);
     }, 1200);
   } catch (e) {
     statusEl.textContent = `✗ ${e.message}`;

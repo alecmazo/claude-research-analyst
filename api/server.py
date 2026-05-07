@@ -911,7 +911,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui35-20260506"
+WEB_BUILD_VERSION = "ui36-20260507"
 
 
 @app.get("/api/build")
@@ -2127,7 +2127,7 @@ async def fund_diagnostic(request: Request):
                 # Does fund_type column exist?
                 cur.execute("""
                     SELECT column_name FROM information_schema.columns
-                     WHERE table_name = 'funds'
+                     WHERE table_schema = 'public' AND table_name = 'funds'
                 """)
                 cols = sorted([r["column_name"] for r in cur.fetchall()])
                 out["funds_columns"] = cols
@@ -2172,10 +2172,12 @@ async def fund_list(request: Request, fund_type: str = None):
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            # First, check if fund_type column exists
+            # First, check if fund_type column exists (scoped to public schema)
             cur.execute("""
                 SELECT 1 FROM information_schema.columns
-                 WHERE table_name = 'funds' AND column_name = 'fund_type'
+                 WHERE table_schema = 'public'
+                   AND table_name   = 'funds'
+                   AND column_name  = 'fund_type'
             """)
             has_fund_type = cur.fetchone() is not None
 
@@ -2195,8 +2197,13 @@ async def fund_list(request: Request, fund_type: str = None):
                      ORDER BY inception_date ASC
                 """)
             else:
-                # Column doesn't exist — return all funds, mark them as lp_fund.
-                # (Managed Account filter returns empty since column absent.)
+                # Column doesn't exist — run migration now and return all funds
+                # (we cannot filter by type without the column; managed_account
+                #  filter gets an empty list since the column is absent).
+                try:
+                    _apply_self_migrations()
+                except Exception:
+                    pass
                 if fund_type == 'managed_account':
                     return []
                 cur.execute("""
@@ -2211,29 +2218,44 @@ async def fund_list(request: Request, fund_type: str = None):
             for f in funds:
                 fid = str(f["id"])
 
-                # NAV = live market value of all open positions
-                nav = _fund_market_nav(cur, fid)
+                # NAV — wrapped so one bad fund doesn't kill the whole list
+                try:
+                    nav = _fund_market_nav(cur, fid)
+                except Exception:
+                    nav = 0.0
 
-                # LP count
-                cur.execute(
-                    "SELECT COUNT(*) AS n FROM lps WHERE fund_id=%s AND status='active'",
-                    (fid,))
-                lp_count = cur.fetchone()["n"]
+                # LP count — graceful fallback if lps table missing / error
+                lp_count = 0
+                try:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n FROM lps WHERE fund_id=%s AND status='active'",
+                        (fid,))
+                    lp_count = cur.fetchone()["n"]
+                except Exception:
+                    conn.rollback()
 
-                # Total committed capital (from commitments table)
-                cur.execute("""
-                    SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
-                      FROM commitments c JOIN lps l ON l.id = c.lp_id
-                     WHERE l.fund_id = %s AND c.superseded_by IS NULL
-                """, (fid,))
-                contributions = float(cur.fetchone()["total"])
+                # Total committed capital — graceful fallback
+                contributions = 0.0
+                try:
+                    cur.execute("""
+                        SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
+                          FROM commitments c JOIN lps l ON l.id = c.lp_id
+                         WHERE l.fund_id = %s AND c.superseded_by IS NULL
+                    """, (fid,))
+                    contributions = float(cur.fetchone()["total"])
+                except Exception:
+                    conn.rollback()
 
-                # Position count (open lots, distinct securities)
-                cur.execute("""
-                    SELECT COUNT(DISTINCT security_id) AS n
-                      FROM tax_lots WHERE fund_id=%s AND closed_at IS NULL
-                """, (fid,))
-                position_count = cur.fetchone()["n"]
+                # Position count — graceful fallback
+                position_count = 0
+                try:
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT security_id) AS n
+                          FROM tax_lots WHERE fund_id=%s AND closed_at IS NULL
+                    """, (fid,))
+                    position_count = cur.fetchone()["n"]
+                except Exception:
+                    conn.rollback()
 
                 gain = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
