@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui27-20260506';
+const DGA_BUILD = 'ui28-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3490,12 +3490,11 @@ async function dedupLPs() {
     statusEl.className = 'fund-import-status fund-import-status-loading';
   }
   try {
-    const fid = window._activeFundId;
-    const tok = localStorage.getItem('fund_token');
+    const fid = _activeFundId;
     const url = `/api/fund/admin/dedup-lps${fid ? '?fund_id=' + encodeURIComponent(fid) : ''}`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: tok ? { 'X-Fund-Token': tok } : {}
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() }
     });
     const j = await res.json();
     if (!res.ok) throw new Error(j.detail || 'Error');
