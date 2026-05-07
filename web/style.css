@@ -2927,27 +2927,35 @@ body {
 .fund-summary-status.closed  { color: #6a8aaa; border-color: #6a8aaa; }
 .fund-summary-metrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  /* NAV gets 2×, GAIN gets 1.5×, LPs/POSITIONS stay narrow, ECONOMICS moderate */
+  grid-template-columns: 2fr 1.5fr 0.55fr 0.7fr 1.25fr;
+  gap: 6px;
   margin-bottom: 10px;
 }
 .fund-summary-metric {
   background: #081526;
   border: 1px solid rgba(255,255,255,0.05);
   border-radius: 7px;
-  padding: 7px 8px;
+  padding: 7px 6px;
+  min-width: 0; /* let flex/grid compress naturally */
 }
 .fund-summary-metric-label {
-  font-size: 8px;
+  font-size: 7.5px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.5px;
   color: #3a5070;
   margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fund-summary-metric-value {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   color: #f0e8d0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fund-summary-cta {
   font-size: 12px;

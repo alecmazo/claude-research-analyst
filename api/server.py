@@ -909,7 +909,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui29-20260506"
+WEB_BUILD_VERSION = "ui30-20260506"
 
 
 @app.get("/api/build")
@@ -3253,27 +3253,46 @@ async def fund_admin_dedup_lps(request: Request, fund_id: str = None):
                 """)
 
             groups = cur.fetchall()
+            if not groups:
+                conn.commit()
+                return {"duplicates_removed": 0, "message": "No duplicate LPs found."}
+
+            # Discover every table+column that FK-references lps.id dynamically.
+            # This covers all 10+ child tables without hardcoding any.
+            cur.execute("""
+                SELECT kcu.table_name, kcu.column_name
+                  FROM information_schema.table_constraints       tc
+                  JOIN information_schema.key_column_usage        kcu
+                       ON  kcu.constraint_name = tc.constraint_name
+                       AND kcu.table_schema    = tc.table_schema
+                  JOIN information_schema.referential_constraints rc
+                       ON  rc.constraint_name  = tc.constraint_name
+                       AND rc.constraint_schema = tc.table_schema
+                  JOIN information_schema.key_column_usage        ccu
+                       ON  ccu.constraint_name = rc.unique_constraint_name
+                 WHERE tc.constraint_type = 'FOREIGN KEY'
+                   AND ccu.table_name     = 'lps'
+                   AND ccu.column_name    = 'id'
+            """)
+            fk_refs = [(r["table_name"], r["column_name"]) for r in cur.fetchall()]
+
             removed = 0
             for g in groups:
-                keeper_id  = str(g["ids"][0])          # newest row survives
-                dupe_ids   = [str(x) for x in g["ids"][1:]]
+                keeper_id = str(g["ids"][0])          # newest row survives
+                dupe_ids  = [str(x) for x in g["ids"][1:]]
 
-                # Re-point commitments
-                cur.execute("""
-                    UPDATE commitments SET lp_id = %s
-                     WHERE lp_id = ANY(%s::uuid[])
-                """, (keeper_id, dupe_ids))
+                # Re-point every child table to the surviving LP
+                for tbl, col in fk_refs:
+                    cur.execute(
+                        f'UPDATE "{tbl}" SET "{col}" = %s WHERE "{col}" = ANY(%s::uuid[])',
+                        (keeper_id, dupe_ids)
+                    )
 
-                # Re-point lp_annual_snapshots (if table exists)
-                cur.execute("""
-                    UPDATE lp_annual_snapshots SET lp_id = %s
-                     WHERE lp_id = ANY(%s::uuid[])
-                """, (keeper_id, dupe_ids))
-
-                # Delete duplicate LP rows
-                cur.execute("""
-                    DELETE FROM lps WHERE id = ANY(%s::uuid[])
-                """, (dupe_ids,))
+                # Now safe to delete the duplicates
+                cur.execute(
+                    "DELETE FROM lps WHERE id = ANY(%s::uuid[])",
+                    (dupe_ids,)
+                )
                 removed += len(dupe_ids)
 
         conn.commit()
