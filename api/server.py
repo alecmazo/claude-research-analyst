@@ -941,7 +941,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui39-20260507"
+WEB_BUILD_VERSION = "ui40-20260507"
 
 
 @app.get("/api/build")
@@ -2074,34 +2074,166 @@ def _fund_conn():
 # ---------------------------------------------------------------------------
 _MIGRATIONS_APPLIED = False
 
+# ---------------------------------------------------------------------------
+# SQL statement splitter — handles dollar-quoted strings ($$...$$, $tag$...$tag$)
+# so we can split a .sql migration file into individual statements.
+# ---------------------------------------------------------------------------
+def _iter_sql_statements(sql: str):
+    """Yield individual SQL statements, properly handling $$ dollar-quoted blocks."""
+    buf: list[str] = []
+    dollar_tag: str | None = None
+    i = 0
+    n = len(sql)
+    while i < n:
+        # Skip single-line comments outside dollar quotes
+        if dollar_tag is None and sql[i] == '-' and i + 1 < n and sql[i + 1] == '-':
+            while i < n and sql[i] != '\n':
+                i += 1
+            continue
+        # Detect dollar-quote open / close
+        if sql[i] == '$':
+            j = sql.find('$', i + 1)
+            if j >= 0:
+                tag = sql[i: j + 1]
+                if dollar_tag is None:
+                    # Opening a dollar-quote block
+                    dollar_tag = tag
+                    buf.append(tag)
+                    i = j + 1
+                    continue
+                elif tag == dollar_tag:
+                    # Closing the dollar-quote block
+                    buf.append(tag)
+                    dollar_tag = None
+                    i = j + 1
+                    continue
+        # Statement terminator (only outside dollar quotes)
+        if dollar_tag is None and sql[i] == ';':
+            stmt = ''.join(buf).strip()
+            if stmt and not stmt.startswith('--'):
+                yield stmt
+            buf = []
+            i += 1
+            continue
+        buf.append(sql[i])
+        i += 1
+    # Trailing statement (no trailing semicolon)
+    stmt = ''.join(buf).strip()
+    if stmt and not stmt.startswith('--'):
+        yield stmt
+
+
+def _exec_sql_file(conn, path: Path) -> tuple[int, int]:
+    """Execute every statement in *path* against *conn*.
+
+    Returns (ok_count, err_count). Errors are logged but do not abort the run
+    so we get as many tables created as possible even if, e.g., an extension
+    isn't available.
+    """
+    try:
+        sql = path.read_text(encoding='utf-8')
+    except Exception as e:
+        print(f"[migration] cannot read {path.name}: {e}")
+        return 0, 1
+
+    ok = err = 0
+    for stmt in _iter_sql_statements(sql):
+        # Skip pure comment blocks
+        stripped = '\n'.join(
+            line for line in stmt.splitlines()
+            if not line.strip().startswith('--')
+        ).strip()
+        if not stripped:
+            continue
+        try:
+            with conn.cursor() as cur:
+                cur.execute(stripped)
+            conn.commit()
+            ok += 1
+        except Exception as e:
+            conn.rollback()
+            err += 1
+            print(f"[migration] non-fatal ({path.name}): {e!s:.120}")
+    print(f"[migration] {path.name}: {ok} ok, {err} errors")
+    return ok, err
+
+
+def _bootstrap_fund_schema(conn) -> None:
+    """Apply migration files 0001 and 0002 to create all fund tables."""
+    base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
+    for fname in ("0001_initial_schema.sql", "0002_annual_snapshots.sql"):
+        p = base / fname
+        if p.exists():
+            _exec_sql_file(conn, p)
+        else:
+            print(f"[migration] WARNING: {fname} not found at {p}")
+
+
+def _fix_fund_type_column(conn) -> None:
+    """Ensure the fund_type column uses ('lp_fund','managed_account').
+
+    Handles three cases:
+      A) Column does not exist yet — add it with correct constraint.
+      B) Column exists with the old CHECK ('open_ended',…) — drop + re-add constraint.
+      C) Column exists with correct constraint — no-op.
+    """
+    statements = [
+        # Drop old check constraint (name auto-assigned by PG; IF EXISTS is safe)
+        "ALTER TABLE funds DROP CONSTRAINT IF EXISTS funds_fund_type_check",
+        # Add column (idempotent — IF NOT EXISTS)
+        ("ALTER TABLE funds "
+         "ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFAULT 'lp_fund'"),
+        # Re-add correct constraint (may already exist if we just added the column)
+        ("ALTER TABLE funds "
+         "ADD CONSTRAINT funds_fund_type_check "
+         "CHECK (fund_type IN ('lp_fund','managed_account'))"),
+        # Fix any stale rows that have the old enum values
+        ("UPDATE funds SET fund_type = 'lp_fund' "
+         "WHERE fund_type NOT IN ('lp_fund','managed_account')"),
+    ]
+    for stmt in statements:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[migration] fund_type fixup non-fatal: {e!s:.120}")
+
+
 def _apply_self_migrations() -> None:
-    """Run any pending schema migrations on startup. Idempotent."""
+    """Bootstrap the full fund schema if missing; then fix fund_type column.
+
+    Idempotent — safe to call multiple times; exits immediately after the
+    first successful run (guarded by _MIGRATIONS_APPLIED).
+    """
     global _MIGRATIONS_APPLIED
     if _MIGRATIONS_APPLIED or not _PSYCOPG2_OK:
         return
     if not os.environ.get("DATABASE_URL"):
         return
-    statements = [
-        # 0003_fund_type — add fund_type discriminator (lp_fund | managed_account).
-        # CHECK constraint + index are nice-to-have but not required; skipping them
-        # keeps the migration trivially idempotent across all PG versions.
-        """ALTER TABLE funds
-              ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFAULT 'lp_fund'""",
-    ]
     try:
         conn = psycopg2.connect(os.environ["DATABASE_URL"])
         try:
+            # Check whether the funds table already exists
             with conn.cursor() as cur:
-                for stmt in statements:
-                    try:
-                        cur.execute(stmt)
-                    except Exception as e:
-                        print(f"[migration] non-fatal: {e}")
-                        conn.rollback()
-                    else:
-                        conn.commit()
+                cur.execute("""
+                    SELECT 1 FROM information_schema.tables
+                     WHERE table_schema = 'public' AND table_name = 'funds'
+                """)
+                funds_exists = cur.fetchone() is not None
+
+            if not funds_exists:
+                print("[migration] funds table missing — bootstrapping schema from SQL files")
+                _bootstrap_fund_schema(conn)
+            else:
+                print("[migration] funds table exists — skipping bootstrap")
+
+            # Always fix the fund_type column / constraint (idempotent)
+            _fix_fund_type_column(conn)
+
             _MIGRATIONS_APPLIED = True
-            print("[migration] self-migrations applied")
+            print("[migration] self-migrations complete")
         finally:
             conn.close()
     except Exception as e:
@@ -2789,7 +2921,9 @@ async def fund_admin_create(request: Request, body: CreateFundRequest):
     the fund name but does not touch the CoA."""
     _require_fund_token(request)
 
-    # Force-run migration up-front so fund_type column definitely exists
+    # Force-run migration up-front (creates tables if missing, fixes fund_type column).
+    # If startup failed to migrate (e.g. DB wasn't ready yet), this gives it a
+    # second chance right before the first fund creation.
     _apply_self_migrations()
 
     # Normalize the inception date — accept "2017", "2017-1-1", "2017-01-01"
@@ -2834,11 +2968,14 @@ async def fund_admin_create(request: Request, body: CreateFundRequest):
                 """, (body.name, body.short_name, inc, fy_end,
                       body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct, ftype))
             except Exception as e:
-                # Most likely cause: fund_type column missing because the
-                # auto-migration silently failed. Fall back to the legacy
-                # INSERT shape (no fund_type) so the user can still create funds.
+                # Most likely causes:
+                #   A) fund_type column missing — fall back to no-fund_type INSERT
+                #   B) Table doesn't exist — re-raise with informative message
                 conn.rollback()
                 msg = str(e).lower()
+                if 'does not exist' in msg or 'relation' in msg:
+                    raise HTTPException(500,
+                        f"Database table missing — schema may not have been created: {e}")
                 if 'fund_type' in msg or 'column' in msg:
                     cur.execute("""
                         INSERT INTO funds (

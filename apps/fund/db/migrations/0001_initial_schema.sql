@@ -72,7 +72,7 @@ CREATE TABLE funds (
     short_name      TEXT NOT NULL UNIQUE,          -- 'DGA-I'
     structure       TEXT NOT NULL CHECK (structure IN ('3c1','3c7','fund_of_one','separately_managed')),
     domicile        TEXT NOT NULL,                 -- 'DE', 'KY', etc.
-    fund_type       TEXT CHECK (fund_type IN ('open_ended','closed_ended','evergreen')),
+    fund_type       TEXT NOT NULL DEFAULT 'lp_fund' CHECK (fund_type IN ('lp_fund','managed_account')),
     base_ccy        TEXT NOT NULL DEFAULT 'USD',
     inception_date  DATE NOT NULL,
     fiscal_year_end DATE NOT NULL,                 -- typically Dec 31
