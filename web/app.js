@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui36-20260507';
+const DGA_BUILD = 'ui37-20260507';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -2803,11 +2803,33 @@ let _activeFundId = null;   // UUID of the currently-open fund (null = list view
 // Called when the Fund tab is clicked.
 function openFundTab() {
   if (getFundToken()) {
-    // Already authenticated this session — show branch selector and load data.
-    document.getElementById('fund-branch-selector').style.display = 'flex';
-    // Always reset to list view so cards are visible (not hidden behind detail view)
-    showFundListView();
-    loadFundList();
+    // Already authenticated — show branch selector
+    const sel = document.getElementById('fund-branch-selector');
+    if (sel) sel.style.display = 'flex';
+
+    // Determine which branch is currently "active" (user may have previously
+    // clicked Managed Account). Re-apply the display state so the correct
+    // branch panel is visible and re-load its data.
+    const activeBtn = document.querySelector('.fund-branch-btn.active');
+    const branch = activeBtn?.dataset.branch || 'lp';
+
+    if (branch === 'portfolio') {
+      // Make sure the portfolio panel is visible and LP is hidden
+      const lpEl   = document.getElementById('fund-branch-lp');
+      const portEl = document.getElementById('fund-branch-portfolio');
+      if (lpEl)   lpEl.style.display   = 'none';
+      if (portEl) portEl.style.display = 'block';
+      showAccountListView();
+      loadAccountList();
+    } else {
+      // Make sure LP panel is visible and portfolio is hidden
+      const lpEl   = document.getElementById('fund-branch-lp');
+      const portEl = document.getElementById('fund-branch-portfolio');
+      if (lpEl)   lpEl.style.display   = 'block';
+      if (portEl) portEl.style.display = 'none';
+      showFundListView();
+      loadFundList();
+    }
     _loadMyPortfolioData();
   } else {
     // Show the lock overlay; data loads after successful auth.
@@ -3004,10 +3026,17 @@ function showFundLock() {
 
 function hideFundLock() {
   document.getElementById('fund-lock-overlay').style.display = 'none';
-  // Reveal branch selector now that we're authenticated
+  // Reveal branch selector
   const sel = document.getElementById('fund-branch-selector');
   if (sel) sel.style.display = 'flex';
-  // Ensure LP Fund list view is visible, then load
+  // Always start on LP Fund branch after unlocking
+  const lpEl   = document.getElementById('fund-branch-lp');
+  const portEl = document.getElementById('fund-branch-portfolio');
+  if (lpEl)   lpEl.style.display   = 'block';
+  if (portEl) portEl.style.display = 'none';
+  document.querySelectorAll('.fund-branch-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.branch === 'lp');
+  });
   showFundListView();
   loadFundList();
   _loadMyPortfolioData();
