@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui26-20260506';
+const DGA_BUILD = 'ui27-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -2956,15 +2956,17 @@ async function loadFundList() {
         const statusLbl  = (f.status || 'active').toUpperCase();
         const econLabel  = `${(f.mgmt_fee_pct * 100).toFixed(0)} &amp; ${(f.carry_pct * 100).toFixed(0)}`;
         return `
-        <div class="fund-summary-card" style="position:relative;" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}">
-          <button class="fund-delete-btn" title="Delete fund" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}"
-                  onclick="event.stopPropagation(); confirmDeleteFund('${f.id}', '${escHtml(f.name)}')">✕</button>
+        <div class="fund-summary-card" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}">
           <div class="fund-summary-header">
             <div>
               <div class="fund-summary-name">${escHtml(f.name)}</div>
               <div class="fund-summary-short">${escHtml(f.short_name)}  ·  est. ${f.inception_date?.slice(0,4)}</div>
             </div>
-            <span class="fund-summary-status ${statusCls}">${statusLbl}</span>
+            <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+              <span class="fund-summary-status ${statusCls}">${statusLbl}</span>
+              <button class="fund-delete-btn" title="Delete fund" data-fund-id="${f.id}" data-fund-name="${escHtml(f.name)}"
+                      onclick="event.stopPropagation(); confirmDeleteFund('${f.id}', '${escHtml(f.name)}')">✕</button>
+            </div>
           </div>
           <div class="fund-summary-metrics">
             <div class="fund-summary-metric">

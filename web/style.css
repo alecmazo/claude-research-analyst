@@ -3305,16 +3305,13 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 
 /* ── Fund list — delete X button ─────────────────────────────────────── */
 .fund-delete-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: none;
   background: rgba(220,60,60,0.15);
   color: rgba(220,80,80,0.7);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   cursor: pointer;
   display: flex;
@@ -3322,8 +3319,8 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   justify-content: center;
   line-height: 1;
   padding: 0;
+  flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
-  z-index: 2;
 }
 .fund-delete-btn:hover {
   background: rgba(220,60,60,0.4);
