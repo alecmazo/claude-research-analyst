@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui25-20260506';
+    var EXPECTED = 'ui26-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui28">
+  <link rel="stylesheet" href="/app/style.css?v=ui29">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -635,12 +635,10 @@
       </div>
 
       <!-- Export -->
-      <div style="margin-top:28px; padding-bottom:12px;">
-        <button class="fund-lock-btn" style="width:100%; font-size:13px;" onclick="exportFundExcel()">
-          ⬇ Export Fund Data to Excel
-        </button>
-        <div id="fund-export-status" class="fund-import-status" style="margin-top:6px;"></div>
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:flex-end; padding-top:8px;">
+        <button class="fund-import-btn" onclick="exportFundExcel()">⬇ Export Fund Data to Excel</button>
       </div>
+      <div id="fund-export-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
 
     </div><!-- /fund-detail-view -->
   </div><!-- /fund-branch-lp -->
@@ -822,6 +820,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui26"></script>
+<script src="/app/app.js?v=ui27"></script>
 </body>
 </html>
