@@ -277,7 +277,86 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
         raw  = [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text))]
 
     if not raw:
-        return []
+        return [], {}
+
+    import re as _re
+
+    def _parse_money_inner(s):
+        try:
+            return float(str(s).replace('$', '').replace(',', '').strip())
+        except (ValueError, TypeError):
+            return None
+
+    # ── Layout C: transposed key-value (single LP, labels in col A, values in col B) ──
+    # Detects files like:
+    #   Row N:   "LP Name"              | "EM"
+    #   Row N+1: "initial contribution" | "$1,400,000"
+    #   Row N+2: "Economics"            | "0/25, 5% hurdle"
+    for i, row in enumerate(raw):
+        if len(row) < 2:
+            continue
+        a = str(row[0]).lower().strip()
+        b = str(row[1]).strip() if len(row) > 1 else ''
+        if a not in ('lp name', 'legal name', 'investor name', 'investor'):
+            continue
+        # col B must be a real name, not a header keyword
+        skip_kws = ('commitment', 'amount', 'date', 'type', 'entity', 'year', 'nav', 'name')
+        if not b or any(kw in b.lower() for kw in skip_kws):
+            continue
+        # Confirm a contribution label appears within the next 10 rows
+        contrib_found = False
+        for j in range(i + 1, min(i + 10, len(raw))):
+            nrow = raw[j]
+            if not nrow or not str(nrow[0]).strip():
+                continue
+            nl = str(nrow[0]).lower().strip()
+            if any(kw in nl for kw in ('contribution', 'committed', 'initial', 'capital commit')):
+                contrib_found = True
+                break
+        if not contrib_found:
+            continue
+
+        # ── Parse Layout C ────────────────────────────────────────────────────
+        lp_name    = b
+        commitment = None
+        eff_date   = str(datetime.utcnow().date())
+        econ_str   = ''
+        for row2 in raw[i + 1:]:
+            if not row2 or not str(row2[0]).strip():
+                continue
+            lbl = str(row2[0]).lower().strip()
+            val = str(row2[1]).strip() if len(row2) > 1 else ''
+            if any(kw in lbl for kw in ('contribution', 'committed', 'initial')) and commitment is None:
+                v = _parse_money_inner(val)
+                if v and v > 0:
+                    commitment = v
+            elif any(kw in lbl for kw in ('economics', 'econ', 'fee structure', 'terms')):
+                econ_str = val
+            elif any(kw in lbl for kw in ('date', 'effective', 'inception')) and val:
+                eff_date = val
+
+        lp_rows_c = []
+        if lp_name and commitment and commitment > 0:
+            lp_rows_c.append({
+                'legal_name':        lp_name,
+                'entity_type':       'individual',
+                'commitment':        commitment,
+                'effective_date':    eff_date,
+                'contribution_year': None,
+            })
+
+        # Parse economics string: "0/25, 5% hurdle" | "2 & 20, 8% hurdle" | "2/20"
+        economics_c = {}
+        if econ_str:
+            m_slash = _re.match(r'(\d+(?:\.\d+)?)\s*[/&]\s*(\d+(?:\.\d+)?)', econ_str)
+            if m_slash:
+                economics_c['mgmt_fee_pct'] = round(float(m_slash.group(1)) / 100, 6)
+                economics_c['carry_pct']    = round(float(m_slash.group(2)) / 100, 6)
+            hm = _re.search(r'(\d+(?:\.\d+)?)\s*%\s*hurdle', econ_str, _re.IGNORECASE)
+            if hm:
+                economics_c['hurdle_pct'] = round(float(hm.group(1)) / 100, 6)
+
+        return lp_rows_c, economics_c
 
     # ── Find header row ───────────────────────────────────────────────────────
     header = []
@@ -777,7 +856,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui19-20260506"
+WEB_BUILD_VERSION = "ui20-20260506"
 
 
 @app.get("/api/build")

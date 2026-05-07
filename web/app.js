@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui19-20260506';
+const DGA_BUILD = 'ui20-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -1045,6 +1045,12 @@ async function loadReports() {
   const list = document.getElementById('reports-list');
   try {
     const reports = await api.listReports();
+    // Sort by upside % descending; reports with no target sink to the bottom
+    reports.sort((a, b) => {
+      const ua = a.upside_pct != null ? Number(a.upside_pct) : -Infinity;
+      const ub = b.upside_pct != null ? Number(b.upside_pct) : -Infinity;
+      return ub - ua;
+    });
     if (!reports.length) {
       list.innerHTML = '<div class="empty">No reports yet. Run your first analysis above.</div>';
       // Hide the count badge if it's there
@@ -3434,7 +3440,10 @@ async function submitCreateFund() {
   const hurdle   = parseFloat(document.getElementById('cf-hurdle')?.value || '8');
   const statusEl = document.getElementById('create-fund-status');
 
-  if (!name || !short || !inception) {
+  // Accept bare year ("2017") → normalize to "2017-01-01"
+  const inceptionNorm = /^\d{4}$/.test(inception) ? inception + '-01-01' : inception;
+
+  if (!name || !short || !inceptionNorm) {
     statusEl.textContent = '✗ Name, short name, and inception date are required.';
     statusEl.className = 'fund-import-status fund-import-status-err';
     return;
@@ -3454,7 +3463,7 @@ async function submitCreateFund() {
       body: JSON.stringify({
         name,
         short_name: short,
-        inception_date: inception,
+        inception_date: inceptionNorm,
         mgmt_fee_pct: mgmt / 100,
         carry_pct: carry / 100,
         hurdle_pct: hurdle / 100,
