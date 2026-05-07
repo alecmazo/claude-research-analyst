@@ -81,6 +81,45 @@ def _fetch_prices(symbols: list) -> dict:
     return out
 
 
+def _fund_market_nav(cur, fid: str) -> float:
+    """Return fund NAV = Σ(open_qty × live_price) across all tax_lots.
+
+    Pricing priority:
+      1. Live yfinance price (cached 15 min)
+      2. Cost-basis fallback when no live price (prevents NAV from going to zero
+         on data outages or unlisted securities)
+
+    Money-market positions (asset_class='cash') are priced at $1.00/unit via
+    the existing _fetch_prices() logic (SPAXX/FDRXX/SPRXX → 1.0).
+    """
+    cur.execute("""
+        SELECT s.symbol, s.asset_class,
+               SUM(tl.quantity)                                       AS total_qty,
+               SUM(tl.quantity * tl.cost_basis_per_unit)              AS total_cost,
+               SUM(tl.quantity * tl.cost_basis_per_unit)
+                 / NULLIF(SUM(tl.quantity), 0)                        AS avg_cost
+          FROM tax_lots tl
+          JOIN securities s ON s.id = tl.security_id
+         WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+         GROUP BY s.symbol, s.asset_class
+    """, (fid,))
+    rows = cur.fetchall()
+    if not rows:
+        return 0.0
+
+    symbols = [r["symbol"] for r in rows if r["symbol"]]
+    prices  = _fetch_prices(symbols)
+
+    total = 0.0
+    for r in rows:
+        qty      = float(r["total_qty"] or 0)
+        avg_cost = float(r["avg_cost"]  or 0)
+        sym      = r["symbol"]
+        price    = prices.get(sym)
+        total   += qty * (price if price is not None else avg_cost)
+    return round(total, 2)
+
+
 # ── Embedded chart-of-accounts rows  (replaces reading the seed .sql file) ───
 # Matches apps/fund/db/seed/0001_chart_of_accounts.sql exactly.
 _FUND_COA = [
@@ -206,10 +245,24 @@ def _parse_fidelity_csv(content: str) -> list:
 
 def _parse_captable(content: bytes, filename: str) -> list:
     """Parse a cap-table CSV or XLSX.
-    Expected columns (case-insensitive): LP Name, Commitment Amount,
-    Entity Type (optional), Effective Date (optional).
-    Returns list of dicts."""
-    rows = []
+
+    Accepted column layouts (case-insensitive):
+
+    Layout A — named commitment column:
+        LP Name | Commitment Amount | Entity Type (opt) | Effective Date (opt)
+
+    Layout B — year columns (waterfall / distribution schedule format):
+        LP Name | <Entity Type (opt)> | 2022 | 2023 | 2024 | 2025 | …
+        The LP's contribution is taken from the MOST RECENT (rightmost highest)
+        year column that contains a non-zero value for that row.  If multiple
+        year cells are filled the most-recent non-zero one wins; the "effective
+        date" is set to Jan-1 of that year.
+
+    Returns list of dicts:
+        {legal_name, entity_type, commitment, effective_date, contribution_year}
+    where `contribution_year` is None for Layout A.
+    """
+    out = []
     fname_lower = (filename or '').lower()
 
     if fname_lower.endswith('.xlsx') or fname_lower.endswith('.xls'):
@@ -217,7 +270,8 @@ def _parse_captable(content: bytes, filename: str) -> list:
             raise HTTPException(400, "openpyxl not installed — upload a CSV instead")
         wb  = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         ws  = wb.active
-        raw = [[str(c.value or '').strip() for c in row] for row in ws.iter_rows()]
+        raw = [[str(c.value if c.value is not None else '').strip() for c in row]
+               for row in ws.iter_rows()]
     else:
         text = content.decode('utf-8', errors='replace')
         raw  = [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text))]
@@ -225,7 +279,7 @@ def _parse_captable(content: bytes, filename: str) -> list:
     if not raw:
         return []
 
-    # Find header row
+    # ── Find header row ───────────────────────────────────────────────────────
     header = []
     data_start = 0
     for i, row in enumerate(raw):
@@ -237,44 +291,111 @@ def _parse_captable(content: bytes, filename: str) -> list:
 
     if not header:
         raise HTTPException(400, "Could not find header row in cap table. "
-            "Expected columns: 'LP Name', 'Commitment Amount'")
+            "Expected a column containing 'LP Name', 'Legal Name', or 'Name'.")
 
-    def col(row, *names):
+    # ── Detect year columns (4-digit int, 2000–2099) ─────────────────────────
+    import re as _re
+    year_cols = []   # list of (col_index, year_int) sorted ascending by year
+    for idx, h in enumerate(header):
+        m = _re.fullmatch(r'(20\d{2})', h.strip())
+        if m:
+            year_cols.append((idx, int(m.group(1))))
+    year_cols.sort(key=lambda x: x[1])
+
+    # ── Column helpers ────────────────────────────────────────────────────────
+    def col_idx(header, *names):
+        """Return index of first header that contains any of the given names."""
         for n in names:
             for i, h in enumerate(header):
                 if n.lower() in h:
-                    return row[i] if i < len(row) else ''
-        return ''
+                    return i
+        return None
+
+    def col_val(row, *names):
+        idx = col_idx(header, *names)
+        return row[idx] if idx is not None and idx < len(row) else ''
+
+    name_idx   = col_idx(header, 'lp name', 'legal name', 'name')
+    commit_idx = col_idx(header, 'commitment', 'amount', 'capital')  # Layout A
+    etype_idx  = col_idx(header, 'entity type', 'type')
+    date_idx   = col_idx(header, 'effective date', 'date')
+
+    valid_etypes = ('individual','joint','llc','trust','ira','corp',
+                    'partnership','foundation','other')
+
+    def _parse_money(s):
+        try:
+            return float(str(s).replace('$','').replace(',','').strip())
+        except (ValueError, TypeError):
+            return None
 
     for row in raw[data_start:]:
         if not any(row):
             continue
-        name = col(row, 'lp name', 'legal name', 'name')
-        amt_str = col(row, 'commitment', 'amount', 'capital')
-        if not name or not amt_str:
+        if name_idx is None or name_idx >= len(row):
             continue
-        try:
-            amt = float(str(amt_str).replace('$','').replace(',','').strip())
-        except ValueError:
-            continue
-        if amt <= 0:
+        name = row[name_idx].strip()
+        if not name:
             continue
 
-        etype   = col(row, 'entity type', 'type') or 'individual'
-        eff_date= col(row, 'effective date', 'date') or str(datetime.utcnow().date())
-        # Normalise entity_type to allowed values
-        etype_lower = etype.lower().strip()
-        valid_etypes = ('individual','joint','llc','trust','ira','corp','partnership','foundation','other')
-        etype = etype_lower if etype_lower in valid_etypes else 'individual'
+        etype_raw = (row[etype_idx].strip() if etype_idx is not None and etype_idx < len(row) else '')
+        etype     = etype_raw.lower() if etype_raw.lower() in valid_etypes else 'individual'
 
-        rows.append({
-            'legal_name':    name.strip(),
-            'entity_type':   etype,
-            'commitment':    amt,
-            'effective_date':eff_date.strip() or str(datetime.utcnow().date()),
-        })
+        # ── Layout B: year columns ────────────────────────────────────────────
+        if year_cols:
+            # Walk year columns newest → oldest; take first non-zero value
+            amt          = None
+            contrib_year = None
+            for col_i, yr in reversed(year_cols):
+                v = _parse_money(row[col_i] if col_i < len(row) else '')
+                if v and v > 0:
+                    amt          = v
+                    contrib_year = yr
+                    break
 
-    return rows
+            if amt is None:
+                # If the row has only zeros in year cols, fall through to Layout A
+                if commit_idx is not None and commit_idx < len(row):
+                    amt = _parse_money(row[commit_idx])
+                    contrib_year = None
+
+            if not amt or amt <= 0:
+                continue
+
+            eff_date = f"{contrib_year}-01-01" if contrib_year else str(datetime.utcnow().date())
+            if date_idx is not None and date_idx < len(row) and row[date_idx]:
+                eff_date = row[date_idx].strip() or eff_date
+
+            out.append({
+                'legal_name':       name,
+                'entity_type':      etype,
+                'commitment':       amt,
+                'effective_date':   eff_date,
+                'contribution_year': contrib_year,
+            })
+
+        # ── Layout A: named commitment column ─────────────────────────────────
+        else:
+            if commit_idx is None:
+                continue
+            amt_str = row[commit_idx] if commit_idx < len(row) else ''
+            amt = _parse_money(amt_str)
+            if not amt or amt <= 0:
+                continue
+
+            eff_date = str(datetime.utcnow().date())
+            if date_idx is not None and date_idx < len(row) and row[date_idx]:
+                eff_date = row[date_idx].strip() or eff_date
+
+            out.append({
+                'legal_name':       name,
+                'entity_type':      etype,
+                'commitment':       amt,
+                'effective_date':   eff_date,
+                'contribution_year': None,
+            })
+
+    return out
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -613,7 +734,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui17-20260506"
+WEB_BUILD_VERSION = "ui18-20260506"
 
 
 @app.get("/api/build")
@@ -1774,12 +1895,9 @@ async def fund_list(request: Request):
             result = []
             for f in funds:
                 fid = str(f["id"])
-                # NAV
-                cur.execute("""
-                    SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
-                      FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
-                """, (fid,))
-                nav = float(cur.fetchone()["nav"])
+
+                # NAV = live market value of all open positions
+                nav = _fund_market_nav(cur, fid)
 
                 # LP count
                 cur.execute(
@@ -1787,7 +1905,7 @@ async def fund_list(request: Request):
                     (fid,))
                 lp_count = cur.fetchone()["n"]
 
-                # Contributions
+                # Total committed capital (from commitments table)
                 cur.execute("""
                     SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
                       FROM commitments c JOIN lps l ON l.id = c.lp_id
@@ -1851,13 +1969,10 @@ async def fund_overview(request: Request, fund_id: str = None):
             fund = dict(cur.fetchone())
 
             # NAV = net balance of all asset accounts
-            cur.execute("""
-                SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
-                  FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
-            """, (fid,))
-            nav = float(cur.fetchone()["nav"])
+            # NAV = live market value of all open positions
+            nav = _fund_market_nav(cur, fid)
 
-            # Total LP commitments
+            # Total LP committed capital
             cur.execute("""
                 SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
                   FROM commitments c
@@ -1902,34 +2017,42 @@ async def fund_lps(request: Request, fund_id: str = None):
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             fid = _resolve_fund_id(cur, fund_id)
+
+            # Market NAV for the fund
+            market_nav = _fund_market_nav(cur, fid)
+
             cur.execute("""
-                SELECT
-                    l.id, l.legal_name, l.entity_type, l.onboarded_at,
-                    COALESCE(c.commitment, 0)                              AS commitment,
-                    COALESCE(SUM(tl.credit) - SUM(tl.debit), 0)           AS current_value
+                SELECT l.id, l.legal_name, l.entity_type, l.onboarded_at,
+                       COALESCE(c.commitment, 0) AS commitment
                   FROM lps l
                   LEFT JOIN (
                       SELECT lp_id, SUM(commitment_amount) AS commitment
                         FROM commitments WHERE superseded_by IS NULL GROUP BY lp_id
                   ) c ON c.lp_id = l.id
-                  LEFT JOIN accounts a  ON a.lp_id   = l.id AND a.fund_id = l.fund_id
-                  LEFT JOIN transaction_lines tl ON tl.account_id = a.id
                  WHERE l.fund_id = %s AND l.status = 'active'
-                 GROUP BY l.id, l.legal_name, l.entity_type, l.onboarded_at, c.commitment
                  ORDER BY COALESCE(c.commitment, 0) DESC
             """, (fid,))
             rows = cur.fetchall()
-            total_nav = sum(float(r["current_value"]) for r in rows) or 1
-            return [{
-                "id":           str(r["id"]),
-                "legal_name":   r["legal_name"],
-                "entity_type":  r["entity_type"],
-                "onboarded_at": str(r["onboarded_at"]) if r["onboarded_at"] else None,
-                "commitment":   float(r["commitment"]),
-                "current_value":float(r["current_value"]),
-                "gain":         float(r["current_value"]) - float(r["commitment"]),
-                "share_pct":    float(r["current_value"]) / total_nav * 100,
-            } for r in rows]
+
+            # Total committed determines each LP's ownership share
+            total_committed = sum(float(r["commitment"]) for r in rows) or 0
+
+            result = []
+            for r in rows:
+                commitment = float(r["commitment"])
+                share      = (commitment / total_committed) if total_committed > 0 else 0.0
+                cur_val    = round(market_nav * share, 2)
+                result.append({
+                    "id":           str(r["id"]),
+                    "legal_name":   r["legal_name"],
+                    "entity_type":  r["entity_type"],
+                    "onboarded_at": str(r["onboarded_at"]) if r["onboarded_at"] else None,
+                    "commitment":   commitment,
+                    "current_value":cur_val,
+                    "gain":         round(cur_val - commitment, 2),
+                    "share_pct":    round(share * 100, 2),
+                })
+            return result
     finally:
         conn.close()
 
@@ -2106,11 +2229,8 @@ async def fund_waterfall(request: Request, fund_id: str = None):
             """, (fid,))
             lp_rows = cur.fetchall()
 
-            cur.execute("""
-                SELECT COALESCE(SUM(total_debit - total_credit), 0) AS nav
-                  FROM v_trial_balance WHERE fund_id = %s AND type = 'asset'
-            """, (fid,))
-            nav = float(cur.fetchone()["nav"])
+            # NAV = live market value of all open positions
+            nav = _fund_market_nav(cur, fid)
 
             if has_snapshots:
                 # ── Exact annual calculation from year-by-year snapshots ─────
@@ -2503,15 +2623,29 @@ async def fund_import_captable(
     rows = _parse_captable(raw, file.filename or '')
     if not rows:
         raise HTTPException(400, "No valid LP rows found in file. "
-            "Expected columns: 'LP Name', 'Commitment Amount'")
+            "Expected a column containing 'LP Name' and contribution amounts "
+            "(either a 'Commitment Amount' column or year columns like '2024', '2025').")
 
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             fid = _resolve_fund_id(cur, fund_id)
+
+            # Look up CoA accounts needed for contribution journal entries
+            cur.execute("""
+                SELECT code, id FROM accounts
+                 WHERE fund_id = %s AND code IN ('1020','1010','3100','3000')
+            """, (fid,))
+            acct_map = {r["code"]: str(r["id"]) for r in cur.fetchall()}
+            cash_acct = acct_map.get("1020") or acct_map.get("1010")
+            lp_cap_acct = acct_map.get("3100")  # Capital — LP
+
             imported = 0
             for row in rows:
-                # Upsert LP by (fund_id, legal_name)
+                commitment = float(row["commitment"])
+                eff_date   = row["effective_date"]
+
+                # ── Upsert LP ─────────────────────────────────────────────────
                 cur.execute("""
                     INSERT INTO lps (fund_id, legal_name, entity_type,
                                      accred_type, status)
@@ -2533,7 +2667,7 @@ async def fund_import_captable(
                         continue
                     lp_id = str(r["id"])
 
-                # Supersede existing active commitment
+                # ── Supersede existing active commitment ──────────────────────
                 cur.execute("""
                     SELECT id FROM commitments
                      WHERE lp_id = %s AND fund_id = %s AND superseded_by IS NULL
@@ -2545,7 +2679,7 @@ async def fund_import_captable(
                         (lp_id, fund_id, commitment_amount, effective_date)
                     VALUES (%s, %s, %s, %s)
                     RETURNING id
-                """, (lp_id, fid, row["commitment"], row["effective_date"]))
+                """, (lp_id, fid, commitment, eff_date))
                 new_cmt_id = str(cur.fetchone()["id"])
 
                 if old:
@@ -2553,14 +2687,59 @@ async def fund_import_captable(
                         UPDATE commitments SET superseded_by = %s WHERE id = %s
                     """, (new_cmt_id, str(old["id"])))
 
+                # ── Capital contribution journal entry ────────────────────────
+                # Dr. 1020 Cash — Brokerage (or 1010 Operating)
+                # Cr. 3100 Capital — Limited Partners
+                # Only if we have both accounts and the LP didn't already have
+                # a contribution transaction for the same amount on the same date.
+                if cash_acct and lp_cap_acct and commitment > 0:
+                    cur.execute("""
+                        SELECT COUNT(*) AS n FROM transactions t
+                          JOIN transaction_lines tl ON tl.transaction_id = t.id
+                         WHERE t.fund_id = %s
+                           AND t.category = 'contribution'
+                           AND t.effective_date = %s
+                           AND tl.account_id = %s
+                           AND tl.credit = %s
+                    """, (fid, eff_date, lp_cap_acct, round(commitment, 4)))
+                    already_exists = cur.fetchone()["n"] > 0
+
+                    if not already_exists:
+                        cur.execute("""
+                            INSERT INTO transactions
+                                (fund_id, effective_date, category, description)
+                            VALUES (%s, %s, 'contribution', %s)
+                            RETURNING id
+                        """, (fid, eff_date,
+                              f"Capital contribution — {row['legal_name']}"))
+                        txn_id = str(cur.fetchone()["id"])
+
+                        # Debit cash
+                        cur.execute("""
+                            INSERT INTO transaction_lines
+                                (transaction_id, line_number, account_id, debit)
+                            VALUES (%s, 1, %s, %s)
+                        """, (txn_id, cash_acct, round(commitment, 4)))
+
+                        # Credit LP capital
+                        cur.execute("""
+                            INSERT INTO transaction_lines
+                                (transaction_id, line_number, account_id, credit)
+                            VALUES (%s, 2, %s, %s)
+                        """, (txn_id, lp_cap_acct, round(commitment, 4)))
+
                 imported += 1
 
         conn.commit()
+        year_note = ""
+        contrib_years = [r["contribution_year"] for r in rows if r.get("contribution_year")]
+        if contrib_years:
+            year_note = f" (contributions from {min(contrib_years)}–{max(contrib_years)})"
         return {
             "fund_id":      fid,
             "imported":     imported,
             "lps_imported": imported,
-            "message":      f"Imported {imported} LP records.",
+            "message":      f"Imported {imported} LP records{year_note}.",
         }
     finally:
         conn.close()
