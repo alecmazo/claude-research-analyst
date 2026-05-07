@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui21-20260506';
+const DGA_BUILD = 'ui22-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3412,6 +3412,43 @@ async function handleCaptableUpload(input) {
 
     const n = body.imported || 0;
     statusEl.textContent = `✓ Imported ${n} LP records`;
+    statusEl.className = 'fund-import-status fund-import-status-ok';
+    _fundLoaded = false;
+    loadFund();
+  } catch (e) {
+    statusEl.textContent = `✗ Import failed: ${e.message}`;
+    statusEl.className = 'fund-import-status fund-import-status-err';
+  }
+  input.value = '';
+}
+
+// ── Import Annual NAV ─────────────────────────────────────────────────────────
+function triggerAnnualNavUpload() {
+  const el = document.getElementById('annual-nav-file-input');
+  if (el) el.click();
+}
+
+async function handleAnnualNavUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('fund-annual-nav-status');
+  statusEl.textContent = '⏳ Uploading annual NAV data…';
+  statusEl.className = 'fund-import-status fund-import-status-loading';
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    if (_activeFundId) form.append('fund_id', _activeFundId);
+
+    const r = await fetch(`${API_BASE}/api/fund/import-annual-nav`, {
+      method: 'POST',
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+      body: form,
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+
+    statusEl.textContent = `✓ ${body.message || `Imported ${body.imported} rows`}`;
     statusEl.className = 'fund-import-status fund-import-status-ok';
     _fundLoaded = false;
     loadFund();

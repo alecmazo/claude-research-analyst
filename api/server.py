@@ -856,7 +856,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui21-20260506"
+WEB_BUILD_VERSION = "ui22-20260506"
 
 
 @app.get("/api/build")
@@ -2895,6 +2895,199 @@ async def fund_import_captable(
                 parts.append(f"hurdle {econ_applied['hurdle_pct']*100:.0f}%")
             resp["message"] += f" Fund economics updated: {', '.join(parts)}."
         return resp
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Annual NAV import — populates fund_annual_snapshots for waterfall display
+# ---------------------------------------------------------------------------
+
+def _parse_annual_nav(content: bytes, filename: str) -> list:
+    """Parse an annual NAV / waterfall spreadsheet.
+
+    Expected columns (detected by header keyword matching):
+        Year | Jan 1 NAV | Dec 31 NAV | Contributions | Hurdle Amount |
+        Carry Owed | GP Equity Allocated | LP Allocations | … |
+        accum GP equity in fund
+
+    Returns list of dicts matching fund_annual_snapshots columns.
+    Rows without a valid Dec 31 NAV (e.g. current partial year) are skipped.
+    """
+    fname_lower = (filename or '').lower()
+    if fname_lower.endswith(('.xlsx', '.xls')):
+        if not _OPENPYXL_OK:
+            raise HTTPException(400, "openpyxl not installed — upload a CSV instead")
+        wb  = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws  = wb.active
+        raw = [[str(c.value if c.value is not None else '').strip() for c in row]
+               for row in ws.iter_rows()]
+    else:
+        text = content.decode('utf-8', errors='replace')
+        raw  = [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text))]
+
+    if not raw:
+        return []
+
+    def _pm(s):
+        """Parse money string: '$1,474,741' or '-' → float (dash / blank → 0)."""
+        s2 = str(s or '').replace('$', '').replace(',', '').strip()
+        if s2 in ('', '-', '—', 'None'):
+            return 0.0
+        try:
+            return float(s2)
+        except (ValueError, TypeError):
+            return None
+
+    def _pct_val(s):
+        """Parse percent string '13.37%' or '0.1337' → fraction 0–1, or None."""
+        s2 = str(s or '').strip()
+        # Strip everything after a space (e.g. "0.08% EM: 99.02%" → "0.08%")
+        s2 = s2.split()[0] if s2 else ''
+        s2 = s2.replace('%', '').strip()
+        try:
+            v = float(s2)
+            return v / 100.0 if v > 1 else v   # "13.37" → 0.1337; "0.1337" → 0.001337?
+            # Heuristic: values > 1 are already percent form
+        except (ValueError, TypeError):
+            return None
+
+    # ── Locate the header row (col A = "year") ───────────────────────────────
+    header_idx = None
+    for i, row in enumerate(raw):
+        if row and str(row[0]).strip().lower() == 'year':
+            header_idx = i
+            break
+
+    if header_idx is None:
+        return []
+
+    header = [str(c).lower().strip() for c in raw[header_idx]]
+
+    def _find_col(*kws):
+        for kw in kws:
+            for j, h in enumerate(header):
+                if kw in h:
+                    return j
+        return None
+
+    c_start  = _find_col('jan 1', 'jan1', 'start nav', 'beginning') or 1
+    c_end    = _find_col('dec 31', 'dec31', 'end nav', 'ending')    or 2
+    c_contr  = _find_col('contribution')                             or 3
+    c_hurdle = _find_col('hurdle amount', 'hurdle')                  or 4
+    c_carry  = _find_col('carry owed', 'carry earned', 'carry')      or 5
+    c_accum  = _find_col('accum gp', 'accumulated gp', 'accum gp equity')
+
+    # accum GP column is often the last column (J = index 9 in typical layout)
+    if c_accum is None:
+        c_accum = max(9, len(header) - 1)
+
+    out = []
+    for row in raw[header_idx + 1:]:
+        if not row or not str(row[0]).strip():
+            continue
+        try:
+            year = int(float(str(row[0]).strip()))
+        except (ValueError, TypeError):
+            continue
+        if year < 2000 or year > 2099:
+            continue
+
+        start_nav = _pm(row[c_start]  if c_start  < len(row) else '') or 0.0
+        end_nav   = _pm(row[c_end]    if c_end    < len(row) else '')
+        contrib   = _pm(row[c_contr]  if c_contr  < len(row) else '') or 0.0
+        hurdle    = _pm(row[c_hurdle] if c_hurdle < len(row) else '') or 0.0
+        carry     = _pm(row[c_carry]  if c_carry  < len(row) else '') or 0.0
+        accum_raw = row[c_accum]      if c_accum  < len(row) else ''
+
+        # Skip partial / current year rows (no Dec 31 NAV yet)
+        if end_nav is None or end_nav <= 0:
+            continue
+
+        accum_pct    = _pct_val(accum_raw)
+        gp_equity_end = round(accum_pct * end_nav, 2) if accum_pct is not None else 0.0
+        gross_profit  = round(end_nav - start_nav - contrib, 2)
+
+        out.append({
+            'year':          year,
+            'start_nav':     round(start_nav, 2),
+            'end_nav':       round(end_nav,   2),
+            'contributions': round(contrib,   2),
+            'hurdle_amount': round(hurdle,    2),
+            'gross_profit':  gross_profit,
+            'carry_earned':  round(carry,     2),
+            'carry_paid':    0.0,
+            'carry_rolled':  round(carry,     2),
+            'gp_equity_end': gp_equity_end,
+        })
+
+    return out
+
+
+@app.post("/api/fund/import-annual-nav")
+async def fund_import_annual_nav(
+    request: Request,
+    fund_id: str = Form(None),
+    file: UploadFile = File(...),
+):
+    """Upload an annual NAV / waterfall spreadsheet to populate
+    fund_annual_snapshots and unlock the year-by-year waterfall table.
+
+    Accepted column layout (flexible, header-keyword matched):
+        Year | Jan 1 NAV | Dec 31 NAV | Contributions | Hurdle Amount |
+        Carry Owed | GP Equity Allocated | LP Allocations | … |
+        accum GP equity in fund
+
+    Rows without a Dec 31 NAV are silently skipped (current partial year).
+    Existing rows for the same fund+year are overwritten (upsert).
+    """
+    _require_fund_token(request)
+    raw  = await file.read()
+    rows = _parse_annual_nav(raw, file.filename or '')
+    if not rows:
+        raise HTTPException(400,
+            "No valid annual NAV rows found. Expected columns: Year, "
+            "Jan 1 NAV, Dec 31 NAV, Contributions, Hurdle Amount, Carry Owed, "
+            "accum GP equity in fund.")
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+
+            upserted = 0
+            for r in rows:
+                cur.execute("""
+                    INSERT INTO fund_annual_snapshots
+                        (fund_id, year, start_nav, end_nav, contributions,
+                         hurdle_amount, gross_profit, carry_earned,
+                         carry_paid, carry_rolled, gp_equity_end)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (fund_id, year) DO UPDATE
+                        SET start_nav      = EXCLUDED.start_nav,
+                            end_nav        = EXCLUDED.end_nav,
+                            contributions  = EXCLUDED.contributions,
+                            hurdle_amount  = EXCLUDED.hurdle_amount,
+                            gross_profit   = EXCLUDED.gross_profit,
+                            carry_earned   = EXCLUDED.carry_earned,
+                            carry_paid     = EXCLUDED.carry_paid,
+                            carry_rolled   = EXCLUDED.carry_rolled,
+                            gp_equity_end  = EXCLUDED.gp_equity_end,
+                            updated_at     = NOW()
+                """, (fid, r['year'], r['start_nav'], r['end_nav'],
+                      r['contributions'], r['hurdle_amount'], r['gross_profit'],
+                      r['carry_earned'], r['carry_paid'], r['carry_rolled'],
+                      r['gp_equity_end']))
+                upserted += 1
+
+        conn.commit()
+        years = sorted(r['year'] for r in rows)
+        return {
+            "fund_id":  fid,
+            "imported": upserted,
+            "years":    years,
+            "message":  f"Imported {upserted} annual NAV rows ({min(years)}–{max(years)}).",
+        }
     finally:
         conn.close()
 
