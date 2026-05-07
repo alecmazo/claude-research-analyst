@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui37-20260507';
+const DGA_BUILD = 'ui38-20260507';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -63,7 +63,9 @@ window.fundListDiag = async function (fundType = 'lp_fund') {
   } catch (_) {}
 
   // Async: ask the server what the current build is. If it differs from our
-  // embedded constant AND we haven't already tried, hard reload once.
+  // embedded constant, hard reload — unless the guard is active (prevents
+  // infinite loops). Guard is cleared by forceRefreshApp() so the next
+  // Force Refresh always picks up the latest code.
   try {
     fetch('/api/build', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
@@ -72,10 +74,11 @@ window.fundListDiag = async function (fundType = 'lp_fund') {
         try { localStorage.setItem('_dga_build', j.build); } catch (_) {}
         if (j.build === DGA_BUILD) return;
         if (alreadyTried) {
-          console.log('[DGA] Build mismatch but reload guard active — local:', DGA_BUILD, 'server:', j.build);
+          // Guard is active — log but don't loop. User can Force Refresh in Settings.
+          console.warn('[DGA] Build mismatch — reload guard active. Local:', DGA_BUILD, '| Server:', j.build, '| Go to Settings → Force Refresh to update.');
           return;
         }
-        console.log('[DGA] Build mismatch — local:', DGA_BUILD, 'server:', j.build);
+        console.log('[DGA] Build mismatch — reloading. Local:', DGA_BUILD, '| Server:', j.build);
         try { sessionStorage.setItem('_dga_reload_attempted', '1'); } catch (_) {}
         const u = new URL(window.location.href);
         u.searchParams.set('_b', Date.now().toString());
@@ -332,13 +335,15 @@ async function forceRefreshApp() {
       const keys = await caches.keys();
       await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
     }
-    // 3) Wipe the build marker so we don't no-op on next load
+    // 3) Wipe the build marker AND the reload-guard flag so the next load
+    //    can detect a mismatch and auto-reload freely.
     try { localStorage.removeItem('_dga_build'); } catch (_) {}
+    try { sessionStorage.removeItem('_dga_reload_attempted'); } catch (_) {}
   } catch (_) { /* best-effort */ }
-  // 4) Hard reload with a unique cache-bust query
+  // 4) Hard reload — strip any existing ?_b= param so the URL looks fresh
   const u = new URL(window.location.href);
-  u.searchParams.set('_b', String(Date.now()));
-  // Use replace() so the back button doesn't take them to the stale URL
+  u.searchParams.delete('_b');
+  u.searchParams.set('_force', String(Date.now()));
   window.location.replace(u.toString());
 }
 

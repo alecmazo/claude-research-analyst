@@ -903,6 +903,36 @@ def root():
     return RedirectResponse(url="/app/")
 
 
+# Hard-coded no-cache headers applied to every shell response.
+# Using an explicit FileResponse endpoint (not the StaticFiles mount) is the
+# ONLY reliable way to guarantee the browser + CDN edge never serve a stale
+# index.html.  StaticFiles + middleware is not guaranteed to override Railway's
+# edge layer; a dedicated route with headers= on the FileResponse is.
+_NOCACHE = {
+    "Cache-Control":              "no-cache, no-store, must-revalidate",
+    "Pragma":                     "no-cache",
+    "Expires":                    "0",
+    "Surrogate-Control":          "no-store",
+    "CDN-Cache-Control":          "no-store",
+    "Cloudflare-CDN-Cache-Control": "no-store",
+}
+
+
+@app.get("/app/")
+@app.get("/app/index.html")
+async def serve_shell():
+    """Serve the web app shell with strict no-cache headers.
+
+    Defined as explicit routes so they take precedence over the
+    StaticFiles mount — guarantees Cache-Control is set on every
+    response regardless of CDN/edge behaviour.
+    """
+    path = WEB_DIR / "index.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="index.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
+
+
 @app.get("/info")
 def info():
     return {"service": "DGA Research Analyst API", "status": "ok"}
@@ -911,7 +941,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui37-20260507"
+WEB_BUILD_VERSION = "ui38-20260507"
 
 
 @app.get("/api/build")
