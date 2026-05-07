@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui30-20260506';
+const DGA_BUILD = 'ui31-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -3533,7 +3533,7 @@ async function dedupLPs() {
       statusEl.textContent = j.message || `Removed ${j.duplicates_removed} duplicate(s).`;
       statusEl.className = 'fund-import-status fund-import-status-ok';
     }
-    if (j.duplicates_removed > 0) loadFundLPs();   // refresh LP table
+    if (j.duplicates_removed > 0) loadFund();   // refresh LP table
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = '✗ ' + err.message;

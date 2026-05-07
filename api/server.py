@@ -909,7 +909,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui30-20260506"
+WEB_BUILD_VERSION = "ui31-20260506"
 
 
 @app.get("/api/build")
@@ -2817,102 +2817,80 @@ async def fund_import_captable(
             cash_acct = acct_map.get("1020") or acct_map.get("1010")
             lp_cap_acct = acct_map.get("3100")  # Capital — LP
 
+            # ── Wipe existing LP rows for this fund, then reimport clean ─────
+            # Discover every table that FK-references lps.id and delete those
+            # child rows first so the DELETE FROM lps won't hit FK violations.
+            cur.execute("""
+                SELECT kcu.table_name, kcu.column_name
+                  FROM information_schema.table_constraints       tc
+                  JOIN information_schema.key_column_usage        kcu
+                       ON  kcu.constraint_name = tc.constraint_name
+                       AND kcu.table_schema    = tc.table_schema
+                  JOIN information_schema.referential_constraints rc
+                       ON  rc.constraint_name  = tc.constraint_name
+                       AND rc.constraint_schema = tc.table_schema
+                  JOIN information_schema.key_column_usage        ccu
+                       ON  ccu.constraint_name = rc.unique_constraint_name
+                 WHERE tc.constraint_type = 'FOREIGN KEY'
+                   AND ccu.table_name     = 'lps'
+                   AND ccu.column_name    = 'id'
+            """)
+            fk_refs = [(r["table_name"], r["column_name"]) for r in cur.fetchall()]
+
+            cur.execute("SELECT id FROM lps WHERE fund_id = %s", (fid,))
+            existing_lp_ids = [str(r["id"]) for r in cur.fetchall()]
+            if existing_lp_ids:
+                for tbl, col in fk_refs:
+                    cur.execute(
+                        f'DELETE FROM "{tbl}" WHERE "{col}" = ANY(%s::uuid[])',
+                        (existing_lp_ids,)
+                    )
+                cur.execute("DELETE FROM lps WHERE fund_id = %s", (fid,))
+
+            # ── Insert fresh LP rows ──────────────────────────────────────────
             imported = 0
-            skipped  = 0
             for row in rows:
                 commitment = float(row["commitment"])
                 eff_date   = row["effective_date"]
 
-                # ── Get or create LP (idempotent — match by legal_name) ───────
                 cur.execute("""
-                    SELECT id FROM lps
-                     WHERE fund_id = %s
-                       AND LOWER(legal_name) = LOWER(%s)
-                     LIMIT 1
-                """, (fid, row["legal_name"]))
-                existing_lp = cur.fetchone()
-
-                if existing_lp:
-                    lp_id = str(existing_lp["id"])
-                else:
-                    cur.execute("""
-                        INSERT INTO lps (fund_id, legal_name, entity_type,
-                                         accred_type, status)
-                        VALUES (%s, %s, %s, 'net_worth', 'active')
-                        RETURNING id
-                    """, (fid, row["legal_name"], row["entity_type"]))
-                    r = cur.fetchone()
-                    if not r:
-                        continue
-                    lp_id = str(r["id"])
-
-                # ── Commitment: skip if same amount already exists ─────────────
-                cur.execute("""
-                    SELECT id, commitment_amount FROM commitments
-                     WHERE lp_id = %s AND fund_id = %s AND superseded_by IS NULL
-                     LIMIT 1
-                """, (lp_id, fid))
-                old = cur.fetchone()
-
-                if old and abs(float(old["commitment_amount"]) - commitment) < 0.01:
-                    # Exact same commitment already on record — skip entirely
-                    skipped += 1
+                    INSERT INTO lps (fund_id, legal_name, entity_type,
+                                     accred_type, status)
+                    VALUES (%s, %s, %s, 'net_worth', 'active')
+                    RETURNING id
+                """, (fid, row["legal_name"], row["entity_type"]))
+                r = cur.fetchone()
+                if not r:
                     continue
+                lp_id = str(r["id"])
 
-                # Different amount (or no existing commitment) → insert + supersede
+                # ── Commitment ────────────────────────────────────────────────
                 cur.execute("""
                     INSERT INTO commitments
                         (lp_id, fund_id, commitment_amount, effective_date)
                     VALUES (%s, %s, %s, %s)
-                    RETURNING id
                 """, (lp_id, fid, commitment, eff_date))
-                new_cmt_id = str(cur.fetchone()["id"])
-
-                if old:
-                    cur.execute("""
-                        UPDATE commitments SET superseded_by = %s WHERE id = %s
-                    """, (new_cmt_id, str(old["id"])))
 
                 # ── Capital contribution journal entry ────────────────────────
-                # Dr. 1020 Cash — Brokerage (or 1010 Operating)
-                # Cr. 3100 Capital — Limited Partners
-                # Only if we have both accounts and the LP didn't already have
-                # a contribution transaction for the same amount on the same date.
                 if cash_acct and lp_cap_acct and commitment > 0:
                     cur.execute("""
-                        SELECT COUNT(*) AS n FROM transactions t
-                          JOIN transaction_lines tl ON tl.transaction_id = t.id
-                         WHERE t.fund_id = %s
-                           AND t.category = 'contribution'
-                           AND t.effective_date = %s
-                           AND tl.account_id = %s
-                           AND tl.credit = %s
-                    """, (fid, eff_date, lp_cap_acct, round(commitment, 4)))
-                    already_exists = cur.fetchone()["n"] > 0
-
-                    if not already_exists:
-                        cur.execute("""
-                            INSERT INTO transactions
-                                (fund_id, effective_date, category, description)
-                            VALUES (%s, %s, 'contribution', %s)
-                            RETURNING id
-                        """, (fid, eff_date,
-                              f"Capital contribution — {row['legal_name']}"))
-                        txn_id = str(cur.fetchone()["id"])
-
-                        # Debit cash
-                        cur.execute("""
-                            INSERT INTO transaction_lines
-                                (transaction_id, line_number, account_id, debit)
-                            VALUES (%s, 1, %s, %s)
-                        """, (txn_id, cash_acct, round(commitment, 4)))
-
-                        # Credit LP capital
-                        cur.execute("""
-                            INSERT INTO transaction_lines
-                                (transaction_id, line_number, account_id, credit)
-                            VALUES (%s, 2, %s, %s)
-                        """, (txn_id, lp_cap_acct, round(commitment, 4)))
+                        INSERT INTO transactions
+                            (fund_id, effective_date, category, description)
+                        VALUES (%s, %s, 'contribution', %s)
+                        RETURNING id
+                    """, (fid, eff_date,
+                          f"Capital contribution — {row['legal_name']}"))
+                    txn_id = str(cur.fetchone()["id"])
+                    cur.execute("""
+                        INSERT INTO transaction_lines
+                            (transaction_id, line_number, account_id, debit)
+                        VALUES (%s, 1, %s, %s)
+                    """, (txn_id, cash_acct, round(commitment, 4)))
+                    cur.execute("""
+                        INSERT INTO transaction_lines
+                            (transaction_id, line_number, account_id, credit)
+                        VALUES (%s, 2, %s, %s)
+                    """, (txn_id, lp_cap_acct, round(commitment, 4)))
 
                 imported += 1
 
@@ -2970,16 +2948,12 @@ async def fund_import_captable(
         contrib_years = [r["contribution_year"] for r in rows if r.get("contribution_year")]
         if contrib_years:
             year_note = f" (contributions from {min(contrib_years)}–{max(contrib_years)})"
-        lp_msg = f"Imported {imported} LP record(s)" if imported else "No new LP records"
-        if skipped:
-            lp_msg += f" ({skipped} already on file, skipped)"
         resp: dict = {
-            "fund_id":          fid,
-            "imported":         imported,
-            "lps_imported":     imported,
-            "lps_skipped":      skipped,
+            "fund_id":           fid,
+            "imported":          imported,
+            "lps_imported":      imported,
             "nav_rows_imported": nav_imported,
-            "message":          f"{lp_msg}{year_note}.",
+            "message":           f"Imported {imported} LP record(s){year_note}.",
         }
         if nav_imported:
             resp["message"] += f" {nav_imported} annual NAV rows loaded."
