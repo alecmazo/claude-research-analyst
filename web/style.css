@@ -3233,8 +3233,13 @@ body {
    Ideas, Report viewer, and Portfolio remain on the light theme.
    ============================================================ */
 
-/* Body background + text — only when the Fund view is active */
+/* Body + html background — only when the Fund view is active.
+   html covers the viewport area outside body's max-width on wide screens. */
+html:has(#view-fund.active),
 body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
+
+/* The section itself fills the full column — no white gaps between cards */
+#view-fund { background: #060f1e; min-height: 100vh; }
 
 /* Cards, text helpers, and buttons — scoped to fund view */
 #view-fund .card {

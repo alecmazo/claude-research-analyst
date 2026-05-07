@@ -901,7 +901,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui23-20260506"
+WEB_BUILD_VERSION = "ui24-20260506"
 
 
 @app.get("/api/build")
@@ -2810,39 +2810,48 @@ async def fund_import_captable(
             lp_cap_acct = acct_map.get("3100")  # Capital — LP
 
             imported = 0
+            skipped  = 0
             for row in rows:
                 commitment = float(row["commitment"])
                 eff_date   = row["effective_date"]
 
-                # ── Upsert LP ─────────────────────────────────────────────────
+                # ── Get or create LP (idempotent — match by legal_name) ───────
                 cur.execute("""
-                    INSERT INTO lps (fund_id, legal_name, entity_type,
-                                     accred_type, status)
-                    VALUES (%s, %s, %s, 'net_worth', 'active')
-                    ON CONFLICT DO NOTHING
-                    RETURNING id
-                """, (fid, row["legal_name"], row["entity_type"]))
-                result = cur.fetchone()
-                if result:
-                    lp_id = str(result["id"])
+                    SELECT id FROM lps
+                     WHERE fund_id = %s
+                       AND LOWER(legal_name) = LOWER(%s)
+                     LIMIT 1
+                """, (fid, row["legal_name"]))
+                existing_lp = cur.fetchone()
+
+                if existing_lp:
+                    lp_id = str(existing_lp["id"])
                 else:
                     cur.execute("""
-                        SELECT id FROM lps
-                         WHERE fund_id = %s
-                           AND LOWER(legal_name) = LOWER(%s)
-                    """, (fid, row["legal_name"]))
+                        INSERT INTO lps (fund_id, legal_name, entity_type,
+                                         accred_type, status)
+                        VALUES (%s, %s, %s, 'net_worth', 'active')
+                        RETURNING id
+                    """, (fid, row["legal_name"], row["entity_type"]))
                     r = cur.fetchone()
                     if not r:
                         continue
                     lp_id = str(r["id"])
 
-                # ── Supersede existing active commitment ──────────────────────
+                # ── Commitment: skip if same amount already exists ─────────────
                 cur.execute("""
-                    SELECT id FROM commitments
+                    SELECT id, commitment_amount FROM commitments
                      WHERE lp_id = %s AND fund_id = %s AND superseded_by IS NULL
+                     LIMIT 1
                 """, (lp_id, fid))
                 old = cur.fetchone()
 
+                if old and abs(float(old["commitment_amount"]) - commitment) < 0.01:
+                    # Exact same commitment already on record — skip entirely
+                    skipped += 1
+                    continue
+
+                # Different amount (or no existing commitment) → insert + supersede
                 cur.execute("""
                     INSERT INTO commitments
                         (lp_id, fund_id, commitment_amount, effective_date)
@@ -2953,12 +2962,16 @@ async def fund_import_captable(
         contrib_years = [r["contribution_year"] for r in rows if r.get("contribution_year")]
         if contrib_years:
             year_note = f" (contributions from {min(contrib_years)}–{max(contrib_years)})"
+        lp_msg = f"Imported {imported} LP record(s)" if imported else "No new LP records"
+        if skipped:
+            lp_msg += f" ({skipped} already on file, skipped)"
         resp: dict = {
-            "fund_id":      fid,
-            "imported":     imported,
-            "lps_imported": imported,
+            "fund_id":          fid,
+            "imported":         imported,
+            "lps_imported":     imported,
+            "lps_skipped":      skipped,
             "nav_rows_imported": nav_imported,
-            "message":      f"Imported {imported} LP record(s){year_note}.",
+            "message":          f"{lp_msg}{year_note}.",
         }
         if nav_imported:
             resp["message"] += f" {nav_imported} annual NAV rows loaded."
