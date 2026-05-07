@@ -726,6 +726,9 @@ class PortfolioJobStatus(BaseModel):
     n_tickers: int
     error: str | None = None
     result: dict | None = None
+    # Input weights from the uploaded CSV: {ticker: decimal_weight} so the
+    # frontend can render current-weight → target-weight arrows.
+    input_weights: dict | None = None
     # Live progress emitted by run_portfolio_rebalance — populated on
     # /portfolio/{id} polls while status='running'. Frontend renders a
     # per-ticker counter ("3 / 12 — analyzing AAPL") and progress bar.
@@ -941,7 +944,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui40-20260507"
+WEB_BUILD_VERSION = "ui41-20260507"
 
 
 @app.get("/api/build")
@@ -1334,6 +1337,18 @@ async def start_portfolio(
     date_str = datetime.utcnow().strftime("%Y%m%d")
     xlsx_out = PORTFOLIO_OUT_DIR / f"Rebalance{date_str}.xlsx"
 
+    # Store input weights so the UI can render current→target arrows
+    input_weights = {}
+    for r in records:
+        t = (r.get("ticker") or r.get("Ticker") or "").strip().upper()
+        w = r.get("weight") or r.get("Weight") or r.get("current_weight") or 0
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            w = 0.0
+        if t:
+            input_weights[t] = w
+
     with _pjobs_lock:
         _pjobs[job_id] = {
             "job_id": job_id,
@@ -1343,6 +1358,8 @@ async def start_portfolio(
             "n_tickers": len(records),
             "error": None,
             "result": None,
+            # Input weights (ticker → decimal weight) for current→target display
+            "input_weights": input_weights,
             # Seeded so a poll right after submit gets a useful payload
             # rather than null. Real values arrive once the worker thread
             # starts firing on_progress.

@@ -3378,3 +3378,181 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   background: rgba(220,60,60,0.4);
   color: #ff6060;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MANAGED ACCOUNT — detail view layout
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Back nav + account title */
+.acct-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px 6px;
+}
+.acct-back-btn { padding: 5px 12px; font-size: 12px; }
+.acct-detail-title {
+  margin: 0;
+  color: var(--gold);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Section header row: label + action button on same line */
+.acct-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 6px;
+}
+.acct-section-header .label { margin: 0; }
+.acct-calc-btn { padding: 5px 12px; font-size: 11px; }
+
+/* Rebalance card */
+.acct-rebalance-card { margin-top: 0; }
+
+/* Upload row for portfolio file */
+.reb-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.reb-upload-row .fund-import-btn { flex-shrink: 0; }
+.reb-upload-row .file-info { font-size: 11px; color: var(--mid-gray); }
+
+/* Compact options toggles row */
+.reb-options-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+.reb-option-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reb-option-item .gamma-label { font-size: 11px; margin: 0; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   REBALANCE RESULT — numbered current → target table
+   ────────────────────────────────────────────────────────────────────────── */
+.reb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.reb-table thead tr {
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.reb-table th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-weight: 700;
+  color: #4a6080;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+.reb-table td {
+  padding: 6px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+}
+.reb-table tr:last-child td { border-bottom: none; }
+
+/* Column widths */
+.reb-num  { width: 24px; text-align: right; color: #4a6080; font-size: 10px; padding-right: 8px !important; }
+.reb-ticker { font-weight: 600; font-size: 12px; color: #c0cfe0; letter-spacing: 0.5px; }
+.reb-cur  { text-align: right; color: #8090a8; font-size: 11px; min-width: 48px; }
+.reb-arrow { text-align: center; color: #3a5070; font-size: 11px; width: 18px; padding: 0 2px !important; }
+.reb-tgt  { text-align: right; font-weight: 600; font-size: 12px; color: #c9a84c; min-width: 48px; }
+.reb-delta { text-align: right; font-size: 11px; min-width: 52px; }
+
+.reb-delta-up { color: #22c55e; }
+.reb-delta-dn { color: #ef4444; }
+.reb-delta-nc { color: #5a7090; }
+
+/* Row accent lines */
+.reb-row-increase td  { border-left: 2px solid rgba(34,197,94,0.4); }
+.reb-row-decrease td  { border-left: 2px solid rgba(239,68,68,0.3); }
+.reb-row-new td       { border-left: 2px solid rgba(201,168,76,0.5); }
+.reb-row-exit td      { border-left: 2px solid rgba(100,100,120,0.3); opacity: 0.7; }
+
+/* NEW / EXIT badges on ticker cell */
+.reb-badge {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+.reb-badge-new  { background: rgba(201,168,76,0.25); color: #c9a84c; }
+.reb-badge-exit { background: rgba(100,100,120,0.3); color: #8090a8; }
+
+/* Numbered pills fallback (when no current weights) */
+.pill-num {
+  display: inline-block;
+  font-size: 9px;
+  color: #4a6080;
+  margin-right: 3px;
+  min-width: 14px;
+  text-align: right;
+}
+
+/* Failed tickers in managed account context — use <details> pattern */
+.failed-section-summary {
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  color: #e05a4e;
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 0;
+}
+.failed-section-summary::-webkit-details-marker { display: none; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Dark-theme overrides for the fund/managed-account section
+   ────────────────────────────────────────────────────────────────────────── */
+#view-fund .acct-detail-nav { background: transparent; }
+#view-fund .acct-section-header .label { color: #4a6080; }
+#view-fund .reb-table th { color: #3a5070; }
+#view-fund .reb-table td { border-bottom-color: rgba(255,255,255,0.04); }
+#view-fund .reb-ticker { color: #c0cfe0; }
+#view-fund .reb-cur    { color: #5a7090; }
+#view-fund .reb-arrow  { color: #2a4060; }
+#view-fund .reb-tgt    { color: #c9a84c; }
+#view-fund .strategy-result {
+  background: #0d1f38;
+  border-color: rgba(255,255,255,0.07);
+  margin-top: 8px;
+}
+#view-fund .strategy-result.primary {
+  background: rgba(201,168,76,0.06);
+  border-color: rgba(201,168,76,0.25);
+}
+#view-fund .strategy-result-head {
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+#view-fund .strategy-result-title { color: #e0d8c8; font-size: 12px; }
+#view-fund .strategy-result-count { color: #3a5070; font-size: 11px; }
+
+/* ── Account list card — "CURRENT VALUE" metric label wider ─────────── */
+.fund-summary-metric-label {
+  font-size: 8.5px; /* slightly smaller to fit "CURRENT VALUE" */
+  letter-spacing: 1px;
+}
+

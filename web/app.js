@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui40-20260507';
+const DGA_BUILD = 'ui41-20260507';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -507,11 +507,16 @@ if (portfolioFileInput) {
   portfolioFileInput.addEventListener('change', () => {
     const f = portfolioFileInput.files?.[0];
     if (f) {
-      portfolioFileInfo.textContent = `📄 ${f.name} — ${(f.size / 1024).toFixed(1)} KB`;
-      portfolioRunBtn.disabled = false;
+      // Update the label button text in the new upload-row UI
+      const labelEl = document.getElementById('portfolio-file-label');
+      if (labelEl) labelEl.textContent = `✓ ${f.name}`;
+      if (portfolioFileInfo) portfolioFileInfo.textContent = `${(f.size / 1024).toFixed(1)} KB`;
+      if (portfolioRunBtn) portfolioRunBtn.disabled = false;
     } else {
-      portfolioFileInfo.textContent = '';
-      portfolioRunBtn.disabled = true;
+      const labelEl = document.getElementById('portfolio-file-label');
+      if (labelEl) labelEl.textContent = '↑ Choose Portfolio File';
+      if (portfolioFileInfo) portfolioFileInfo.textContent = '';
+      if (portfolioRunBtn) portfolioRunBtn.disabled = true;
     }
   });
 }
@@ -600,17 +605,18 @@ async function pollPortfolio() {
     } else if (job.status === 'done') {
       clearInterval(portfolioPollTimer);
       portfolioStatusText.textContent = `✅ Done — ${job.n_tickers} tickers analyzed`;
-      renderPortfolioResult(job.result);
+      renderPortfolioResult(job.result, null, job.input_weights);
       portfolioDownloadBtn.style.display = 'block';
       portfolioDownloadBtn.onclick = () =>
         window.location.href = api.portfolioDownloadUrl(portfolioJobId);
-      // Persist for "Last portfolio run" card.
+      // Persist for "Last portfolio run" card (include input_weights for current→target).
       persistPortfolioLast({
         job_id: portfolioJobId,
         n_tickers: job.n_tickers,
         strategy: job.strategy,
         completed_at: new Date().toISOString(),
         result: job.result,
+        input_weights: job.input_weights || {},
       });
     } else if (job.status === 'failed') {
       clearInterval(portfolioPollTimer);
@@ -651,7 +657,7 @@ function rehydratePortfolioLastCard() {
   document.getElementById('portfolio-last-date').textContent =
     `Ran ${formatDateTime(last.completed_at)} — ${last.n_tickers} tickers (${last.strategy})`;
   const body = document.getElementById('portfolio-last-result');
-  body.innerHTML = buildPortfolioResultHtml(last.result);
+  body.innerHTML = buildPortfolioResultHtml(last.result, last.input_weights || {});
 
   const dlBtn = document.getElementById('portfolio-last-download-btn');
   if (dlBtn) {
@@ -662,6 +668,8 @@ function rehydratePortfolioLastCard() {
       dlBtn.style.display = 'none';
     }
   }
+  // In managed-account context the "View Summary" btn is hidden; on the
+  // standalone Portfolio page it navigates to the summary view.
   const viewBtn = document.getElementById('portfolio-last-view-btn');
   if (viewBtn) viewBtn.onclick = openPortfolioSummary;
 }
@@ -702,25 +710,99 @@ async function openPortfolioSummary() {
   }
 }
 
-function buildPortfolioResultHtml(result) {
+// Build the rebalance result HTML.
+// inputWeights: {TICKER: decimalWeight} from the uploaded CSV — enables
+// the current % → target % arrow table.  Pass {} or null to show pills.
+function buildPortfolioResultHtml(result, inputWeights) {
   if (!result) return '';
+  const inputs = inputWeights || {};
+  const hasInputs = Object.keys(inputs).length > 0;
+
   const primary = result.primary_strategy;
   const order = [primary, ...Object.keys(result.strategies || {}).filter(k => k !== primary)];
-  const blocks = order.map(k => {
+
+  const blocks = order.map((k, stratIdx) => {
     const s = (result.strategies || {})[k];
     if (!s) return '';
-    const weights = Object.entries(s.weights || {})
-      .sort(([, a], [, b]) => b - a)
-      .map(([t, w]) => `<span class="pill">${t} <strong>${(w * 100).toFixed(1)}%</strong></span>`)
-      .join('');
     const isPrimary = k === primary;
+
+    // ── Build numbered current → target table when we have input weights ──
+    let posHtml = '';
+    const targetEntries = Object.entries(s.weights || {})
+      .sort(([, a], [, b]) => b - a);
+
+    if (hasInputs) {
+      // Merge: all tickers from target + any in current not in target (exits)
+      const allTickers = new Set([
+        ...targetEntries.map(([t]) => t),
+        ...Object.keys(inputs),
+      ]);
+      // Build rows: target weight may be 0 (full exit) or missing (no recommendation)
+      const rows = [];
+      for (const ticker of allTickers) {
+        const cur = (inputs[ticker] ?? 0);
+        const tgt = (s.weights || {})[ticker] ?? 0;
+        rows.push({ ticker, cur, tgt });
+      }
+      // Sort: primary sort by target weight desc, then by current weight desc
+      rows.sort((a, b) => (b.tgt - a.tgt) || (b.cur - a.cur));
+
+      const rowsHtml = rows.map((r, idx) => {
+        const curPct  = (r.cur * 100).toFixed(1);
+        const tgtPct  = (r.tgt * 100).toFixed(1);
+        const delta   = r.tgt - r.cur;
+        const deltaPct = (delta * 100).toFixed(1);
+        const sign    = delta > 0.0005 ? '+' : '';
+        const deltaCls = delta > 0.0005 ? 'reb-delta-up' : delta < -0.0005 ? 'reb-delta-dn' : 'reb-delta-nc';
+        const rowCls   = delta > 0.005  ? 'reb-row-increase'
+                       : delta < -0.005 ? 'reb-row-decrease'
+                       : r.cur === 0    ? 'reb-row-new'
+                       : r.tgt === 0    ? 'reb-row-exit'
+                       : '';
+        const badge   = r.cur === 0 ? '<span class="reb-badge reb-badge-new">NEW</span>'
+                      : r.tgt === 0 ? '<span class="reb-badge reb-badge-exit">EXIT</span>'
+                      : '';
+        return `
+          <tr class="${rowCls}">
+            <td class="reb-num">${idx + 1}</td>
+            <td class="reb-ticker">${r.ticker}${badge}</td>
+            <td class="reb-cur">${r.cur > 0 ? curPct + '%' : '—'}</td>
+            <td class="reb-arrow">→</td>
+            <td class="reb-tgt">${r.tgt > 0 ? tgtPct + '%' : '—'}</td>
+            <td class="reb-delta ${deltaCls}">${sign}${deltaPct}%</td>
+          </tr>`;
+      }).join('');
+
+      posHtml = `
+        <table class="reb-table">
+          <thead>
+            <tr>
+              <th class="reb-num">#</th>
+              <th>Ticker</th>
+              <th>Current</th>
+              <th></th>
+              <th>Target</th>
+              <th>Δ</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`;
+    } else {
+      // Fallback pills when no current weights uploaded
+      const pills = targetEntries
+        .map(([t, w], idx) =>
+          `<span class="pill"><span class="pill-num">${idx + 1}</span>${t} <strong>${(w * 100).toFixed(1)}%</strong></span>`)
+        .join('');
+      posHtml = `<div class="strategy-result-pills">${pills || '<em>No positions</em>'}</div>`;
+    }
+
     return `
       <div class="strategy-result ${isPrimary ? 'primary' : ''}">
         <div class="strategy-result-head">
           <span class="strategy-result-title">${s.label}${isPrimary ? ' — Primary' : ''}</span>
           <span class="strategy-result-count">${s.held} positions</span>
         </div>
-        <div class="strategy-result-pills">${weights || '<em>No positions</em>'}</div>
+        ${posHtml}
       </div>`;
   }).join('');
 
@@ -731,10 +813,12 @@ function buildPortfolioResultHtml(result) {
       `<div class="failed-ticker-row"><strong>${f.ticker}</strong>: ${f.error || 'Unknown error'}</div>`
     ).join('');
     failedHtml = `
-      <div class="failed-section">
-        <div class="label" style="margin-top:14px;">FAILED TICKERS (${failed.length})</div>
+      <details class="failed-section">
+        <summary class="failed-section-summary">
+          FAILED TICKERS (${failed.length}) — click to expand
+        </summary>
         <div class="failed-ticker-list">${rows}</div>
-      </div>`;
+      </details>`;
   }
 
   let emailHtml = '';
@@ -751,11 +835,12 @@ function buildPortfolioResultHtml(result) {
   return blocks + failedHtml + emailHtml;
 }
 
-function renderPortfolioResult(result, target) {
+function renderPortfolioResult(result, target, inputWeights) {
   const el = target || portfolioResultBox;
   if (!el) return;
-  el.innerHTML = buildPortfolioResultHtml(result);
+  el.innerHTML = buildPortfolioResultHtml(result, inputWeights || {});
   el.style.display = 'block';
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // Strategy selector was removed from the UI — every run produces all three
@@ -1473,8 +1558,17 @@ function initTracker() {
   document.getElementById('tracker-detail-close-portfolio')?.addEventListener('click', closeTrackerCurrent);
   document.getElementById('tracker-detail-delete')?.addEventListener('click', deleteTrackerCurrent);
 
-  // Unified YTD: Modified Dietz return + per-stock attribution in one call
-  document.getElementById('history-upload-btn')?.addEventListener('click', uploadAccountHistory);
+  // "⚡ Calculate" outer button: toggle the upload form card
+  document.getElementById('history-upload-btn')?.addEventListener('click', () => {
+    const card = document.getElementById('history-upload-card');
+    if (!card) return;
+    const isOpen = card.style.display !== 'none';
+    card.style.display = isOpen ? 'none' : '';
+    const btn = document.getElementById('history-upload-btn');
+    if (btn) btn.textContent = isOpen ? '⚡ Calculate' : '✕ Close';
+  });
+  // Inner "Calculate YTD" button: run the actual upload
+  document.getElementById('history-run-btn')?.addEventListener('click', uploadAccountHistory);
 
   // Email the YTD report (only visible in live YTD detail mode)
   document.getElementById('tracker-email-btn')?.addEventListener('click', sendYtdEmail);
@@ -1660,7 +1754,9 @@ async function uploadAccountHistory() {
   const beginInput = document.getElementById('history-begin-value');
   const statusEl   = document.getElementById('history-upload-status');
   const resultBox  = document.getElementById('history-result-box');
-  const btn        = document.getElementById('history-upload-btn');
+  // Use the inner "Calculate YTD" submit button (not the outer toggle)
+  const btn        = document.getElementById('history-run-btn') ||
+                     document.getElementById('history-upload-btn');
 
   const posFile    = posInput?.files?.[0];
   const actFile    = actInput?.files?.[0];
@@ -1700,11 +1796,25 @@ async function uploadAccountHistory() {
     }
     const data = await res.json();
     if (statusEl) statusEl.style.display = 'none';
+    // Collapse the upload form so result is front-and-center
+    const uploadCard = document.getElementById('history-upload-card');
+    if (uploadCard) uploadCard.style.display = 'none';
+    const toggleBtn = document.getElementById('history-upload-btn');
+    if (toggleBtn) toggleBtn.textContent = '⚡ Calculate';
     _renderUnifiedYtdResult(data);
-    // Refresh the live benchmark card then auto-open the YTD detail view
-    // so the user doesn't have to click the card to see results.
-    await loadLiveBenchmark();
-    openLiveBenchmarkDetail(data.snapshot_id || null);
+    // Scroll result into view
+    setTimeout(() => {
+      const box = document.getElementById('history-result-box');
+      if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+    // Cache the YTD return so the account list card can show it
+    try {
+      const mdRet = data.md_return_pct ?? null;
+      if (mdRet !== null) localStorage.setItem('dga_ytd_return', String(mdRet));
+    } catch (_) {}
+    // Refresh the live benchmark card in the background — do NOT navigate
+    // away to openLiveBenchmarkDetail; results are already rendered inline.
+    loadLiveBenchmark().catch(() => {});
   } catch (err) {
     if (statusEl) { statusEl.textContent = `Error: ${err.message}`; }
   } finally {
@@ -2905,8 +3015,9 @@ function showAccountDetailView(accountId, accountName) {
   if (listEl)   listEl.style.display   = 'none';
   if (detailEl) detailEl.style.display = '';
   if (titleEl)  titleEl.textContent    = accountName || 'Account';
-  // Load existing YTD/portfolio data for this account context
+  // Render cached YTD attribution + last rebalance result inline
   _loadMyPortfolioData();
+  _rehydrateLastRebalanceResult();
 }
 
 async function loadAccountList() {
@@ -2936,10 +3047,20 @@ async function loadAccountList() {
         </div>`;
       return;
     }
+    // Try to get a cached YTD return from the last YTD calculation
+    let cachedYtd = null;
+    try { cachedYtd = parseFloat(localStorage.getItem('dga_ytd_return')); } catch (_) {}
+    if (!Number.isFinite(cachedYtd)) cachedYtd = null;
+
     listEl.innerHTML = `
       <div class="fund-list-hint">Select an account to view details</div>
       ${accounts.map(f => {
-        const gainColor = f.total_gain >= 0 ? '#c9a84c' : '#e05a4e';
+        // Use cached YTD return if available, otherwise fall back to API gain_pct
+        const ytdVal   = cachedYtd !== null ? cachedYtd : (f.gain_pct ?? null);
+        const ytdColor = (ytdVal ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+        const ytdStr   = ytdVal !== null
+          ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}%${cachedYtd !== null ? ' YTD' : ''}`
+          : '—';
         return `
         <div class="fund-summary-card" data-account-id="${f.id}" data-account-name="${escHtml(f.name)}">
           <div class="fund-summary-header">
@@ -2955,19 +3076,19 @@ async function loadAccountList() {
           </div>
           <div class="fund-summary-metrics">
             <div class="fund-summary-metric">
-              <div class="fund-summary-metric-label">NAV</div>
+              <div class="fund-summary-metric-label">CURRENT VALUE</div>
               <div class="fund-summary-metric-value">${fmt$(f.nav)}</div>
             </div>
             <div class="fund-summary-metric">
-              <div class="fund-summary-metric-label">GAIN</div>
-              <div class="fund-summary-metric-value" style="color:${gainColor}">${fmtPct(f.gain_pct)}</div>
+              <div class="fund-summary-metric-label">YTD GAIN</div>
+              <div class="fund-summary-metric-value" style="color:${ytdColor}">${ytdStr}</div>
             </div>
             <div class="fund-summary-metric">
               <div class="fund-summary-metric-label">POS</div>
               <div class="fund-summary-metric-value">${f.position_count || 0}</div>
             </div>
             <div class="fund-summary-metric">
-              <div class="fund-summary-metric-label">FEE</div>
+              <div class="fund-summary-metric-label">MGMT FEE</div>
               <div class="fund-summary-metric-value">${(f.mgmt_fee_pct * 100).toFixed(1)}%</div>
             </div>
           </div>
@@ -3162,6 +3283,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// Re-render the last rebalance result (from localStorage) in the account
+// detail view so it's visible immediately without re-running.
+function _rehydrateLastRebalanceResult() {
+  const last = readPortfolioLast();
+  if (!last?.result) return;
+  const resultBox = document.getElementById('portfolio-result');
+  const progressCard = document.getElementById('portfolio-progress-card');
+  const dlBtn = document.getElementById('portfolio-download-btn');
+  const statusTxt = document.getElementById('portfolio-status-text');
+  if (!resultBox) return;
+  if (progressCard) progressCard.style.display = 'block';
+  if (statusTxt) statusTxt.textContent =
+    `Last run ${formatDateTime(last.completed_at)} — ${last.n_tickers || '?'} tickers`;
+  renderPortfolioResult(last.result, resultBox, last.input_weights || {});
+  if (dlBtn && last.job_id) {
+    dlBtn.style.display = 'block';
+    dlBtn.onclick = () => window.location.href = api.portfolioDownloadUrl(last.job_id);
+  }
+}
 
 // Re-render the most recent YTD result (from persisted account_history) so
 // the attribution table is visible immediately when switching to My Portfolio.

@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui40-20260507';
+    var EXPECTED = 'ui41-20260507';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui40">
+  <link rel="stylesheet" href="/app/style.css?v=ui41">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -674,139 +674,137 @@
     </div>
 
     <!-- ════════════════════ ACCOUNT DETAIL VIEW ══════════════════════════ -->
-    <!-- Hidden by default; shown when user clicks an account card.
-         Contains the existing YTD/attribution/rebalance flow scoped to one account. -->
     <div id="account-detail-view" style="display:none;">
-      <div class="fund-detail-nav" style="padding:12px 16px 4px; display:flex; align-items:center; gap:10px;">
-        <button class="btn-secondary" onclick="showAccountListView()" style="padding:6px 12px;">← All Accounts</button>
-        <h2 id="account-detail-name" style="margin:0; color:#c9a84c; font-size:18px;"></h2>
+
+      <!-- Back nav + account name -->
+      <div class="acct-detail-nav">
+        <button class="btn-secondary acct-back-btn" onclick="showAccountListView()">← Accounts</button>
+        <h2 id="account-detail-name" class="acct-detail-title"></h2>
       </div>
 
-    <!-- Past YTD runs (snapshot history) — shown when ≥1 run exists -->
-    <div class="card" id="ytd-snapshots-card" style="display:none;">
-      <div class="label">PAST YTD RUNS</div>
-      <p class="hint" style="margin-bottom:8px;">
-        Every YTD calculation is saved here. Click any run to re-open the full
-        attribution with that snapshot's holdings &amp; values.
-      </p>
-      <div id="ytd-snapshots-list"></div>
-    </div>
-
-    <!-- ════════════ YTD & ATTRIBUTION ════════════ -->
-    <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
-      <div class="label section-label">YTD &amp; ATTRIBUTION</div>
-      <button id="history-upload-btn" class="fund-import-btn">⚡ Calculate YTD &amp; Attribution</button>
-    </div>
-    <div class="card" id="history-upload-card">
-      <p class="hint" style="margin-bottom:12px;">
-        Upload Fidelity CSVs to compute a Modified Dietz YTD return and a
-        per-stock attribution that factors in partial sales, new buys, dividends,
-        and the actual Jan 1 position.
-      </p>
-      <div class="history-fields">
-        <div class="history-field-row">
-          <label class="history-field-label" for="history-begin-value">
-            Jan 1 Portfolio Value&nbsp;($)
-            <span class="history-optional-badge">optional w/ Income CSV</span>
-          </label>
-          <input type="number" id="history-begin-value" class="fund-import-input"
-                 placeholder="e.g. 3628719" min="1" step="1" style="margin-bottom:0;">
-        </div>
-        <div class="history-field-row" style="margin-top:12px;">
-          <label class="history-field-label">Account Positions CSV (Current Holdings)</label>
-          <button class="fund-import-btn" onclick="document.getElementById('history-positions-file').click()" style="display:block; margin-top:4px;">
-            <span id="history-positions-file-label">↑ Choose File</span>
-          </button>
-          <input type="file" id="history-positions-file" accept=".csv,.txt" style="display:none;"
-                 onchange="document.getElementById('history-positions-file-label').textContent = '✓ ' + (this.files[0]?.name || '↑ Choose File')">
-        </div>
-        <div class="history-field-row" style="margin-top:12px;">
-          <label class="history-field-label">Account History CSV (YTD transactions)</label>
-          <button class="fund-import-btn" onclick="document.getElementById('history-file').click()" style="display:block; margin-top:4px;">
-            <span id="history-file-label">↑ Choose File</span>
-          </button>
-          <input type="file" id="history-file" accept=".csv,.txt" style="display:none;"
-                 onchange="document.getElementById('history-file-label').textContent = '✓ ' + (this.files[0]?.name || '↑ Choose File')">
-        </div>
-        <div class="history-field-row" style="margin-top:12px;">
-          <label class="history-field-label">
-            Investment Income Balance CSV
-            <span class="history-optional-badge">optional</span>
-          </label>
-          <button class="fund-import-btn" onclick="document.getElementById('history-monthly-perf-file').click()" style="display:block; margin-top:4px;">
-            <span id="history-monthly-perf-file-label">↑ Choose File</span>
-          </button>
-          <input type="file" id="history-monthly-perf-file" accept=".csv,.txt" style="display:none;"
-                 onchange="document.getElementById('history-monthly-perf-file-label').textContent = '✓ ' + (this.files[0]?.name || '↑ Choose File')">
-        </div>
+      <!-- ══════════════════════════════════════════════════════════════
+           SECTION 1 — LIVE PORTFOLIO YTD
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="acct-section-header">
+        <span class="label">LIVE PORTFOLIO YTD</span>
+        <button id="history-upload-btn" class="fund-import-btn acct-calc-btn">⚡ Calculate</button>
       </div>
-      <div id="history-upload-status" class="history-upload-status" style="display:none;"></div>
+
+      <!-- Upload form — shown/hidden by the Calculate button in app.js -->
+      <div class="card" id="history-upload-card" style="display:none;">
+        <p class="hint" style="margin-bottom:12px;">
+          Upload Fidelity CSVs to compute Modified Dietz YTD return and
+          per-stock attribution with the actual Jan 1 position.
+        </p>
+        <div class="history-fields">
+          <div class="history-field-row">
+            <label class="history-field-label" for="history-begin-value">
+              Jan 1 Portfolio Value ($)
+              <span class="history-optional-badge">optional w/ Income CSV</span>
+            </label>
+            <input type="number" id="history-begin-value" class="fund-import-input"
+                   placeholder="e.g. 3628719" min="1" step="1" style="margin-bottom:0;">
+          </div>
+          <div class="history-field-row" style="margin-top:10px;">
+            <label class="history-field-label">Positions CSV (Current Holdings)</label>
+            <button class="fund-import-btn" onclick="document.getElementById('history-positions-file').click()" style="display:block;margin-top:4px;">
+              <span id="history-positions-file-label">↑ Choose File</span>
+            </button>
+            <input type="file" id="history-positions-file" accept=".csv,.txt" style="display:none;"
+                   onchange="document.getElementById('history-positions-file-label').textContent='✓ '+(this.files[0]?.name||'↑ Choose File')">
+          </div>
+          <div class="history-field-row" style="margin-top:10px;">
+            <label class="history-field-label">Account History CSV (YTD transactions)</label>
+            <button class="fund-import-btn" onclick="document.getElementById('history-file').click()" style="display:block;margin-top:4px;">
+              <span id="history-file-label">↑ Choose File</span>
+            </button>
+            <input type="file" id="history-file" accept=".csv,.txt" style="display:none;"
+                   onchange="document.getElementById('history-file-label').textContent='✓ '+(this.files[0]?.name||'↑ Choose File')">
+          </div>
+          <div class="history-field-row" style="margin-top:10px;">
+            <label class="history-field-label">
+              Investment Income Balance CSV
+              <span class="history-optional-badge">optional</span>
+            </label>
+            <button class="fund-import-btn" onclick="document.getElementById('history-monthly-perf-file').click()" style="display:block;margin-top:4px;">
+              <span id="history-monthly-perf-file-label">↑ Choose File</span>
+            </button>
+            <input type="file" id="history-monthly-perf-file" accept=".csv,.txt" style="display:none;"
+                   onchange="document.getElementById('history-monthly-perf-file-label').textContent='✓ '+(this.files[0]?.name||'↑ Choose File')">
+          </div>
+        </div>
+        <div id="history-upload-status" class="history-upload-status" style="display:none;margin-top:10px;"></div>
+        <button id="history-run-btn" class="btn-primary full-width" style="margin-top:12px;">Calculate YTD &amp; Attribution</button>
+      </div>
+
+      <!-- Past YTD runs (snapshot history) -->
+      <div class="card" id="ytd-snapshots-card" style="display:none;">
+        <div class="label">PAST YTD RUNS</div>
+        <div id="ytd-snapshots-list"></div>
+      </div>
+
+      <!-- YTD result renders inline here (never navigates away) -->
       <div id="history-result-box" class="history-result-box" style="display:none;"></div>
-    </div>
 
-    <!-- ── RUN REBALANCE ──────────────────────────────────────────── -->
-    <div class="card">
-      <div class="label">UPLOAD PORTFOLIO</div>
-      <p class="hint">
-        CSV or XLSX with columns: <strong>Ticker</strong>, <strong>Weight</strong> (%), <strong>Optimized</strong>.
-        The Optimized column (if present) is ignored on input.
-      </p>
-      <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" class="file-input">
-      <div id="portfolio-file-info" class="file-info"></div>
-    </div>
-
-    <input type="hidden" id="strategy-list" value="current">
-
-    <div class="card">
-      <div class="gamma-row" style="margin-top:0;padding-top:0;border-top:none;">
-        <label class="gamma-label" for="portfolio-reuse">Reuse cached reports (faster)</label>
-        <label class="toggle-switch">
-          <input type="checkbox" id="portfolio-reuse" checked>
-          <span class="toggle-slider"></span>
-        </label>
+      <!-- ══════════════════════════════════════════════════════════════
+           SECTION 2 — REBALANCE
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="acct-section-header" style="margin-top:16px;">
+        <span class="label">REBALANCE</span>
       </div>
-      <p class="hint" id="portfolio-reuse-hint">
-        ON: reuses existing per-ticker reports from the server (fast, cheap).
-        OFF: <strong>clears the local report cache first</strong> and re-runs every ticker through Grok — use when you want the latest news folded in.
-      </p>
-      <div class="gamma-row">
-        <label class="gamma-label" for="portfolio-gamma">Generate Gamma Presentations</label>
-        <label class="toggle-switch">
-          <input type="checkbox" id="portfolio-gamma">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
-    </div>
 
-    <div class="card" id="portfolio-progress-card" style="display:none;">
-      <div class="label">STATUS</div>
-      <div id="portfolio-status-text" class="portfolio-status">Queued…</div>
-      <div id="portfolio-result" style="display:none;"></div>
-      <div id="portfolio-error" class="error-box" style="display:none;"></div>
-      <button id="portfolio-download-btn" class="btn-primary full-width" style="display:none;">Download DGA-portfolio.xlsx</button>
-    </div>
+      <div class="card acct-rebalance-card">
+        <p class="hint" style="margin-bottom:10px;">
+          Upload a CSV/XLSX with <strong>Ticker</strong> and <strong>Weight (%)</strong> columns.
+          The AI will analyze each position and return optimized target weights.
+        </p>
 
-    <!-- Persistent last-result card -->
-    <div class="card" id="portfolio-last-card" style="display:none;">
-      <div class="label">LAST PORTFOLIO RUN</div>
-      <div class="last-portfolio-date" id="portfolio-last-date"></div>
-      <div id="portfolio-last-result"></div>
-      <div class="last-portfolio-actions">
-        <button id="portfolio-last-view-btn" class="btn-secondary">View Summary →</button>
-        <button id="portfolio-last-download-btn" class="btn-primary">Download xlsx</button>
-      </div>
-    </div>
+        <!-- File pick row -->
+        <div class="reb-upload-row">
+          <button class="fund-import-btn" onclick="document.getElementById('portfolio-file').click()">
+            <span id="portfolio-file-label">↑ Choose Portfolio File</span>
+          </button>
+          <span id="portfolio-file-info" class="file-info"></span>
+        </div>
+        <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" style="display:none;">
 
-    <!-- Portal cards: Quarterly Reports -->
-    <div class="fund-portal-grid" style="margin-top:8px;">
-      <div class="fund-portal-card fund-portal-card-dim">
-        <div class="fund-portal-card-icon">📄</div>
-        <div class="fund-portal-card-title">Quarterly Reports</div>
-        <div class="fund-portal-card-sub">LP statements &amp; performance summaries</div>
-        <div class="fund-portal-soon">Coming Soon</div>
+        <input type="hidden" id="strategy-list" value="current">
+
+        <!-- Options row -->
+        <div class="reb-options-row">
+          <div class="reb-option-item">
+            <label class="gamma-label" for="portfolio-reuse">Reuse cache</label>
+            <label class="toggle-switch" style="width:36px;height:20px;">
+              <input type="checkbox" id="portfolio-reuse" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="reb-option-item">
+            <label class="gamma-label" for="portfolio-gamma">Gamma slides</label>
+            <label class="toggle-switch" style="width:36px;height:20px;">
+              <input type="checkbox" id="portfolio-gamma">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="hint" id="portfolio-reuse-hint" style="margin-top:4px;margin-bottom:10px;">
+          Cache ON: reuses existing reports (fast). OFF: re-runs every ticker through Grok for latest news.
+        </p>
+
+        <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
       </div>
-    </div>
+
+      <!-- Progress + result — stays in this view, no navigation -->
+      <div class="card" id="portfolio-progress-card" style="display:none;">
+        <div class="acct-section-header" style="margin:0 0 8px;">
+          <span class="label">REBALANCE STATUS</span>
+          <button id="portfolio-download-btn" class="fund-import-btn" style="display:none;">⬇ Download xlsx</button>
+        </div>
+        <div id="portfolio-status-text" class="portfolio-status"></div>
+        <div id="portfolio-error" class="error-box" style="display:none;"></div>
+        <!-- Numbered current → target result table renders here -->
+        <div id="portfolio-result" style="display:none; margin-top:12px;"></div>
+      </div>
 
     </div><!-- /account-detail-view -->
   </div><!-- /fund-branch-portfolio -->
@@ -862,6 +860,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui41"></script>
+<script src="/app/app.js?v=ui42"></script>
 </body>
 </html>
