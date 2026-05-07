@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui28-20260506';
+const DGA_BUILD = 'ui29-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -762,18 +762,22 @@ async function injectReportPrices(reports) {
 
       // Recompute target upside against the live price so it's in sync
       // intraday (the server's stored upside_pct is from report-time close).
-      if (targetEl && r.price_target != null) {
-        const tgt = Number(r.price_target);
+      if (r.price_target != null) {
+        const tgt    = Number(r.price_target);
         const upside = price > 0 ? ((tgt - price) / price) * 100 : null;
-        let h = `<span class="rr-target-label">TGT</span>`;
-        h    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
-        if (upside != null) {
-          const sign = upside >= 0 ? '+' : '';
-          const cls  = upside >= 0 ? 'up' : 'down';
-          h += `<span class="rr-upside ${cls}">${sign}${upside.toFixed(1)}%</span>`;
-          targetEl.title = `12M target $${tgt.toFixed(0)} = ${sign}${upside.toFixed(1)}% upside vs $${price.toFixed(2)}`;
+        // Write back so sort-by-upside uses live value
+        r._liveUpside = upside;
+        if (targetEl) {
+          let h = `<span class="rr-target-label">TGT</span>`;
+          h    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
+          if (upside != null) {
+            const sign = upside >= 0 ? '+' : '';
+            const cls  = upside >= 0 ? 'up' : 'down';
+            h += `<span class="rr-upside ${cls}">${sign}${upside.toFixed(1)}%</span>`;
+            targetEl.title = `12M target $${tgt.toFixed(0)} = ${sign}${upside.toFixed(1)}% upside vs $${price.toFixed(2)}`;
+          }
+          targetEl.innerHTML = h;
         }
-        targetEl.innerHTML = h;
       }
     } catch { /* non-fatal */ }
   });
@@ -1039,88 +1043,115 @@ function toggleScanPanel(ticker) {
 }
 
 // ============================================================================
-// Updated loadReports — now also fetches live prices
+// Reports — sortable by TGT/UPSIDE, live-price aware
 // ============================================================================
+let _reportsCache  = [];   // full reports array, mutated by injectReportPrices
+let _reportsSortDir = 'desc'; // 'desc' = highest upside first
+
+const _yr = new Date().getFullYear();
+function _compactDate(iso) {
+  try {
+    const d = new Date(iso);
+    const opts = d.getFullYear() === _yr
+      ? { month: 'short', day: 'numeric' }
+      : { month: 'short', day: 'numeric', year: '2-digit' };
+    return d.toLocaleDateString('en-US', opts);
+  } catch { return ''; }
+}
+
+function _targetCellHtml(r) {
+  if (r.price_target == null) return '<span class="rr-target-missing">—</span>';
+  const tgt = Number(r.price_target);
+  // prefer live upside written back by injectReportPrices
+  const pct = r._liveUpside != null ? r._liveUpside
+            : r.upside_pct  != null ? Number(r.upside_pct) : null;
+  let html = `<span class="rr-target-label">TGT</span>`;
+  html    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
+  if (pct != null) {
+    const sign = pct >= 0 ? '+' : '';
+    const cls  = pct >= 0 ? 'up' : 'down';
+    html += `<span class="rr-upside ${cls}">${sign}${pct.toFixed(1)}%</span>`;
+  }
+  return html;
+}
+
+function _sortedReports(dir) {
+  return [..._reportsCache].sort((a, b) => {
+    // Use live upside if available, else stored upside_pct
+    const ua = (a._liveUpside ?? (a.upside_pct != null ? Number(a.upside_pct) : null));
+    const ub = (b._liveUpside ?? (b.upside_pct != null ? Number(b.upside_pct) : null));
+    const va = ua != null ? ua : -Infinity;
+    const vb = ub != null ? ub : -Infinity;
+    return dir === 'desc' ? vb - va : va - vb;
+  });
+}
+
+function _renderReportRows() {
+  const list = document.getElementById('reports-list');
+  if (!list) return;
+  const sorted = _sortedReports(_reportsSortDir);
+  const arrow  = _reportsSortDir === 'desc' ? ' ▼' : ' ▲';
+
+  list.innerHTML = `
+    <div class="reports-table">
+      <div class="reports-col-header">
+        <span>TICKER</span>
+        <span class="rch-price">PRICE</span>
+        <span class="rch-target rch-sortable" id="rch-upside-toggle" title="Click to sort">TGT / UPSIDE${arrow}</span>
+      </div>
+      ${sorted.map(r => `
+        <div class="report-row" data-ticker="${r.ticker}">
+          <div class="rr-ticker-cell">
+            <div class="rr-ticker">${r.ticker}</div>
+            <div class="rr-meta">
+              ${r.has_docx ? '<span class="rr-pill rr-pill-doc" title="Word report available">DOC</span>' : ''}
+              ${r.has_pptx ? '<span class="rr-pill rr-pill-ppt" title="Gamma deck available">PPT</span>' : ''}
+              <span class="rr-date">${_compactDate(r.generated_at)}</span>
+            </div>
+          </div>
+          <div class="rr-price-cell" id="price-tag-${r.ticker}">…</div>
+          <div class="rr-target-cell" id="target-tag-${r.ticker}">${_targetCellHtml(r)}</div>
+          <span class="rr-chev">›</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  list.querySelectorAll('.report-row').forEach(el => {
+    el.addEventListener('click', () => openReport(el.dataset.ticker));
+  });
+
+  // Sort toggle on the column header
+  const toggleEl = document.getElementById('rch-upside-toggle');
+  if (toggleEl) {
+    toggleEl.addEventListener('click', () => {
+      _reportsSortDir = _reportsSortDir === 'desc' ? 'asc' : 'desc';
+      _renderReportRows();
+      // Re-fill already-fetched prices (DOM was rebuilt, cells are empty again)
+      injectReportPrices(_reportsCache);
+    });
+  }
+}
+
 async function loadReports() {
   const list = document.getElementById('reports-list');
   try {
-    const reports = await api.listReports();
-    // Sort by upside % descending; reports with no target sink to the bottom
-    reports.sort((a, b) => {
-      const ua = a.upside_pct != null ? Number(a.upside_pct) : -Infinity;
-      const ub = b.upside_pct != null ? Number(b.upside_pct) : -Infinity;
-      return ub - ua;
-    });
-    if (!reports.length) {
+    _reportsCache = await api.listReports();
+    if (!_reportsCache.length) {
       list.innerHTML = '<div class="empty">No reports yet. Run your first analysis above.</div>';
-      // Hide the count badge if it's there
       const countEl = document.getElementById('reports-count');
       if (countEl) countEl.style.display = 'none';
       return;
     }
-    // Update count badge in section header
     const countEl = document.getElementById('reports-count');
     if (countEl) {
-      countEl.textContent = reports.length;
+      countEl.textContent = _reportsCache.length;
       countEl.style.display = 'inline-block';
     }
-    // Compact date — drop the year when it's the current year for tighter rows
-    const yr = new Date().getFullYear();
-    const compactDate = (iso) => {
-      try {
-        const d = new Date(iso);
-        const opts = d.getFullYear() === yr
-          ? { month: 'short', day: 'numeric' }
-          : { month: 'short', day: 'numeric', year: '2-digit' };
-        return d.toLocaleDateString('en-US', opts);
-      } catch { return ''; }
-    };
-    // Pre-render target placeholder using server-extracted summary so the
-    // target column doesn't pop in late on slow networks. Live price arrives
-    // shortly after via injectReportPrices() and we recompute upside there.
-    const targetCellHtml = (r) => {
-      if (r.price_target == null) return '<span class="rr-target-missing">—</span>';
-      const tgt = Number(r.price_target);
-      let pct = r.upside_pct != null ? Number(r.upside_pct) : null;
-      let html = `<span class="rr-target-label">TGT</span>`;
-      html    += `<span class="rr-target">$${tgt.toFixed(0)}</span>`;
-      if (pct != null) {
-        const sign = pct >= 0 ? '+' : '';
-        const cls  = pct >= 0 ? 'up' : 'down';
-        html += `<span class="rr-upside ${cls}">${sign}${pct.toFixed(1)}%</span>`;
-      }
-      return html;
-    };
-
-    list.innerHTML = `
-      <div class="reports-table">
-        <div class="reports-col-header">
-          <span>TICKER</span>
-          <span class="rch-price">PRICE</span>
-          <span class="rch-target">TGT / UPSIDE</span>
-        </div>
-        ${reports.map(r => `
-          <div class="report-row" data-ticker="${r.ticker}">
-            <div class="rr-ticker-cell">
-              <div class="rr-ticker">${r.ticker}</div>
-              <div class="rr-meta">
-                ${r.has_docx ? '<span class="rr-pill rr-pill-doc" title="Word report available">DOC</span>' : ''}
-                ${r.has_pptx ? '<span class="rr-pill rr-pill-ppt" title="Gamma deck available">PPT</span>' : ''}
-                <span class="rr-date">${compactDate(r.generated_at)}</span>
-              </div>
-            </div>
-            <div class="rr-price-cell" id="price-tag-${r.ticker}">…</div>
-            <div class="rr-target-cell" id="target-tag-${r.ticker}">${targetCellHtml(r)}</div>
-            <span class="rr-chev">›</span>
-          </div>
-        `).join('')}
-      </div>
-    `;
-    list.querySelectorAll('.report-row').forEach(el => {
-      el.addEventListener('click', () => openReport(el.dataset.ticker));
-    });
-    // Kick off price fetches without blocking the render.
-    injectReportPrices(reports);
+    _reportsSortDir = 'desc'; // always start highest-first on fresh load
+    _renderReportRows();
+    // Kick off live price fetches; injectReportPrices writes _liveUpside back
+    injectReportPrices(_reportsCache);
   } catch (err) {
     list.innerHTML = `<div class="empty">Could not load reports: ${err.message}</div>`;
   }

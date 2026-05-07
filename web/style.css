@@ -344,6 +344,12 @@ body {
 }
 .reports-col-header .rch-price  { text-align: right; }
 .reports-col-header .rch-target { text-align: right; color: var(--gold); }
+.reports-col-header .rch-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+.reports-col-header .rch-sortable:hover { opacity: 0.75; }
 
 .report-row {
   display: grid;

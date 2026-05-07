@@ -637,13 +637,21 @@ async def auth_middleware(request: Request, call_next):
             or path.startswith("/branding/")
             or not path.startswith("/api/")):
         return await call_next(request)
-    # Check token from header or query string
+    # Check main app token from header or query string
     token = (request.headers.get("x-auth-token")
              or request.query_params.get("token")
              or "")
-    if not _valid_token(token):
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-    return await call_next(request)
+    if _valid_token(token):
+        return await call_next(request)
+    # Fund paths may also be accessed with a valid fund token alone
+    # (they perform their own _require_fund_token check internally).
+    if path.startswith("/api/fund/"):
+        fund_tok = (request.headers.get("x-fund-token")
+                    or request.query_params.get("fund_token")
+                    or "")
+        if _valid_fund_token(fund_tok):
+            return await call_next(request)
+    return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
 _jobs: dict[str, dict[str, Any]] = {}
@@ -901,7 +909,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui28-20260506"
+WEB_BUILD_VERSION = "ui29-20260506"
 
 
 @app.get("/api/build")
