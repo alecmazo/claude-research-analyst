@@ -697,6 +697,7 @@ class CreateFundRequest(BaseModel):
     mgmt_fee_pct:   float = 0.02
     carry_pct:      float = 0.25
     hurdle_pct:     float = 0.08
+    fund_type:      str   = 'lp_fund'   # 'lp_fund' | 'managed_account'
 
 class AnalyzeRequest(BaseModel):
     ticker: str
@@ -909,7 +910,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui32-20260506"
+WEB_BUILD_VERSION = "ui33-20260506"
 
 
 @app.get("/api/build")
@@ -2023,10 +2024,65 @@ def _fund_conn():
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+    # Ensure self-migrations have run before the first real query.
+    # Cheap no-op after the first successful run (guarded by _MIGRATIONS_APPLIED).
+    try:
+        _apply_self_migrations()
+    except Exception:
+        pass
     try:
         return psycopg2.connect(url)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Fund DB unavailable: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Idempotent self-applying migrations.
+# Each ALTER uses IF NOT EXISTS so it's safe to run on every startup.
+# Failures are logged but don't crash the app.
+# ---------------------------------------------------------------------------
+_MIGRATIONS_APPLIED = False
+
+def _apply_self_migrations() -> None:
+    """Run any pending schema migrations on startup. Idempotent."""
+    global _MIGRATIONS_APPLIED
+    if _MIGRATIONS_APPLIED or not _PSYCOPG2_OK:
+        return
+    if not os.environ.get("DATABASE_URL"):
+        return
+    statements = [
+        # 0003_fund_type — add fund_type discriminator (lp_fund | managed_account)
+        """ALTER TABLE funds
+              ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFAULT 'lp_fund'""",
+        """DO $$ BEGIN
+              ALTER TABLE funds ADD CONSTRAINT funds_fund_type_check
+                  CHECK (fund_type IN ('lp_fund', 'managed_account'));
+           EXCEPTION WHEN duplicate_object THEN NULL; END $$""",
+        """CREATE INDEX IF NOT EXISTS idx_funds_fund_type ON funds(fund_type)""",
+    ]
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with conn.cursor() as cur:
+                for stmt in statements:
+                    try:
+                        cur.execute(stmt)
+                    except Exception as e:
+                        print(f"[migration] non-fatal: {e}")
+                        conn.rollback()
+                    else:
+                        conn.commit()
+            _MIGRATIONS_APPLIED = True
+            print("[migration] self-migrations applied")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[migration] could not connect: {e}")
+
+
+@app.on_event("startup")
+async def _on_startup_run_migrations() -> None:
+    _apply_self_migrations()
 
 def _fund_id(cur) -> str:
     fid = os.environ.get("FUND_ID")
@@ -2052,19 +2108,29 @@ def _resolve_fund_id(cur, fund_id: str = None) -> str:
 
 
 @app.get("/api/fund/list")
-async def fund_list(request: Request):
-    """Return a lightweight summary of every fund in the DB.
+async def fund_list(request: Request, fund_type: str = None):
+    """Return a lightweight summary of funds in the DB, optionally filtered
+    by fund_type ('lp_fund' | 'managed_account').
     Used by the multi-fund selector UI to show all funds before drilling in."""
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""
-                SELECT id, name, short_name, inception_date, status,
-                       mgmt_fee_pct, carry_pct, hurdle_pct
-                  FROM funds
-                 ORDER BY inception_date ASC
-            """)
+            if fund_type in ('lp_fund', 'managed_account'):
+                cur.execute("""
+                    SELECT id, name, short_name, inception_date, status,
+                           mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
+                      FROM funds
+                     WHERE fund_type = %s
+                     ORDER BY inception_date ASC
+                """, (fund_type,))
+            else:
+                cur.execute("""
+                    SELECT id, name, short_name, inception_date, status,
+                           mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
+                      FROM funds
+                     ORDER BY inception_date ASC
+                """)
             funds = [dict(r) for r in cur.fetchall()]
 
             result = []
@@ -2104,6 +2170,7 @@ async def fund_list(request: Request):
                     "short_name":     f["short_name"],
                     "inception_date": str(f["inception_date"]),
                     "status":         f["status"],
+                    "fund_type":      f.get("fund_type") or "lp_fund",
                     "mgmt_fee_pct":   float(f["mgmt_fee_pct"]),
                     "carry_pct":      float(f["carry_pct"]),
                     "hurdle_pct":     float(f["hurdle_pct"]),
@@ -2604,26 +2671,28 @@ async def fund_admin_create(request: Request, body: CreateFundRequest):
                 yr = body.inception_date[:4]
                 fy_end = f"{yr}-12-31"
 
+            ftype = body.fund_type if body.fund_type in ('lp_fund', 'managed_account') else 'lp_fund'
             cur.execute("""
                 INSERT INTO funds (
                     name, short_name, structure, domicile, base_ccy,
                     inception_date, fiscal_year_end,
                     mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
                     carry_pct, hurdle_pct, catch_up_pct,
-                    max_lps, status
+                    max_lps, status, fund_type
                 ) VALUES (
                     %s, %s, '3c1', 'DE', 'USD',
                     %s, %s,
                     %s, 'committed', 'quarterly',
                     %s, %s, 1.00,
-                    99, 'open'
+                    99, 'open', %s
                 )
                 ON CONFLICT (short_name) DO UPDATE
-                    SET name = EXCLUDED.name,
+                    SET name      = EXCLUDED.name,
+                        fund_type = EXCLUDED.fund_type,
                         updated_at = NOW()
                 RETURNING id
             """, (body.name, body.short_name, body.inception_date, fy_end,
-                  body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct))
+                  body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct, ftype))
             fid = str(cur.fetchone()["id"])
             _seed_coa_for_fund(cur, fid)
         conn.commit()

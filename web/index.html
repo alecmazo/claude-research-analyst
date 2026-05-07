@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui32-20260506';
+    var EXPECTED = 'ui33-20260506';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui35">
+  <link rel="stylesheet" href="/app/style.css?v=ui36">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -232,7 +232,7 @@
       <div class="label">LIVE BENCHMARK</div>
       <div id="tracker-live-info" class="tracker-live-info">
         <div class="tracker-live-empty">
-          No live portfolio yet. Upload Fidelity CSVs in Fund → My Portfolio to set the benchmark.
+          No live portfolio yet. Upload Fidelity CSVs in Fund → Managed Account to set the benchmark.
         </div>
       </div>
     </div>
@@ -541,7 +541,7 @@
   <!-- Branch selector (hidden until authenticated) -->
   <div id="fund-branch-selector" class="fund-branch-selector" style="display:none;">
     <button class="fund-branch-btn active" data-branch="lp">LP Fund</button>
-    <button class="fund-branch-btn" data-branch="portfolio">My Portfolio</button>
+    <button class="fund-branch-btn" data-branch="portfolio">Managed Account</button>
   </div>
 
   <!-- ── LP Fund branch ─────────────────────────────────────────────────── -->
@@ -559,6 +559,10 @@
       <div id="create-fund-form" style="display:none; padding:0 16px 20px;">
         <div class="fund-import-form">
           <div class="fund-import-form-title">New Fund Details</div>
+          <select id="cf-type" class="fund-import-input">
+            <option value="lp_fund">LP Fund (pooled, with waterfall)</option>
+            <option value="managed_account">Managed Account (single owner, mgmt fee)</option>
+          </select>
           <input id="cf-name" class="fund-import-input" type="text" placeholder="Fund Name (e.g. DGA Capital Fund II, LP)" />
           <input id="cf-short" class="fund-import-input" type="text" placeholder="Short Name (e.g. DGAF-II)" />
           <input id="cf-inception" class="fund-import-input" type="text" placeholder="Inception Date (YYYY-MM-DD)" />
@@ -817,6 +821,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui33"></script>
+<script src="/app/app.js?v=ui34"></script>
 </body>
 </html>

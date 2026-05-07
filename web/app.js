@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui32-20260506';
+const DGA_BUILD = 'ui33-20260506';
 ;(function(){
   let alreadyTried = false;
   try {
@@ -1571,7 +1571,7 @@ async function loadLiveBenchmark() {
     if (!live) {
       wrap.innerHTML = `<div class="tracker-live-empty">
         No live portfolio yet. Upload Fidelity CSVs in
-        <strong>Fund → My Portfolio</strong> to set the benchmark.
+        <strong>Fund → Managed Account</strong> to set the benchmark.
       </div>`;
       card?.classList.remove('clickable');
       card?.removeAttribute('role');
@@ -2952,7 +2952,7 @@ async function _rehydrateYtdResult() {
   } catch (_) { /* non-fatal — no previous run */ }
 }
 
-async function loadFundList() {
+async function loadFundList(fundType = 'lp_fund') {
   const listEl = document.getElementById('fund-list-cards');
   if (!listEl) return;
   listEl.innerHTML = '<div class="fund-card-loading">Loading funds…</div>';
@@ -2974,7 +2974,8 @@ async function loadFundList() {
   }
 
   try {
-    const funds = await fundFetch('/api/fund/list');
+    const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
+    const funds = await fundFetch('/api/fund/list' + qs);
     if (!funds.length) {
       listEl.innerHTML = '<div class="fund-card-loading">No funds found in database.</div>';
       return;
@@ -3564,6 +3565,7 @@ async function submitCreateFund() {
   const name     = (document.getElementById('cf-name')?.value || '').trim();
   const short    = (document.getElementById('cf-short')?.value || '').trim();
   const inception= (document.getElementById('cf-inception')?.value || '').trim();
+  const fundType = (document.getElementById('cf-type')?.value || 'lp_fund').trim();
   const mgmt     = parseFloat(document.getElementById('cf-mgmt')?.value || '2');
   const carry    = parseFloat(document.getElementById('cf-carry')?.value || '20');
   const hurdle   = parseFloat(document.getElementById('cf-hurdle')?.value || '8');
@@ -3596,6 +3598,7 @@ async function submitCreateFund() {
         mgmt_fee_pct: mgmt / 100,
         carry_pct: carry / 100,
         hurdle_pct: hurdle / 100,
+        fund_type: fundType,
         status: 'active',
       }),
     });
