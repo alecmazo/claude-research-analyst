@@ -3551,6 +3551,13 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
               font-weight: 800; padding: 0 2px !important; opacity: 0.9; }
 .reb-tgt    { width: 44px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
 .reb-delta  { width: 48px; text-align: right; font-size: 10px; }
+.reb-sector { width: 88px; font-size: 10px; color: #8090a8; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; max-width: 88px; }
+.reb-dev    { min-width: 160px; max-width: 260px; font-size: 10px; color: #7a8a9a;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+
+/* Meta cells — sector + recent dev, injected async */
+.reb-meta-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Live price cell — injected async */
 .reb-price-cell { white-space: nowrap; }

@@ -184,6 +184,7 @@ export const api = {
   listReports:  ()       => request('/api/reports'),
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
   getSpyYtd:    ()       => request('/api/market/spy-ytd'),
+  getTickerMeta: (ticker) => request(`/api/market/ticker-meta/${encodeURIComponent(ticker)}`),
   deleteReport: (ticker) => request(`/api/report/${ticker}`, { method: 'DELETE' }),
 
   downloadUrl: async (ticker, type) => {

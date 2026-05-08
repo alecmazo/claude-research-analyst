@@ -678,14 +678,40 @@ export default function FundScreen({ navigation }) {
   // ── Rebalance result table ──────────────────────────────────────────────
   // Renders current-weight → target-weight for the primary strategy.
   function RebalResultTable({ result, inputWeights }) {
+    const [tickerMeta, setTickerMeta] = useState({});
+
     if (!result?.strategies) return null;
     const key   = result.primary_strategy || Object.keys(result.strategies)[0];
     const strat = result.strategies?.[key];
-    if (!strat?.weights?.length) return null;
-    const weights = [...strat.weights]
-      .filter(w => w.ticker && w.target_weight != null)
+    // weights comes as a plain object { AAPL: 0.10, MSFT: 0.08, … } from the server
+    const weightsObj = strat?.weights || {};
+    const weightEntries = Object.entries(weightsObj).filter(([, w]) => w > 0);
+    if (!weightEntries.length) return null;
+    const weights = weightEntries
+      .map(([ticker, target_weight]) => ({ ticker, target_weight }))
       .sort((a, b) => b.target_weight - a.target_weight);
+
     const iw = inputWeights || {};
+
+    // Fetch sector + recent dev for each ticker (non-blocking, fills in as data arrives)
+    useEffect(() => {
+      let cancelled = false;
+      const tickers = weights.map(w => w.ticker);
+      Promise.allSettled(
+        tickers.map(ticker =>
+          api.getTickerMeta(ticker)
+            .then(meta => {
+              if (!cancelled && meta) {
+                setTickerMeta(prev => ({ ...prev, [ticker]: meta }));
+              }
+            })
+            .catch(() => {})
+        )
+      );
+      return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [key, JSON.stringify(Object.keys(weightsObj).sort())]);
+
     return (
       <View style={s.rebalResultWrap}>
         <Text style={s.rebalResultTitle}>
@@ -699,6 +725,8 @@ export default function FundScreen({ navigation }) {
               <Text style={[s.th, { width: 18, textAlign: 'center' }]}> </Text>
               <Text style={[s.th, s.thRight, { width: 46 }]}>Target</Text>
               <Text style={[s.th, s.thRight, { width: 46 }]}>Δ</Text>
+              <Text style={[s.th, { width: 80 }]}>Sector</Text>
+              <Text style={[s.th, { width: 220 }]}>Recent Dev</Text>
             </View>
             {weights.map((w, i) => {
               const curRaw  = iw[w.ticker] != null ? iw[w.ticker] : null;
@@ -708,6 +736,9 @@ export default function FundScreen({ navigation }) {
               const dColor  = delta == null ? '#8090a8'
                             : delta > 0.5  ? '#16A34A'
                             : delta < -0.5 ? '#DC2626' : '#8090a8';
+              const meta    = tickerMeta[w.ticker];
+              const sector  = meta?.sector  || '…';
+              const recentDev = meta?.recent_dev || '…';
               return (
                 <View key={w.ticker} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
                   <Text style={[s.td, { width: 50, color: colors.gold, fontWeight: '700' }]}>
@@ -722,6 +753,12 @@ export default function FundScreen({ navigation }) {
                   </Text>
                   <Text style={[s.td, s.tdRight, { width: 46, color: dColor }]}>
                     {delta == null ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(1) + '%'}
+                  </Text>
+                  <Text style={[s.td, s.rebalMeta, { width: 80 }]} numberOfLines={1}>
+                    {sector}
+                  </Text>
+                  <Text style={[s.td, s.rebalDev, { width: 220 }]} numberOfLines={2}>
+                    {recentDev}
                   </Text>
                 </View>
               );
@@ -1931,6 +1968,10 @@ const s = StyleSheet.create({
   // Arrow between current → target — gold, visually distinct from the dark row background
   rebalArrow:       { width: 18, textAlign: 'center', fontSize: 11, fontWeight: '800',
                       color: colors.gold, opacity: 0.85, paddingHorizontal: 2 },
+  // Sector label — dim, truncated
+  rebalMeta:        { fontSize: 10, color: '#7a8a9a', letterSpacing: 0.2 },
+  // Recent development — slightly lighter, wraps to 2 lines
+  rebalDev:         { fontSize: 10, color: '#6a7a8a', lineHeight: 14 },
 });
 
 // Styles for YtdAttribView / YtdHoldingRow (light-on-dark, matching fund theme)

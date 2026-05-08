@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui49-20260508"
+WEB_BUILD_VERSION = "ui50-20260508"
 
 
 @app.get("/api/build")
@@ -1228,6 +1228,58 @@ def get_spy_ytd():
         if cached:
             return {k: v for k, v in _spy_ytd_cache.items() if k != "ts"}
         raise HTTPException(status_code=503, detail=f"SPY YTD fetch failed: {exc}")
+
+
+# ── Per-ticker sector + recent headline (for rebalance table columns) ─────────
+_ticker_meta_cache: dict[str, dict] = {}   # ticker → {"sector", "industry", "recent_dev", "ts"}
+_TICKER_META_TTL = 900                     # 15 min — same as price/SPY caches
+
+
+@app.get("/api/market/ticker-meta/{ticker}")
+def get_ticker_meta(ticker: str):
+    """Return sector, industry, and most-recent news headline for *ticker*.
+
+    Cached for 15 minutes.  Used by the rebalance table to fill the
+    Category and Recent Development columns via async client-side injection.
+
+    Returns:
+        sector     — e.g. "Technology"
+        industry   — e.g. "Semiconductors"
+        recent_dev — title of the most-recent Yahoo Finance news item, or ""
+    """
+    t = ticker.strip().upper()
+    now = time.time()
+    cached = _ticker_meta_cache.get(t)
+    if cached and (now - cached["ts"]) < _TICKER_META_TTL:
+        return {k: v for k, v in cached.items() if k != "ts"}
+
+    # Sector / industry — analyst module has a robust multi-fallback implementation
+    try:
+        sector, industry = analyst.fetch_sector_and_industry(t)
+    except Exception:
+        sector, industry = "Unknown", "Unknown"
+
+    # Most-recent news headline via yfinance
+    recent_dev = ""
+    if _YFINANCE_OK:
+        try:
+            news_items = yf.Ticker(t).news or []
+            if news_items:
+                first = news_items[0]
+                # yfinance ≥ 0.2.x returns dicts with "content" sub-dict;
+                # older versions have "title" at the top level.
+                title = (
+                    first.get("title")
+                    or (first.get("content") or {}).get("title")
+                    or ""
+                )
+                recent_dev = title[:160]  # cap length
+        except Exception:
+            pass
+
+    result = {"sector": sector, "industry": industry, "recent_dev": recent_dev}
+    _ticker_meta_cache[t] = {**result, "ts": now}
+    return result
 
 
 @app.delete("/api/cache")

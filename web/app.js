@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui49-20260508';
+const DGA_BUILD = 'ui50-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -167,6 +167,7 @@ const api = {
   getReport: (ticker) => apiGet(`/api/report/${ticker}`),
   getQuote: (ticker) => apiGet(`/api/quote/${ticker}`),
   getSpyYtd: () => apiGet('/api/market/spy-ytd'),
+  getTickerMeta: (ticker) => apiGet(`/api/market/ticker-meta/${encodeURIComponent(ticker)}`),
   listStrategies: () => apiGet('/api/strategies'),
   clearCache: () => fetch(`${API_BASE}/api/cache`, {
     method: 'DELETE',
@@ -660,6 +661,7 @@ function rehydratePortfolioLastCard() {
   const body = document.getElementById('portfolio-last-result');
   body.innerHTML = buildPortfolioResultHtml(last.result, last.input_weights || {});
   _injectStrategyPrices(body);
+  _injectTickerMeta(body);
 
   const dlBtn = document.getElementById('portfolio-last-download-btn');
   if (dlBtn) {
@@ -773,6 +775,8 @@ function buildPortfolioResultHtml(result, inputWeights) {
             <td class="reb-arrow">→</td>
             <td class="reb-tgt">${r.tgt > 0 ? tgtPct + '%' : '—'}</td>
             <td class="reb-delta ${deltaCls}">${sign}${deltaPct}%</td>
+            <td class="reb-sector"><span class="reb-meta-cell" data-ticker="${r.ticker}" data-meta="sector">…</span></td>
+            <td class="reb-dev"><span class="reb-meta-cell" data-ticker="${r.ticker}" data-meta="recent_dev">…</span></td>
           </tr>`;
       }).join('');
 
@@ -787,6 +791,8 @@ function buildPortfolioResultHtml(result, inputWeights) {
               <th></th>
               <th>Target</th>
               <th>Δ</th>
+              <th class="reb-sector">Sector</th>
+              <th class="reb-dev">Recent Dev</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -849,6 +855,7 @@ function renderPortfolioResult(result, target, inputWeights) {
   el.style.display = 'block';
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   _injectStrategyPrices(el);
+  _injectTickerMeta(el);
 }
 
 // Async: fill in live prices for every .reb-price-cell in a rendered result.
@@ -871,6 +878,32 @@ async function _injectStrategyPrices(container) {
       }
       container.querySelectorAll(`.reb-price-cell[data-ticker="${ticker}"]`).forEach(c => {
         c.innerHTML = html;
+      });
+    } catch (_) {}
+  }));
+}
+
+// Async: fill in sector + recent-dev for every .reb-meta-cell in a rendered result.
+async function _injectTickerMeta(container) {
+  if (!container) return;
+  const cells = container.querySelectorAll('.reb-meta-cell[data-ticker]');
+  if (!cells.length) return;
+  const tickers = [...new Set([...cells].map(c => c.dataset.ticker))];
+  await Promise.allSettled(tickers.map(async ticker => {
+    try {
+      const meta = await api.getTickerMeta(ticker);
+      if (!meta) return;
+      container.querySelectorAll(`.reb-meta-cell[data-ticker="${ticker}"]`).forEach(c => {
+        const field = c.dataset.meta;
+        if (field === 'sector') {
+          const val = meta.sector || '—';
+          c.textContent = val;
+          c.title = meta.industry ? `${meta.sector} · ${meta.industry}` : val;
+        } else if (field === 'recent_dev') {
+          const val = meta.recent_dev || '—';
+          c.textContent = val;
+          c.title = val;  // full text on hover
+        }
       });
     } catch (_) {}
   }));
