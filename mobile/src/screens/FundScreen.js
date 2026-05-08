@@ -47,7 +47,7 @@ const fmtCat = (cat) =>
 const pctColor = (x) =>
   x == null ? '#8090a8' : x > 0 ? '#16A34A' : x < 0 ? '#DC2626' : '#8090a8';
 
-const BRANCHES = ['LP Fund', 'Managed Account'];
+const BRANCHES = ['LP Fund', 'Managed Account', 'Rebalanced'];
 const LP_TABS  = ['Overview', 'LPs', 'Positions', 'Activity', 'Waterfall'];
 
 export default function FundScreen({ navigation }) {
@@ -624,38 +624,33 @@ export default function FundScreen({ navigation }) {
   }
 
   // ── SPY comparison card ─────────────────────────────────────────────────
-  // Shows portfolio YTD vs S&P 500 YTD with live SPY data if available.
+  // Shows S&P 500 YTD vs portfolio alpha. Portfolio YTD is already shown
+  // above in the main metrics row — no need to repeat it here.
   function SpyComparisonCard({ portfolioPct }) {
-    // Use live SPY if fetched; fall back to stored value in ytdResult
     const spyPct  = spyLive?.ytd_pct ?? ytdResult?.spy_return_pct ?? null;
     const isLive  = spyLive != null;
     const asOf    = spyLive?.as_of ?? null;
-    if (portfolioPct == null && spyPct == null) return null;
-    const alpha   = portfolioPct != null && spyPct != null ? portfolioPct - spyPct : null;
+    if (spyPct == null) return null;
+    const alpha    = portfolioPct != null && spyPct != null ? portfolioPct - spyPct : null;
     const alphaPos = alpha != null && alpha >= 0;
     return (
       <View style={s.spyCard}>
         <Text style={s.spyCardTitle}>
-          VS S&P 500{isLive ? '  ·  ' : ''}
+          S&P 500 COMPARISON{isLive ? '  ·  ' : ''}
           {isLive && <Text style={s.spyLiveBadge}>LIVE{asOf ? `  ${asOf}` : ''}</Text>}
         </Text>
         <View style={s.spyCardRow}>
-          {/* Portfolio */}
-          <View style={s.spyMetric}>
-            <Text style={s.spyMetricLabel}>PORTFOLIO YTD</Text>
-            <Text style={[s.spyMetricVal, { color: pctColor(portfolioPct) }]}>
-              {portfolioPct != null ? fmtPct(portfolioPct, 2) : '—'}
-            </Text>
-            <Text style={s.spyMetricSub}>Modified Dietz</Text>
-          </View>
-          <Text style={s.spyVs}>vs</Text>
-          {/* SPY */}
+          {/* S&P 500 YTD */}
           <View style={s.spyMetric}>
             <Text style={s.spyMetricLabel}>S&P 500 YTD</Text>
-            <Text style={[s.spyMetricVal, { color: pctColor(spyPct) }]}>
-              {spyPct != null ? fmtPct(spyPct, 2) : '—'}
+            <Text
+              style={[s.spyMetricVal, { color: pctColor(spyPct) }]}
+              adjustsFontSizeToFit
+              numberOfLines={1}
+            >
+              {fmtPct(spyPct, 2)}
             </Text>
-            <Text style={s.spyMetricSub}>SPY {isLive ? 'real-time' : 'at calc time'}</Text>
+            <Text style={s.spyMetricSub}>SPY {isLive ? 'real-time' : 'stored'}</Text>
           </View>
           {/* Alpha */}
           {alpha != null && (
@@ -663,7 +658,11 @@ export default function FundScreen({ navigation }) {
               <Text style={s.spyVs}>=</Text>
               <View style={[s.spyAlpha, alphaPos ? s.spyAlphaPos : s.spyAlphaNeg]}>
                 <Text style={s.spyAlphaLabel}>ALPHA</Text>
-                <Text style={s.spyAlphaVal}>
+                <Text
+                  style={[s.spyAlphaVal, { color: alphaPos ? '#16A34A' : '#DC2626' }]}
+                  adjustsFontSizeToFit
+                  numberOfLines={1}
+                >
                   {alphaPos ? '+' : ''}{alpha.toFixed(2)}%
                 </Text>
                 <Text style={s.spyAlphaSub}>{alphaPos ? 'outperforming' : 'underperforming'}</Text>
@@ -677,11 +676,11 @@ export default function FundScreen({ navigation }) {
 
   // ── Rebalance result table ──────────────────────────────────────────────
   // Renders current-weight → target-weight for the primary strategy.
-  function RebalResultTable({ result, inputWeights }) {
+  function RebalResultTable({ result, inputWeights, stratKey }) {
     const [tickerMeta, setTickerMeta] = useState({});
 
     if (!result?.strategies) return null;
-    const key   = result.primary_strategy || Object.keys(result.strategies)[0];
+    const key   = stratKey || result.primary_strategy || Object.keys(result.strategies)[0];
     const strat = result.strategies?.[key];
     // weights comes as a plain object { AAPL: 0.10, MSFT: 0.08, … } from the server
     const weightsObj = strat?.weights || {};
@@ -834,15 +833,15 @@ export default function FundScreen({ navigation }) {
               </View>
             </View>
 
+            {/* S&P 500 comparison — sits right after the MD return metrics */}
+            <SpyComparisonCard portfolioPct={ytdResult.md_return_pct} />
+
             {ytdResult.net_flow != null && (
               <Text style={s.ytdSubNote}>
                 Net flow: {ytdResult.net_flow >= 0 ? '+' : ''}{fmt$0(ytdResult.net_flow)}
                 {ytdResult.begin_value ? `  ·  Begin: ${fmt$0(ytdResult.begin_value)}` : ''}
               </Text>
             )}
-
-            {/* S&P 500 live comparison — prominent card */}
-            <SpyComparisonCard portfolioPct={ytdResult.md_return_pct} />
 
             {/* Attribution tornado */}
             {(ytdResult.attribution || []).length > 0 && (
@@ -1083,6 +1082,93 @@ export default function FundScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+      </View>
+    );
+  }
+
+  // ── Rebalanced branch panel ──────────────────────────────────────────────
+  // Shows all three strategy tables from the last portfolio run.
+  function RebalancedPanel() {
+    const data = rebalJob?.status === 'done' ? rebalJob : lastRebal;
+
+    if (!data?.result?.strategies) {
+      return (
+        <View style={s.rebalEmptyWrap}>
+          <Text style={s.rebalEmptyIcon}>📊</Text>
+          <Text style={s.rebalEmptyTitle}>No Rebalance Data</Text>
+          <Text style={s.rebalEmptyDesc}>
+            Run a portfolio rebalance from the Managed Account tab.{'\n'}
+            Results will appear here for all three strategies.
+          </Text>
+        </View>
+      );
+    }
+
+    const result       = data.result;
+    const inputWeights = data.input_weights || {};
+    const primary      = result.primary_strategy;
+    const stratKeys    = [primary, ...Object.keys(result.strategies || {}).filter(k => k !== primary)];
+    const emailOk      = result.email?.ok;
+    const emailSent    = result.email && !result.email.skipped;
+    const sentTo       = result.email?.sent_to || '';
+    const runAt        = data.completed_at
+      ? new Date(data.completed_at).toLocaleString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric',
+          hour: 'numeric', minute: '2-digit',
+        })
+      : '—';
+
+    return (
+      <View style={s.rebalBranchWrap}>
+        {/* Header */}
+        <View style={s.rebalBranchHeader}>
+          <View>
+            <Text style={s.rebalBranchTitle}>PORTFOLIO REBALANCE</Text>
+            <Text style={s.rebalBranchMeta}>
+              {runAt}{data.n_tickers ? `  ·  ${data.n_tickers} tickers` : ''}
+            </Text>
+          </View>
+          {/* Email status badge */}
+          {emailSent && (
+            <View style={[s.rebalEmailBadge, emailOk ? s.rebalEmailOk : s.rebalEmailFail]}>
+              <Text style={s.rebalEmailBadgeText}>
+                {emailOk ? `📧 Emailed${sentTo ? ` ${sentTo}` : ''}` : '📧 Email failed'}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* One table per strategy */}
+        {stratKeys.map(k => {
+          const strat = result.strategies?.[k];
+          if (!strat) return null;
+          const label = (strat.label || k).toUpperCase();
+          const isPrimary = k === primary;
+          return (
+            <View key={k} style={[s.rebalStratBlock, isPrimary && s.rebalStratBlockPrimary]}>
+              <View style={s.rebalStratLabelRow}>
+                <Text style={s.rebalStratLabel}>{label}</Text>
+                {isPrimary && <Text style={s.rebalStratPrimaryBadge}>PRIMARY</Text>}
+                <Text style={s.rebalStratCount}>{strat.held || 0} positions</Text>
+              </View>
+              <RebalResultTable result={result} inputWeights={inputWeights} stratKey={k} />
+            </View>
+          );
+        })}
+
+        {/* Download button */}
+        {data.job_id && (
+          <TouchableOpacity
+            style={[s.rebalRunBtn, { marginHorizontal: 0, marginTop: 16 }]}
+            onPress={() => {
+              const fn = data === rebalJob ? openRebalDownload : openLastRebalDownload;
+              fn();
+            }}
+          >
+            <Ionicons name="download-outline" size={15} color={colors.navy} style={{ marginRight: 6 }} />
+            <Text style={s.rebalRunBtnText}>Download DGA-portfolio.xlsx</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -1538,13 +1624,13 @@ export default function FundScreen({ navigation }) {
             onPress={() => {
               setBranch(b);
               if (b === 'LP Fund') {
-                // If switching back to LP Fund, go to list view
                 if (activeFundId) closeFundDetail();
               }
               if (b === 'Managed Account') {
                 loadYtdSnapshots();
                 loadManagedAccList(activeManagedAccId);
               }
+              // 'Rebalanced' uses lastRebal already loaded by useFocusEffect — no extra fetch needed
             }}
           >
             <Text style={[s.branchBtnText, branch === b && s.branchBtnTextActive]}>{b}</Text>
@@ -1552,7 +1638,15 @@ export default function FundScreen({ navigation }) {
         ))}
       </View>
 
-      {branch === 'Managed Account' ? (
+      {branch === 'Rebalanced' ? (
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <RebalancedPanel />
+        </ScrollView>
+      ) : branch === 'Managed Account' ? (
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1723,7 +1817,7 @@ const s = StyleSheet.create({
   branchBar:          { flexDirection: 'row', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)', padding: 8, gap: 8 },
   branchBtn:          { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: 'transparent' },
   branchBtnActive:    { backgroundColor: 'rgba(201,168,76,0.12)', borderColor: 'rgba(201,168,76,0.4)' },
-  branchBtnText:      { fontSize: 13, fontWeight: '600', color: '#3a5070' },
+  branchBtnText:      { fontSize: 11, fontWeight: '600', color: '#3a5070' },
   branchBtnTextActive:{ color: colors.gold },
 
   // Sub-tab bar (LP Fund)
@@ -1952,15 +2046,35 @@ const s = StyleSheet.create({
   spyCardRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
   spyMetric:        { flex: 1, alignItems: 'center' },
   spyMetricLabel:   { fontSize: 9, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 3 },
-  spyMetricVal:     { fontSize: 18, fontWeight: '800' },
+  spyMetricVal:     { fontSize: 14, fontWeight: '800', minWidth: 0 },
   spyMetricSub:     { fontSize: 9, color: '#3a5070', marginTop: 2 },
-  spyVs:            { fontSize: 11, color: '#3a5070', fontWeight: '600', paddingHorizontal: 2 },
+  spyVs:            { fontSize: 11, color: '#3a5070', fontWeight: '600', paddingHorizontal: 4 },
   spyAlpha:         { flex: 1.2, alignItems: 'center', borderRadius: 10, padding: 8 },
   spyAlphaPos:      { backgroundColor: 'rgba(22,163,74,0.12)', borderWidth: 1, borderColor: 'rgba(22,163,74,0.3)' },
   spyAlphaNeg:      { backgroundColor: 'rgba(220,38,38,0.1)', borderWidth: 1, borderColor: 'rgba(220,38,38,0.25)' },
   spyAlphaLabel:    { fontSize: 9, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 2 },
-  spyAlphaVal:      { fontSize: 16, fontWeight: '800', color: '#e8eaf0' },
+  spyAlphaVal:      { fontSize: 14, fontWeight: '800', minWidth: 0 },
   spyAlphaSub:      { fontSize: 9, color: '#6a8aaa', marginTop: 2 },
+
+  // ── Rebalanced branch panel ──────────────────────────────────────────────
+  rebalBranchWrap:         { padding: 14 },
+  rebalBranchHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+  rebalBranchTitle:        { fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 0.8 },
+  rebalBranchMeta:         { fontSize: 10, color: '#4a6080', marginTop: 3 },
+  rebalEmailBadge:         { borderRadius: 8, paddingVertical: 4, paddingHorizontal: 8, maxWidth: 180 },
+  rebalEmailOk:            { backgroundColor: 'rgba(22,163,74,0.12)', borderWidth: 1, borderColor: 'rgba(22,163,74,0.3)' },
+  rebalEmailFail:          { backgroundColor: 'rgba(220,38,38,0.1)', borderWidth: 1, borderColor: 'rgba(220,38,38,0.25)' },
+  rebalEmailBadgeText:     { fontSize: 10, color: '#8090a8', fontWeight: '600' },
+  rebalStratBlock:         { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', padding: 12, marginBottom: 12 },
+  rebalStratBlockPrimary:  { borderColor: 'rgba(201,168,76,0.25)', backgroundColor: 'rgba(201,168,76,0.03)' },
+  rebalStratLabelRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  rebalStratLabel:         { fontSize: 10, fontWeight: '800', color: '#c0cfe0', letterSpacing: 0.5, flex: 1 },
+  rebalStratPrimaryBadge:  { fontSize: 9, color: colors.gold, fontWeight: '700', backgroundColor: 'rgba(201,168,76,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  rebalStratCount:         { fontSize: 10, color: '#4a6080' },
+  rebalEmptyWrap:          { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 60 },
+  rebalEmptyIcon:          { fontSize: 40, marginBottom: 16 },
+  rebalEmptyTitle:         { fontSize: 14, fontWeight: '800', color: '#4a6080', marginBottom: 8 },
+  rebalEmptyDesc:          { fontSize: 12, color: '#3a5070', textAlign: 'center', lineHeight: 18 },
 
   // ── Rebalance result table ──────────────────────────────────────────────
   rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.15)', paddingTop: 12 },
