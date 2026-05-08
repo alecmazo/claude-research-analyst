@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui41-20260507';
+const DGA_BUILD = 'ui42-20260507';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -1807,9 +1807,28 @@ async function uploadAccountHistory() {
       const box = document.getElementById('history-result-box');
       if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
-    // Cache the YTD return so the account list card can show it
+    // Persist YTD result to the DB so it survives Railway redeploys
+    const mdRet  = data.md_return_pct ?? null;
+    const endVal = data.end_value ?? 0;
+    if (mdRet !== null && _activeAccountId) {
+      try {
+        await fetch(`${API_BASE}/api/fund/account/${encodeURIComponent(_activeAccountId)}/ytd-cache`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-auth-token':  getToken(),
+            'x-fund-token':  getFundToken(),
+          },
+          body: JSON.stringify({
+            nav:         endVal,
+            ytd_pct:     mdRet,
+            result_json: JSON.stringify(data),
+          }),
+        });
+      } catch (_) { /* non-fatal — localStorage fallback still works */ }
+    }
+    // Also keep localStorage as a fast local fallback
     try {
-      const mdRet = data.md_return_pct ?? null;
       if (mdRet !== null) localStorage.setItem('dga_ytd_return', String(mdRet));
     } catch (_) {}
     // Refresh the live benchmark card in the background — do NOT navigate
@@ -3015,9 +3034,32 @@ function showAccountDetailView(accountId, accountName) {
   if (listEl)   listEl.style.display   = 'none';
   if (detailEl) detailEl.style.display = '';
   if (titleEl)  titleEl.textContent    = accountName || 'Account';
+  // Load YTD result from DB (persistent across Railway redeploys)
+  _rehydrateYtdFromDb(accountId);
   // Render cached YTD attribution + last rebalance result inline
   _loadMyPortfolioData();
   _rehydrateLastRebalanceResult();
+}
+
+async function _rehydrateYtdFromDb(accountId) {
+  if (!accountId) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/fund/account/${encodeURIComponent(accountId)}/ytd-cache`, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (!r.ok) return;   // 404 = no cache yet, that's fine
+    const cache = await r.json();
+    if (!cache.result_json) return;
+    const data = JSON.parse(cache.result_json);
+    // Show the result box and render it
+    const box = document.getElementById('history-result-box');
+    if (box) {
+      _renderUnifiedYtdResult(data);
+      box.style.display = '';
+    }
+    // Update localStorage fallback too
+    try { localStorage.setItem('dga_ytd_return', String(cache.ytd_pct)); } catch (_) {}
+  } catch (_) { /* non-fatal */ }
 }
 
 async function loadAccountList() {
@@ -3037,8 +3079,11 @@ async function loadAccountList() {
       const body = await r.text().catch(() => '');
       throw new Error(`${r.status}${body ? ': ' + body : ''}`);
     }
-    const accounts = await r.json();
-    console.log(`[loadAccountList] API returned ${accounts.length} account(s)`, accounts);
+    let accounts = await r.json();
+    // Deduplicate by ID (guard against rare DB duplicates from migration retries)
+    const seenIds = new Set();
+    accounts = accounts.filter(a => { if (seenIds.has(a.id)) return false; seenIds.add(a.id); return true; });
+    console.log(`[loadAccountList] API returned ${accounts.length} account(s) (deduped)`, accounts);
     if (!accounts.length) {
       listEl.innerHTML = `
         <div class="fund-list-hint">No managed accounts yet.</div>
@@ -3047,19 +3092,19 @@ async function loadAccountList() {
         </div>`;
       return;
     }
-    // Try to get a cached YTD return from the last YTD calculation
-    let cachedYtd = null;
-    try { cachedYtd = parseFloat(localStorage.getItem('dga_ytd_return')); } catch (_) {}
-    if (!Number.isFinite(cachedYtd)) cachedYtd = null;
-
     listEl.innerHTML = `
       <div class="fund-list-hint">Select an account to view details</div>
       ${accounts.map(f => {
-        // Use cached YTD return if available, otherwise fall back to API gain_pct
-        const ytdVal   = cachedYtd !== null ? cachedYtd : (f.gain_pct ?? null);
+        // ytd_pct comes from the DB cache (managed_account_ytd_cache table),
+        // populated after each YTD calculation. Fall back to localStorage/gain_pct.
+        let ytdVal = f.ytd_pct ?? null;
+        if (ytdVal === null) {
+          try { ytdVal = parseFloat(localStorage.getItem('dga_ytd_return')); } catch (_) {}
+          if (!Number.isFinite(ytdVal)) ytdVal = null;
+        }
         const ytdColor = (ytdVal ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
         const ytdStr   = ytdVal !== null
-          ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}%${cachedYtd !== null ? ' YTD' : ''}`
+          ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}% YTD`
           : '—';
         return `
         <div class="fund-summary-card" data-account-id="${f.id}" data-account-name="${escHtml(f.name)}">
@@ -3358,8 +3403,11 @@ async function loadFundList(fundType = 'lp_fund') {
 
   try {
     const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
-    const funds = await fundFetch('/api/fund/list' + qs);
-    console.log(`[loadFundList fund_type=${fundType}] API returned ${funds.length} fund(s)`, funds);
+    let funds = await fundFetch('/api/fund/list' + qs);
+    // Deduplicate by ID (guard against rare DB duplicates from migration retries)
+    const _seen = new Set();
+    funds = funds.filter(f => { if (_seen.has(f.id)) return false; _seen.add(f.id); return true; });
+    console.log(`[loadFundList fund_type=${fundType}] API returned ${funds.length} fund(s) (deduped)`, funds);
     if (!funds.length) {
       listEl.innerHTML = '<div class="fund-card-loading">No funds yet. Use <strong>+ Create New Fund</strong> below to add one.</div>';
       return;
@@ -3898,6 +3946,42 @@ async function confirmDeleteFund(fundId, fundName) {
   }
 }
 
+
+// ── Export Fund to PDF ────────────────────────────────────────────────────────
+async function exportFundPdf() {
+  const statusEl = document.getElementById('fund-export-status');
+  if (statusEl) {
+    statusEl.textContent = '⏳ Generating PDF…';
+    statusEl.className = 'fund-import-status fund-import-status-loading';
+  }
+  try {
+    const qs = _activeFundId ? `?fund_id=${encodeURIComponent(_activeFundId)}` : '';
+    const r = await fetch(`${API_BASE}/api/fund/export-pdf${qs}`, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    const disp  = r.headers.get('content-disposition') || '';
+    const match = disp.match(/filename="([^"]+)"/);
+    const fname = match ? match[1] : 'Fund_Report.pdf';
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    a.href = url; a.download = fname; a.click();
+    URL.revokeObjectURL(url);
+    if (statusEl) {
+      statusEl.textContent = `✓ Downloaded ${fname}`;
+      statusEl.className = 'fund-import-status fund-import-status-ok';
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = `✗ PDF export failed: ${e.message}`;
+      statusEl.className = 'fund-import-status fund-import-status-err';
+    }
+  }
+}
 
 // ── Export Fund to Excel ───────────────────────────────────────────────────────
 async function exportFundExcel() {

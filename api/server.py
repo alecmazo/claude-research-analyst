@@ -43,6 +43,13 @@ try:
 except ImportError:
     _OPENPYXL_OK = False
 
+# ── reportlab (optional — for PDF export) ────────────────────────────────────
+try:
+    import reportlab  # noqa: F401
+    _REPORTLAB_OK = True
+except ImportError:
+    _REPORTLAB_OK = False
+
 # ── Live-price cache  (TTL: 15 min) ──────────────────────────────────────────
 _price_cache: dict = {}  # { symbol: (price, fetched_at) }
 _PRICE_CACHE_TTL = 900   # seconds
@@ -944,7 +951,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui41-20260507"
+WEB_BUILD_VERSION = "ui42-20260507"
 
 
 @app.get("/api/build")
@@ -2176,9 +2183,13 @@ def _exec_sql_file(conn, path: Path) -> tuple[int, int]:
 
 
 def _bootstrap_fund_schema(conn) -> None:
-    """Apply migration files 0001 and 0002 to create all fund tables."""
+    """Apply all numbered migration files in order to create/update fund tables."""
     base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
-    for fname in ("0001_initial_schema.sql", "0002_annual_snapshots.sql"):
+    for fname in (
+        "0001_initial_schema.sql",
+        "0002_annual_snapshots.sql",
+        "0004_ytd_cache.sql",
+    ):
         p = base / fname
         if p.exists():
             _exec_sql_file(conn, p)
@@ -2244,7 +2255,13 @@ def _apply_self_migrations() -> None:
                 print("[migration] funds table missing — bootstrapping schema from SQL files")
                 _bootstrap_fund_schema(conn)
             else:
-                print("[migration] funds table exists — skipping bootstrap")
+                print("[migration] funds table exists — running incremental migrations")
+                # Run incremental migrations (each is idempotent via IF NOT EXISTS)
+                base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
+                for fname in ("0002_annual_snapshots.sql", "0004_ytd_cache.sql"):
+                    p = base / fname
+                    if p.exists():
+                        _exec_sql_file(conn, p)
 
             # Always fix the fund_type column / constraint (idempotent)
             _fix_fund_type_column(conn)
@@ -2439,6 +2456,25 @@ async def fund_list(request: Request, fund_type: str = None):
                 gain = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
 
+                # For managed accounts, pull cached YTD result from DB
+                ytd_pct  = None
+                ytd_nav  = None
+                if f.get("fund_type") == "managed_account":
+                    try:
+                        cur.execute("""
+                            SELECT nav, ytd_pct, updated_at
+                              FROM managed_account_ytd_cache
+                             WHERE fund_id = %s
+                        """, (fid,))
+                        ytd_row = cur.fetchone()
+                        if ytd_row:
+                            ytd_nav = float(ytd_row["nav"] or 0) or None
+                            ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
+                            if ytd_nav:
+                                nav = ytd_nav   # override 0 with cached real value
+                    except Exception:
+                        conn.rollback()
+
                 result.append({
                     "id":             fid,
                     "name":           f["name"],
@@ -2455,8 +2491,78 @@ async def fund_list(request: Request, fund_type: str = None):
                     "gain_pct":       round(gain_pct, 2),
                     "lp_count":       lp_count,
                     "position_count": position_count,
+                    "ytd_pct":        round(ytd_pct, 4) if ytd_pct is not None else None,
                 })
             return result
+    finally:
+        conn.close()
+
+
+class YtdCacheSaveRequest(BaseModel):
+    nav:         float
+    ytd_pct:     float
+    result_json: str | None = None   # full JSON from /api/track/live/ytd
+
+
+@app.put("/api/fund/account/{fund_id}/ytd-cache")
+async def save_account_ytd_cache(fund_id: str, body: YtdCacheSaveRequest, request: Request):
+    """Persist the latest YTD result for a managed account in the DB.
+
+    Called by the frontend after a successful YTD calculation so the result
+    survives Railway redeploys (no longer localStorage-only).
+    """
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO managed_account_ytd_cache
+                       (fund_id, nav, ytd_pct, result_json, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                   SET nav         = EXCLUDED.nav,
+                       ytd_pct     = EXCLUDED.ytd_pct,
+                       result_json = EXCLUDED.result_json,
+                       updated_at  = now()
+            """, (fund_id, body.nav, body.ytd_pct, body.result_json))
+        conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, f"Failed to save YTD cache: {e}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/fund/account/{fund_id}/ytd-cache")
+async def get_account_ytd_cache(fund_id: str, request: Request):
+    """Return the persisted YTD result for a managed account.
+
+    Returns 404 if no result has been saved yet.
+    """
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT fund_id, nav, ytd_pct, result_json, updated_at
+                  FROM managed_account_ytd_cache
+                 WHERE fund_id = %s
+            """, (fund_id,))
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "No YTD cache for this account")
+        return {
+            "fund_id":     str(row["fund_id"]),
+            "nav":         float(row["nav"] or 0),
+            "ytd_pct":     float(row["ytd_pct"] or 0),
+            "result_json": row["result_json"],
+            "updated_at":  str(row["updated_at"]),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load YTD cache: {e}")
     finally:
         conn.close()
 
@@ -4014,6 +4120,188 @@ async def fund_export_excel(request: Request, fund_id: str = None):
     return StreamingResponse(
         buf,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/api/fund/export-pdf")
+async def fund_export_pdf(request: Request, fund_id: str = None):
+    """Generate a PDF report for the fund and return it as a downloadable file.
+
+    Uses reportlab for layout. Falls back with a 400 if reportlab is missing.
+    """
+    _require_fund_token(request)
+    if not _REPORTLAB_OK:
+        raise HTTPException(400, "reportlab not installed on this server")
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    )
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from fastapi.responses import StreamingResponse
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("""
+                SELECT name, short_name, inception_date, status,
+                       mgmt_fee_pct, carry_pct, hurdle_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund = dict(cur.fetchone())
+            nav = _fund_market_nav(cur, fid)
+
+            cur.execute("""
+                SELECT s.symbol, s.name AS sec_name,
+                       SUM(tl.quantity) AS qty,
+                       SUM(tl.quantity * tl.cost_basis_per_unit)
+                         / NULLIF(SUM(tl.quantity), 0) AS avg_cost,
+                       SUM(tl.quantity * tl.cost_basis_per_unit) AS cost_basis
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.symbol, s.name
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, (fid,))
+            positions = [dict(r) for r in cur.fetchall()]
+            symbols   = [p['symbol'] for p in positions if p['symbol']]
+            prices    = _fetch_prices(symbols)
+
+            cur.execute("""
+                SELECT l.legal_name, l.entity_type,
+                       COALESCE(SUM(c.commitment_amount), 0) AS commitment
+                  FROM lps l
+                  LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
+                 WHERE l.fund_id = %s AND l.status = 'active'
+                 GROUP BY l.id, l.legal_name, l.entity_type
+                HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
+                 ORDER BY commitment DESC
+            """, (fid,))
+            lps = [dict(r) for r in cur.fetchall()]
+            total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
+    finally:
+        conn.close()
+
+    # ── Build PDF ─────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=0.75*inch, rightMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.75*inch)
+
+    styles = getSampleStyleSheet()
+    NAVY   = colors.HexColor('#0a1628')
+    GOLD   = colors.HexColor('#c9a84c')
+    LGRAY  = colors.HexColor('#e8ecf2')
+    WHITE  = colors.white
+
+    h1  = ParagraphStyle('h1', parent=styles['Heading1'],
+                         fontSize=18, textColor=NAVY, spaceAfter=4)
+    h2  = ParagraphStyle('h2', parent=styles['Heading2'],
+                         fontSize=12, textColor=NAVY, spaceAfter=4, spaceBefore=14)
+    sub = ParagraphStyle('sub', parent=styles['Normal'],
+                         fontSize=9, textColor=colors.HexColor('#4a6080'), spaceAfter=2)
+    body = ParagraphStyle('body', parent=styles['Normal'],
+                          fontSize=9, textColor=NAVY)
+
+    def money(v):
+        if v is None: return '—'
+        v = float(v)
+        if abs(v) >= 1e6: return f'${v/1e6:,.2f}M'
+        if abs(v) >= 1e3: return f'${v/1e3:,.1f}K'
+        return f'${v:,.2f}'
+
+    def tbl(data, col_widths, header_rows=1):
+        t = Table(data, colWidths=col_widths)
+        style = [
+            ('BACKGROUND', (0,0), (-1, header_rows-1), NAVY),
+            ('TEXTCOLOR',  (0,0), (-1, header_rows-1), WHITE),
+            ('FONTNAME',   (0,0), (-1, header_rows-1), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,-1), 9),
+            ('ROWBACKGROUNDS', (0, header_rows), (-1,-1), [WHITE, LGRAY]),
+            ('GRID',       (0,0), (-1,-1), 0.4, colors.HexColor('#c0ccd8')),
+            ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    story = []
+    story.append(Paragraph(fund['name'], h1))
+    story.append(Paragraph(
+        f"Short name: {fund['short_name']}  ·  "
+        f"Inception: {str(fund['inception_date'])[:10]}  ·  "
+        f"Status: {fund['status'].upper()}  ·  "
+        f"Mgmt fee: {float(fund['mgmt_fee_pct'])*100:.1f}%  ·  "
+        f"Carry: {float(fund['carry_pct'])*100:.0f}%  ·  "
+        f"Hurdle: {float(fund['hurdle_pct'])*100:.0f}%",
+        sub))
+    story.append(HRFlowable(width='100%', thickness=1.5, color=GOLD, spaceAfter=8))
+
+    # Summary metrics
+    usable_w = 7.0 * inch
+    gain = nav - total_committed
+    gain_pct = (gain / total_committed * 100) if total_committed else 0.0
+    metrics = [
+        ['Market NAV', 'Total Committed', 'Total Gain', 'Gain %', 'LP Count'],
+        [money(nav), money(total_committed), money(gain),
+         f'{gain_pct:+.2f}%', str(len(lps))],
+    ]
+    story.append(tbl(metrics, [usable_w/5]*5))
+    story.append(Spacer(1, 12))
+
+    # Positions
+    if positions:
+        story.append(Paragraph('Portfolio Positions', h2))
+        rows = [['Ticker', 'Name', 'Qty', 'Avg Cost', 'Cost Basis', 'Live Price', 'MV', 'P/L']]
+        for p in positions:
+            sym   = p['symbol'] or ''
+            qty   = float(p['qty'] or 0)
+            cost  = float(p['cost_basis'] or 0)
+            price = prices.get(sym)
+            mv    = qty * price if price else None
+            pl    = (mv - cost) if mv else None
+            rows.append([
+                sym, (p['sec_name'] or '')[:22],
+                f'{qty:,.0f}', money(p['avg_cost']),
+                money(cost), money(price), money(mv), money(pl),
+            ])
+        cw = [0.6, 2.0, 0.65, 0.75, 0.85, 0.75, 0.8, 0.8]
+        story.append(tbl(rows, [w*inch for w in cw]))
+        story.append(Spacer(1, 12))
+
+    # LPs
+    if lps:
+        story.append(Paragraph('Limited Partners', h2))
+        rows = [['LP Name', 'Type', 'Commitment', '% of Total']]
+        for lp in lps:
+            comm = float(lp['commitment'])
+            pct  = comm / total_committed * 100 if total_committed else 0
+            rows.append([
+                (lp['legal_name'] or '')[:38],
+                lp['entity_type'] or '',
+                money(comm),
+                f'{pct:.1f}%',
+            ])
+        story.append(tbl(rows, [3.5*inch, 1.2*inch, 1.2*inch, 1.1*inch]))
+
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(
+        f'Report generated {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC  ·  DGA Capital Research',
+        sub))
+
+    doc.build(story)
+    buf.seek(0)
+    safe  = fund.get('short_name', 'Fund').replace('/', '-').replace('\\', '-')
+    fname = f"{safe}_Report_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type='application/pdf',
         headers={'Content-Disposition': f'attachment; filename="{fname}"'},
     )
 

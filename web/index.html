@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui41-20260507';
+    var EXPECTED = 'ui42-20260507';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui41">
+  <link rel="stylesheet" href="/app/style.css?v=ui42">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -215,12 +215,12 @@
   <article id="report-content" class="report-content">Loading…</article>
 </section>
 
-<!-- ============ PORTFOLIO VIEW ============ -->
+<!-- ============ MANAGED ACCOUNT VIEW ============ -->
 <section id="view-portfolio" class="view">
   <header class="header">
     <div class="header-brand">
       <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
-      <h1>Portfolio</h1>
+      <h1>Managed Account</h1>
     </div>
     <span></span>
   </header>
@@ -338,21 +338,17 @@
     <span class="tab-label">Ideas</span>
   </button>
 
-  <!-- Portfolio tab — bank / columns building -->
+  <!-- Managed Account tab — person + chart -->
   <button class="tab" data-target="view-portfolio">
     <div class="tab-icon-wrap">
       <span class="tab-icon">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M3 10H21M3 21H21M12 3L3 8H21L12 3Z"
-                stroke="currentColor" stroke-width="1.9"
-                stroke-linecap="round" stroke-linejoin="round"/>
-          <line x1="6.5"  y1="10" x2="6.5"  y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
-          <line x1="12"   y1="10" x2="12"   y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
-          <line x1="17.5" y1="10" x2="17.5" y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </span>
     </div>
-    <span class="tab-label">Portfolio</span>
+    <span class="tab-label">Managed Acct</span>
   </button>
 
   <!-- Fund tab — briefcase / fund management -->
@@ -638,8 +634,9 @@
       </div>
 
       <!-- Export -->
-      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:flex-end; padding-top:8px;">
-        <button class="fund-import-btn" onclick="exportFundExcel()">⬇ Export Fund Data to Excel</button>
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:8px;">
+        <button class="fund-import-btn" onclick="exportFundExcel()">⬇ Export to Excel</button>
+        <button class="fund-import-btn" onclick="exportFundPdf()">🖨 Export to PDF</button>
       </div>
       <div id="fund-export-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
 
@@ -774,14 +771,14 @@
         <div class="reb-options-row">
           <div class="reb-option-item">
             <label class="gamma-label" for="portfolio-reuse">Reuse cache</label>
-            <label class="toggle-switch" style="width:36px;height:20px;">
+            <label class="toggle-switch reb-toggle">
               <input type="checkbox" id="portfolio-reuse" checked>
               <span class="toggle-slider"></span>
             </label>
           </div>
           <div class="reb-option-item">
             <label class="gamma-label" for="portfolio-gamma">Gamma slides</label>
-            <label class="toggle-switch" style="width:36px;height:20px;">
+            <label class="toggle-switch reb-toggle">
               <input type="checkbox" id="portfolio-gamma">
               <span class="toggle-slider"></span>
             </label>

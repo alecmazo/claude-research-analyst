@@ -3441,6 +3441,17 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 }
 .reb-option-item .gamma-label { font-size: 11px; margin: 0; }
 
+/* Small toggle variant used in the rebalance options row */
+.toggle-switch.reb-toggle { width: 36px; height: 20px; }
+.toggle-switch.reb-toggle .toggle-slider { border-radius: 20px; }
+.toggle-switch.reb-toggle .toggle-slider::before {
+  width: 14px; height: 14px;
+  left: 3px; bottom: 3px;
+}
+.toggle-switch.reb-toggle input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    REBALANCE RESULT — numbered current → target table
    ────────────────────────────────────────────────────────────────────────── */
