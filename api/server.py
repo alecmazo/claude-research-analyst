@@ -951,7 +951,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui45-20260508"
+WEB_BUILD_VERSION = "ui46-20260508"
 
 
 @app.get("/api/build")
@@ -2533,13 +2533,16 @@ async def fund_list(request: Request, fund_type: str = None):
                 gain = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
 
-                # For managed accounts, pull cached YTD result from DB
+                # For managed accounts, pull cached YTD result from DB.
+                # Also extract attribution count so the list card shows
+                # the real number of holdings (tax_lots is always empty
+                # for managed accounts — their positions live in result_json).
                 ytd_pct  = None
                 ytd_nav  = None
                 if f.get("fund_type") == "managed_account":
                     try:
                         cur.execute("""
-                            SELECT nav, ytd_pct, updated_at
+                            SELECT nav, ytd_pct, result_json, updated_at
                               FROM managed_account_ytd_cache
                              WHERE fund_id = %s
                         """, (fid,))
@@ -2549,6 +2552,15 @@ async def fund_list(request: Request, fund_type: str = None):
                             ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
                             if ytd_nav:
                                 nav = ytd_nav   # override 0 with cached real value
+                            # Derive position count from the attribution table
+                            if ytd_row["result_json"]:
+                                try:
+                                    cached = json.loads(ytd_row["result_json"])
+                                    attr = cached.get("attribution") or []
+                                    if attr:
+                                        position_count = len(attr)
+                                except Exception:
+                                    pass
                     except Exception:
                         conn.rollback()
 

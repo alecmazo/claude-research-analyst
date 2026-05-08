@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui45-20260508';
+const DGA_BUILD = 'ui46-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -3133,8 +3133,10 @@ function showAccountListView() {
   _activeAccountId = null;
   const listEl   = document.getElementById('account-list-view');
   const detailEl = document.getElementById('account-detail-view');
+  const rebalEl  = document.getElementById('rebalance-branch-section');
   if (listEl)   listEl.style.display   = '';
   if (detailEl) detailEl.style.display = 'none';
+  if (rebalEl)  rebalEl.style.display  = '';   // rebalance visible on list
 }
 
 function showAccountDetailView(accountId, accountName) {
@@ -3142,9 +3144,11 @@ function showAccountDetailView(accountId, accountName) {
   const listEl   = document.getElementById('account-list-view');
   const detailEl = document.getElementById('account-detail-view');
   const titleEl  = document.getElementById('account-detail-name');
+  const rebalEl  = document.getElementById('rebalance-branch-section');
   if (listEl)   listEl.style.display   = 'none';
   if (detailEl) detailEl.style.display = '';
   if (titleEl)  titleEl.textContent    = accountName || 'Account';
+  if (rebalEl)  rebalEl.style.display  = 'none';  // rebalance hidden on detail
   // Clear any previous account's YTD result before loading this one
   const _prevResultBox = document.getElementById('history-result-box');
   if (_prevResultBox) { _prevResultBox.style.display = 'none'; _prevResultBox.innerHTML = ''; }
