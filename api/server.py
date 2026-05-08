@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui50-20260508"
+WEB_BUILD_VERSION = "ui51-20260508"
 
 
 @app.get("/api/build")
@@ -3857,9 +3857,29 @@ async def fund_import_annual_nav(
 # Fund administration — delete
 # ---------------------------------------------------------------------------
 
+def _safe_delete(cur, sql: str, params: tuple) -> None:
+    """Execute a DELETE, silently ignoring 'table does not exist' errors
+    (UndefinedTable / 42P01).  Uses a savepoint so the outer transaction
+    stays intact if the table was never created on this schema version."""
+    cur.execute("SAVEPOINT _del_sp")
+    try:
+        cur.execute(sql, params)
+        cur.execute("RELEASE SAVEPOINT _del_sp")
+    except Exception as exc:
+        cur.execute("ROLLBACK TO SAVEPOINT _del_sp")
+        if "42P01" not in str(type(exc).__name__ + str(exc)):
+            raise  # re-raise anything that isn't "table not found"
+
+
 @app.delete("/api/fund/admin/delete")
 async def fund_admin_delete(request: Request, fund_id: str):
-    """Permanently delete a fund and all its associated data (cascade)."""
+    """Permanently delete a fund and ALL its associated data.
+
+    The initial schema did not add ON DELETE CASCADE to most FK references,
+    so we delete child rows in dependency order before removing the funds row.
+    Each statement runs inside a savepoint so missing tables (schema version
+    differences) are silently skipped without aborting the transaction.
+    """
     _require_fund_token(request)
     conn = _fund_conn()
     try:
@@ -3870,6 +3890,64 @@ async def fund_admin_delete(request: Request, fund_id: str):
             if not row:
                 raise HTTPException(404, "Fund not found")
             name = row["name"]
+
+            # ── 1. Grandchild rows (FK → non-funds parent) ────────────────────
+            _safe_delete(cur, """
+                DELETE FROM transaction_lines
+                 WHERE transaction_id IN (
+                       SELECT id FROM transactions WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM capital_call_allocations
+                 WHERE capital_call_id IN (
+                       SELECT id FROM capital_calls WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM distribution_allocations
+                 WHERE distribution_id IN (
+                       SELECT id FROM distributions WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM nav_snapshot_lp
+                 WHERE snapshot_id IN (
+                       SELECT id FROM nav_snapshots WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM carry_allocations
+                 WHERE carry_run_id IN (
+                       SELECT id FROM carry_runs WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM mgmt_fee_allocations
+                 WHERE mgmt_fee_run_id IN (
+                       SELECT id FROM mgmt_fee_runs WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM commitments
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+            """, (fid,))
+            _safe_delete(cur, """
+                DELETE FROM lp_statements
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+            """, (fid,))
+
+            # ── 2. Direct fund_id children (order matters for remaining FKs) ──
+            for tbl in (
+                "transactions",
+                "capital_calls",
+                "distributions",
+                "nav_snapshots",
+                "carry_runs",
+                "mgmt_fee_runs",
+                "lps",
+                "tax_lots",
+                "accounts",
+                "managed_account_ytd_cache",
+                "audit_log",
+            ):
+                _safe_delete(cur, f"DELETE FROM {tbl} WHERE fund_id = %s", (fid,))  # noqa: S608
+
+            # ── 3. Finally remove the fund itself ─────────────────────────────
             cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
         conn.commit()
         return {"deleted": fid, "name": name}

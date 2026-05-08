@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui50-20260508';
+const DGA_BUILD = 'ui51-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -4077,23 +4077,85 @@ async function handleAnnualNavUpload(input) {
 }
 
 // ── Delete Fund ───────────────────────────────────────────────────────────────
-async function confirmDeleteFund(fundId, fundName) {
-  const ok = window.confirm(
-    `Delete "${fundName}"?\n\nThis will permanently erase the fund and ALL its data — LPs, positions, transactions, and waterfall history.\n\nThis action CANNOT be undone. Continue?`
-  );
-  if (!ok) return;
-  try {
-    const r = await fetch(
-      `${API_BASE}/api/fund/admin/delete?fund_id=${encodeURIComponent(fundId)}`,
-      { method: 'DELETE',
-        headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() } }
-    );
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
-    loadFundList();
-  } catch (e) {
-    alert(`Delete failed: ${e.message}`);
-  }
+function confirmDeleteFund(fundId, fundName) {
+  // Build modal DOM
+  const overlay = document.createElement('div');
+  overlay.id = 'delete-fund-overlay';
+  overlay.innerHTML = `
+    <div class="delete-fund-modal">
+      <div class="delete-fund-modal-icon">⚠️</div>
+      <div class="delete-fund-modal-title">Delete Account</div>
+      <div class="delete-fund-modal-body">
+        You are about to permanently delete <strong>${escHtml(fundName)}</strong>
+        and all its data — positions, YTD history, and transactions.
+        <br><br>This action <strong>cannot be undone</strong>.
+        <br><br>Enter the fund admin password to confirm:
+      </div>
+      <input id="delete-fund-pw" type="password" class="delete-fund-pw-input"
+             placeholder="Fund password…" autocomplete="current-password" />
+      <div id="delete-fund-err" class="delete-fund-err" style="display:none"></div>
+      <div class="delete-fund-modal-btns">
+        <button class="delete-fund-cancel-btn" onclick="document.getElementById('delete-fund-overlay').remove()">Cancel</button>
+        <button class="delete-fund-confirm-btn" id="delete-fund-confirm-btn">Delete Permanently</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const pwInput  = document.getElementById('delete-fund-pw');
+  const errEl    = document.getElementById('delete-fund-err');
+  const confirmBtn = document.getElementById('delete-fund-confirm-btn');
+
+  // Close on backdrop click
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  // Focus the input
+  setTimeout(() => pwInput.focus(), 60);
+
+  // Allow Enter key to submit
+  pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmBtn.click(); });
+
+  confirmBtn.addEventListener('click', async () => {
+    const pw = pwInput.value.trim();
+    if (!pw) { errEl.textContent = 'Password required.'; errEl.style.display = ''; return; }
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Verifying…';
+    errEl.style.display = 'none';
+    try {
+      // Re-authenticate with the fund password to verify it
+      const authR = await fetch(`${API_BASE}/api/fund/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (!authR.ok) {
+        errEl.textContent = 'Incorrect password.';
+        errEl.style.display = '';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Delete Permanently';
+        pwInput.select();
+        return;
+      }
+      const authBody = await authR.json().catch(() => ({}));
+      const freshToken = authBody.token || getFundToken();
+
+      // Proceed with deletion
+      confirmBtn.textContent = 'Deleting…';
+      const r = await fetch(
+        `${API_BASE}/api/fund/admin/delete?fund_id=${encodeURIComponent(fundId)}`,
+        { method: 'DELETE',
+          headers: { 'x-auth-token': getToken(), 'x-fund-token': freshToken } }
+      );
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      overlay.remove();
+      loadFundList();
+    } catch (e) {
+      errEl.textContent = `Delete failed: ${e.message}`;
+      errEl.style.display = '';
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Delete Permanently';
+    }
+  });
 }
 
 
