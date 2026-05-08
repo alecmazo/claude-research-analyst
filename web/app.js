@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui60-20260508';
+const DGA_BUILD = 'ui61-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -662,6 +662,7 @@ function rehydratePortfolioLastCard() {
   body.innerHTML = buildPortfolioResultHtml(last.result, last.input_weights || {});
   _injectStrategyPrices(body);
   _injectTickerMeta(body);
+  _attachRebRowClicks(body);
 
   const dlBtn = document.getElementById('portfolio-last-download-btn');
   if (dlBtn) {
@@ -871,6 +872,7 @@ function renderPortfolioResult(result, target, inputWeights) {
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   _injectStrategyPrices(el);
   _injectTickerMeta(el);
+  _attachRebRowClicks(el);
 }
 
 // Async: fill in live prices for every .reb-price-cell in a rendered result.
@@ -922,6 +924,88 @@ async function _injectTickerMeta(container) {
       });
     } catch (_) {}
   }));
+}
+
+// ── Recent Dev row click → expanded modal ────────────────────────────────────
+function _attachRebRowClicks(container) {
+  if (!container) return;
+  container.querySelectorAll('.reb-table').forEach(table => {
+    table.addEventListener('click', (e) => {
+      const row = e.target.closest('tbody tr');
+      if (!row) return;
+      const devCell  = row.querySelector('.reb-meta-cell[data-meta="recent_dev"]');
+      if (!devCell) return;
+      const ticker   = devCell.dataset.ticker || '';
+      // .title holds the full untruncated text set by _injectTickerMeta
+      const fullText = devCell.title || devCell.textContent || '';
+      const priceEl  = row.querySelector('.reb-price-col');
+      const price    = priceEl ? priceEl.textContent.trim() : '';
+      showRebDevModal(ticker, price, fullText);
+    });
+  });
+}
+
+function showRebDevModal(ticker, price, fullText) {
+  document.getElementById('reb-dev-modal-overlay')?.remove();
+
+  // The recent_dev string is "Title — Excerpt (Publisher) · Title2 — Excerpt2 (Publisher2)"
+  // Split on " · " to get individual stories, then further parse each one.
+  const stories = fullText
+    ? fullText.split(' · ').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const storiesHtml = stories.length
+    ? stories.map(story => {
+        // Split on first " — " to separate title from the rest
+        const dashIdx = story.indexOf(' — ');
+        if (dashIdx === -1) {
+          return `<div class="rdm-story">
+            <div class="rdm-story-title">${escHtml(story)}</div>
+          </div>`;
+        }
+        const title = story.slice(0, dashIdx).trim();
+        const rest  = story.slice(dashIdx + 3).trim();
+        // Publisher is in trailing parentheses "(Publisher)"
+        const pubMatch = rest.match(/\(([^)]+)\)\s*$/);
+        const publisher = pubMatch ? pubMatch[1] : '';
+        const excerpt   = publisher
+          ? rest.slice(0, rest.lastIndexOf(' (' + publisher)).trim()
+          : rest;
+        return `<div class="rdm-story">
+          <div class="rdm-story-title">${escHtml(title)}</div>
+          ${excerpt   ? `<div class="rdm-story-excerpt">${escHtml(excerpt)}</div>` : ''}
+          ${publisher ? `<div class="rdm-story-pub">${escHtml(publisher)}</div>` : ''}
+        </div>`;
+      }).join('')
+    : '<div class="rdm-empty">No recent developments available for this ticker.</div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'reb-dev-modal-overlay';
+  overlay.innerHTML = `
+    <div class="rdm-modal" role="dialog" aria-modal="true">
+      <div class="rdm-header">
+        <span class="rdm-ticker">${escHtml(ticker)}</span>
+        <span class="rdm-price">${escHtml(price)}</span>
+        <button class="rdm-close" aria-label="Close"
+                onclick="document.getElementById('reb-dev-modal-overlay').remove()">✕</button>
+      </div>
+      <div class="rdm-section-label">RECENT DEVELOPMENTS</div>
+      <div class="rdm-stories">${storiesHtml}</div>
+    </div>`;
+
+  // Click outside modal to dismiss
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  // Esc to dismiss
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      overlay.remove();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+  document.body.appendChild(overlay);
 }
 
 // Strategy selector was removed from the UI — every run produces all three

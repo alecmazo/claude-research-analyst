@@ -3637,6 +3637,101 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-row-new td       { border-left: 2px solid rgba(201,168,76,0.5); }
 .reb-row-exit td      { border-left: 2px solid rgba(100,100,120,0.3); opacity: 0.7; }
 
+/* Clickable rows — cursor + subtle hover highlight */
+.reb-table tbody tr { cursor: pointer; }
+.reb-table tbody tr:hover td { background: rgba(255,255,255,0.025); }
+
+/* ── Recent Dev expanded modal ──────────────────────────────────────────────── */
+#reb-dev-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  backdrop-filter: blur(2px);
+}
+.rdm-modal {
+  background: #0b1828;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 20px 22px;
+  max-width: 680px;
+  width: 100%;
+  max-height: 78vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+.rdm-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.rdm-ticker {
+  font-size: 17px;
+  font-weight: 800;
+  color: #c0cfe0;
+  letter-spacing: 1px;
+}
+.rdm-price {
+  font-size: 11px;
+  color: #8090a8;
+  flex: 1;
+}
+.rdm-close {
+  background: none;
+  border: none;
+  color: #4a6080;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 7px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.rdm-close:hover { color: #c0cfe0; background: rgba(255,255,255,0.07); }
+.rdm-section-label {
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  font-weight: 700;
+  color: #3a5070;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+.rdm-stories { display: flex; flex-direction: column; gap: 0; }
+.rdm-story {
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.rdm-story:last-child { border-bottom: none; padding-bottom: 0; }
+.rdm-story-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #c9a84c;
+  line-height: 1.45;
+  margin-bottom: 5px;
+}
+.rdm-story-excerpt {
+  font-size: 12px;
+  color: #8ea0b8;
+  line-height: 1.55;
+  margin-bottom: 5px;
+}
+.rdm-story-pub {
+  font-size: 10px;
+  color: #3a5070;
+  font-style: italic;
+}
+.rdm-empty {
+  font-size: 12px;
+  color: #4a6080;
+  text-align: center;
+  padding: 24px 0;
+}
+
 /* NEW / EXIT badges on ticker cell */
 .reb-badge {
   display: inline-block;
