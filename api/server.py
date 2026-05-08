@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui52-20260508"
+WEB_BUILD_VERSION = "ui53-20260508"
 
 
 @app.get("/api/build")
@@ -3896,12 +3896,23 @@ def _safe_delete(cur, sql: str, params: tuple) -> None:
 async def fund_admin_delete(request: Request, fund_id: str):
     """Permanently delete a fund and ALL its associated data.
 
-    The initial schema did not add ON DELETE CASCADE to most FK references,
-    so we delete child rows in dependency order before removing the funds row.
-    Each statement runs inside a savepoint so missing tables (schema version
-    differences) are silently skipped without aborting the transaction.
+    Requires the x-delete-password header to match the FUND_DELETE_PASSWORD
+    environment variable.  If FUND_DELETE_PASSWORD is not set the endpoint
+    is disabled (returns 503).
     """
     _require_fund_token(request)
+
+    # ── Verify FUND_DELETE_PASSWORD ──────────────────────────────────────────
+    required_pw = os.environ.get("FUND_DELETE_PASSWORD", "").strip()
+    if not required_pw:
+        raise HTTPException(
+            status_code=503,
+            detail="FUND_DELETE_PASSWORD is not configured on this server.",
+        )
+    submitted_pw = request.headers.get("x-delete-password", "").strip()
+    if not hmac.compare_digest(submitted_pw, required_pw):
+        raise HTTPException(status_code=403, detail="Incorrect delete password.")
+
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:

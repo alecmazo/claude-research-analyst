@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui52-20260508';
+const DGA_BUILD = 'ui53-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -4089,10 +4089,10 @@ function confirmDeleteFund(fundId, fundName) {
         You are about to permanently delete <strong>${escHtml(fundName)}</strong>
         and all its data — positions, YTD history, and transactions.
         <br><br>This action <strong>cannot be undone</strong>.
-        <br><br>Enter the fund admin password to confirm:
+        <br><br>Enter the admin delete password to confirm:
       </div>
       <input id="delete-fund-pw" type="password" class="delete-fund-pw-input"
-             placeholder="Fund password…" autocomplete="current-password" />
+             placeholder="Delete password…" autocomplete="off" />
       <div id="delete-fund-err" class="delete-fund-err" style="display:none"></div>
       <div class="delete-fund-modal-btns">
         <button class="delete-fund-cancel-btn" onclick="document.getElementById('delete-fund-overlay').remove()">Cancel</button>
@@ -4121,13 +4121,20 @@ function confirmDeleteFund(fundId, fundName) {
     confirmBtn.textContent = 'Verifying…';
     errEl.style.display = 'none';
     try {
-      // Re-authenticate with the fund password to verify it
-      const authR = await fetch(`${API_BASE}/api/fund/auth`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-auth-token': getToken() },
-        body: JSON.stringify({ password: pw }),
-      });
-      if (!authR.ok) {
+      // Send the password directly to the delete endpoint via x-delete-password header.
+      // The server validates it against the FUND_DELETE_PASSWORD env var.
+      confirmBtn.textContent = 'Deleting…';
+      const r = await fetch(
+        `${API_BASE}/api/fund/admin/delete?fund_id=${encodeURIComponent(fundId)}`,
+        { method: 'DELETE',
+          headers: {
+            'x-auth-token': getToken(),
+            'x-fund-token': getFundToken(),
+            'x-delete-password': pw,
+          } }
+      );
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 403) {
         errEl.textContent = 'Incorrect password.';
         errEl.style.display = '';
         confirmBtn.disabled = false;
@@ -4135,17 +4142,6 @@ function confirmDeleteFund(fundId, fundName) {
         pwInput.select();
         return;
       }
-      const authBody = await authR.json().catch(() => ({}));
-      const freshToken = authBody.token || getFundToken();
-
-      // Proceed with deletion
-      confirmBtn.textContent = 'Deleting…';
-      const r = await fetch(
-        `${API_BASE}/api/fund/admin/delete?fund_id=${encodeURIComponent(fundId)}`,
-        { method: 'DELETE',
-          headers: { 'x-auth-token': getToken(), 'x-fund-token': freshToken } }
-      );
-      const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
       overlay.remove();
       loadFundList();
