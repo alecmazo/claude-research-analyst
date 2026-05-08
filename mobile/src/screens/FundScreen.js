@@ -47,7 +47,7 @@ const fmtCat = (cat) =>
 const pctColor = (x) =>
   x == null ? '#8090a8' : x > 0 ? '#16A34A' : x < 0 ? '#DC2626' : '#8090a8';
 
-const BRANCHES = ['LP Fund', 'My Portfolio'];
+const BRANCHES = ['LP Fund', 'Managed Account'];
 const LP_TABS  = ['Overview', 'LPs', 'Positions', 'Activity', 'Waterfall'];
 
 export default function FundScreen({ navigation }) {
@@ -90,6 +90,12 @@ export default function FundScreen({ navigation }) {
   const [ytdError,       setYtdError]       = useState(null);
   const [ytdSnapshots,   setYtdSnapshots]   = useState([]);
 
+  // ── Managed Account list (for YTD persistence) ──────────────────────────
+  const [managedAccList,       setManagedAccList]       = useState([]);
+  const [managedAccLoading,    setManagedAccLoading]    = useState(false);
+  const [activeManagedAccId,   setActiveManagedAccId]   = useState(null);
+  const [activeManagedAccName, setActiveManagedAccName] = useState('');
+
   // ── Fund import state ────────────────────────────────────────────────────
   const [importPosStatus,  setImportPosStatus]  = useState(null);  // {ok, msg}
   const [importCtStatus,   setImportCtStatus]   = useState(null);  // {ok, msg}
@@ -118,9 +124,13 @@ export default function FundScreen({ navigation }) {
     return () => { active = false; };
   }, []));
 
-  // When unlocked, load fund list (and YTD snapshots for My Portfolio)
+  // When unlocked, load fund list, managed accounts, and YTD snapshots
   useFocusEffect(useCallback(() => {
-    if (!locked) { loadFundList(); loadYtdSnapshots(); }
+    if (!locked) {
+      loadFundList();
+      loadYtdSnapshots();
+      loadManagedAccList(null);
+    }
   }, [locked])); // eslint-disable-line
 
   // ── Auth submit ──────────────────────────────────────────────────────────
@@ -147,8 +157,12 @@ export default function FundScreen({ navigation }) {
     setFundListLoading(true);
     setFundListError(null);
     try {
-      const list = await api.fundList();
-      setFundList(Array.isArray(list) ? list : []);
+      // Only load LP funds in this branch; managed accounts are under 'Managed Account'
+      const list = await api.fundList('lp_fund');
+      const raw = Array.isArray(list) ? list : [];
+      // Deduplicate by ID (guard against rare DB duplicates)
+      const seen = new Set();
+      setFundList(raw.filter(f => { if (seen.has(f.id)) return false; seen.add(f.id); return true; }));
     } catch (e) {
       if (e.message?.includes('403')) {
         await clearFundToken();
@@ -199,6 +213,49 @@ export default function FundScreen({ navigation }) {
       setYtdSnapshots(Array.isArray(data?.snapshots) ? data.snapshots : []);
     } catch (_) {}
   }, []);
+
+  // ── Load cached YTD from DB for a given managed account ─────────────────
+  const loadYtdCacheForAccount = useCallback(async (accId) => {
+    if (!accId) return;
+    try {
+      const cached = await api.getYtdCache(accId);
+      if (cached?.result_json) {
+        setYtdResult(JSON.parse(cached.result_json));
+      }
+    } catch (_) {
+      // 404 = no cache yet — that's fine
+    }
+  }, []);
+
+  // ── Managed account list (for YTD cache persistence) ────────────────────
+  const loadManagedAccList = useCallback(async (currentAccId) => {
+    setManagedAccLoading(true);
+    try {
+      const list = await api.fundList('managed_account');
+      const raw = Array.isArray(list) ? list : [];
+      const seen = new Set();
+      const deduped = raw.filter(f => {
+        if (seen.has(f.id)) return false;
+        seen.add(f.id);
+        return true;
+      });
+      setManagedAccList(deduped);
+      // Auto-select the first account if none is selected yet
+      if (deduped.length > 0 && !currentAccId) {
+        const first = deduped[0];
+        setActiveManagedAccId(first.id);
+        setActiveManagedAccName(first.name || first.short_name || 'Account');
+        loadYtdCacheForAccount(first.id);
+      }
+    } catch (e) {
+      if (e.message?.includes('403')) {
+        await clearFundToken();
+        setLocked(true);
+      }
+    } finally {
+      setManagedAccLoading(false);
+    }
+  }, [loadYtdCacheForAccount]); // eslint-disable-line
 
   // ── File picker ──────────────────────────────────────────────────────────
   const pickCsv = async (setter) => {
@@ -300,6 +357,15 @@ export default function FundScreen({ navigation }) {
       });
       setYtdResult(data);
       loadYtdSnapshots();
+      // Persist to DB so the result survives Railway redeploys
+      if (activeManagedAccId) {
+        api.saveYtdCache(
+          activeManagedAccId,
+          data.end_value ?? 0,
+          data.md_return_pct ?? 0,
+          JSON.stringify(data),
+        ).catch(() => {});
+      }
     } catch (e) {
       setYtdError(e.message || 'Computation failed.');
     } finally {
@@ -519,6 +585,37 @@ export default function FundScreen({ navigation }) {
   function MyPortfolioPanel() {
     return (
       <View style={s.portfolioBranch}>
+
+        {/* ── Account selector ─────────────────────────────────────────── */}
+        {managedAccLoading ? (
+          <ActivityIndicator color={colors.gold} style={{ marginBottom: 12 }} />
+        ) : managedAccList.length > 1 ? (
+          <View style={s.accSelectorRow}>
+            {managedAccList.map(acc => (
+              <TouchableOpacity
+                key={acc.id}
+                style={[s.accSelectorBtn, activeManagedAccId === acc.id && s.accSelectorBtnActive]}
+                onPress={() => {
+                  setActiveManagedAccId(acc.id);
+                  setActiveManagedAccName(acc.name || acc.short_name || 'Account');
+                  setYtdResult(null);
+                  loadYtdCacheForAccount(acc.id);
+                }}
+              >
+                <Text
+                  style={[s.accSelectorText, activeManagedAccId === acc.id && s.accSelectorTextActive]}
+                  numberOfLines={1}
+                >
+                  {acc.short_name || acc.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : activeManagedAccName ? (
+          <View style={s.accNameBadge}>
+            <Text style={s.accNameBadgeText}>{activeManagedAccName}</Text>
+          </View>
+        ) : null}
 
         {/* ── YTD Upload card ──────────────────────────────────────────── */}
         <View style={s.ytdCard}>
@@ -1258,7 +1355,10 @@ export default function FundScreen({ navigation }) {
                 // If switching back to LP Fund, go to list view
                 if (activeFundId) closeFundDetail();
               }
-              if (b === 'My Portfolio') loadYtdSnapshots();
+              if (b === 'Managed Account') {
+                loadYtdSnapshots();
+                loadManagedAccList(activeManagedAccId);
+              }
             }}
           >
             <Text style={[s.branchBtnText, branch === b && s.branchBtnTextActive]}>{b}</Text>
@@ -1266,7 +1366,7 @@ export default function FundScreen({ navigation }) {
         ))}
       </View>
 
-      {branch === 'My Portfolio' ? (
+      {branch === 'Managed Account' ? (
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1649,6 +1749,15 @@ const s = StyleSheet.create({
   wfallSubhead:  { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#3a5070', marginBottom: 4, paddingHorizontal: 14 },
   wfallWarn:     { backgroundColor: 'rgba(220,160,40,0.1)', borderWidth: 1, borderColor: 'rgba(220,160,40,0.3)', borderRadius: 8, padding: 12, marginBottom: 12 },
   wfallWarnText: { fontSize: 11, color: '#e0a030', lineHeight: 16 },
+
+  // Managed Account selector
+  accSelectorRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  accSelectorBtn:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', backgroundColor: '#0a1628' },
+  accSelectorBtnActive: { borderColor: colors.gold, backgroundColor: 'rgba(201,168,76,0.12)' },
+  accSelectorText:      { fontSize: 12, fontWeight: '600', color: '#4a6080' },
+  accSelectorTextActive:{ color: colors.gold, fontWeight: '800' },
+  accNameBadge:         { backgroundColor: 'rgba(201,168,76,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
+  accNameBadgeText:     { fontSize: 12, fontWeight: '700', color: colors.gold },
 });
 
 // Styles for YtdAttribView / YtdHoldingRow (light-on-dark, matching fund theme)

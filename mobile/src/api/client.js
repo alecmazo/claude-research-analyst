@@ -328,9 +328,23 @@ export const api = {
     body:   JSON.stringify({ password }),
   }),
 
-  fundList: async () => {
+  fundList: async (fundType) => {
     const ft = await getFundToken();
-    return request('/api/fund/list', { headers: { 'x-fund-token': ft } });
+    const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
+    return request(`/api/fund/list${qs}`, { headers: { 'x-fund-token': ft } });
+  },
+  getYtdCache: async (fundId) => {
+    const ft = await getFundToken();
+    return request(`/api/fund/account/${encodeURIComponent(fundId)}/ytd-cache`,
+      { headers: { 'x-fund-token': ft } });
+  },
+  saveYtdCache: async (fundId, nav, ytdPct, resultJson) => {
+    const ft = await getFundToken();
+    return request(`/api/fund/account/${encodeURIComponent(fundId)}/ytd-cache`, {
+      method: 'PUT',
+      body: JSON.stringify({ nav, ytd_pct: ytdPct, result_json: resultJson }),
+      headers: { 'x-fund-token': ft },
+    });
   },
   fundOverview: async (fundId) => {
     const ft = await getFundToken();

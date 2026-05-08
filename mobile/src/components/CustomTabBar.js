@@ -18,6 +18,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from './theme';
 import { haptics } from '../design/haptics';
 
+// ── Display-label overrides (route.name → shown label) ───────────────────────
+// Keeps internal navigation names stable while showing friendlier UI labels.
+const LABEL_OVERRIDE = {
+  Intelligence: 'Ideas',
+  Portfolio:    'Managed Acct',
+};
+
 // ── Icon config per route name ────────────────────────────────────────────────
 const TAB_CONFIG = {
   Research: {
@@ -101,7 +108,7 @@ export default function CustomTabBar({ state, navigation }) {
               </View>
 
               <Text style={[styles.label, focused && styles.labelActive]}>
-                {route.name}
+                {LABEL_OVERRIDE[route.name] || route.name}
               </Text>
             </TouchableOpacity>
           );
