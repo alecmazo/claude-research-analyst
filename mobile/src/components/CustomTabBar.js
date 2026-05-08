@@ -22,7 +22,7 @@ import { haptics } from '../design/haptics';
 // Keeps internal navigation names stable while showing friendlier UI labels.
 const LABEL_OVERRIDE = {
   Intelligence: 'Ideas',
-  Portfolio:    'Managed Acct',
+  Portfolio:    'Tracker',
 };
 
 // ── Icon config per route name ────────────────────────────────────────────────
@@ -43,9 +43,9 @@ const TAB_CONFIG = {
     active:   { family: 'mci', name: 'radar' },
   },
   Portfolio: {
-    // Bank / financial-institution building — premium, not a cheap briefcase
-    inactive: { family: 'mci', name: 'bank-outline' },
-    active:   { family: 'mci', name: 'bank' },
+    // Chart-line + bookmark — paper portfolio tracker
+    inactive: { family: 'mci', name: 'bookmark-multiple-outline' },
+    active:   { family: 'mci', name: 'bookmark-multiple' },
   },
   Fund: {
     // Briefcase — fund administration / GP operations

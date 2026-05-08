@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui42-20260507';
+const DGA_BUILD = 'ui43-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -658,6 +658,7 @@ function rehydratePortfolioLastCard() {
     `Ran ${formatDateTime(last.completed_at)} — ${last.n_tickers} tickers (${last.strategy})`;
   const body = document.getElementById('portfolio-last-result');
   body.innerHTML = buildPortfolioResultHtml(last.result, last.input_weights || {});
+  _injectStrategyPrices(body);
 
   const dlBtn = document.getElementById('portfolio-last-download-btn');
   if (dlBtn) {
@@ -766,6 +767,7 @@ function buildPortfolioResultHtml(result, inputWeights) {
           <tr class="${rowCls}">
             <td class="reb-num">${idx + 1}</td>
             <td class="reb-ticker">${r.ticker}${badge}</td>
+            <td class="reb-price-col"><span class="reb-price-cell" data-ticker="${r.ticker}">—</span></td>
             <td class="reb-cur">${r.cur > 0 ? curPct + '%' : '—'}</td>
             <td class="reb-arrow">→</td>
             <td class="reb-tgt">${r.tgt > 0 ? tgtPct + '%' : '—'}</td>
@@ -779,6 +781,7 @@ function buildPortfolioResultHtml(result, inputWeights) {
             <tr>
               <th class="reb-num">#</th>
               <th>Ticker</th>
+              <th class="reb-price-col">Price</th>
               <th>Current</th>
               <th></th>
               <th>Target</th>
@@ -796,14 +799,17 @@ function buildPortfolioResultHtml(result, inputWeights) {
       posHtml = `<div class="strategy-result-pills">${pills || '<em>No positions</em>'}</div>`;
     }
 
+    const isOpenByDefault = isPrimary;  // Current strategy starts expanded; HC + All-In start collapsed
     return `
-      <div class="strategy-result ${isPrimary ? 'primary' : ''}">
-        <div class="strategy-result-head">
+      <details class="strategy-result-details ${isPrimary ? 'primary' : ''}" ${isOpenByDefault ? 'open' : ''}>
+        <summary class="strategy-result-head strategy-result-summary">
           <span class="strategy-result-title">${s.label}${isPrimary ? ' — Primary' : ''}</span>
-          <span class="strategy-result-count">${s.held} positions</span>
-        </div>
+          <span class="strategy-result-count">${s.held} pos</span>
+          <span class="strategy-result-hint">${isOpenByDefault ? 'click to collapse' : 'click to expand'}</span>
+          <span class="flows-collapse-arrow">▼</span>
+        </summary>
         ${posHtml}
-      </div>`;
+      </details>`;
   }).join('');
 
   let failedHtml = '';
@@ -841,6 +847,32 @@ function renderPortfolioResult(result, target, inputWeights) {
   el.innerHTML = buildPortfolioResultHtml(result, inputWeights || {});
   el.style.display = 'block';
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  _injectStrategyPrices(el);
+}
+
+// Async: fill in live prices for every .reb-price-cell in a rendered result.
+async function _injectStrategyPrices(container) {
+  if (!container) return;
+  const cells = container.querySelectorAll('.reb-price-cell[data-ticker]');
+  if (!cells.length) return;
+  const tickers = [...new Set([...cells].map(c => c.dataset.ticker))];
+  await Promise.allSettled(tickers.map(async ticker => {
+    try {
+      const q = await api.getQuote(ticker);
+      if (!q?.price) return;
+      const price = Number(q.price);
+      const pct   = q.pct_change ?? null;
+      let html = `$${price.toFixed(2)}`;
+      if (pct != null) {
+        const s2  = pct >= 0 ? '+' : '';
+        const c2  = pct > 0 ? 'reb-price-up' : pct < 0 ? 'reb-price-dn' : '';
+        html += `<span class="reb-price-chg ${c2}">${s2}${pct.toFixed(1)}%</span>`;
+      }
+      container.querySelectorAll(`.reb-price-cell[data-ticker="${ticker}"]`).forEach(c => {
+        c.innerHTML = html;
+      });
+    } catch (_) {}
+  }));
 }
 
 // Strategy selector was removed from the UI — every run produces all three
@@ -1970,6 +2002,35 @@ function _renderUnifiedYtdResult(data) {
        </div>`
     : chartDbg;
 
+  // ── SPY comparison block ──────────────────────────────────────────────────
+  const spy    = data.spy_return_pct ?? null;
+  const vsSpy  = data.vs_spy_pct    ?? null;
+  const spyHtml = spy != null ? `
+    <details class="attr-section spy-compare-section">
+      <summary class="attr-section-summary">
+        <span>VS S&amp;P 500 <span class="flows-section-hint">YTD · click to expand/collapse</span></span>
+        <span class="flows-collapse-arrow">▼</span>
+      </summary>
+      <div class="spy-compare-grid">
+        <div class="spy-compare-card">
+          <div class="spy-compare-label">PORTFOLIO YTD</div>
+          <div class="spy-compare-val ${cls(md)}">${sign(md)}${md.toFixed(2)}%</div>
+          <div class="spy-compare-sub">Modified Dietz</div>
+        </div>
+        <div class="spy-compare-vs">vs</div>
+        <div class="spy-compare-card">
+          <div class="spy-compare-label">S&amp;P 500 YTD</div>
+          <div class="spy-compare-val ${cls(spy)}">${sign(spy)}${spy.toFixed(2)}%</div>
+          <div class="spy-compare-sub">SPY total return</div>
+        </div>
+        ${vsSpy != null ? `<div class="spy-compare-card spy-compare-alpha ${vsSpy >= 0 ? 'spy-alpha-pos' : 'spy-alpha-neg'}">
+          <div class="spy-compare-label">ALPHA vs SPY</div>
+          <div class="spy-compare-val">${vsSpy >= 0 ? '+' : ''}${vsSpy.toFixed(2)}%</div>
+          <div class="spy-compare-sub">${vsSpy >= 0 ? 'outperforming' : 'underperforming'}</div>
+        </div>` : ''}
+      </div>
+    </details>` : '';
+
   // ── TWRR stat box ─────────────────────────────────────────────────────────
   const hasExactPerf = data.has_monthly_perf ?? false;
   const twrrBadge    = hasExactPerf ? `<span class="twrr-exact-badge">exact</span>` : '';
@@ -2012,10 +2073,11 @@ function _renderUnifiedYtdResult(data) {
     </div>
     ${flowsHtml}
     ${monthlyChartHtml}
+    ${spyHtml}
 
-    <details class="attr-section" open>
+    <details class="attr-section">
       <summary class="attr-section-summary">
-        <span>PERFORMANCE ATTRIBUTION <span class="flows-section-hint">by holding · transaction-aware · click to collapse</span></span>
+        <span>PERFORMANCE ATTRIBUTION <span class="flows-section-hint">by holding · transaction-aware · click to expand/collapse</span></span>
         <span class="flows-collapse-arrow">▼</span>
       </summary>
       <div class="attr-table-wrap">
@@ -3034,10 +3096,13 @@ function showAccountDetailView(accountId, accountName) {
   if (listEl)   listEl.style.display   = 'none';
   if (detailEl) detailEl.style.display = '';
   if (titleEl)  titleEl.textContent    = accountName || 'Account';
-  // Load YTD result from DB (persistent across Railway redeploys)
+  // Clear any previous account's YTD result before loading this one
+  const _prevResultBox = document.getElementById('history-result-box');
+  if (_prevResultBox) { _prevResultBox.style.display = 'none'; _prevResultBox.innerHTML = ''; }
+  // Load account-specific YTD from DB (never spills across accounts)
   _rehydrateYtdFromDb(accountId);
-  // Render cached YTD attribution + last rebalance result inline
-  _loadMyPortfolioData();
+  // Load snapshot history for this account + last rebalance result
+  loadYtdSnapshots();
   _rehydrateLastRebalanceResult();
 }
 

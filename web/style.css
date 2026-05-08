@@ -974,6 +974,7 @@ body {
   font-weight: 600;
   margin: 6px 0 10px;
 }
+/* Legacy .strategy-result kept for backward compat; new layout uses details/summary */
 .strategy-result {
   margin-top: 10px;
   padding: 12px;
@@ -985,6 +986,33 @@ body {
   border-color: var(--gold);
   background: rgba(201, 162, 39, 0.08);
 }
+
+/* Collapsible strategy blocks */
+.strategy-result-details {
+  margin-top: 10px;
+  border: 1px solid var(--light-gray);
+  border-radius: 10px;
+  background: var(--off-white);
+  overflow: hidden;
+}
+.strategy-result-details.primary {
+  border-color: var(--gold);
+  background: rgba(201, 162, 39, 0.04);
+}
+.strategy-result-details[open] .flows-collapse-arrow { transform: rotate(180deg); }
+.strategy-result-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.strategy-result-summary::-webkit-details-marker { display: none; }
+.strategy-result-summary::marker { display: none; }
+.strategy-result-summary:hover { background: rgba(0,0,0,0.03); }
+.strategy-result-details[open] .strategy-result-summary { border-bottom: 1px solid rgba(0,0,0,0.07); }
 .strategy-result-head {
   display: flex;
   justify-content: space-between;
@@ -996,12 +1024,20 @@ body {
   font-weight: 800;
   color: var(--navy);
   letter-spacing: 0.5px;
+  flex: 1;
 }
 .strategy-result-count {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--mid-gray);
   letter-spacing: 1px;
+  margin-right: 4px;
+}
+.strategy-result-hint {
+  font-size: 10px;
+  color: var(--mid-gray);
+  opacity: 0.6;
+  margin-right: 4px;
 }
 .strategy-result-pills {
   display: flex;
@@ -1989,6 +2025,31 @@ body {
 .attr-section-summary::marker { display: none; }
 .attr-section-summary:hover { background: rgba(255,255,255,0.055); }
 .attr-section[open] .flows-collapse-arrow { transform: rotate(180deg); }
+
+/* SPY comparison section */
+.spy-compare-section { margin: 10px 0 4px; }
+.spy-compare-grid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+.spy-compare-card {
+  flex: 1;
+  min-width: 90px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  text-align: center;
+}
+.spy-compare-alpha.spy-alpha-pos { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.06); }
+.spy-compare-alpha.spy-alpha-neg { border-color: rgba(239,68,68,0.3);  background: rgba(239,68,68,0.05);  }
+.spy-compare-label { font-size: 9px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.4); margin-bottom: 4px; }
+.spy-compare-val   { font-size: 18px; font-weight: 800; margin-bottom: 2px; }
+.spy-compare-sub   { font-size: 9px; color: rgba(255,255,255,0.3); }
+.spy-compare-vs    { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.25); flex-shrink: 0; }
 
 /* Compact attribution chips (used inside table rows) */
 .attr-chip {
@@ -3458,35 +3519,42 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
-  margin-top: 6px;
+  font-size: 11px;
+  margin-top: 4px;
 }
 .reb-table thead tr {
   border-bottom: 1px solid rgba(255,255,255,0.1);
 }
 .reb-table th {
   text-align: left;
-  font-size: 10px;
-  letter-spacing: 1.2px;
+  font-size: 9px;
+  letter-spacing: 1px;
   font-weight: 700;
   color: #4a6080;
-  padding: 4px 6px;
+  padding: 3px 4px;
   white-space: nowrap;
 }
 .reb-table td {
-  padding: 6px 6px;
+  padding: 3px 4px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   vertical-align: middle;
 }
 .reb-table tr:last-child td { border-bottom: none; }
 
-/* Column widths */
-.reb-num  { width: 24px; text-align: right; color: #4a6080; font-size: 10px; padding-right: 8px !important; }
-.reb-ticker { font-weight: 600; font-size: 12px; color: #c0cfe0; letter-spacing: 0.5px; }
-.reb-cur  { text-align: right; color: #8090a8; font-size: 11px; min-width: 48px; }
-.reb-arrow { text-align: center; color: #3a5070; font-size: 11px; width: 18px; padding: 0 2px !important; }
-.reb-tgt  { text-align: right; font-weight: 600; font-size: 12px; color: #c9a84c; min-width: 48px; }
-.reb-delta { text-align: right; font-size: 11px; min-width: 52px; }
+/* Column widths — compact */
+.reb-num  { width: 20px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 5px !important; }
+.reb-ticker { font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.4px; width: 68px; }
+.reb-price-col { text-align: right; font-size: 10px; color: #8090a8; min-width: 58px; }
+.reb-cur  { text-align: right; color: #8090a8; font-size: 10px; min-width: 40px; }
+.reb-arrow { text-align: center; color: #3a5070; font-size: 10px; width: 14px; padding: 0 1px !important; }
+.reb-tgt  { text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; min-width: 40px; }
+.reb-delta { text-align: right; font-size: 10px; min-width: 44px; }
+
+/* Live price cell — injected async */
+.reb-price-cell { white-space: nowrap; }
+.reb-price-chg  { font-size: 9px; margin-left: 3px; }
+.reb-price-up   { color: #22c55e; }
+.reb-price-dn   { color: #ef4444; }
 
 .reb-delta-up { color: #22c55e; }
 .reb-delta-dn { color: #ef4444; }
@@ -3544,22 +3612,30 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 #view-fund .reb-cur    { color: #5a7090; }
 #view-fund .reb-arrow  { color: #2a4060; }
 #view-fund .reb-tgt    { color: #c9a84c; }
-#view-fund .strategy-result {
+#view-fund .strategy-result,
+#view-fund .strategy-result-details {
   background: #0d1f38;
   border-color: rgba(255,255,255,0.07);
   margin-top: 8px;
 }
-#view-fund .strategy-result.primary {
+#view-fund .strategy-result.primary,
+#view-fund .strategy-result-details.primary {
   background: rgba(201,168,76,0.06);
   border-color: rgba(201,168,76,0.25);
 }
-#view-fund .strategy-result-head {
+#view-fund .strategy-result-head,
+#view-fund .strategy-result-summary {
   padding-bottom: 8px;
   margin-bottom: 4px;
   border-bottom: 1px solid rgba(255,255,255,0.07);
 }
+#view-fund .strategy-result-details[open] .strategy-result-summary {
+  border-bottom: 1px solid rgba(255,255,255,0.09);
+}
+#view-fund .strategy-result-summary:hover { background: rgba(255,255,255,0.03); }
 #view-fund .strategy-result-title { color: #e0d8c8; font-size: 12px; }
-#view-fund .strategy-result-count { color: #3a5070; font-size: 11px; }
+#view-fund .strategy-result-count { color: #3a5070; font-size: 10px; }
+#view-fund .strategy-result-hint  { color: #2a4060; }
 
 /* ── Account list card — "CURRENT VALUE" metric label wider ─────────── */
 .fund-summary-metric-label {

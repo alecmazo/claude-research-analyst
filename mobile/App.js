@@ -30,11 +30,12 @@ function HomeStack() {
   );
 }
 
-function PortfolioStack() {
+// Tracker tab — paper portfolios from Ideas, no Fund account cross-over.
+// PaperTrackerScreen is the root; no links back to Fund accounts.
+function TrackerStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Portfolio"        component={PortfolioScreen} />
-      <Stack.Screen name="PortfolioSummary" component={PortfolioSummaryScreen} />
+      <Stack.Screen name="TrackerHome" component={PaperTrackerScreen} />
     </Stack.Navigator>
   );
 }
@@ -90,7 +91,7 @@ export default function App() {
         <Tab.Screen name="Research"     component={HomeStack} />
         <Tab.Screen name="Intelligence" component={IntelligenceStack} />
         <Tab.Screen name="Scan"         component={ScanScreen} />
-        <Tab.Screen name="Portfolio"    component={PortfolioStack} />
+        <Tab.Screen name="Portfolio"    component={TrackerStack} />
         <Tab.Screen name="Fund"         component={FundStack} />
         <Tab.Screen name="Settings"     component={SettingsScreen} />
       </Tab.Navigator>
