@@ -3563,7 +3563,8 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
    REBALANCE RESULT — numbered current → target table
    ────────────────────────────────────────────────────────────────────────── */
 .reb-table {
-  width: auto;           /* shrink to content — no wasted horizontal space */
+  width: 100%;           /* always fills the container */
+  table-layout: fixed;   /* fixed layout: all surplus space flows into .reb-dev */
   border-collapse: collapse;
   font-size: 11px;
   margin-top: 4px;
@@ -3579,31 +3580,39 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   color: #4a6080;
   padding: 3px 5px;
   white-space: nowrap;
+  overflow: hidden;
 }
 .reb-table td {
-  padding: 3px 5px;
+  padding: 4px 5px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
-  vertical-align: middle;
-  white-space: nowrap;
+  vertical-align: top;
+  white-space: nowrap;    /* default: no wrap — overridden for .reb-dev below */
+  overflow: hidden;
 }
 .reb-table tr:last-child td { border-bottom: none; }
 
-/* Column widths — sized to actual content, no surplus space */
-.reb-num    { width: 18px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 4px !important; }
+/* Column widths — all fixed except .reb-dev which absorbs remaining space */
+.reb-num    { width: 22px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 4px !important; }
 .reb-ticker { width: 72px; font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.4px; }
-.reb-price-col { width: 76px; text-align: right; font-size: 10px; color: #8090a8; }
-.reb-cur    { width: 44px; text-align: right; color: #8090a8; font-size: 10px; }
-.reb-arrow  { width: 16px; text-align: center; color: #c9a84c; font-size: 11px;
+.reb-price-col { width: 80px; text-align: right; font-size: 10px; color: #8090a8; }
+.reb-cur    { width: 46px; text-align: right; color: #8090a8; font-size: 10px; }
+.reb-arrow  { width: 18px; text-align: center; color: #c9a84c; font-size: 11px;
               font-weight: 800; padding: 0 2px !important; opacity: 0.9; }
-.reb-tgt    { width: 44px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
-.reb-delta  { width: 48px; text-align: right; font-size: 10px; }
-.reb-sector { width: 88px; font-size: 10px; color: #8090a8; white-space: nowrap;
-              overflow: hidden; text-overflow: ellipsis; max-width: 88px; }
-.reb-dev    { min-width: 160px; max-width: 260px; font-size: 10px; color: #7a8a9a;
-              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.reb-tgt    { width: 46px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
+.reb-delta  { width: 50px; text-align: right; font-size: 10px; }
+.reb-sector { width: 92px; font-size: 10px; color: #8090a8; }
 
-/* Meta cells — sector + recent dev, injected async */
-.reb-meta-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Recent Dev — no fixed width: absorbs all remaining horizontal space */
+.reb-dev    { font-size: 10.5px; color: #8ea0b8; line-height: 1.5;
+              white-space: normal;   /* wrap — the whole point */
+              vertical-align: top;
+              padding-top: 5px !important; padding-bottom: 5px !important; }
+
+/* Sector meta cell: single-line truncation */
+.reb-sector .reb-meta-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Recent dev meta cell: full text, wraps naturally */
+.reb-dev .reb-meta-cell    { display: block; white-space: normal; overflow: visible; }
 
 /* Live price cell — injected async */
 .reb-price-cell { white-space: nowrap; }

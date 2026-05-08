@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui51-20260508"
+WEB_BUILD_VERSION = "ui52-20260508"
 
 
 @app.get("/api/build")
@@ -1264,16 +1264,37 @@ def get_ticker_meta(ticker: str):
     if _YFINANCE_OK:
         try:
             news_items = yf.Ticker(t).news or []
-            if news_items:
-                first = news_items[0]
-                # yfinance ≥ 0.2.x returns dicts with "content" sub-dict;
-                # older versions have "title" at the top level.
+            snippets: list[str] = []
+            for item in news_items[:3]:        # top 3 most-recent stories
+                # yfinance ≥ 0.2.x wraps fields inside "content" sub-dict
+                content = item.get("content") or {}
                 title = (
-                    first.get("title")
-                    or (first.get("content") or {}).get("title")
-                    or ""
-                )
-                recent_dev = title[:160]  # cap length
+                    item.get("title") or content.get("title") or ""
+                ).strip()
+                summary = (
+                    item.get("summary") or item.get("description")
+                    or content.get("summary") or content.get("description") or ""
+                ).strip()
+                publisher = (
+                    item.get("publisher")
+                    or (content.get("provider") or {}).get("displayName", "")
+                ).strip()
+                if not title:
+                    continue
+                # Build: "Title — brief summary (Source)"
+                text = title
+                if summary and summary.lower() != title.lower():
+                    # Append a short excerpt of the summary (first sentence or 120 chars)
+                    first_sentence = summary.split(".")[0].strip()
+                    excerpt = first_sentence if len(first_sentence) <= 120 else first_sentence[:117] + "…"
+                    if excerpt:
+                        text += " — " + excerpt
+                if publisher:
+                    text += f"  ({publisher})"
+                snippets.append(text)
+                if len(snippets) >= 2:   # max 2 stories in the cell
+                    break
+            recent_dev = "  ·  ".join(snippets)
         except Exception:
             pass
 
