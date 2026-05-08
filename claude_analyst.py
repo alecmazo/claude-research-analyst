@@ -138,9 +138,9 @@ def _optional_env(name: str, default: str = "") -> str:
 
 
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
-# All analysis, research, intelligence, and daily brief runs on grok-4.3.
+# All analysis, research, intelligence, and daily brief runs on grok-4.20-reasoning.
 # Override via GROK_MODEL in .env to pin a specific version.
-GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3-latest")
+GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.20-reasoning")
 # Intelligence / Daily Brief use the same model as analysis.
 GROK_INTEL_MODEL = GROK_MODEL
 
@@ -922,38 +922,69 @@ def load_system_prompt() -> str:
 # Fallback: Yahoo Finance chart API via raw requests
 # ============================================================================
 def fetch_market_snapshot(ticker: str) -> dict:
-    """Best-effort current price + previous close + pct_change.
+    """Best-effort current price + previous close + pct_change + market data.
 
     Uses yfinance fast_info as the primary source (reliable previous_close =
-    prior trading day's close) and falls back to the Yahoo chart JSON endpoint
-    when yfinance is absent.
+    prior trading day's close), adds enterprise_value + 52-week range from
+    yfinance .info, and falls back to the Yahoo chart JSON endpoint when
+    yfinance is absent.
 
     Returns:
         {
-            "price":          float | None  — latest trade / current session price
-            "previous_close": float | None  — prior trading day's official close
-            "pct_change":     float | None  — (price − prev_close) / prev_close × 100
-            "market_cap":     float | None
-            "source":         str
+            "price":             float | None  — latest trade / current session price
+            "previous_close":    float | None  — prior trading day's official close
+            "pct_change":        float | None  — (price − prev_close) / prev_close × 100
+            "market_cap":        float | None
+            "year_high":         float | None  — 52-week high
+            "year_low":          float | None  — 52-week low
+            "enterprise_value":  float | None  — from yfinance .info
+            "source":            str
         }
     """
     out = {"price": None, "previous_close": None, "pct_change": None,
-           "market_cap": None, "source": ""}
+           "market_cap": None, "year_high": None, "year_low": None,
+           "enterprise_value": None, "source": ""}
 
     # ── Primary: yfinance fast_info ──────────────────────────────────────────
     try:
         import yfinance as yf  # type: ignore
-        fi = yf.Ticker(ticker).fast_info
+        t   = yf.Ticker(ticker)
+        fi  = t.fast_info
         price = getattr(fi, "last_price", None)
         prev  = getattr(fi, "previous_close", None)
         mcap  = getattr(fi, "market_cap", None)
+        yh    = getattr(fi, "year_high", None)
+        yl    = getattr(fi, "year_low", None)
         if price and float(price) > 0:
             out["price"] = float(price)
             out["source"] = "Yahoo Finance (fast_info)"
         if prev and float(prev) > 0:
             out["previous_close"] = float(prev)
         if mcap:
-            out["market_cap"] = mcap
+            out["market_cap"] = float(mcap)
+        if yh:
+            out["year_high"] = float(yh)
+        if yl:
+            out["year_low"] = float(yl)
+
+        # .info gives enterprise_value + fallback 52-week range.
+        # Wrapped in its own try/except — slower call, best-effort only.
+        try:
+            info = t.info
+            ev = info.get("enterpriseValue")
+            if ev and float(ev) > 0:
+                out["enterprise_value"] = float(ev)
+            if out["year_high"] is None:
+                v = info.get("fiftyTwoWeekHigh")
+                if v:
+                    out["year_high"] = float(v)
+            if out["year_low"] is None:
+                v = info.get("fiftyTwoWeekLow")
+                if v:
+                    out["year_low"] = float(v)
+        except Exception:  # noqa: BLE001
+            pass  # enterprise_value is best-effort; don't abort
+
         # If we have both price and previous_close, we're done.
         if out["price"] is not None and out["previous_close"] is not None:
             _attach_pct_change(out)
@@ -5973,12 +6004,25 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
 
     # Compose Grok user message
     today = datetime.now().strftime("%Y-%m-%d")
+
+    # Format cover-block market data — use verified values from yfinance or "N/A"
+    _mcap = mkt.get("market_cap")
+    _ev   = mkt.get("enterprise_value")
+    _yh   = mkt.get("year_high")
+    _yl   = mkt.get("year_low")
+    mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
+    ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
+    wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
+
     user_msg = (
         f"DATE: {today}\n"
         f"TICKER: {ticker}\n"
         f"ENTITY: {data.get('entity_name','')}\n"
         f"CURRENT_PRICE: {mkt.get('price')}\n"
         f"PREVIOUS_CLOSE: {mkt.get('previous_close')}\n"
+        f"MARKET_CAP: {mcap_str}\n"
+        f"ENTERPRISE_VALUE: {ev_str}\n"
+        f"52_WEEK_RANGE: {wk52_str}\n"
         f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
         f"{verified_block}\n\n"
         + (f"{analyst_block}\n\n" if analyst_block else "")
