@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui56-20260508';
+const DGA_BUILD = 'ui59-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -780,17 +780,32 @@ function buildPortfolioResultHtml(result, inputWeights) {
           </tr>`;
       }).join('');
 
+      // <colgroup> with table-layout:fixed (set in CSS) gives DETERMINISTIC column widths.
+      // The empty <col> for Recent Dev absorbs all remaining horizontal space.
+      // Total utility-col budget: 22+58+78+30+12+28+38+76 = 342px → on a 1700px screen,
+      // Recent Dev gets ~1358px which is room for a full headline + summary.
       posHtml = `
         <table class="reb-table">
+          <colgroup>
+            <col style="width:22px">
+            <col style="width:58px">
+            <col style="width:78px">
+            <col style="width:30px">
+            <col style="width:12px">
+            <col style="width:28px">
+            <col style="width:38px">
+            <col style="width:76px">
+            <col>
+          </colgroup>
           <thead>
             <tr>
               <th class="reb-num">#</th>
-              <th>Ticker</th>
+              <th class="reb-ticker">Ticker</th>
               <th class="reb-price-col">Price</th>
-              <th>Current</th>
-              <th></th>
-              <th>Target</th>
-              <th>Δ</th>
+              <th class="reb-cur">%</th>
+              <th class="reb-arrow"></th>
+              <th class="reb-tgt">Tgt</th>
+              <th class="reb-delta">Δ</th>
               <th class="reb-sector">Sector</th>
               <th class="reb-dev">Recent Dev</th>
             </tr>
@@ -3150,10 +3165,11 @@ async function _refreshFundDbStatus() {
   }
 }
 
-// Load My Portfolio data (YTD snapshots + rehydrate last result).
-// Safe to call any time; only acts on visible elements.
+// Load My Portfolio data (rehydrate last result only).
+// NOTE: loadYtdSnapshots() removed — the Past YTD Runs card is global state, not
+// per-account, so showing it across managed accounts is confusing. The card is
+// permanently hidden via #ytd-snapshots-card { display:none !important } in CSS.
 function _loadMyPortfolioData() {
-  loadYtdSnapshots();
   _rehydrateYtdResult();
 }
 
@@ -3185,10 +3201,13 @@ function showAccountDetailView(accountId, accountName) {
   // Clear any previous account's YTD result before loading this one
   const _prevResultBox = document.getElementById('history-result-box');
   if (_prevResultBox) { _prevResultBox.style.display = 'none'; _prevResultBox.innerHTML = ''; }
+  // Always hide the Past YTD Runs card when switching accounts — user doesn't want
+  // to see another account's run history automatically. It stays hidden unless a new
+  // YTD calculation is triggered from this view.
+  const _snapCard = document.getElementById('ytd-snapshots-card');
+  if (_snapCard) _snapCard.style.display = 'none';
   // Load account-specific YTD from DB (never spills across accounts)
   _rehydrateYtdFromDb(accountId);
-  // Load snapshot history for this account (rebalance is at branch level)
-  loadYtdSnapshots();
 }
 
 async function _rehydrateYtdFromDb(accountId) {

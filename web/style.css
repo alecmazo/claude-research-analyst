@@ -3563,8 +3563,8 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
    REBALANCE RESULT — numbered current → target table
    ────────────────────────────────────────────────────────────────────────── */
 .reb-table {
-  width: 100%;           /* fills the container so .reb-dev absorbs all leftover space */
-  table-layout: fixed;   /* required: fixed layout enforces column widths + gives surplus to .reb-dev */
+  width: 100%;
+  table-layout: fixed;          /* fixed: column widths come from <colgroup> below — deterministic */
   border-collapse: collapse;
   font-size: 11px;
   margin-top: 4px;
@@ -3575,15 +3575,16 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-table th {
   text-align: left;
   font-size: 9px;
-  letter-spacing: 1px;
+  letter-spacing: 0.3px;        /* reduced from 1px — keeps headers tight in narrow columns */
   font-weight: 700;
   color: #4a6080;
-  padding: 3px 5px;
+  padding: 3px 4px;             /* tighter horizontal padding (was 5px) */
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 .reb-table td {
-  padding: 3px 5px;             /* tight rows — single-line height */
+  padding: 3px 4px;             /* matches th — tighter cells */
   border-bottom: 1px solid rgba(255,255,255,0.04);
   vertical-align: middle;
   white-space: nowrap;
@@ -3591,20 +3592,26 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 }
 .reb-table tr:last-child td { border-bottom: none; }
 
-/* Column widths — tight to content; .reb-dev gets every remaining pixel
-   Budget: 18+56+74+34+12+34+40+72 = 340px fixed → ~60-70px more for Recent Dev */
-.reb-num    { width: 18px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 3px !important; }
-.reb-ticker { width: 56px; font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.3px; }
-.reb-price-col { width: 74px; text-align: right; font-size: 10px; color: #8090a8; }
-.reb-cur    { width: 34px; text-align: right; color: #8090a8; font-size: 10px; }
-.reb-arrow  { width: 12px; text-align: center; color: #c9a84c; font-size: 11px;
+/* Column visual styling only — widths come from <colgroup> in the HTML.
+   Total utility-column budget: 22+58+78+30+12+28+38+76 = 342px.
+   On a 1700px desktop, Recent Dev gets ~1358px → fits a full headline + summary. */
+.reb-num    { text-align: right; color: #4a6080; font-size: 9px; padding-right: 3px !important; }
+.reb-ticker { font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.3px; }
+.reb-price-col { text-align: right; font-size: 10px; color: #8090a8; }
+.reb-cur    { text-align: right; color: #8090a8; font-size: 10px; }
+.reb-arrow  { text-align: center; color: #c9a84c; font-size: 11px;
               font-weight: 800; padding: 0 1px !important; opacity: 0.9; }
-.reb-tgt    { width: 34px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
-.reb-delta  { width: 40px; text-align: right; font-size: 10px; }
-.reb-sector { width: 72px; font-size: 10px; color: #8090a8; }
+.reb-tgt    { text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
+.reb-delta  { text-align: right; font-size: 10px; }
+.reb-sector { font-size: 10px; color: #8090a8; }
 
-/* Recent Dev — fills all remaining space; single line with ellipsis truncation */
-.reb-dev { font-size: 10px; color: #8ea0b8; }
+/* Recent Dev — no <col> width in the colgroup → absorbs ALL remaining table width */
+.reb-dev    { font-size: 10px; color: #8ea0b8; }
+
+/* Past YTD Runs card — permanently hidden in managed-account view per user request.
+   The list is loaded into a global state shared across all accounts, which makes the
+   per-account display misleading. Use the "Calculate" button to run a fresh YTD instead. */
+#ytd-snapshots-card { display: none !important; }
 
 /* Both meta cells: one line, truncate with … */
 .reb-meta-cell {
