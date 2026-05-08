@@ -3591,16 +3591,17 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 }
 .reb-table tr:last-child td { border-bottom: none; }
 
-/* Column widths — all fixed except .reb-dev which absorbs remaining space */
-.reb-num    { width: 22px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 4px !important; }
-.reb-ticker { width: 72px; font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.4px; }
-.reb-price-col { width: 80px; text-align: right; font-size: 10px; color: #8090a8; }
-.reb-cur    { width: 46px; text-align: right; color: #8090a8; font-size: 10px; }
-.reb-arrow  { width: 18px; text-align: center; color: #c9a84c; font-size: 11px;
-              font-weight: 800; padding: 0 2px !important; opacity: 0.9; }
-.reb-tgt    { width: 46px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
-.reb-delta  { width: 50px; text-align: right; font-size: 10px; }
-.reb-sector { width: 92px; font-size: 10px; color: #8090a8; }
+/* Column widths — tight to content; .reb-dev gets every remaining pixel
+   Budget: 18+56+74+34+12+34+40+72 = 340px fixed → ~60-70px more for Recent Dev */
+.reb-num    { width: 18px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 3px !important; }
+.reb-ticker { width: 56px; font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.3px; }
+.reb-price-col { width: 74px; text-align: right; font-size: 10px; color: #8090a8; }
+.reb-cur    { width: 34px; text-align: right; color: #8090a8; font-size: 10px; }
+.reb-arrow  { width: 12px; text-align: center; color: #c9a84c; font-size: 11px;
+              font-weight: 800; padding: 0 1px !important; opacity: 0.9; }
+.reb-tgt    { width: 34px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
+.reb-delta  { width: 40px; text-align: right; font-size: 10px; }
+.reb-sector { width: 72px; font-size: 10px; color: #8090a8; }
 
 /* Recent Dev — fills all remaining space; single line with ellipsis truncation */
 .reb-dev { font-size: 10px; color: #8ea0b8; }
