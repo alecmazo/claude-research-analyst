@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui53-20260508"
+WEB_BUILD_VERSION = "ui54-20260508"
 
 
 @app.get("/api/build")
@@ -3879,17 +3879,27 @@ async def fund_import_annual_nav(
 # ---------------------------------------------------------------------------
 
 def _safe_delete(cur, sql: str, params: tuple) -> None:
-    """Execute a DELETE, silently ignoring 'table does not exist' errors
-    (UndefinedTable / 42P01).  Uses a savepoint so the outer transaction
-    stays intact if the table was never created on this schema version."""
+    """Execute a DELETE inside a savepoint.
+
+    Silently skips if the table (or a referenced table in a subquery) does not
+    exist — psycopg2 puts the SQLSTATE code on exc.pgcode, NOT in str(exc), so
+    we check that attribute directly.
+
+    SQLSTATE codes we treat as non-fatal:
+      42P01 — undefined_table
+      42703 — undefined_column
+    All other exceptions are re-raised so real errors surface to the caller.
+    """
+    _SKIP_CODES = ("42P01", "42703")
     cur.execute("SAVEPOINT _del_sp")
     try:
         cur.execute(sql, params)
         cur.execute("RELEASE SAVEPOINT _del_sp")
     except Exception as exc:
         cur.execute("ROLLBACK TO SAVEPOINT _del_sp")
-        if "42P01" not in str(type(exc).__name__ + str(exc)):
-            raise  # re-raise anything that isn't "table not found"
+        pgcode = getattr(exc, "pgcode", "") or ""
+        if pgcode not in _SKIP_CODES:
+            raise  # real error — bubble up with full context
 
 
 @app.delete("/api/fund/admin/delete")
@@ -3983,6 +3993,17 @@ async def fund_admin_delete(request: Request, fund_id: str):
             cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
         conn.commit()
         return {"deleted": fid, "name": name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Delete failed: {type(exc).__name__}: {exc}",
+        )
     finally:
         conn.close()
 
