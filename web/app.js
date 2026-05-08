@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui59-20260508';
+const DGA_BUILD = 'ui60-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -782,18 +782,18 @@ function buildPortfolioResultHtml(result, inputWeights) {
 
       // <colgroup> with table-layout:fixed (set in CSS) gives DETERMINISTIC column widths.
       // The empty <col> for Recent Dev absorbs all remaining horizontal space.
-      // Total utility-col budget: 22+58+78+30+12+28+38+76 = 342px → on a 1700px screen,
-      // Recent Dev gets ~1358px which is room for a full headline + summary.
+      // Total utility-col budget: 22+58+86+38+12+36+46+76 = 374px → on a 1700px screen,
+      // Recent Dev gets ~1326px which is room for a full headline + summary.
       posHtml = `
         <table class="reb-table">
           <colgroup>
             <col style="width:22px">
             <col style="width:58px">
-            <col style="width:78px">
-            <col style="width:30px">
-            <col style="width:12px">
-            <col style="width:28px">
+            <col style="width:86px">
             <col style="width:38px">
+            <col style="width:12px">
+            <col style="width:36px">
+            <col style="width:46px">
             <col style="width:76px">
             <col>
           </colgroup>
