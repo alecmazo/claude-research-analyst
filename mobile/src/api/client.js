@@ -220,6 +220,9 @@ export const api = {
     return `${base}/api/portfolio/${jobId}/download${t}`;
   },
   getLastPortfolio:    () => request('/api/portfolio/last'),
+  // Full payload of the last completed rebalance (synced via Dropbox on server).
+  // Same shape as the AsyncStorage LAST_PORTFOLIO_KEY — whichever is newer wins.
+  getLastPortfolioJob: () => request('/api/portfolio/last-job'),
   getPortfolioSummary: () => request('/api/portfolio/summary'),
 
   // ---------- Watchlist ----------

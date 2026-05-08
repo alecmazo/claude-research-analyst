@@ -532,13 +532,36 @@ export default function FundScreen({ navigation }) {
     Linking.openURL(url);
   };
 
-  // Load last rebal on focus
+  // Load last rebal on focus — merge server (Dropbox-persisted) + local AsyncStorage.
+  // Whichever has the newer completed_at wins, so the phone and web always show
+  // the same last run regardless of which device triggered it.
   useFocusEffect(useCallback(() => {
-    AsyncStorage.getItem(LAST_PORTFOLIO_KEY)
-      .then(raw => { if (raw) setLastRebal(JSON.parse(raw)); })
-      .catch(() => {});
+    (async () => {
+      // Read local cache first so the card appears instantly
+      let local = null;
+      try {
+        const raw = await AsyncStorage.getItem(LAST_PORTFOLIO_KEY);
+        if (raw) local = JSON.parse(raw);
+      } catch (_) {}
+
+      if (local) setLastRebal(local);
+
+      // Then fetch from server; use it if it's newer (or if local is empty)
+      try {
+        const server = await api.getLastPortfolioJob();
+        if (server?.completed_at) {
+          const serverTs = new Date(server.completed_at).getTime();
+          const localTs  = local?.completed_at ? new Date(local.completed_at).getTime() : 0;
+          if (serverTs >= localTs) {
+            setLastRebal(server);
+            // Back-fill local cache so the next cold open is instant
+            AsyncStorage.setItem(LAST_PORTFOLIO_KEY, JSON.stringify(server)).catch(() => {});
+          }
+        }
+      } catch (_) { /* offline or no run yet — local value stays */ }
+    })();
     return () => { if (rebalPollRef.current) clearInterval(rebalPollRef.current); };
-  }, []));
+  }, [])); // eslint-disable-line
 
   // ── Lock screen ──────────────────────────────────────────────────────────
   if (locked) {

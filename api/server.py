@@ -670,7 +670,10 @@ _jobs_lock = threading.Lock()
 # Maps { job_id: { "ticker": str, "type": "analysis"|"portfolio" } }
 # Stored next to the stocks folder so it lives on the same volume.
 # ---------------------------------------------------------------------------
-_JOB_INDEX_PATH = analyst.STOCKS_FOLDER / "_job_index.json"
+_JOB_INDEX_PATH      = analyst.STOCKS_FOLDER / "_job_index.json"
+# Lean snapshot of the last completed rebalance — persisted to Dropbox so
+# both the web client and the mobile app read the same ground truth.
+_LAST_JOB_PATH       = analyst.STOCKS_FOLDER / "_portfolio_last_job.json"
 
 def _load_job_index() -> dict:
     try:
@@ -886,6 +889,22 @@ def _run_portfolio(
                           f"{len(result.get('tickers_failed') or [])} failed")
                           if result.get("ok") else "Failed",
             }
+            # ── Persist lean payload so web + mobile share the same last run ──
+            if result.get("ok"):
+                try:
+                    lean_result = {k: v for k, v in result.items()
+                                   if k != "xlsx_path"}   # strip local server path
+                    last_job_payload = {
+                        "job_id":       job_id,
+                        "n_tickers":    _pjobs[job_id]["n_tickers"],
+                        "strategy":     strategy,
+                        "completed_at": datetime.utcnow().isoformat() + "Z",
+                        "result":       lean_result,
+                        "input_weights": _pjobs[job_id].get("input_weights") or {},
+                    }
+                    _LAST_JOB_PATH.write_text(json.dumps(last_job_payload, default=str))
+                except Exception as _e:
+                    print(f"⚠️  Could not write last-job snapshot: {_e}")
         # Auto-promote the input holdings as the new "live portfolio" benchmark
         # so the Paper Tracker can compare idea baskets against your real book.
         if result.get("ok"):
@@ -951,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui46-20260508"
+WEB_BUILD_VERSION = "ui47-20260508"
 
 
 @app.get("/api/build")
@@ -1956,6 +1975,22 @@ def get_last_portfolio():
         "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
         "title": "Portfolio Review",
     }
+
+
+@app.get("/api/portfolio/last-job")
+def get_last_portfolio_job():
+    """Return the full payload of the most recent completed rebalance run.
+
+    Reads from _portfolio_last_job.json in STOCKS_FOLDER (Dropbox-synced),
+    so both the web client and the mobile app see the same result regardless
+    of which device triggered the run.  Returns 404 if no run has completed yet.
+    """
+    if not _LAST_JOB_PATH.exists():
+        raise HTTPException(status_code=404, detail="No completed portfolio run yet")
+    try:
+        return json.loads(_LAST_JOB_PATH.read_text())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read last-job file: {exc}")
 
 
 @app.get("/api/portfolio/summary")
