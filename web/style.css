@@ -3563,8 +3563,8 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
    REBALANCE RESULT — numbered current → target table
    ────────────────────────────────────────────────────────────────────────── */
 .reb-table {
-  width: 100%;           /* always fills the container */
-  table-layout: fixed;   /* fixed layout: all surplus space flows into .reb-dev */
+  width: 100%;           /* fills the container so .reb-dev absorbs all leftover space */
+  table-layout: fixed;   /* required: fixed layout enforces column widths + gives surplus to .reb-dev */
   border-collapse: collapse;
   font-size: 11px;
   margin-top: 4px;
@@ -3583,10 +3583,10 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   overflow: hidden;
 }
 .reb-table td {
-  padding: 4px 5px;
+  padding: 3px 5px;             /* tight rows — single-line height */
   border-bottom: 1px solid rgba(255,255,255,0.04);
-  vertical-align: top;
-  white-space: nowrap;    /* default: no wrap — overridden for .reb-dev below */
+  vertical-align: middle;
+  white-space: nowrap;
   overflow: hidden;
 }
 .reb-table tr:last-child td { border-bottom: none; }
@@ -3602,17 +3602,16 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-delta  { width: 50px; text-align: right; font-size: 10px; }
 .reb-sector { width: 92px; font-size: 10px; color: #8090a8; }
 
-/* Recent Dev — no fixed width: absorbs all remaining horizontal space */
-.reb-dev    { font-size: 10.5px; color: #8ea0b8; line-height: 1.5;
-              white-space: normal;   /* wrap — the whole point */
-              vertical-align: top;
-              padding-top: 5px !important; padding-bottom: 5px !important; }
+/* Recent Dev — fills all remaining space; single line with ellipsis truncation */
+.reb-dev { font-size: 10px; color: #8ea0b8; }
 
-/* Sector meta cell: single-line truncation */
-.reb-sector .reb-meta-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Recent dev meta cell: full text, wraps naturally */
-.reb-dev .reb-meta-cell    { display: block; white-space: normal; overflow: visible; }
+/* Both meta cells: one line, truncate with … */
+.reb-meta-cell {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Live price cell — injected async */
 .reb-price-cell { white-space: nowrap; }
