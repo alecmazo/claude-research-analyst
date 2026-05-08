@@ -220,7 +220,7 @@
   <header class="header">
     <div class="header-brand">
       <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
-      <h1>Managed Account</h1>
+      <h1>Tracker</h1>
     </div>
     <span></span>
   </header>
@@ -232,7 +232,7 @@
       <div class="label">LIVE BENCHMARK</div>
       <div id="tracker-live-info" class="tracker-live-info">
         <div class="tracker-live-empty">
-          No live portfolio yet. Upload Fidelity CSVs in Fund → Managed Account to set the benchmark.
+          No live portfolio yet. Upload Fidelity CSVs in Fund → Managed Account to calculate YTD and set the benchmark.
         </div>
       </div>
     </div>
@@ -338,17 +338,18 @@
     <span class="tab-label">Ideas</span>
   </button>
 
-  <!-- Managed Account tab — person + chart -->
+  <!-- Tracker tab — paper portfolios, no Fund account cross-over -->
   <button class="tab" data-target="view-portfolio">
     <div class="tab-icon-wrap">
       <span class="tab-icon">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
-          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M5 3h14a1 1 0 0 1 1 1v16l-7-3-7 3V4a1 1 0 0 1 1-1Z"
+                stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+          <path d="M9 10h6M9 13h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       </span>
     </div>
-    <span class="tab-label">Managed Acct</span>
+    <span class="tab-label">Tracker</span>
   </button>
 
   <!-- Fund tab — briefcase / fund management -->
