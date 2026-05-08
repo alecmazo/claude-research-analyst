@@ -69,6 +69,52 @@ INTEL_FILE = STOCKS_FOLDER / "intelligence.json"
 DAILY_BRIEF_FILE = STOCKS_FOLDER / "daily_brief.json"  # most-recent Goldman-style brief
 TRACKER_FILE = STOCKS_FOLDER / "tracker.json"   # paper portfolios + live + SPY series
 
+# Portfolio rebalance — tickers to skip entirely during analysis.
+# Includes cash/money-market funds and any user-specified exclusions.
+# Editable via GET/PUT /api/portfolio/exclude.
+PORTFOLIO_EXCLUDE_FILE = STOCKS_FOLDER / "portfolio_exclude.json"
+
+# Default exclusions: cash/MM funds that cannot be analysed as equities,
+# plus benchmarks / broad ETFs the user explicitly asked to skip.
+_DEFAULT_PORTFOLIO_EXCLUDE: list[str] = [
+    # Fidelity / Schwab money-market & cash equivalents
+    "SPAXX", "FZFXX", "FZSXX", "FDRXX", "FZDXX",
+    "VMFXX", "VMRXX", "SWVXX", "FCASH", "CASH",
+    # User-specified exclusions
+    "BRKB",   # Berkshire — no meaningful SEC XBRL filings for rebalance
+    "SPY",    # S&P 500 index ETF — benchmark, not an individual equity
+]
+
+
+def load_portfolio_exclude() -> list[str]:
+    """Return the current exclude list (uppercase, deduplicated).
+
+    Reads from PORTFOLIO_EXCLUDE_FILE if it exists; otherwise creates it
+    from the default list and saves it so future calls pick up edits.
+    """
+    if PORTFOLIO_EXCLUDE_FILE.exists():
+        try:
+            raw = json.loads(PORTFOLIO_EXCLUDE_FILE.read_text())
+            if isinstance(raw, list):
+                return sorted({str(t).strip().upper() for t in raw if t})
+        except Exception:
+            pass
+    # First run — write defaults so the file exists for editing
+    save_portfolio_exclude(_DEFAULT_PORTFOLIO_EXCLUDE)
+    return list(_DEFAULT_PORTFOLIO_EXCLUDE)
+
+
+def save_portfolio_exclude(tickers: list[str]) -> None:
+    """Persist the exclude list, overwriting the existing file."""
+    cleaned = sorted({str(t).strip().upper() for t in tickers if t})
+    try:
+        PORTFOLIO_EXCLUDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PORTFOLIO_EXCLUDE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cleaned, indent=2))
+        tmp.replace(PORTFOLIO_EXCLUDE_FILE)
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not save portfolio_exclude.json: {exc}")
+
 # Gamma metadata index — maps ticker → { gamma_url, generated_at, ... }.
 # Survives Railway restarts via Dropbox hydration so the "View Gamma"
 # button keeps working days/weeks after the original analysis ran.
@@ -8418,7 +8464,16 @@ def run_portfolio_rebalance(
     if system_prompt is None:
         system_prompt = load_system_prompt()
 
-    tickers = portfolio_tickers(portfolio_records)
+    all_tickers = portfolio_tickers(portfolio_records)
+    exclude_set = set(load_portfolio_exclude())
+
+    # Split into analysable vs. excluded before touching the progress bar
+    tickers          = [t for t in all_tickers if t not in exclude_set]
+    excluded_tickers = [t for t in all_tickers if t in exclude_set]
+    if excluded_tickers:
+        print(f"   ⏭️  Skipping {len(excluded_tickers)} excluded ticker(s): "
+              f"{', '.join(excluded_tickers)}")
+
     n_tickers = len(tickers)
 
     def _emit(step, pct, label, extra=None):
@@ -8434,9 +8489,11 @@ def run_portfolio_rebalance(
     # roll-up, weight computation, xlsx write, and side-effects.
     ANALYZE_BUDGET = 0.80
 
-    _emit("analyzing", 0.0, f"Analyzing {n_tickers} tickers…",
+    _emit("analyzing", 0.0,
+          f"Analyzing {n_tickers} ticker(s)"
+          + (f" ({len(excluded_tickers)} excluded)" if excluded_tickers else "") + "…",
           {"ticker_total": n_tickers, "ticker_index": 0,
-           "ok": [], "failed": []})
+           "ok": [], "failed": [], "excluded": excluded_tickers})
 
     ticker_results: list[dict] = []
     ok_so_far: list[str] = []
@@ -8595,6 +8652,7 @@ def run_portfolio_rebalance(
         "tickers_ok": [r["ticker"] for r in ok_results],
         "tickers_failed": [{"ticker": r["ticker"], "error": r.get("error")}
                             for r in failed],
+        "tickers_excluded": excluded_tickers,   # skipped by exclude list
         "xlsx_path": str(output_path),
         "portfolio_roll_up_ok": bool(roll.get("ok")),
         "strategies": {k: _slim(v) for k, v in strategy_results.items()},

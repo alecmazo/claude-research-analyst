@@ -1862,6 +1862,29 @@ def delete_tracker(portfolio_id: str):
     return {"ok": True}
 
 
+@app.get("/api/portfolio/exclude")
+def get_portfolio_exclude(request: Request):
+    """Return the current portfolio analysis exclude list."""
+    _require_auth(request)
+    return {"tickers": analyst.load_portfolio_exclude()}
+
+
+class PortfolioExcludeBody(BaseModel):
+    tickers: list[str]
+
+
+@app.put("/api/portfolio/exclude")
+def set_portfolio_exclude(body: PortfolioExcludeBody, request: Request):
+    """Replace the portfolio analysis exclude list.
+
+    Pass an empty list to clear all exclusions (money-market defaults will
+    be re-added on the next save cycle unless you explicitly manage them).
+    """
+    _require_auth(request)
+    analyst.save_portfolio_exclude(body.tickers)
+    return {"tickers": analyst.load_portfolio_exclude()}
+
+
 @app.get("/api/portfolio/last")
 def get_last_portfolio():
     """Return metadata about the most recent portfolio run (for the Research page link).

@@ -19,6 +19,7 @@ stocks/*.json
 stocks/*.eml
 # but keep these:
 !stocks/dga_system_prompt.txt
+!stocks/portfolio_exclude.json
 !stocks/.gitkeep
 
 # Portfolio data (sensitive financial holdings / generated outputs)
