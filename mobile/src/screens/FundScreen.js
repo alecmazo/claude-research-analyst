@@ -689,15 +689,16 @@ export default function FundScreen({ navigation }) {
     return (
       <View style={s.rebalResultWrap}>
         <Text style={s.rebalResultTitle}>
-          {(key || 'CURRENT').replace(/_/g, ' ').toUpperCase()} STRATEGY  ·  {weights.length} POSITIONS
+          {(key || 'CURRENT').replace(/_/g, ' ').toUpperCase()}  ·  {weights.length} POSITIONS
         </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View>
             <View style={[s.tableRow, s.tableHeader]}>
-              <Text style={[s.th, { width: 58 }]}>Ticker</Text>
-              <Text style={[s.th, s.thRight, { width: 62 }]}>Current</Text>
-              <Text style={[s.th, s.thRight, { width: 62 }]}>Target</Text>
-              <Text style={[s.th, s.thRight, { width: 56 }]}>Δ</Text>
+              <Text style={[s.th, { width: 50 }]}>Ticker</Text>
+              <Text style={[s.th, s.thRight, { width: 46 }]}>Now</Text>
+              <Text style={[s.th, { width: 18, textAlign: 'center' }]}> </Text>
+              <Text style={[s.th, s.thRight, { width: 46 }]}>Target</Text>
+              <Text style={[s.th, s.thRight, { width: 46 }]}>Δ</Text>
             </View>
             {weights.map((w, i) => {
               const curRaw  = iw[w.ticker] != null ? iw[w.ticker] : null;
@@ -709,16 +710,17 @@ export default function FundScreen({ navigation }) {
                             : delta < -0.5 ? '#DC2626' : '#8090a8';
               return (
                 <View key={w.ticker} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-                  <Text style={[s.td, { width: 58, color: colors.gold, fontWeight: '700' }]}>
+                  <Text style={[s.td, { width: 50, color: colors.gold, fontWeight: '700' }]}>
                     {w.ticker}
                   </Text>
-                  <Text style={[s.td, s.tdRight, s.tdDim, { width: 62 }]}>
+                  <Text style={[s.td, s.tdRight, s.tdDim, { width: 46 }]}>
                     {curPct != null ? curPct.toFixed(1) + '%' : '—'}
                   </Text>
-                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 62 }]}>
+                  <Text style={s.rebalArrow}>→</Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 46 }]}>
                     {tgtPct.toFixed(1)}%
                   </Text>
-                  <Text style={[s.td, s.tdRight, { width: 56, color: dColor }]}>
+                  <Text style={[s.td, s.tdRight, { width: 46, color: dColor }]}>
                     {delta == null ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(1) + '%'}
                   </Text>
                 </View>
@@ -1926,6 +1928,9 @@ const s = StyleSheet.create({
   // ── Rebalance result table ──────────────────────────────────────────────
   rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.15)', paddingTop: 12 },
   rebalResultTitle: { fontSize: 10, fontWeight: '800', color: colors.gold, letterSpacing: 0.6, marginBottom: 8 },
+  // Arrow between current → target — gold, visually distinct from the dark row background
+  rebalArrow:       { width: 18, textAlign: 'center', fontSize: 11, fontWeight: '800',
+                      color: colors.gold, opacity: 0.85, paddingHorizontal: 2 },
 });
 
 // Styles for YtdAttribView / YtdHoldingRow (light-on-dark, matching fund theme)

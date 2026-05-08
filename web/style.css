@@ -3517,7 +3517,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
    REBALANCE RESULT — numbered current → target table
    ────────────────────────────────────────────────────────────────────────── */
 .reb-table {
-  width: 100%;
+  width: auto;           /* shrink to content — no wasted horizontal space */
   border-collapse: collapse;
   font-size: 11px;
   margin-top: 4px;
@@ -3531,24 +3531,26 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   letter-spacing: 1px;
   font-weight: 700;
   color: #4a6080;
-  padding: 3px 4px;
+  padding: 3px 5px;
   white-space: nowrap;
 }
 .reb-table td {
-  padding: 3px 4px;
+  padding: 3px 5px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   vertical-align: middle;
+  white-space: nowrap;
 }
 .reb-table tr:last-child td { border-bottom: none; }
 
-/* Column widths — compact */
-.reb-num  { width: 20px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 5px !important; }
-.reb-ticker { font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.4px; width: 68px; }
-.reb-price-col { text-align: right; font-size: 10px; color: #8090a8; min-width: 58px; }
-.reb-cur  { text-align: right; color: #8090a8; font-size: 10px; min-width: 40px; }
-.reb-arrow { text-align: center; color: #3a5070; font-size: 10px; width: 14px; padding: 0 1px !important; }
-.reb-tgt  { text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; min-width: 40px; }
-.reb-delta { text-align: right; font-size: 10px; min-width: 44px; }
+/* Column widths — sized to actual content, no surplus space */
+.reb-num    { width: 18px; text-align: right; color: #4a6080; font-size: 9px; padding-right: 4px !important; }
+.reb-ticker { width: 72px; font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.4px; }
+.reb-price-col { width: 76px; text-align: right; font-size: 10px; color: #8090a8; }
+.reb-cur    { width: 44px; text-align: right; color: #8090a8; font-size: 10px; }
+.reb-arrow  { width: 16px; text-align: center; color: #c9a84c; font-size: 11px;
+              font-weight: 800; padding: 0 2px !important; opacity: 0.9; }
+.reb-tgt    { width: 44px; text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
+.reb-delta  { width: 48px; text-align: right; font-size: 10px; }
 
 /* Live price cell — injected async */
 .reb-price-cell { white-space: nowrap; }
