@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui61-20260508';
+const DGA_BUILD = 'ui62-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -900,6 +900,10 @@ async function _injectStrategyPrices(container) {
   }));
 }
 
+// Per-ticker news store: ticker → {news: [...], sector, industry}
+// Populated by _injectTickerMeta so showRebDevModal can access full articles.
+const _tickerMetaStore = {};
+
 // Async: fill in sector + recent-dev for every .reb-meta-cell in a rendered result.
 async function _injectTickerMeta(container) {
   if (!container) return;
@@ -910,6 +914,8 @@ async function _injectTickerMeta(container) {
     try {
       const meta = await api.getTickerMeta(ticker);
       if (!meta) return;
+      // Store full structured response for the expanded modal
+      _tickerMetaStore[ticker] = meta;
       container.querySelectorAll(`.reb-meta-cell[data-ticker="${ticker}"]`).forEach(c => {
         const field = c.dataset.meta;
         if (field === 'sector') {
@@ -919,7 +925,7 @@ async function _injectTickerMeta(container) {
         } else if (field === 'recent_dev') {
           const val = meta.recent_dev || '—';
           c.textContent = val;
-          c.title = val;  // full text on hover
+          c.title = val;
         }
       });
     } catch (_) {}
@@ -945,39 +951,57 @@ function _attachRebRowClicks(container) {
   });
 }
 
-function showRebDevModal(ticker, price, fullText) {
+function showRebDevModal(ticker, price, fallbackText) {
   document.getElementById('reb-dev-modal-overlay')?.remove();
 
-  // The recent_dev string is "Title — Excerpt (Publisher) · Title2 — Excerpt2 (Publisher2)"
-  // Split on " · " to get individual stories, then further parse each one.
-  const stories = fullText
-    ? fullText.split(' · ').map(s => s.trim()).filter(Boolean)
-    : [];
+  // Prefer the structured news array stored by _injectTickerMeta (full summaries,
+  // up to 5 stories). Fall back to parsing the compact cell string if not yet loaded.
+  const stored  = _tickerMetaStore[ticker] || {};
+  const sector  = stored.industry || stored.sector || '';
+  const news    = stored.news || [];   // [{title, summary, publisher, url, pub_ts}]
 
-  const storiesHtml = stories.length
-    ? stories.map(story => {
-        // Split on first " — " to separate title from the rest
-        const dashIdx = story.indexOf(' — ');
-        if (dashIdx === -1) {
-          return `<div class="rdm-story">
-            <div class="rdm-story-title">${escHtml(story)}</div>
-          </div>`;
-        }
-        const title = story.slice(0, dashIdx).trim();
-        const rest  = story.slice(dashIdx + 3).trim();
-        // Publisher is in trailing parentheses "(Publisher)"
-        const pubMatch = rest.match(/\(([^)]+)\)\s*$/);
-        const publisher = pubMatch ? pubMatch[1] : '';
-        const excerpt   = publisher
-          ? rest.slice(0, rest.lastIndexOf(' (' + publisher)).trim()
-          : rest;
-        return `<div class="rdm-story">
-          <div class="rdm-story-title">${escHtml(title)}</div>
-          ${excerpt   ? `<div class="rdm-story-excerpt">${escHtml(excerpt)}</div>` : ''}
-          ${publisher ? `<div class="rdm-story-pub">${escHtml(publisher)}</div>` : ''}
-        </div>`;
-      }).join('')
-    : '<div class="rdm-empty">No recent developments available for this ticker.</div>';
+  let storiesHtml;
+  if (news.length) {
+    storiesHtml = news.map(story => {
+      // Format publish date from Unix timestamp
+      let dateStr = '';
+      if (story.pub_ts) {
+        try {
+          dateStr = new Date(story.pub_ts * 1000).toLocaleDateString('en-US', {
+            month: 'short', day: 'numeric', year: 'numeric',
+          });
+        } catch (_) {}
+      }
+      const meta = [story.publisher, dateStr].filter(Boolean).join(' · ');
+      const titleHtml = story.url
+        ? `<a class="rdm-story-title rdm-story-link" href="${escHtml(story.url)}" target="_blank" rel="noopener">${escHtml(story.title)}</a>`
+        : `<div class="rdm-story-title">${escHtml(story.title)}</div>`;
+      return `<div class="rdm-story">
+        ${titleHtml}
+        ${story.summary && story.summary.toLowerCase() !== story.title.toLowerCase()
+          ? `<div class="rdm-story-excerpt">${escHtml(story.summary)}</div>` : ''}
+        ${meta ? `<div class="rdm-story-pub">${escHtml(meta)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } else if (fallbackText && fallbackText !== '—') {
+    // Modal opened before async meta loaded — parse compact cell string
+    storiesHtml = fallbackText.split(/\s+·\s+/).map(s => s.trim()).filter(Boolean).map(story => {
+      const di = story.indexOf(' — ');
+      if (di === -1) return `<div class="rdm-story"><div class="rdm-story-title">${escHtml(story)}</div></div>`;
+      const title = story.slice(0, di).trim();
+      const rest  = story.slice(di + 3).trim();
+      const pm    = rest.match(/\(([^)]+)\)\s*$/);
+      const pub   = pm ? pm[1] : '';
+      const exc   = pub ? rest.slice(0, rest.lastIndexOf(' (' + pub)).trim() : rest;
+      return `<div class="rdm-story">
+        <div class="rdm-story-title">${escHtml(title)}</div>
+        ${exc ? `<div class="rdm-story-excerpt">${escHtml(exc)}</div>` : ''}
+        ${pub ? `<div class="rdm-story-pub">${escHtml(pub)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } else {
+    storiesHtml = '<div class="rdm-empty">No recent developments available for this ticker.</div>';
+  }
 
   const overlay = document.createElement('div');
   overlay.id = 'reb-dev-modal-overlay';
@@ -986,23 +1010,17 @@ function showRebDevModal(ticker, price, fullText) {
       <div class="rdm-header">
         <span class="rdm-ticker">${escHtml(ticker)}</span>
         <span class="rdm-price">${escHtml(price)}</span>
+        ${sector ? `<span class="rdm-sector">${escHtml(sector)}</span>` : ''}
         <button class="rdm-close" aria-label="Close"
                 onclick="document.getElementById('reb-dev-modal-overlay').remove()">✕</button>
       </div>
-      <div class="rdm-section-label">RECENT DEVELOPMENTS</div>
+      <div class="rdm-section-label">RECENT DEVELOPMENTS · ${news.length || '?'} STORIES</div>
       <div class="rdm-stories">${storiesHtml}</div>
     </div>`;
 
-  // Click outside modal to dismiss
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
-  // Esc to dismiss
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      overlay.remove();
-      document.removeEventListener('keydown', escHandler);
-    }
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
   };
   document.addEventListener('keydown', escHandler);
   document.body.appendChild(overlay);

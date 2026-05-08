@@ -970,7 +970,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui61-20260508"
+WEB_BUILD_VERSION = "ui62-20260508"
 
 
 @app.get("/api/build")
@@ -1261,11 +1261,11 @@ def get_ticker_meta(ticker: str):
 
     # Most-recent news headline via yfinance
     recent_dev = ""
+    news_list: list[dict] = []
     if _YFINANCE_OK:
         try:
             news_items = yf.Ticker(t).news or []
-            snippets: list[str] = []
-            for item in news_items[:3]:        # top 3 most-recent stories
+            for item in news_items[:8]:        # fetch up to 8, keep best 5
                 # yfinance ≥ 0.2.x wraps fields inside "content" sub-dict
                 content = item.get("content") or {}
                 title = (
@@ -1279,26 +1279,45 @@ def get_ticker_meta(ticker: str):
                     item.get("publisher")
                     or (content.get("provider") or {}).get("displayName", "")
                 ).strip()
+                url = (
+                    item.get("link") or item.get("url")
+                    or (content.get("canonicalUrl") or {}).get("url", "")
+                ).strip()
+                pub_ts = item.get("providerPublishTime") or None
                 if not title:
                     continue
-                # Build: "Title — brief summary (Source)"
-                text = title
-                if summary and summary.lower() != title.lower():
-                    # Append a short excerpt of the summary (first sentence or 120 chars)
-                    first_sentence = summary.split(".")[0].strip()
-                    excerpt = first_sentence if len(first_sentence) <= 120 else first_sentence[:117] + "…"
+                news_list.append({
+                    "title":     title,
+                    "summary":   summary,   # full, untruncated
+                    "publisher": publisher,
+                    "url":       url,
+                    "pub_ts":    pub_ts,    # Unix timestamp or None
+                })
+                if len(news_list) >= 5:
+                    break
+
+            # Compact inline string for the table cell (2 stories, short excerpt)
+            snippets: list[str] = []
+            for story in news_list[:2]:
+                text = story["title"]
+                if story["summary"] and story["summary"].lower() != story["title"].lower():
+                    first = story["summary"].split(".")[0].strip()
+                    excerpt = first if len(first) <= 120 else first[:117] + "…"
                     if excerpt:
                         text += " — " + excerpt
-                if publisher:
-                    text += f"  ({publisher})"
+                if story["publisher"]:
+                    text += f"  ({story['publisher']})"
                 snippets.append(text)
-                if len(snippets) >= 2:   # max 2 stories in the cell
-                    break
             recent_dev = "  ·  ".join(snippets)
         except Exception:
             pass
 
-    result = {"sector": sector, "industry": industry, "recent_dev": recent_dev}
+    result = {
+        "sector":     sector,
+        "industry":   industry,
+        "recent_dev": recent_dev,   # compact string for the inline cell
+        "news":       news_list,    # structured array for the expanded modal
+    }
     _ticker_meta_cache[t] = {**result, "ts": now}
     return result
 
