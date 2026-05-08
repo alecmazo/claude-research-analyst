@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui44-20260508';
+const DGA_BUILD = 'ui45-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -166,6 +166,7 @@ const api = {
   listReports: () => apiGet('/api/reports'),
   getReport: (ticker) => apiGet(`/api/report/${ticker}`),
   getQuote: (ticker) => apiGet(`/api/quote/${ticker}`),
+  getSpyYtd: () => apiGet('/api/market/spy-ytd'),
   listStrategies: () => apiGet('/api/strategies'),
   clearCache: () => fetch(`${API_BASE}/api/cache`, {
     method: 'DELETE',
@@ -2003,33 +2004,41 @@ function _renderUnifiedYtdResult(data) {
     : chartDbg;
 
   // ── SPY comparison block ──────────────────────────────────────────────────
-  const spy    = data.spy_return_pct ?? null;
-  const vsSpy  = data.vs_spy_pct    ?? null;
-  const spyHtml = spy != null ? `
-    <details class="attr-section spy-compare-section">
+  // Initially render using the stored value from the YTD computation (fast),
+  // then overwrite with a live yfinance fetch so the comparison is always
+  // current even when the YTD was computed weeks ago.
+  const spyStored = data.spy_return_pct ?? null;
+  const spyHtml = `
+    <details class="attr-section spy-compare-section" open>
       <summary class="attr-section-summary">
-        <span>VS S&amp;P 500 <span class="flows-section-hint">YTD · click to expand/collapse</span></span>
+        <span>VS S&amp;P 500 <span class="flows-section-hint">YTD · real-time · click to expand/collapse</span></span>
         <span class="flows-collapse-arrow">▼</span>
       </summary>
-      <div class="spy-compare-grid">
+      <div class="spy-compare-grid" id="spy-compare-grid">
         <div class="spy-compare-card">
           <div class="spy-compare-label">PORTFOLIO YTD</div>
           <div class="spy-compare-val ${cls(md)}">${sign(md)}${md.toFixed(2)}%</div>
           <div class="spy-compare-sub">Modified Dietz</div>
         </div>
         <div class="spy-compare-vs">vs</div>
-        <div class="spy-compare-card">
+        <div class="spy-compare-card" id="spy-spy-card">
           <div class="spy-compare-label">S&amp;P 500 YTD</div>
-          <div class="spy-compare-val ${cls(spy)}">${sign(spy)}${spy.toFixed(2)}%</div>
-          <div class="spy-compare-sub">SPY total return</div>
+          <div class="spy-compare-val ${spyStored != null ? cls(spyStored) : ''}" id="spy-spy-val">
+            ${spyStored != null ? sign(spyStored) + spyStored.toFixed(2) + '%' : '<span style="color:#6a8aaa;font-size:13px">Loading…</span>'}
+          </div>
+          <div class="spy-compare-sub" id="spy-spy-sub">SPY · ${spyStored != null ? 'stored' : 'fetching live…'}</div>
         </div>
-        ${vsSpy != null ? `<div class="spy-compare-card spy-compare-alpha ${vsSpy >= 0 ? 'spy-alpha-pos' : 'spy-alpha-neg'}">
+        <div class="spy-compare-card spy-compare-alpha ${spyStored != null ? (md - spyStored >= 0 ? 'spy-alpha-pos' : 'spy-alpha-neg') : ''}" id="spy-alpha-card">
           <div class="spy-compare-label">ALPHA vs SPY</div>
-          <div class="spy-compare-val">${vsSpy >= 0 ? '+' : ''}${vsSpy.toFixed(2)}%</div>
-          <div class="spy-compare-sub">${vsSpy >= 0 ? 'outperforming' : 'underperforming'}</div>
-        </div>` : ''}
+          <div class="spy-compare-val" id="spy-alpha-val">
+            ${spyStored != null ? ((md - spyStored >= 0 ? '+' : '') + (md - spyStored).toFixed(2) + '%') : '—'}
+          </div>
+          <div class="spy-compare-sub" id="spy-alpha-sub">
+            ${spyStored != null ? (md - spyStored >= 0 ? 'outperforming' : 'underperforming') : ''}
+          </div>
+        </div>
       </div>
-    </details>` : '';
+    </details>`;
 
   // ── TWRR stat box ─────────────────────────────────────────────────────────
   const hasExactPerf = data.has_monthly_perf ?? false;
@@ -2108,6 +2117,44 @@ function _renderUnifiedYtdResult(data) {
   if (mc && mc.monthly && mc.monthly.length) {
     requestAnimationFrame(() => _drawMonthlyChart(mc));
   }
+
+  // ── Live SPY YTD refresh ─────────────────────────────────────────────────
+  // Fetch real-time SPY from the backend and overwrite the stored value that
+  // was baked into result_json at computation time (which may be days old).
+  (async () => {
+    try {
+      const spyData = await api.getSpyYtd();
+      const liveSpyPct = spyData?.ytd_pct;
+      if (liveSpyPct == null) return;
+      const alphaEl  = document.getElementById('spy-alpha-card');
+      const spyVal   = document.getElementById('spy-spy-val');
+      const spySub   = document.getElementById('spy-spy-sub');
+      const alphaVal = document.getElementById('spy-alpha-val');
+      const alphaSub = document.getElementById('spy-alpha-sub');
+      if (!spyVal) return;
+
+      const sign2 = v => v >= 0 ? '+' : '';
+      const clsLive = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+      spyVal.className = `spy-compare-val ${clsLive(liveSpyPct)}`;
+      spyVal.textContent = sign2(liveSpyPct) + liveSpyPct.toFixed(2) + '%';
+      if (spySub) {
+        const asOf = spyData.as_of ? ` · ${spyData.as_of}` : '';
+        spySub.textContent = `SPY · live${asOf}`;
+      }
+      // Recalculate alpha vs live SPY
+      const alpha = md - liveSpyPct;
+      if (alphaEl) {
+        alphaEl.className = `spy-compare-card spy-compare-alpha ${alpha >= 0 ? 'spy-alpha-pos' : 'spy-alpha-neg'}`;
+      }
+      if (alphaVal) {
+        alphaVal.className = 'spy-compare-val';
+        alphaVal.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
+      }
+      if (alphaSub) {
+        alphaSub.textContent = alpha >= 0 ? 'outperforming' : 'underperforming';
+      }
+    } catch (_) { /* fail silently — stored value remains */ }
+  })();
 }
 
 // ── Monthly YTD chart (Fidelity-style bar + balance line) ─────────────────

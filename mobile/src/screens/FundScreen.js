@@ -13,7 +13,7 @@
  *
  * Sub-tabs (LP Fund branch): Overview | LPs | Positions | Activity | Waterfall
  */
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, RefreshControl, TextInput,
   StyleSheet, ActivityIndicator, TouchableOpacity,
@@ -102,6 +102,10 @@ export default function FundScreen({ navigation }) {
   const [importPosLoading, setImportPosLoading] = useState(false);
   const [importCtLoading,  setImportCtLoading]  = useState(false);
 
+  // ── Live SPY YTD comparison ──────────────────────────────────────────────
+  // Populated when a YTD result is displayed; refreshes from /api/market/spy-ytd
+  const [spyLive, setSpyLive] = useState(null);
+
   // ── Rebalance state ──────────────────────────────────────────────────────
   const [rebalFile,         setRebalFile]         = useState(null);
   const [rebalReuseCache,   setRebalReuseCache]   = useState(true);
@@ -132,6 +136,19 @@ export default function FundScreen({ navigation }) {
       loadManagedAccList(null);
     }
   }, [locked])); // eslint-disable-line
+
+  // ── Live SPY YTD: fetch whenever a YTD result is displayed ──────────────
+  useEffect(() => {
+    if (!ytdResult) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.getSpyYtd();
+        if (!cancelled && data?.ytd_pct != null) setSpyLive(data);
+      } catch (_) { /* fail silently */ }
+    })();
+    return () => { cancelled = true; };
+  }, [ytdResult]); // eslint-disable-line
 
   // ── Auth submit ──────────────────────────────────────────────────────────
   const submitPassword = async () => {
@@ -489,6 +506,7 @@ export default function FundScreen({ navigation }) {
           strategy: j.strategy,
           completed_at: new Date().toISOString(),
           result: j.result,
+          input_weights: j.input_weights || {},
         };
         AsyncStorage.setItem(LAST_PORTFOLIO_KEY, JSON.stringify(payload)).catch(() => {});
         setLastRebal(payload);
@@ -582,6 +600,113 @@ export default function FundScreen({ navigation }) {
     );
   }
 
+  // ── SPY comparison card ─────────────────────────────────────────────────
+  // Shows portfolio YTD vs S&P 500 YTD with live SPY data if available.
+  function SpyComparisonCard({ portfolioPct }) {
+    // Use live SPY if fetched; fall back to stored value in ytdResult
+    const spyPct  = spyLive?.ytd_pct ?? ytdResult?.spy_return_pct ?? null;
+    const isLive  = spyLive != null;
+    const asOf    = spyLive?.as_of ?? null;
+    if (portfolioPct == null && spyPct == null) return null;
+    const alpha   = portfolioPct != null && spyPct != null ? portfolioPct - spyPct : null;
+    const alphaPos = alpha != null && alpha >= 0;
+    return (
+      <View style={s.spyCard}>
+        <Text style={s.spyCardTitle}>
+          VS S&P 500{isLive ? '  ·  ' : ''}
+          {isLive && <Text style={s.spyLiveBadge}>LIVE{asOf ? `  ${asOf}` : ''}</Text>}
+        </Text>
+        <View style={s.spyCardRow}>
+          {/* Portfolio */}
+          <View style={s.spyMetric}>
+            <Text style={s.spyMetricLabel}>PORTFOLIO YTD</Text>
+            <Text style={[s.spyMetricVal, { color: pctColor(portfolioPct) }]}>
+              {portfolioPct != null ? fmtPct(portfolioPct, 2) : '—'}
+            </Text>
+            <Text style={s.spyMetricSub}>Modified Dietz</Text>
+          </View>
+          <Text style={s.spyVs}>vs</Text>
+          {/* SPY */}
+          <View style={s.spyMetric}>
+            <Text style={s.spyMetricLabel}>S&P 500 YTD</Text>
+            <Text style={[s.spyMetricVal, { color: pctColor(spyPct) }]}>
+              {spyPct != null ? fmtPct(spyPct, 2) : '—'}
+            </Text>
+            <Text style={s.spyMetricSub}>SPY {isLive ? 'real-time' : 'at calc time'}</Text>
+          </View>
+          {/* Alpha */}
+          {alpha != null && (
+            <>
+              <Text style={s.spyVs}>=</Text>
+              <View style={[s.spyAlpha, alphaPos ? s.spyAlphaPos : s.spyAlphaNeg]}>
+                <Text style={s.spyAlphaLabel}>ALPHA</Text>
+                <Text style={s.spyAlphaVal}>
+                  {alphaPos ? '+' : ''}{alpha.toFixed(2)}%
+                </Text>
+                <Text style={s.spyAlphaSub}>{alphaPos ? 'outperforming' : 'underperforming'}</Text>
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // ── Rebalance result table ──────────────────────────────────────────────
+  // Renders current-weight → target-weight for the primary strategy.
+  function RebalResultTable({ result, inputWeights }) {
+    if (!result?.strategies) return null;
+    const key   = result.primary_strategy || Object.keys(result.strategies)[0];
+    const strat = result.strategies?.[key];
+    if (!strat?.weights?.length) return null;
+    const weights = [...strat.weights]
+      .filter(w => w.ticker && w.target_weight != null)
+      .sort((a, b) => b.target_weight - a.target_weight);
+    const iw = inputWeights || {};
+    return (
+      <View style={s.rebalResultWrap}>
+        <Text style={s.rebalResultTitle}>
+          {(key || 'CURRENT').replace(/_/g, ' ').toUpperCase()} STRATEGY  ·  {weights.length} POSITIONS
+        </Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View>
+            <View style={[s.tableRow, s.tableHeader]}>
+              <Text style={[s.th, { width: 58 }]}>Ticker</Text>
+              <Text style={[s.th, s.thRight, { width: 62 }]}>Current</Text>
+              <Text style={[s.th, s.thRight, { width: 62 }]}>Target</Text>
+              <Text style={[s.th, s.thRight, { width: 56 }]}>Δ</Text>
+            </View>
+            {weights.map((w, i) => {
+              const curRaw  = iw[w.ticker] != null ? iw[w.ticker] : null;
+              const curPct  = curRaw != null ? curRaw * 100 : null;
+              const tgtPct  = w.target_weight * 100;
+              const delta   = curPct != null ? tgtPct - curPct : null;
+              const dColor  = delta == null ? '#8090a8'
+                            : delta > 0.5  ? '#16A34A'
+                            : delta < -0.5 ? '#DC2626' : '#8090a8';
+              return (
+                <View key={w.ticker} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
+                  <Text style={[s.td, { width: 58, color: colors.gold, fontWeight: '700' }]}>
+                    {w.ticker}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, s.tdDim, { width: 62 }]}>
+                    {curPct != null ? curPct.toFixed(1) + '%' : '—'}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 62 }]}>
+                    {tgtPct.toFixed(1)}%
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 56, color: dColor }]}>
+                    {delta == null ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(1) + '%'}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
   function MyPortfolioPanel() {
     return (
       <View style={s.portfolioBranch}>
@@ -597,6 +722,7 @@ export default function FundScreen({ navigation }) {
                 style={[s.accSelectorBtn, activeManagedAccId === acc.id && s.accSelectorBtnActive]}
                 onPress={() => {
                   setActiveManagedAccId(acc.id);
+                  setSpyLive(null);
                   setActiveManagedAccName(acc.name || acc.short_name || 'Account');
                   setYtdResult(null);
                   loadYtdCacheForAccount(acc.id);
@@ -616,63 +742,6 @@ export default function FundScreen({ navigation }) {
             <Text style={s.accNameBadgeText}>{activeManagedAccName}</Text>
           </View>
         ) : null}
-
-        {/* ── YTD Upload card ──────────────────────────────────────────── */}
-        <View style={s.ytdCard}>
-          <View style={s.ytdCardHead}>
-            <Text style={s.ytdCardTitle}>YTD ATTRIBUTION</Text>
-            <View style={s.ytdBadge}>
-              <Text style={s.ytdBadgeText}>MODIFIED DIETZ</Text>
-            </View>
-          </View>
-          <Text style={s.ytdCardDesc}>
-            Upload Fidelity CSVs to compute cash-flow adjusted returns with per-stock attribution.
-          </Text>
-
-          <FileRow
-            label="Account Positions"
-            file={ytdPosFile}
-            onPick={() => pickCsv(setYtdPosFile)}
-            required
-          />
-          <FileRow
-            label="Account Activity"
-            file={ytdActFile}
-            onPick={() => pickCsv(setYtdActFile)}
-            required
-          />
-          <FileRow
-            label="Monthly Performance"
-            file={ytdMonthlyFile}
-            onPick={() => pickCsv(setYtdMonthlyFile)}
-          />
-
-          <View style={s.beginValueRow}>
-            <Text style={s.beginValueLabel}>Jan 1 Value (optional if monthly CSV provided)</Text>
-            <TextInput
-              style={s.beginValueInput}
-              value={ytdBeginValue}
-              onChangeText={setYtdBeginValue}
-              placeholder="e.g. 250000"
-              placeholderTextColor="#3a5070"
-              keyboardType="numeric"
-            />
-          </View>
-
-          {ytdError ? (
-            <Text style={s.ytdError}>{ytdError}</Text>
-          ) : null}
-
-          <TouchableOpacity
-            style={[s.ytdBtn, ytdSubmitting && { opacity: 0.6 }]}
-            onPress={submitYtd}
-            disabled={ytdSubmitting}
-          >
-            {ytdSubmitting
-              ? <ActivityIndicator color={colors.navy} size="small" />
-              : <Text style={s.ytdBtnText}>Compute YTD Return + Attribution</Text>}
-          </TouchableOpacity>
-        </View>
 
         {/* ── YTD Result card ───────────────────────────────────────────── */}
         {ytdResult && (
@@ -695,14 +764,6 @@ export default function FundScreen({ navigation }) {
                   </Text>
                 </View>
               )}
-              {ytdResult.spy_return_pct != null && (
-                <View style={s.ytdMetric}>
-                  <Text style={s.ytdMetricKey}>SPY YTD</Text>
-                  <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.spy_return_pct) }]}>
-                    {fmtPct(ytdResult.spy_return_pct, 2)}
-                  </Text>
-                </View>
-              )}
               <View style={s.ytdMetric}>
                 <Text style={s.ytdMetricKey}>TOTAL GAIN</Text>
                 <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.total_dollar_gain) }]}>
@@ -717,6 +778,9 @@ export default function FundScreen({ navigation }) {
                 {ytdResult.begin_value ? `  ·  Begin: ${fmt$0(ytdResult.begin_value)}` : ''}
               </Text>
             )}
+
+            {/* S&P 500 live comparison — prominent card */}
+            <SpyComparisonCard portfolioPct={ytdResult.md_return_pct} />
 
             {/* Attribution tornado */}
             {(ytdResult.attribution || []).length > 0 && (
@@ -840,18 +904,19 @@ export default function FundScreen({ navigation }) {
                 </View>
               ) : null}
               {rebalJob.status === 'done' && (
-                <Text style={s.rebalStatusDone}>✅ Done — {rebalJob.n_tickers} tickers analyzed</Text>
+                <>
+                  <Text style={s.rebalStatusDone}>✅ Done — {rebalJob.n_tickers} tickers analyzed</Text>
+                  <RebalResultTable result={rebalJob.result} inputWeights={rebalJob.input_weights} />
+                  <TouchableOpacity style={[s.rebalRunBtn, { marginTop: 10 }]} onPress={openRebalDownload}>
+                    <Ionicons name="document-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
+                    <Text style={s.rebalRunBtnText}>Download DGA-portfolio.xlsx</Text>
+                  </TouchableOpacity>
+                </>
               )}
               {rebalJob.status === 'failed' && (
                 <Text style={s.rebalStatusFail}>❌ Failed</Text>
               )}
               {rebalError && <Text style={s.rebalStatusFail}>{rebalError}</Text>}
-              {rebalJob.status === 'done' && (
-                <TouchableOpacity style={s.rebalRunBtn} onPress={openRebalDownload}>
-                  <Ionicons name="document-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
-                  <Text style={s.rebalRunBtnText}>Download DGA-portfolio.xlsx</Text>
-                </TouchableOpacity>
-              )}
             </View>
           )}
         </View>
@@ -864,7 +929,9 @@ export default function FundScreen({ navigation }) {
               {lastRebal.completed_at ? new Date(lastRebal.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
               {lastRebal.n_tickers ? `  ·  ${lastRebal.n_tickers} tickers` : ''}
             </Text>
-            <View style={s.rebalLastActions}>
+            {/* Strategy result table from last run */}
+            <RebalResultTable result={lastRebal.result} inputWeights={lastRebal.input_weights} />
+            <View style={[s.rebalLastActions, { marginTop: 10 }]}>
               <TouchableOpacity
                 style={[s.rebalRunBtn, { flex: 1 }]}
                 onPress={() => navigation.navigate('PortfolioSummary')}
@@ -895,6 +962,63 @@ export default function FundScreen({ navigation }) {
           <View style={[s.portfolioBtn, { backgroundColor: 'rgba(201,168,76,0.1)', borderColor: 'rgba(201,168,76,0.3)' }]}>
             <Text style={[s.portfolioBtnText, { color: '#6a8aaa' }]}>Coming soon</Text>
           </View>
+        </View>
+
+        {/* ── YTD Upload card (last — upload/compute is a secondary action) ── */}
+        <View style={[s.ytdCard, { marginTop: 4 }]}>
+          <View style={s.ytdCardHead}>
+            <Text style={s.ytdCardTitle}>COMPUTE YTD</Text>
+            <View style={s.ytdBadge}>
+              <Text style={s.ytdBadgeText}>MODIFIED DIETZ</Text>
+            </View>
+          </View>
+          <Text style={s.ytdCardDesc}>
+            Upload Fidelity CSVs to compute cash-flow adjusted returns with per-stock attribution.
+          </Text>
+
+          <FileRow
+            label="Account Positions"
+            file={ytdPosFile}
+            onPick={() => pickCsv(setYtdPosFile)}
+            required
+          />
+          <FileRow
+            label="Account Activity"
+            file={ytdActFile}
+            onPick={() => pickCsv(setYtdActFile)}
+            required
+          />
+          <FileRow
+            label="Monthly Performance"
+            file={ytdMonthlyFile}
+            onPick={() => pickCsv(setYtdMonthlyFile)}
+          />
+
+          <View style={s.beginValueRow}>
+            <Text style={s.beginValueLabel}>Jan 1 Value (optional if monthly CSV provided)</Text>
+            <TextInput
+              style={s.beginValueInput}
+              value={ytdBeginValue}
+              onChangeText={setYtdBeginValue}
+              placeholder="e.g. 250000"
+              placeholderTextColor="#3a5070"
+              keyboardType="numeric"
+            />
+          </View>
+
+          {ytdError ? (
+            <Text style={s.ytdError}>{ytdError}</Text>
+          ) : null}
+
+          <TouchableOpacity
+            style={[s.ytdBtn, ytdSubmitting && { opacity: 0.6 }]}
+            onPress={submitYtd}
+            disabled={ytdSubmitting}
+          >
+            {ytdSubmitting
+              ? <ActivityIndicator color={colors.navy} size="small" />
+              : <Text style={s.ytdBtnText}>Compute YTD Return + Attribution</Text>}
+          </TouchableOpacity>
         </View>
 
       </View>
@@ -1758,6 +1882,27 @@ const s = StyleSheet.create({
   accSelectorTextActive:{ color: colors.gold, fontWeight: '800' },
   accNameBadge:         { backgroundColor: 'rgba(201,168,76,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
   accNameBadgeText:     { fontSize: 12, fontWeight: '700', color: colors.gold },
+
+  // ── S&P 500 comparison card ─────────────────────────────────────────────
+  spyCard:          { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', padding: 14, marginTop: 14, marginBottom: 4 },
+  spyCardTitle:     { fontSize: 10, fontWeight: '800', color: '#4a6080', letterSpacing: 0.8, marginBottom: 10 },
+  spyLiveBadge:     { fontSize: 9, color: '#16A34A', fontWeight: '700', letterSpacing: 0.5 },
+  spyCardRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  spyMetric:        { flex: 1, alignItems: 'center' },
+  spyMetricLabel:   { fontSize: 9, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 3 },
+  spyMetricVal:     { fontSize: 18, fontWeight: '800' },
+  spyMetricSub:     { fontSize: 9, color: '#3a5070', marginTop: 2 },
+  spyVs:            { fontSize: 11, color: '#3a5070', fontWeight: '600', paddingHorizontal: 2 },
+  spyAlpha:         { flex: 1.2, alignItems: 'center', borderRadius: 10, padding: 8 },
+  spyAlphaPos:      { backgroundColor: 'rgba(22,163,74,0.12)', borderWidth: 1, borderColor: 'rgba(22,163,74,0.3)' },
+  spyAlphaNeg:      { backgroundColor: 'rgba(220,38,38,0.1)', borderWidth: 1, borderColor: 'rgba(220,38,38,0.25)' },
+  spyAlphaLabel:    { fontSize: 9, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 2 },
+  spyAlphaVal:      { fontSize: 16, fontWeight: '800', color: '#e8eaf0' },
+  spyAlphaSub:      { fontSize: 9, color: '#6a8aaa', marginTop: 2 },
+
+  // ── Rebalance result table ──────────────────────────────────────────────
+  rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.15)', paddingTop: 12 },
+  rebalResultTitle: { fontSize: 10, fontWeight: '800', color: colors.gold, letterSpacing: 0.6, marginBottom: 8 },
 });
 
 // Styles for YtdAttribView / YtdHoldingRow (light-on-dark, matching fund theme)

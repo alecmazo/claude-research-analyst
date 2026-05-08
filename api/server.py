@@ -951,7 +951,7 @@ def info():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui44-20260508"
+WEB_BUILD_VERSION = "ui45-20260508"
 
 
 @app.get("/api/build")
@@ -1155,6 +1155,60 @@ def get_quote(ticker: str):
     ticker = ticker.strip().upper()
     snapshot = analyst.fetch_market_snapshot(ticker)
     return {"ticker": ticker, **snapshot}
+
+
+# ── SPY YTD cache (TTL: 15 min) ───────────────────────────────────────────────
+_spy_ytd_cache: dict = {}   # {"ytd_pct": float, "first_close": float,
+                             #  "last_close": float, "as_of": str, "ts": float}
+_SPY_YTD_TTL = 900          # seconds — matches _PRICE_CACHE_TTL
+
+
+@app.get("/api/market/spy-ytd")
+def get_spy_ytd():
+    """Return S&P 500 (SPY) year-to-date return % in real-time from Yahoo Finance.
+
+    Cached for 15 minutes so rapid page reloads don't hammer Yahoo.
+    Returns:
+        ytd_pct     — YTD return as a decimal percentage (e.g. -4.37)
+        first_close — SPY closing price on the first trading day of the year
+        last_close  — SPY closing price on the most recent trading day
+        as_of       — date string of the last_close bar (YYYY-MM-DD)
+    """
+    import datetime as _dt
+
+    now = time.time()
+    cached = _spy_ytd_cache.get("ts")
+    if cached and (now - cached) < _SPY_YTD_TTL:
+        return {k: v for k, v in _spy_ytd_cache.items() if k != "ts"}
+
+    if not _YFINANCE_OK:
+        raise HTTPException(status_code=503, detail="yfinance not installed on this server")
+
+    try:
+        start_of_year = _dt.date(_dt.date.today().year, 1, 1).isoformat()
+        spy = yf.Ticker("SPY")
+        hist = spy.history(start=start_of_year, interval="1d")
+        if hist.empty:
+            raise ValueError("Empty history returned for SPY")
+        first_close = float(hist["Close"].iloc[0])
+        last_close  = float(hist["Close"].iloc[-1])
+        ytd_pct     = round((last_close / first_close - 1) * 100, 2)
+        as_of       = str(hist.index[-1].date())
+        result = {
+            "ytd_pct":     ytd_pct,
+            "first_close": round(first_close, 2),
+            "last_close":  round(last_close, 2),
+            "as_of":       as_of,
+        }
+        _spy_ytd_cache.update({**result, "ts": now})
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Return stale cache if available rather than erroring
+        if cached:
+            return {k: v for k, v in _spy_ytd_cache.items() if k != "ts"}
+        raise HTTPException(status_code=503, detail=f"SPY YTD fetch failed: {exc}")
 
 
 @app.delete("/api/cache")
