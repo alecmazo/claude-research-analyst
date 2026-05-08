@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui43-20260508';
+const DGA_BUILD = 'ui44-20260508';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -3040,6 +3040,8 @@ function _switchFundBranch(branch) {
   } else {
     showAccountListView();
     loadAccountList();
+    // Rebalance lives at branch level — restore last run result on every branch open
+    _rehydrateLastRebalanceResult();
   }
 }
 
@@ -3101,9 +3103,8 @@ function showAccountDetailView(accountId, accountName) {
   if (_prevResultBox) { _prevResultBox.style.display = 'none'; _prevResultBox.innerHTML = ''; }
   // Load account-specific YTD from DB (never spills across accounts)
   _rehydrateYtdFromDb(accountId);
-  // Load snapshot history for this account + last rebalance result
+  // Load snapshot history for this account (rebalance is at branch level)
   loadYtdSnapshots();
-  _rehydrateLastRebalanceResult();
 }
 
 async function _rehydrateYtdFromDb(accountId) {

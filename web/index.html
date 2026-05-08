@@ -22,7 +22,7 @@
        ────────────────────────────────────────────────────────────────────── -->
   <script>
   (function () {
-    var EXPECTED = 'ui43-20260508';
+    var EXPECTED = 'ui44-20260508';
     try {
       // Nuke any service worker (we don't use one, so this is purely defensive)
       if ('serviceWorker' in navigator) {
@@ -744,67 +744,67 @@
       <!-- YTD result renders inline here (never navigates away) -->
       <div id="history-result-box" class="history-result-box" style="display:none;"></div>
 
-      <!-- ══════════════════════════════════════════════════════════════
-           SECTION 2 — REBALANCE
-           ═══════════════════════════════════════════════════════════ -->
-      <div class="acct-section-header" style="margin-top:16px;">
-        <span class="label">REBALANCE</span>
-      </div>
-
-      <div class="card acct-rebalance-card">
-        <p class="hint" style="margin-bottom:10px;">
-          Upload a CSV/XLSX with <strong>Ticker</strong> and <strong>Weight (%)</strong> columns.
-          The AI will analyze each position and return optimized target weights.
-        </p>
-
-        <!-- File pick row -->
-        <div class="reb-upload-row">
-          <button class="fund-import-btn" onclick="document.getElementById('portfolio-file').click()">
-            <span id="portfolio-file-label">↑ Choose Portfolio File</span>
-          </button>
-          <span id="portfolio-file-info" class="file-info"></span>
-        </div>
-        <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" style="display:none;">
-
-        <input type="hidden" id="strategy-list" value="current">
-
-        <!-- Options row -->
-        <div class="reb-options-row">
-          <div class="reb-option-item">
-            <label class="gamma-label" for="portfolio-reuse">Reuse cache</label>
-            <label class="toggle-switch reb-toggle">
-              <input type="checkbox" id="portfolio-reuse" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="reb-option-item">
-            <label class="gamma-label" for="portfolio-gamma">Gamma slides</label>
-            <label class="toggle-switch reb-toggle">
-              <input type="checkbox" id="portfolio-gamma">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
-        <p class="hint" id="portfolio-reuse-hint" style="margin-top:4px;margin-bottom:10px;">
-          Cache ON: reuses existing reports (fast). OFF: re-runs every ticker through Grok for latest news.
-        </p>
-
-        <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
-      </div>
-
-      <!-- Progress + result — stays in this view, no navigation -->
-      <div class="card" id="portfolio-progress-card" style="display:none;">
-        <div class="acct-section-header" style="margin:0 0 8px;">
-          <span class="label">REBALANCE STATUS</span>
-          <button id="portfolio-download-btn" class="fund-import-btn" style="display:none;">⬇ Download xlsx</button>
-        </div>
-        <div id="portfolio-status-text" class="portfolio-status"></div>
-        <div id="portfolio-error" class="error-box" style="display:none;"></div>
-        <!-- Numbered current → target result table renders here -->
-        <div id="portfolio-result" style="display:none; margin-top:12px;"></div>
-      </div>
-
     </div><!-- /account-detail-view -->
+
+    <!-- ════════════════════ REBALANCE (branch-level — not tied to any account) ════════════ -->
+    <div class="acct-section-header" style="margin-top:20px;">
+      <span class="label">REBALANCE</span>
+    </div>
+
+    <div class="card acct-rebalance-card">
+      <p class="hint" style="margin-bottom:10px;">
+        Upload a CSV/XLSX with <strong>Ticker</strong> and <strong>Weight (%)</strong> columns.
+        The AI will analyze each position and return optimized target weights.
+        Results apply to the uploaded file only — not tied to any specific account.
+      </p>
+
+      <!-- File pick row -->
+      <div class="reb-upload-row">
+        <button class="fund-import-btn" onclick="document.getElementById('portfolio-file').click()">
+          <span id="portfolio-file-label">↑ Choose Portfolio File</span>
+        </button>
+        <span id="portfolio-file-info" class="file-info"></span>
+      </div>
+      <input type="file" id="portfolio-file" accept=".csv,.xlsx,.xls" style="display:none;">
+
+      <input type="hidden" id="strategy-list" value="current">
+
+      <!-- Options row -->
+      <div class="reb-options-row">
+        <div class="reb-option-item">
+          <label class="gamma-label" for="portfolio-reuse">Reuse cache</label>
+          <label class="toggle-switch reb-toggle">
+            <input type="checkbox" id="portfolio-reuse" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="reb-option-item">
+          <label class="gamma-label" for="portfolio-gamma">Gamma slides</label>
+          <label class="toggle-switch reb-toggle">
+            <input type="checkbox" id="portfolio-gamma">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <p class="hint" id="portfolio-reuse-hint" style="margin-top:4px;margin-bottom:10px;">
+        Cache ON: reuses existing reports (fast). OFF: re-runs every ticker through Grok for latest news.
+      </p>
+
+      <button id="portfolio-run-btn" class="btn-primary full-width" disabled>RUN REBALANCE</button>
+    </div>
+
+    <!-- Progress + result — branch-level, persists across account navigation -->
+    <div class="card" id="portfolio-progress-card" style="display:none;">
+      <div class="acct-section-header" style="margin:0 0 8px;">
+        <span class="label">REBALANCE STATUS</span>
+        <button id="portfolio-download-btn" class="fund-import-btn" style="display:none;">⬇ Download xlsx</button>
+      </div>
+      <div id="portfolio-status-text" class="portfolio-status"></div>
+      <div id="portfolio-error" class="error-box" style="display:none;"></div>
+      <!-- Numbered current → target result table renders here -->
+      <div id="portfolio-result" style="display:none; margin-top:12px;"></div>
+    </div>
+
   </div><!-- /fund-branch-portfolio -->
 
 </section>
