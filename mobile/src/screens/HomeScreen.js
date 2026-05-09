@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Linking,
+  Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -453,6 +454,19 @@ const styles = StyleSheet.create({
     minWidth: 90,
     justifyContent: 'center',
     alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.goldLight,          // top highlight edge
+    borderBottomWidth: 2,
+    borderBottomColor: colors.goldDark,        // bottom depth edge
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.gold,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.55,
+        shadowRadius: 10,
+      },
+      android: { elevation: 8 },
+    }),
   },
   analyzeBtnDisabled: { opacity: 0.5 },
   analyzeBtnInner: {
@@ -522,7 +536,10 @@ const styles = StyleSheet.create({
   // Compact two-line row, ~46px tall vs old ~70px
   reportRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 9,
+    paddingHorizontal: 12,            // slightly less left-pad to make room for accent bar
+    paddingVertical: 9,
+    borderLeftWidth: 3,
+    borderLeftColor: `rgba(91,184,212,0.25)`, // subtle permanent accent bar
   },
   sep: { height: 1, backgroundColor: colors.lightGray, marginLeft: 14 },
   tickerCell:    { flex: 1 },

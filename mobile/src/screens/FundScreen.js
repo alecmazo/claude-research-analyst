@@ -1181,7 +1181,7 @@ export default function FundScreen({ navigation }) {
       <View style={s.overviewWrap}>
         <View style={s.heroCard}>
           <Text style={s.heroLabel}>CURRENT NAV</Text>
-          <Text style={s.heroValue}>{fmt$(overview.nav)}</Text>
+          <Text style={s.heroValue} adjustsFontSizeToFit minimumFontScale={0.7} numberOfLines={1}>{fmt$(overview.nav)}</Text>
           <Text style={[s.heroGain, { color: gainColor }]}>
             {fmtPct(overview.gain_pct)} since inception ({overview.inception_date?.slice(0,4)})
           </Text>
@@ -1960,12 +1960,12 @@ const s = StyleSheet.create({
   overviewWrap: { padding: 14 },
   heroCard:  { backgroundColor: '#0e1d38', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: 'rgba(91,184,212,0.3)', marginBottom: 10 },
   heroLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, color: colors.gold, marginBottom: 4 },
-  heroValue: { fontSize: 32, fontWeight: '800', color: '#f0e8d0', letterSpacing: -1 },
+  heroValue: { fontSize: 32, fontWeight: '800', color: '#f0e8d0', letterSpacing: -1, fontVariant: ['tabular-nums'] },
   heroGain:  { fontSize: 12, marginTop: 4 },
   statRow:   { flexDirection: 'row', gap: 8, marginBottom: 10 },
   statCard:  { flex: 1, backgroundColor: '#0e1d38', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.12)' },
   statLabel: { fontSize: 8, fontWeight: '800', letterSpacing: 0.8, color: '#5BB8D4', marginBottom: 3 },
-  statValue: { fontSize: 15, fontWeight: '800', color: '#f0e8d0' },
+  statValue: { fontSize: 15, fontWeight: '800', color: '#f0e8d0', fontVariant: ['tabular-nums'] },
   statSub:   { fontSize: 10, color: '#4a6080', marginTop: 2 },
   econCard:     { backgroundColor: '#0e1d38', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
   econTitle:    { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#4a6080', marginBottom: 10 },

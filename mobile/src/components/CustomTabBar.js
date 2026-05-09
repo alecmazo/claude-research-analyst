@@ -110,6 +110,8 @@ export default function CustomTabBar({ state, navigation }) {
               <Text style={[styles.label, focused && styles.labelActive]}>
                 {LABEL_OVERRIDE[route.name] || route.name}
               </Text>
+              {/* Glow dot below active label */}
+              {focused && <View style={styles.glowDot} />}
             </TouchableOpacity>
           );
         })}
@@ -192,5 +194,23 @@ const styles = StyleSheet.create({
   labelActive: {
     color: colors.gold,
     fontWeight: '800',
+  },
+
+  // Tiny glow dot under the active tab label
+  glowDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.gold,
+    marginTop: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.gold,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.95,
+        shadowRadius: 5,
+      },
+      android: { elevation: 4 },
+    }),
   },
 });

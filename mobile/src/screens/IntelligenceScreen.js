@@ -17,14 +17,14 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  ActivityIndicator, Alert,
+  ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
 import AppHeader from '../components/AppHeader';
-import { colors, mdStyles, haptics, formatDate } from '../design';
+import { colors, mdStyles, haptics, formatDate, SkeletonList } from '../design';
 
 const SECTOR_OPTIONS = [
   { label: 'Tech',        value: 'Tech' },
@@ -47,6 +47,7 @@ export default function IntelligenceScreen({ navigation }) {
   const [status, setStatus]       = useState('');     // human-readable status line
   const [error, setError]         = useState(null);
   const [briefRunning, setBriefRunning] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true); // first-focus skeleton
   const pollRef                   = useRef(null);
 
   // ── Load latest persisted result on tab focus ──────────────────────────────
@@ -69,7 +70,8 @@ export default function IntelligenceScreen({ navigation }) {
         } else if (intel?.markdown) {
           setResult(intel); setResultKind('intel');
         }
-      }).catch(() => {});
+        setInitialLoading(false);
+      }).catch(() => { setInitialLoading(false); });
     }, [])
   );
 
@@ -371,6 +373,11 @@ export default function IntelligenceScreen({ navigation }) {
           ) : null}
         </View>
 
+        {/* ── Initial load skeleton ── */}
+        {initialLoading && !result && (
+          <SkeletonList count={4} />
+        )}
+
         {/* ── Results ── */}
         {result?.markdown ? (
           <View style={styles.resultCard}>
@@ -523,10 +530,23 @@ const styles = StyleSheet.create({
   // ── Run button ──
   runBtn: {
     backgroundColor: colors.gold,
-    borderRadius: 8,
-    height: 50,
+    borderRadius: 10,
+    height: 54,
     alignItems: 'center',
     justifyContent: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.goldLight,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.goldDark,
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.gold,
+        shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.6,
+        shadowRadius: 14,
+      },
+      android: { elevation: 10 },
+    }),
   },
   runBtnDisabled: { opacity: 0.55 },
   runBtnInner:    { flexDirection: 'row', alignItems: 'center' },

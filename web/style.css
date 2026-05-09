@@ -110,6 +110,8 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
+  border-bottom: 1px solid rgba(91,184,212,0.2);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.30);
 }
 
 .header h1 {
@@ -165,7 +167,10 @@ body {
   border-radius: 12px;
   padding: 18px;
   margin: 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  border: 1px solid rgba(0,0,0,0.055);
+  box-shadow:
+    0 2px 12px rgba(0,0,0,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.9);
 }
 
 .label {
@@ -457,6 +462,7 @@ body {
   font-weight: 700;
   color: var(--navy);
   line-height: 1.15;
+  font-variant-numeric: tabular-nums;
 }
 .rr-pct {
   font-size: 11px;
@@ -489,6 +495,7 @@ body {
   font-weight: 700;
   color: var(--dark-gray);
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 .rr-upside {
   font-size: 11px;
@@ -571,9 +578,28 @@ body {
 
 .empty {
   text-align: center;
-  padding: 40px 20px;
+  padding: 48px 20px 40px;
   color: var(--mid-gray);
   font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+/* Icon above empty-state message */
+.empty::before {
+  content: '📊';
+  font-size: 36px;
+  opacity: 0.35;
+  line-height: 1;
+  display: block;
+  margin-bottom: 2px;
+}
+/* Sub-text helper — wrap in <span class="empty-sub"> */
+.empty-sub {
+  font-size: 12px;
+  color: var(--light-gray);
+  line-height: 1.5;
 }
 
 /* ============ ANALYSIS ============ */
@@ -853,11 +879,25 @@ body {
   letter-spacing: 0.2px;
   color: var(--mid-gray);
   transition: color 0.15s;
+  position: relative;
 }
 .tab.active .tab-label {
   color: var(--gold);
   font-weight: 800;
   letter-spacing: 0.4px;
+}
+/* Blue glow dot under active tab label */
+.tab.active .tab-label::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(91,184,212,0.9), 0 0 12px rgba(91,184,212,0.5);
 }
 
 /* ============ SETTINGS ============ */
@@ -1430,8 +1470,31 @@ body {
   justify-content: center;
   z-index: 1000;
   padding: 24px;
+  overflow: hidden; /* contain the glow */
 }
 #login-overlay.hidden { display: none; }
+
+/* Animated radial blue glow behind the logo */
+#login-overlay::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 480px;
+  height: 480px;
+  transform: translate(-50%, -58%);
+  background: radial-gradient(ellipse at center,
+    rgba(91,184,212,0.22) 0%,
+    rgba(91,184,212,0.08) 38%,
+    transparent 68%);
+  animation: loginGlow 4s ease-in-out infinite;
+  pointer-events: none;
+  border-radius: 50%;
+}
+@keyframes loginGlow {
+  0%, 100% { opacity: 0.6; transform: translate(-50%, -58%) scale(1);   }
+  50%       { opacity: 1;   transform: translate(-50%, -58%) scale(1.18); }
+}
 
 #login-card {
   width: 100%;
@@ -1440,16 +1503,22 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 0;
+  position: relative; /* sit above glow */
+  z-index: 1;
 }
 
 #login-logo {
-  height: 60px;
+  height: 90px;           /* larger — hero treatment */
   width: auto;
   object-fit: contain;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   background: #ffffff;
-  border-radius: 8px;
-  padding: 6px 14px;
+  border-radius: 12px;
+  padding: 10px 22px;
+  box-shadow:
+    0 0 0 2px rgba(91,184,212,0.5),
+    0 8px 28px rgba(91,184,212,0.25),
+    0 2px 6px rgba(0,0,0,0.3);
 }
 
 #login-brand {
@@ -1993,6 +2062,7 @@ body {
 .ytd-stat-val {
   font-size: 18px; font-weight: 800; font-family: "SF Mono", monospace;
   color: var(--white);
+  font-variant-numeric: tabular-nums;
 }
 .ytd-stat.hero .ytd-stat-val { font-size: 26px; }
 .ytd-stat-val.green { color: #4ADE80; }
@@ -3607,7 +3677,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-arrow  { text-align: center; color: #5BB8D4; font-size: 11px;
               font-weight: 800; padding: 0 1px !important; opacity: 0.9; }
 .reb-tgt    { text-align: right; font-weight: 700; font-size: 11px; color: #5BB8D4; }
-.reb-delta  { text-align: right; font-size: 10px; }
+.reb-delta  { text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }
 .reb-sector { font-size: 10px; color: #8090a8; }
 
 /* Recent Dev — no <col> width in the colgroup → absorbs ALL remaining table width */

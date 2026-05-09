@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui63-20260509';
+const DGA_BUILD = 'ui64-20260509';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -2351,12 +2351,24 @@ function _drawMonthlyChart(mc) {
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PAD.left, midY); ctx.lineTo(W - PAD.right, midY); ctx.stroke();
 
-  // Bars (monthly return %)
+  // Bars (monthly return %) — gradient fill top-to-bottom
   months.forEach((m, i) => {
     const x    = PAD.left + colW * i + (colW - barW) / 2;
     const bH   = Math.abs(m.return_pct) * yScaleR;
     const y    = m.return_pct >= 0 ? midY - bH : midY;
-    ctx.fillStyle = m.return_pct >= 0 ? 'rgba(34,197,94,0.85)' : 'rgba(239,68,68,0.85)';
+    if (bH > 0) {
+      const grad = ctx.createLinearGradient(0, y, 0, y + bH);
+      if (m.return_pct >= 0) {
+        grad.addColorStop(0, 'rgba(74,222,128,0.95)');   // bright green top
+        grad.addColorStop(1, 'rgba(20,110,55,0.75)');    // deep green bottom
+      } else {
+        grad.addColorStop(0, 'rgba(248,113,113,0.95)');  // bright red top
+        grad.addColorStop(1, 'rgba(136,19,19,0.75)');    // deep red bottom
+      }
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = m.return_pct >= 0 ? 'rgba(74,222,128,0.85)' : 'rgba(248,113,113,0.85)';
+    }
     ctx.fillRect(x, y, barW, bH);
     // return % label inside bar
     if (bH > 18) {
@@ -2368,8 +2380,8 @@ function _drawMonthlyChart(mc) {
     }
   });
 
-  // Balance line (gold)
-  ctx.strokeStyle = '#d4af37';
+  // Balance line (DGA blue)
+  ctx.strokeStyle = '#5BB8D4';
   ctx.lineWidth = 2.5;
   ctx.lineJoin = 'round';
   ctx.beginPath();
@@ -2383,8 +2395,8 @@ function _drawMonthlyChart(mc) {
   });
   ctx.stroke();
 
-  // Balance line dots
-  ctx.fillStyle = '#d4af37';
+  // Balance line dots (DGA blue)
+  ctx.fillStyle = '#5BB8D4';
   months.forEach((m, i) => {
     const x = PAD.left + colW * i + colW / 2;
     const y = PAD.top + cH - (m.end_value - minV) * yScaleL;
