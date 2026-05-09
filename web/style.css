@@ -1,8 +1,10 @@
 :root {
   --navy: #0A1628;
   --navy-light: #132040;
-  --gold: #C9A84C;
-  --gold-light: #D9BE6E;
+  /* DGA Brand blue — matches the vertical bars in the DGA Capital logo */
+  --gold: #5BB8D4;            /* renamed in spirit but kept as --gold for compat */
+  --gold-light: #84CCE3;      /* lighter tint for hover/glow */
+  --gold-dark: #3E9AB8;       /* deeper shade for pressed/active */
   --white: #FFFFFF;
   --off-white: #F5F7FA;
   --light-gray: #E8ECF2;
@@ -76,7 +78,7 @@ body {
     border-radius: 7px;
     box-shadow:
       inset 0 1px 0 rgba(255,255,255,0.4),
-      0 2px 8px rgba(201,168,76,0.22),
+      0 2px 8px rgba(91,184,212,0.22),
       0 1px 2px rgba(0,0,0,0.1);
   }
 
@@ -277,7 +279,8 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, var(--gold-light) 0%, var(--gold) 55%, #B8962E 100%);
+  /* DGA blue 3-D gradient button */
+  background: linear-gradient(180deg, #84CCE3 0%, #5BB8D4 50%, #3A9CBD 100%);
   color: var(--navy);
   border: none;
   border-radius: 10px;
@@ -289,25 +292,27 @@ body {
   cursor: pointer;
   min-height: 50px;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.45),
-    inset 0 -1px 0 rgba(0,0,0,0.12),
-    0 4px 12px rgba(201,168,76,0.28),
-    0 1px 2px rgba(0,0,0,0.12);
-  transition: transform 0.08s ease-out, box-shadow 0.2s, filter 0.2s, opacity 0.2s;
+    inset 0 1px 0 rgba(255,255,255,0.50),   /* top highlight */
+    inset 0 -2px 0 rgba(0,0,0,0.18),         /* bottom depth */
+    0 4px 14px rgba(91,184,212,0.40),         /* blue glow */
+    0 1px 3px  rgba(0,0,0,0.18);              /* base shadow */
+  transition: transform 0.08s ease-out, box-shadow 0.15s, filter 0.15s, opacity 0.2s;
 }
 .btn-primary:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.08);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.5),
-    inset 0 -1px 0 rgba(0,0,0,0.12),
-    0 6px 16px rgba(201,168,76,0.35),
-    0 1px 2px rgba(0,0,0,0.12);
+    inset 0 1px 0 rgba(255,255,255,0.55),
+    inset 0 -2px 0 rgba(0,0,0,0.18),
+    0 6px 20px rgba(91,184,212,0.55),
+    0 2px 5px  rgba(0,0,0,0.20);
+  transform: translateY(-1px);
 }
 .btn-primary:active {
   transform: translateY(1px);
+  filter: brightness(0.96);
   box-shadow:
-    inset 0 1px 2px rgba(0,0,0,0.18),
-    0 1px 3px rgba(201,168,76,0.2);
+    inset 0 2px 4px rgba(0,0,0,0.20),
+    0 1px 3px rgba(91,184,212,0.25);
 }
 .btn-primary:disabled {
   opacity: 0.45;
@@ -401,7 +406,7 @@ body {
 }
 .reports-table .report-row:first-of-type { border-top: none; }
 .report-row:hover  { background: var(--off-white); }
-.report-row:active { background: rgba(201,168,76,0.08); }
+.report-row:active { background: rgba(91,184,212,0.08); }
 
 .rr-ticker-cell { display: flex; flex-direction: column; min-width: 0; }
 .rr-ticker {
@@ -794,8 +799,8 @@ body {
   padding: 8px 0;
   padding-bottom: calc(8px + env(safe-area-inset-bottom));
   /* Gold hairline + soft upward glow — matches mobile CustomTabBar */
-  border-top: 1px solid rgba(201, 168, 76, 0.45);
-  box-shadow: 0 -3px 18px rgba(201, 168, 76, 0.10),
+  border-top: 1px solid rgba(91, 184, 212, 0.45);
+  box-shadow: 0 -3px 18px rgba(91, 184, 212, 0.10),
               0 -1px  4px rgba(0, 0, 0, 0.30);
   max-width: 640px;
   margin: 0 auto;
@@ -828,8 +833,8 @@ body {
 }
 .tab.active .tab-icon-wrap {
   background: var(--gold);
-  box-shadow: 0 3px 14px rgba(201, 168, 76, 0.70),
-              0 1px  5px rgba(201, 168, 76, 0.40);
+  box-shadow: 0 3px 14px rgba(91, 184, 212, 0.70),
+              0 1px  5px rgba(91, 184, 212, 0.40);
 }
 
 /* SVG icon — inherits color via currentColor */
@@ -1135,7 +1140,7 @@ body {
 .btn-scan {
   background: linear-gradient(180deg, #1e3a5f 0%, var(--navy) 100%);
   color: var(--gold);
-  border: 1.5px solid rgba(201,168,76,0.5);
+  border: 1.5px solid rgba(91,184,212,0.5);
   border-radius: 10px;
   padding: 8px 18px;
   font-size: 13px;
@@ -1194,7 +1199,7 @@ body {
 .watchlist-chip-remove {
   background: none;
   border: none;
-  color: rgba(201,168,76,0.6);
+  color: rgba(91,184,212,0.6);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
@@ -1376,7 +1381,7 @@ body {
 
 /* ============ LAST PORTFOLIO CARDS ============ */
 .last-portfolio-card {
-  border: 1px solid rgba(201,168,76,0.3);
+  border: 1px solid rgba(91,184,212,0.3);
   background: linear-gradient(180deg, #fffdf6 0%, var(--white) 100%);
 }
 .last-portfolio-body {
@@ -1603,7 +1608,7 @@ body {
   cursor: pointer;
   transition: background-color 0.15s, transform 0.1s;
 }
-.btn-brief:hover  { background: rgba(201,168,76,0.18); }
+.btn-brief:hover  { background: rgba(91,184,212,0.18); }
 .btn-brief:active { transform: translateY(1px); }
 .btn-brief:disabled { opacity: 0.55; cursor: not-allowed; }
 
@@ -1747,7 +1752,7 @@ body {
 .port-mode-btn.active {
   background: var(--gold);
   color: var(--navy);
-  box-shadow: 0 2px 6px rgba(201,168,76,0.35);
+  box-shadow: 0 2px 6px rgba(91,184,212,0.35);
 }
 
 /* ── Live benchmark info card ── */
@@ -1976,8 +1981,8 @@ body {
   border: 1px solid rgba(255,255,255,0.05);
 }
 .ytd-stat.hero {
-  background: linear-gradient(135deg, rgba(201,168,76,0.10), rgba(201,168,76,0.04));
-  border-color: rgba(201,168,76,0.20);
+  background: linear-gradient(135deg, rgba(91,184,212,0.10), rgba(91,184,212,0.04));
+  border-color: rgba(91,184,212,0.20);
 }
 .ytd-stat-label {
   font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
@@ -2093,7 +2098,7 @@ body {
 }
 .ytd-snap-row:hover {
   border-color: var(--gold);
-  box-shadow: 0 2px 10px rgba(201,168,76,0.10);
+  box-shadow: 0 2px 10px rgba(91,184,212,0.10);
   transform: translateY(-1px);
 }
 .ytd-snap-row-left { flex: 1; min-width: 0; }
@@ -2118,13 +2123,13 @@ body {
 /* Active (currently promoted) snapshot row */
 .ytd-snap-row--active {
   border-color: var(--gold);
-  background: rgba(201,168,76,0.04);
+  background: rgba(91,184,212,0.04);
 }
 .ytd-snap-active-badge {
   display: inline-block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
   text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-left: 7px;
   vertical-align: middle;
-  background: rgba(201,168,76,0.18); color: var(--gold);
+  background: rgba(91,184,212,0.18); color: var(--gold);
 }
 .ytd-snap-delete {
   background: transparent;
@@ -2274,7 +2279,7 @@ body {
 }
 .tracker-milestone.reached {
   background: var(--gold); color: var(--navy);
-  box-shadow: 0 2px 6px rgba(201,168,76,0.35);
+  box-shadow: 0 2px 6px rgba(91,184,212,0.35);
 }
 
 /* ── Detail card ── */
@@ -2292,7 +2297,7 @@ body {
 .tracker-chart-wrap {
   /* Dark glass panel — Bloomberg-style chart housing */
   background: linear-gradient(160deg, #0f1e3a 0%, #0a1628 100%);
-  border: 1px solid rgba(201,168,76,0.18);
+  border: 1px solid rgba(91,184,212,0.18);
   border-radius: 12px;
   padding: 12px 14px 10px;
   margin: 8px 0 0;
@@ -2312,7 +2317,7 @@ body {
   display: inline-block;
   box-shadow: 0 0 4px currentColor;
 }
-.tracker-legend-dot.gold  { background: #C9A84C; }
+.tracker-legend-dot.gold  { background: #5BB8D4; }
 .tracker-legend-dot.blue  { background: #60A5FA; }
 .tracker-legend-dot.green { background: #4ADE80; }
 
@@ -2493,7 +2498,7 @@ body {
   color: var(--gold);
   letter-spacing: 0.6px;
   margin-left: 8px;
-  background: rgba(201,168,76,0.12);
+  background: rgba(91,184,212,0.12);
   padding: 2px 7px;
   border-radius: 4px;
 }
@@ -2647,7 +2652,7 @@ body {
   margin-right: 5px;
   vertical-align: middle;
 }
-.tracker-table .row-tag.winner { color: #C9A84C; }
+.tracker-table .row-tag.winner { color: #5BB8D4; }
 .tracker-table .row-tag.loser  { color: #DC2626; opacity: 0.7; }
 
 /* Tighter table for the new 7-column layout */
@@ -2853,7 +2858,7 @@ body {
 
 .fund-stat-card {
   background: #0e1d38;
-  border: 1px solid rgba(201,168,76,0.18);
+  border: 1px solid rgba(91,184,212,0.18);
   border-radius: 10px;
   padding: 14px 14px 12px;
 }
@@ -2861,14 +2866,14 @@ body {
 .fund-stat-primary {
   grid-column: 1 / -1;
   background: linear-gradient(135deg, #0e1d38 0%, #132847 100%);
-  border-color: rgba(201,168,76,0.35);
+  border-color: rgba(91,184,212,0.35);
 }
 
 .fund-stat-label {
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 1px;
-  color: #c9a84c;
+  color: #5BB8D4;
   margin-bottom: 5px;
   text-transform: uppercase;
 }
@@ -2924,11 +2929,11 @@ body {
   border-bottom: 1px solid rgba(255,255,255,0.04);
   transition: background 0.1s;
 }
-.fund-table tbody tr:hover { background: rgba(201,168,76,0.05); }
+.fund-table tbody tr:hover { background: rgba(91,184,212,0.05); }
 
 .fund-td-name  { padding: 9px 8px 9px 0; color: #e8e0d0; }
 .fund-td-dim   { color: #5a7090; font-size: 11px; }
-.fund-td-ticker { padding: 9px 8px 9px 0; color: #c9a84c; font-weight: 700; font-size: 12px; min-width: 60px; }
+.fund-td-ticker { padding: 9px 8px 9px 0; color: #5BB8D4; font-weight: 700; font-size: 12px; min-width: 60px; }
 .fund-td-num   { text-align: right; padding: 9px 0 9px 8px; color: #b0bdd0; font-variant-numeric: tabular-nums; }
 .fund-td-bold  { color: #e8e0d0; font-weight: 600; }
 .fund-td-pct   { text-align: right; padding: 9px 0 9px 8px; color: #7090b0; font-size: 11px; }
@@ -2952,7 +2957,7 @@ body {
 .fund-cat-contribution { background: rgba(50,160,80,0.18); color: #4cc870; }
 .fund-cat-trade_buy    { background: rgba(80,120,201,0.18); color: #6090e8; }
 .fund-cat-trade_sell   { background: rgba(220,80,60,0.18);  color: #e06050; }
-.fund-cat-adjustment   { background: rgba(201,168,76,0.18); color: #c9a84c; }
+.fund-cat-adjustment   { background: rgba(91,184,212,0.18); color: #5BB8D4; }
 .fund-cat-transfer     { background: rgba(140,80,201,0.18); color: #b080e8; }
 
 /* Loading / error states */
@@ -2984,8 +2989,8 @@ body {
 }
 .fund-summary-card {
   background: #0e1d38;
-  border: 1px solid rgba(201,168,76,0.25);
-  border-left: 3px solid #c9a84c;
+  border: 1px solid rgba(91,184,212,0.25);
+  border-left: 3px solid #5BB8D4;
   border-radius: 10px;
   padding: 16px;
   margin-bottom: 12px;
@@ -2994,7 +2999,7 @@ body {
 }
 .fund-summary-card:hover {
   background: #122540;
-  border-color: rgba(201,168,76,0.5);
+  border-color: rgba(91,184,212,0.5);
 }
 .fund-summary-header {
   display: flex;
@@ -3059,7 +3064,7 @@ body {
 .fund-summary-cta {
   font-size: 12px;
   font-weight: 700;
-  color: #c9a84c;
+  color: #5BB8D4;
   text-align: right;
 }
 
@@ -3069,19 +3074,19 @@ body {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  border-bottom: 1px solid rgba(201,168,76,0.15);
+  border-bottom: 1px solid rgba(91,184,212,0.15);
   background: #060f1e;
 }
 .fund-back-btn {
   background: none;
   border: none;
-  color: #c9a84c;
+  color: #5BB8D4;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   padding: 4px 0;
 }
-.fund-back-btn:hover { color: #f0d080; }
+.fund-back-btn:hover { color: #84CCE3; }
 .fund-detail-name {
   font-size: 13px;
   font-weight: 700;
@@ -3101,7 +3106,7 @@ body {
 }
 .fund-lock-card {
   background: #0d1f38;
-  border: 1px solid rgba(201,168,76,0.35);
+  border: 1px solid rgba(91,184,212,0.35);
   border-radius: 16px;
   padding: 40px 36px;
   width: min(340px, 90vw);
@@ -3123,7 +3128,7 @@ body {
   outline: none;
   margin-bottom: 8px;
 }
-.fund-lock-input:focus { border-color: #c9a84c; }
+.fund-lock-input:focus { border-color: #5BB8D4; }
 .fund-lock-error {
   font-size: 12px;
   color: #e05a5a;
@@ -3131,7 +3136,7 @@ body {
 }
 .fund-lock-btn {
   width: 100%;
-  background: #c9a84c;
+  background: #5BB8D4;
   color: #0a1628;
   border: none;
   border-radius: 8px;
@@ -3161,7 +3166,7 @@ body {
   border-bottom: 1px solid #0f2240;
 }
 .wfall-row:last-child { border-bottom: none; }
-.wfall-highlight { background: rgba(201,168,76,0.06); }
+.wfall-highlight { background: rgba(91,184,212,0.06); }
 .wfall-label  { font-size: 11px; color: #6a8aaa; text-transform: uppercase; letter-spacing: 0.4px; }
 .wfall-value  { font-size: 13px; color: #c0cfe0; font-weight: 600; }
 .wfall-gp     { color: #e8a060; }
@@ -3191,13 +3196,13 @@ body {
   transition: all 0.15s;
 }
 .fund-branch-btn.active {
-  background: #c9a84c;
-  border-color: #c9a84c;
+  background: #5BB8D4;
+  border-color: #5BB8D4;
   color: #0a1628;
 }
 .fund-branch-btn:not(.active):hover {
-  border-color: #c9a84c;
-  color: #c9a84c;
+  border-color: #5BB8D4;
+  color: #5BB8D4;
 }
 
 /* ── My Portfolio portal cards ──────────────────────────────────────────── */
@@ -3216,7 +3221,7 @@ body {
   transition: border-color 0.15s, background 0.15s;
 }
 .fund-portal-card:not(.fund-portal-card-dim):hover {
-  border-color: #c9a84c;
+  border-color: #5BB8D4;
   background: #122a50;
 }
 .fund-portal-card-dim {
@@ -3242,7 +3247,7 @@ body {
 .fund-portal-card-cta {
   font-size: 13px;
   font-weight: 700;
-  color: #c9a84c;
+  color: #5BB8D4;
   letter-spacing: 0.3px;
 }
 .fund-portal-soon {
@@ -3251,8 +3256,8 @@ body {
   font-weight: 700;
   letter-spacing: 0.6px;
   text-transform: uppercase;
-  background: rgba(201,168,76,0.12);
-  color: #c9a84c;
+  background: rgba(91,184,212,0.12);
+  color: #5BB8D4;
   padding: 4px 10px;
   border-radius: 20px;
 }
@@ -3272,9 +3277,9 @@ body {
 /* ── Import buttons + status ─────────────────────────────────────────────── */
 .fund-import-btn {
   background: transparent;
-  border: 1px solid rgba(201,168,76,0.35);
+  border: 1px solid rgba(91,184,212,0.35);
   border-radius: 6px;
-  color: #c9a84c;
+  color: #5BB8D4;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.3px;
@@ -3284,14 +3289,14 @@ body {
   white-space: nowrap;
 }
 .fund-import-btn:hover {
-  border-color: #c9a84c;
-  background: rgba(201,168,76,0.08);
-  color: #f0d080;
+  border-color: #5BB8D4;
+  background: rgba(91,184,212,0.08);
+  color: #84CCE3;
 }
 .fund-import-btn-primary {
-  background: #c9a84c;
+  background: #5BB8D4;
   color: #0a1628;
-  border-color: #c9a84c;
+  border-color: #5BB8D4;
 }
 .fund-import-btn-primary:hover {
   background: #d9b85c;
@@ -3309,7 +3314,7 @@ body {
 /* ── Create New Fund form ────────────────────────────────────────────────── */
 .fund-import-form {
   background: #0e1d38;
-  border: 1px solid rgba(201,168,76,0.25);
+  border: 1px solid rgba(91,184,212,0.25);
   border-radius: 10px;
   padding: 16px;
 }
@@ -3333,7 +3338,7 @@ body {
   margin-bottom: 8px;
   outline: none;
 }
-.fund-import-input:focus { border-color: #c9a84c; }
+.fund-import-input:focus { border-color: #5BB8D4; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DARK THEME — full app matches mobile's navy/dark-card palette
@@ -3357,7 +3362,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 /* Cards, text helpers, and buttons — scoped to fund view */
 #view-fund .card {
   background: #0e1d38;
-  border: 1px solid rgba(201,168,76,0.15);
+  border: 1px solid rgba(91,184,212,0.15);
   box-shadow: 0 2px 16px rgba(0,0,0,0.4);
 }
 #view-fund .label   { color: #4a6080; }
@@ -3365,9 +3370,9 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 #view-fund .empty   { color: #3a5070; }
 #view-fund .chevron { color: #3a5070; }
 #view-fund .badge              { background: #122a50; color: #6a8aaa; }
-#view-fund .badge.gold         { background: #c9a84c; color: #0a1628; }
-#view-fund .btn-secondary      { color: #c9a84c; border-color: rgba(201,168,76,0.35); }
-#view-fund .btn-secondary:hover { background: rgba(201,168,76,0.08); color: #f0d080; box-shadow: none; }
+#view-fund .badge.gold         { background: #5BB8D4; color: #0a1628; }
+#view-fund .btn-secondary      { color: #5BB8D4; border-color: rgba(91,184,212,0.35); }
+#view-fund .btn-secondary:hover { background: rgba(91,184,212,0.08); color: #84CCE3; box-shadow: none; }
 #view-fund .btn-secondary:disabled { opacity: 0.4; }
 
 /* ── My Portfolio tab — strategy result cards & pills ─────────────────── */
@@ -3376,8 +3381,8 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   border-color: rgba(255,255,255,0.07);
 }
 #view-fund .strategy-result.primary {
-  background: rgba(201,168,76,0.07);
-  border-color: rgba(201,168,76,0.28);
+  background: rgba(91,184,212,0.07);
+  border-color: rgba(91,184,212,0.28);
 }
 #view-fund .strategy-result-title { color: #e0d8c8; }
 #view-fund .strategy-result-count { color: #3a5070; }
@@ -3386,11 +3391,11 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   border-color: rgba(255,255,255,0.09);
   color: #c0cfe0;
 }
-#view-fund .pill strong { color: #c9a84c; }
+#view-fund .pill strong { color: #5BB8D4; }
 
 /* ── My Portfolio tab — YTD / history ─────────────────────────────────── */
 #view-fund .ytd-snap-row           { border-bottom-color: rgba(255,255,255,0.05); }
-#view-fund .ytd-snap-row:hover     { background: rgba(201,168,76,0.05); }
+#view-fund .ytd-snap-row:hover     { background: rgba(91,184,212,0.05); }
 #view-fund .ytd-snap-date          { color: #8090a8; }
 #view-fund .ytd-snap-meta          { color: #4a6080; }
 #view-fund .ytd-snap-return        { color: #8090a8; }
@@ -3463,7 +3468,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
   color: #e0e8f8; font-size: 13px; padding: 10px 12px;
   outline: none; margin-bottom: 8px;
 }
-.delete-fund-pw-input:focus { border-color: #c9a84c; }
+.delete-fund-pw-input:focus { border-color: #5BB8D4; }
 .delete-fund-err {
   font-size: 11px; color: #ef4444; margin-bottom: 10px;
 }
@@ -3599,9 +3604,9 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .reb-ticker { font-weight: 700; font-size: 11px; color: #c0cfe0; letter-spacing: 0.3px; }
 .reb-price-col { text-align: right; font-size: 10px; color: #8090a8; }
 .reb-cur    { text-align: right; color: #8090a8; font-size: 10px; }
-.reb-arrow  { text-align: center; color: #c9a84c; font-size: 11px;
+.reb-arrow  { text-align: center; color: #5BB8D4; font-size: 11px;
               font-weight: 800; padding: 0 1px !important; opacity: 0.9; }
-.reb-tgt    { text-align: right; font-weight: 700; font-size: 11px; color: #c9a84c; }
+.reb-tgt    { text-align: right; font-weight: 700; font-size: 11px; color: #5BB8D4; }
 .reb-delta  { text-align: right; font-size: 10px; }
 .reb-sector { font-size: 10px; color: #8090a8; }
 
@@ -3634,7 +3639,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 /* Row accent lines */
 .reb-row-increase td  { border-left: 2px solid rgba(34,197,94,0.4); }
 .reb-row-decrease td  { border-left: 2px solid rgba(239,68,68,0.3); }
-.reb-row-new td       { border-left: 2px solid rgba(201,168,76,0.5); }
+.reb-row-new td       { border-left: 2px solid rgba(91,184,212,0.5); }
 .reb-row-exit td      { border-left: 2px solid rgba(100,100,120,0.3); opacity: 0.7; }
 
 /* Clickable rows — cursor + subtle hover highlight */
@@ -3710,7 +3715,7 @@ body:has(#view-fund.active) { background: #060f1e; color: #c0cfe0; }
 .rdm-story-title {
   font-size: 13px;
   font-weight: 600;
-  color: #c9a84c;
+  color: #5BB8D4;
   line-height: 1.45;
   margin-bottom: 5px;
   display: block;
@@ -3758,7 +3763,7 @@ a.rdm-story-link:hover { color: #e8c06a; text-decoration: underline; }
   margin-left: 5px;
   vertical-align: middle;
 }
-.reb-badge-new  { background: rgba(201,168,76,0.25); color: #c9a84c; }
+.reb-badge-new  { background: rgba(91,184,212,0.25); color: #5BB8D4; }
 .reb-badge-exit { background: rgba(100,100,120,0.3); color: #8090a8; }
 
 /* Numbered pills fallback (when no current weights) */
@@ -3792,7 +3797,7 @@ a.rdm-story-link:hover { color: #e8c06a; text-decoration: underline; }
 #view-fund .reb-ticker { color: #c0cfe0; }
 #view-fund .reb-cur    { color: #5a7090; }
 #view-fund .reb-arrow  { color: #2a4060; }
-#view-fund .reb-tgt    { color: #c9a84c; }
+#view-fund .reb-tgt    { color: #5BB8D4; }
 #view-fund .strategy-result,
 #view-fund .strategy-result-details {
   background: #0d1f38;
@@ -3801,8 +3806,8 @@ a.rdm-story-link:hover { color: #e8c06a; text-decoration: underline; }
 }
 #view-fund .strategy-result.primary,
 #view-fund .strategy-result-details.primary {
-  background: rgba(201,168,76,0.06);
-  border-color: rgba(201,168,76,0.25);
+  background: rgba(91,184,212,0.06);
+  border-color: rgba(91,184,212,0.25);
 }
 #view-fund .strategy-result-head,
 #view-fund .strategy-result-summary {

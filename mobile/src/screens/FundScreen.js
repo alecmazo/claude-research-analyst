@@ -1020,7 +1020,7 @@ export default function FundScreen({ navigation }) {
             Email performance reports to investors.{'\n'}
             (Available once LP email addresses are configured.)
           </Text>
-          <View style={[s.portfolioBtn, { backgroundColor: 'rgba(201,168,76,0.1)', borderColor: 'rgba(201,168,76,0.3)' }]}>
+          <View style={[s.portfolioBtn, { backgroundColor: 'rgba(91,184,212,0.1)', borderColor: 'rgba(91,184,212,0.3)' }]}>
             <Text style={[s.portfolioBtnText, { color: '#6a8aaa' }]}>Coming soon</Text>
           </View>
         </View>
@@ -1315,8 +1315,8 @@ export default function FundScreen({ navigation }) {
                 <Text style={[s.th, s.thRight, { width: 56 }]}>Qty</Text>
                 <Text style={[s.th, s.thRight, { width: 64 }]}>Avg $</Text>
                 <Text style={[s.th, s.thRight, { width: 72 }]}>Cost</Text>
-                <Text style={[s.th, s.thRight, { width: 64, color: '#c9a84c' }]}>Last $</Text>
-                <Text style={[s.th, s.thRight, { width: 80, color: '#c9a84c' }]}>Mkt Val</Text>
+                <Text style={[s.th, s.thRight, { width: 64, color: '#5BB8D4' }]}>Last $</Text>
+                <Text style={[s.th, s.thRight, { width: 80, color: '#5BB8D4' }]}>Mkt Val</Text>
                 <Text style={[s.th, s.thRight, { width: 72 }]}>P/L</Text>
                 <Text style={[s.th, s.thRight, { width: 48 }]}>Wt%</Text>
               </View>
@@ -1333,10 +1333,10 @@ export default function FundScreen({ navigation }) {
                     <Text style={[s.td, s.tdRight, { width: 56 }]}>{Number(p.total_qty).toLocaleString()}</Text>
                     <Text style={[s.td, s.tdRight, { width: 64 }]}>${Math.round(p.avg_cost).toLocaleString('en-US')}</Text>
                     <Text style={[s.td, s.tdRight, { width: 72 }]}>{fmt$(p.total_cost)}</Text>
-                    <Text style={[s.td, s.tdRight, { width: 64, color: '#c9a84c' }]}>
+                    <Text style={[s.td, s.tdRight, { width: 64, color: '#5BB8D4' }]}>
                       {hasMkt ? `$${p.last_price?.toFixed(2)}` : '—'}
                     </Text>
-                    <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: hasMkt ? '#c9a84c' : '#b0bdd0' }]}>
+                    <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: hasMkt ? '#5BB8D4' : '#b0bdd0' }]}>
                       {hasMkt ? fmt$(p.market_value) : '—'}
                     </Text>
                     <Text style={[s.td, s.tdRight, { width: 72, color: hasMkt ? plColor : '#4a6080' }]}>
@@ -1348,7 +1348,7 @@ export default function FundScreen({ navigation }) {
               })}
               {/* Total footer */}
               {totalMktVal > 0 && (
-                <View style={[s.tableRow, { borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.2)' }]}>
+                <View style={[s.tableRow, { borderTopWidth: 1, borderTopColor: 'rgba(91,184,212,0.2)' }]}>
                   <Text style={[s.td, { width: 64, color: '#4a6080', fontSize: 9, fontWeight: '700' }]}>TOTAL</Text>
                   <Text style={[s.td, s.tdRight, { width: 56 }]}></Text>
                   <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
@@ -1356,7 +1356,7 @@ export default function FundScreen({ navigation }) {
                     {fmt$(positions.reduce((acc, p) => acc + (p.total_cost || 0), 0))}
                   </Text>
                   <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
-                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: '#c9a84c' }]}>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: '#5BB8D4' }]}>
                     {fmt$(totalMktVal)}
                   </Text>
                   <Text style={[s.td, s.tdRight, { width: 72,
@@ -1503,11 +1503,11 @@ export default function FundScreen({ navigation }) {
   }
 
   function catPillStyle(cat) {
-    const m = { contribution:'rgba(50,160,80,.18)', trade_buy:'rgba(80,120,201,.18)', trade_sell:'rgba(220,80,60,.18)', adjustment:'rgba(201,168,76,.18)', transfer:'rgba(140,80,201,.18)' };
+    const m = { contribution:'rgba(50,160,80,.18)', trade_buy:'rgba(80,120,201,.18)', trade_sell:'rgba(220,80,60,.18)', adjustment:'rgba(91,184,212,.18)', transfer:'rgba(140,80,201,.18)' };
     return { backgroundColor: m[cat] || 'rgba(255,255,255,0.07)' };
   }
   function catPillTextStyle(cat) {
-    const m = { contribution:'#4cc870', trade_buy:'#6090e8', trade_sell:'#e06050', adjustment:'#c9a84c', transfer:'#b080e8' };
+    const m = { contribution:'#4cc870', trade_buy:'#6090e8', trade_sell:'#e06050', adjustment:'#5BB8D4', transfer:'#b080e8' };
     return { color: m[cat] || '#8090a8' };
   }
 
@@ -1797,13 +1797,13 @@ const s = StyleSheet.create({
   center:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   loadingText: { color: '#4a6080', marginTop: 12, fontSize: 13 },
   errorText:   { color: '#e05a4e', textAlign: 'center', marginBottom: 16 },
-  retryBtn:    { backgroundColor: 'rgba(201,168,76,.15)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: colors.gold },
+  retryBtn:    { backgroundColor: 'rgba(91,184,212,.15)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: colors.gold },
   retryText:   { color: colors.gold, fontWeight: '700', fontSize: 14 },
   emptyText:   { color: '#3a5070', padding: 24, fontSize: 13 },
 
   // Lock screen
   lockOuter:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-  lockCard:       { backgroundColor: '#0d1f38', borderRadius: 16, padding: 32, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)' },
+  lockCard:       { backgroundColor: '#0d1f38', borderRadius: 16, padding: 32, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(91,184,212,0.3)' },
   lockIcon:       { fontSize: 36, marginBottom: 12 },
   lockTitle:      { fontSize: 18, fontWeight: '800', color: '#f0e8d0', marginBottom: 6 },
   lockHint:       { fontSize: 12, color: '#4a6080', marginBottom: 20, textAlign: 'center' },
@@ -1814,9 +1814,9 @@ const s = StyleSheet.create({
   lockBtnText:    { color: colors.navy, fontWeight: '800', fontSize: 15, letterSpacing: 0.4 },
 
   // Branch selector
-  branchBar:          { flexDirection: 'row', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)', padding: 8, gap: 8 },
+  branchBar:          { flexDirection: 'row', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(91,184,212,0.2)', padding: 8, gap: 8 },
   branchBtn:          { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: 'transparent' },
-  branchBtnActive:    { backgroundColor: 'rgba(201,168,76,0.12)', borderColor: 'rgba(201,168,76,0.4)' },
+  branchBtnActive:    { backgroundColor: 'rgba(91,184,212,0.12)', borderColor: 'rgba(91,184,212,0.4)' },
   branchBtnText:      { fontSize: 11, fontWeight: '600', color: '#3a5070' },
   branchBtnTextActive:{ color: colors.gold },
 
@@ -1831,10 +1831,10 @@ const s = StyleSheet.create({
   portfolioBranch: { padding: 14 },
 
   // YTD Upload card
-  ytdCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
+  ytdCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.25)' },
   ytdCardHead:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   ytdCardTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, color: colors.gold },
-  ytdBadge:     { backgroundColor: 'rgba(201,168,76,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
+  ytdBadge:     { backgroundColor: 'rgba(91,184,212,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
   ytdBadgeText: { fontSize: 9, fontWeight: '800', color: colors.gold, letterSpacing: 0.5 },
   ytdCardDesc:  { fontSize: 11, color: '#4a6080', lineHeight: 16, marginBottom: 14 },
 
@@ -1882,7 +1882,7 @@ const s = StyleSheet.create({
   snapDeleteText:{ fontSize: 10, fontWeight: '700', color: '#DC2626' },
 
   // Portal cards (paper portfolios / quarterly reports)
-  portfolioCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)' },
+  portfolioCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)' },
   portfolioCardTitle: { fontSize: 15, fontWeight: '700', color: '#f0e8d0', marginBottom: 8 },
   portfolioCardDesc:  { fontSize: 12, color: '#6a8aaa', lineHeight: 18, marginBottom: 14 },
   portfolioBtn:       { backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: colors.gold },
@@ -1891,18 +1891,18 @@ const s = StyleSheet.create({
   // Rebalance section styles
   rebalCard: {
     backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12,
-    borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)',
+    borderWidth: 1, borderColor: 'rgba(91,184,212,0.2)',
   },
   rebalLastCard: {
     backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12,
-    borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)',
+    borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)',
   },
   rebalCardTitle:  { fontSize: 10, fontWeight: '800', letterSpacing: 1.5, color: colors.gold, marginBottom: 8 },
   rebalCardDesc:   { fontSize: 12, color: '#6a8aaa', lineHeight: 17, marginBottom: 12 },
   rebalFilePicker: {
     flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14,
-    borderWidth: 1.5, borderColor: 'rgba(201,168,76,0.3)', borderStyle: 'dashed',
-    borderRadius: 10, backgroundColor: 'rgba(201,168,76,0.05)', marginBottom: 12,
+    borderWidth: 1.5, borderColor: 'rgba(91,184,212,0.3)', borderStyle: 'dashed',
+    borderRadius: 10, backgroundColor: 'rgba(91,184,212,0.05)', marginBottom: 12,
   },
   rebalFilePickerText: { fontSize: 13, fontWeight: '600', color: '#c9d8e8', flex: 1 },
   rebalToggleRow: {
@@ -1935,7 +1935,7 @@ const s = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(201,168,76,0.25)',
+    borderColor: 'rgba(91,184,212,0.25)',
     borderLeftWidth: 3,
     borderLeftColor: colors.gold,
   },
@@ -1952,19 +1952,19 @@ const s = StyleSheet.create({
   fundCardCtaText:   { fontSize: 12, fontWeight: '700', color: colors.gold },
 
   // Fund detail navigation bar (back button)
-  detailNavBar:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.15)', paddingHorizontal: 12, paddingVertical: 8 },
+  detailNavBar:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(91,184,212,0.15)', paddingHorizontal: 12, paddingVertical: 8 },
   backBtn:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backBtnText:   { fontSize: 13, fontWeight: '700', color: colors.gold },
 
   // Overview
   overviewWrap: { padding: 14 },
-  heroCard:  { backgroundColor: '#0e1d38', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)', marginBottom: 10 },
+  heroCard:  { backgroundColor: '#0e1d38', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: 'rgba(91,184,212,0.3)', marginBottom: 10 },
   heroLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, color: colors.gold, marginBottom: 4 },
   heroValue: { fontSize: 32, fontWeight: '800', color: '#f0e8d0', letterSpacing: -1 },
   heroGain:  { fontSize: 12, marginTop: 4 },
   statRow:   { flexDirection: 'row', gap: 8, marginBottom: 10 },
-  statCard:  { flex: 1, backgroundColor: '#0e1d38', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.12)' },
-  statLabel: { fontSize: 8, fontWeight: '800', letterSpacing: 0.8, color: '#c9a84c', marginBottom: 3 },
+  statCard:  { flex: 1, backgroundColor: '#0e1d38', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.12)' },
+  statLabel: { fontSize: 8, fontWeight: '800', letterSpacing: 0.8, color: '#5BB8D4', marginBottom: 3 },
   statValue: { fontSize: 15, fontWeight: '800', color: '#f0e8d0' },
   statSub:   { fontSize: 10, color: '#4a6080', marginTop: 2 },
   econCard:     { backgroundColor: '#0e1d38', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
@@ -1980,7 +1980,7 @@ const s = StyleSheet.create({
   tableHeader: { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.1)', paddingBottom: 6, marginBottom: 2 },
   tableRow:    { flexDirection: 'row', paddingVertical: 8, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' },
   tableRowAlt: { backgroundColor: 'rgba(255,255,255,0.02)' },
-  totalsRow:   { borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.3)', marginTop: 2, paddingTop: 10 },
+  totalsRow:   { borderTopWidth: 1, borderTopColor: 'rgba(91,184,212,0.3)', marginTop: 2, paddingTop: 10 },
   th:      { flex: 1, fontSize: 9, fontWeight: '700', letterSpacing: 0.6, color: '#3a5070', textTransform: 'uppercase' },
   thRight: { textAlign: 'right' },
   td:      { flex: 1, fontSize: 11, color: '#8090a8' },
@@ -1989,7 +1989,7 @@ const s = StyleSheet.create({
   tdDim:   { color: '#4a6080' },
   symbolCell: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   symbolText: { fontSize: 12, fontWeight: '700', color: colors.gold },
-  lotBadge:   { fontSize: 8, backgroundColor: 'rgba(201,168,76,0.2)', color: colors.gold, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' },
+  lotBadge:   { fontSize: 8, backgroundColor: 'rgba(91,184,212,0.2)', color: colors.gold, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' },
 
   // Import row (Positions + LPs tabs)
   importRow: {
@@ -1998,11 +1998,11 @@ const s = StyleSheet.create({
   },
   importBtn: {
     paddingHorizontal: 12, paddingVertical: 6,
-    borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)', borderRadius: 7,
+    borderWidth: 1, borderColor: 'rgba(91,184,212,0.4)', borderRadius: 7,
     backgroundColor: 'transparent',
   },
   importBtnDisabled: { opacity: 0.5 },
-  importBtnText: { fontSize: 11, fontWeight: '700', color: '#c9a84c', letterSpacing: 0.2 },
+  importBtnText: { fontSize: 11, fontWeight: '700', color: '#5BB8D4', letterSpacing: 0.2 },
   importStatus: { fontSize: 11 },
   importStatusOk:  { color: '#4cc870' },
   importStatusErr: { color: '#e06050' },
@@ -2022,7 +2022,7 @@ const s = StyleSheet.create({
   wfallWrap:     { padding: 14 },
   wfallCard:     { backgroundColor: '#0a1628', borderWidth: 1, borderColor: '#1e3a5a', borderRadius: 10, marginBottom: 16, overflow: 'hidden' },
   wRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#0f2240' },
-  wRowHighlight: { backgroundColor: 'rgba(201,168,76,0.06)' },
+  wRowHighlight: { backgroundColor: 'rgba(91,184,212,0.06)' },
   wRowLast:      { borderBottomWidth: 0 },
   wLabel:        { fontSize: 11, color: '#4a6080', flex: 1, marginRight: 8 },
   wValue:        { fontSize: 13, fontWeight: '700', color: '#c0cfe0' },
@@ -2033,14 +2033,14 @@ const s = StyleSheet.create({
   // Managed Account selector
   accSelectorRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
   accSelectorBtn:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', backgroundColor: '#0a1628' },
-  accSelectorBtnActive: { borderColor: colors.gold, backgroundColor: 'rgba(201,168,76,0.12)' },
+  accSelectorBtnActive: { borderColor: colors.gold, backgroundColor: 'rgba(91,184,212,0.12)' },
   accSelectorText:      { fontSize: 12, fontWeight: '600', color: '#4a6080' },
   accSelectorTextActive:{ color: colors.gold, fontWeight: '800' },
-  accNameBadge:         { backgroundColor: 'rgba(201,168,76,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
+  accNameBadge:         { backgroundColor: 'rgba(91,184,212,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 14, borderWidth: 1, borderColor: 'rgba(91,184,212,0.25)' },
   accNameBadgeText:     { fontSize: 12, fontWeight: '700', color: colors.gold },
 
   // ── S&P 500 comparison card ─────────────────────────────────────────────
-  spyCard:          { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', padding: 14, marginTop: 14, marginBottom: 4 },
+  spyCard:          { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.2)', padding: 14, marginTop: 14, marginBottom: 4 },
   spyCardTitle:     { fontSize: 10, fontWeight: '800', color: '#4a6080', letterSpacing: 0.8, marginBottom: 10 },
   spyLiveBadge:     { fontSize: 9, color: '#16A34A', fontWeight: '700', letterSpacing: 0.5 },
   spyCardRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -2066,10 +2066,10 @@ const s = StyleSheet.create({
   rebalEmailFail:          { backgroundColor: 'rgba(220,38,38,0.1)', borderWidth: 1, borderColor: 'rgba(220,38,38,0.25)' },
   rebalEmailBadgeText:     { fontSize: 10, color: '#8090a8', fontWeight: '600' },
   rebalStratBlock:         { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', padding: 12, marginBottom: 12 },
-  rebalStratBlockPrimary:  { borderColor: 'rgba(201,168,76,0.25)', backgroundColor: 'rgba(201,168,76,0.03)' },
+  rebalStratBlockPrimary:  { borderColor: 'rgba(91,184,212,0.25)', backgroundColor: 'rgba(91,184,212,0.03)' },
   rebalStratLabelRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   rebalStratLabel:         { fontSize: 10, fontWeight: '800', color: '#c0cfe0', letterSpacing: 0.5, flex: 1 },
-  rebalStratPrimaryBadge:  { fontSize: 9, color: colors.gold, fontWeight: '700', backgroundColor: 'rgba(201,168,76,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  rebalStratPrimaryBadge:  { fontSize: 9, color: colors.gold, fontWeight: '700', backgroundColor: 'rgba(91,184,212,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   rebalStratCount:         { fontSize: 10, color: '#4a6080' },
   rebalEmptyWrap:          { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 60 },
   rebalEmptyIcon:          { fontSize: 40, marginBottom: 16 },
@@ -2077,7 +2077,7 @@ const s = StyleSheet.create({
   rebalEmptyDesc:          { fontSize: 12, color: '#3a5070', textAlign: 'center', lineHeight: 18 },
 
   // ── Rebalance result table ──────────────────────────────────────────────
-  rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.15)', paddingTop: 12 },
+  rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(91,184,212,0.15)', paddingTop: 12 },
   rebalResultTitle: { fontSize: 10, fontWeight: '800', color: colors.gold, letterSpacing: 0.6, marginBottom: 8 },
   // Arrow between current → target — gold, visually distinct from the dark row background
   rebalArrow:       { width: 18, textAlign: 'center', fontSize: 11, fontWeight: '800',

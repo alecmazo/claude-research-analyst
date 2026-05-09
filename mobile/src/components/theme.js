@@ -1,7 +1,10 @@
 export const colors = {
   navy: '#0A1628',
   navyLight: '#132040',
-  gold: '#C9A84C',
+  // DGA Brand blue — matches the vertical bars in the DGA Capital logo
+  gold: '#5BB8D4',        // kept as "gold" for compat; now DGA light-blue
+  goldLight: '#84CCE3',   // lighter tint for hover/glow
+  goldDark: '#3E9AB8',    // deeper shade for pressed/active states
   white: '#FFFFFF',
   offWhite: '#F5F7FA',
   lightGray: '#E8ECF2',
@@ -9,7 +12,7 @@ export const colors = {
   darkGray: '#3D4A5C',
   green: '#22C55E',
   red: '#EF4444',
-  amber: '#F59E0B',
+  amber: '#F59E0B',       // kept for semantic warning/status use only
   blue: '#3B82F6',
 };
 

@@ -566,7 +566,7 @@ const styles = StyleSheet.create({
 
   // Live benchmark
   liveHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  liveDrillHint: { backgroundColor: 'rgba(201,168,76,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
+  liveDrillHint: { backgroundColor: 'rgba(91,184,212,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
   liveDrillHintText: { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   liveLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: colors.lightGray },
   liveKey:  { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 0.5 },
@@ -580,7 +580,7 @@ const styles = StyleSheet.create({
   liveYtdSub: { fontSize: 10, color: colors.midGray, fontStyle: 'italic', marginBottom: 12 },
 
   // Email
-  emailBox: { marginTop: 18, padding: 14, borderRadius: 8, backgroundColor: 'rgba(201,168,76,0.05)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)' },
+  emailBox: { marginTop: 18, padding: 14, borderRadius: 8, backgroundColor: 'rgba(91,184,212,0.05)', borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)' },
   emailBoxTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 1, color: colors.gold, marginBottom: 8 },
   emailStatus: { fontSize: 12, marginTop: 8, fontWeight: '600' },
   formInput: { backgroundColor: colors.offWhite, borderWidth: 1, borderColor: colors.lightGray, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: colors.navy, fontFamily: 'Courier New' },
