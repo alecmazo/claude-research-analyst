@@ -20,7 +20,7 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import csv
 import io
@@ -855,6 +855,342 @@ def auth_v2_change_password(request: Request, body: AuthV2ChangePasswordRequest)
         )
     return {"ok": True}
 
+
+# ===========================================================================
+# Phase B — GP dashboard data endpoints
+#
+# These endpoints power the new Terminal Pro view at /gp:
+#   • /api/market/indices   — top index ribbon (11 instruments, 15s cache)
+#   • /api/search/resolve   — company name → ticker
+#   • /api/gurufocus/{tk}   — GuruFocus fundamentals snapshot (per-ticker cache)
+#   • /api/watchlist        — per-user personal watchlist (v2-token scoped)
+# ===========================================================================
+
+# ── Index ribbon ────────────────────────────────────────────────────────────
+_INDEX_TICKERS = [
+    ("S&P 500",       "^GSPC"),
+    ("Dow 30",        "^DJI"),
+    ("Nasdaq",        "^IXIC"),
+    ("Russell 2000",  "^RUT"),
+    ("VIX",           "^VIX"),
+    ("10Y Treasury",  "^TNX"),
+    ("Dollar Index",  "DX-Y.NYB"),
+    ("Gold",          "GC=F"),
+    ("Crude Oil",     "CL=F"),
+    ("Bitcoin",       "BTC-USD"),
+    ("Ethereum",      "ETH-USD"),
+]
+_INDICES_CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
+_INDICES_TTL = 15  # seconds
+
+
+@app.get("/api/market/indices")
+def market_indices():
+    """Return live quotes for the 11 instruments shown in the GP index ribbon.
+    Cached server-side for 15s to stay well under yfinance rate limits even
+    if every GP browser polls aggressively."""
+    now = time.time()
+    if _INDICES_CACHE["data"] and (now - _INDICES_CACHE["ts"]) < _INDICES_TTL:
+        return _INDICES_CACHE["data"]
+
+    if yf is None:
+        raise HTTPException(status_code=503, detail="yfinance not installed")
+
+    out = []
+    for label, sym in _INDEX_TICKERS:
+        try:
+            t = yf.Ticker(sym)
+            info = t.fast_info
+            last  = float(info.last_price)  if info.last_price  is not None else None
+            prev  = float(info.previous_close) if info.previous_close is not None else None
+            pct   = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
+            out.append({
+                "label":    label,
+                "symbol":   sym,
+                "price":    last,
+                "prev":     prev,
+                "pct":      pct,
+            })
+        except Exception as exc:
+            out.append({"label": label, "symbol": sym, "price": None, "prev": None, "pct": None, "error": str(exc)[:80]})
+
+    payload = {"indices": out, "fetched_at": int(now)}
+    _INDICES_CACHE.update(data=payload, ts=now)
+    return payload
+
+
+# ── Universal search: company name / ticker → resolved ticker ───────────────
+class SearchResolveResult(BaseModel):
+    ticker:   str
+    name:     str
+    exchange: Optional[str] = None
+    score:    float = 1.0
+
+
+@app.get("/api/search/resolve")
+def search_resolve(q: str = ""):
+    """Resolve a company name OR ticker symbol to one or more ticker matches.
+
+    Strategy:
+      1. If `q` looks like a ticker (≤6 chars, all uppercase letters/digits),
+         try yfinance directly — if info has a `longName` we have a hit.
+      2. Otherwise, use yfinance's search() helper (which queries Yahoo's
+         autocomplete backend). Returns up to 5 results.
+    """
+    query = (q or "").strip()
+    if not query:
+        return {"results": []}
+    if yf is None:
+        raise HTTPException(status_code=503, detail="yfinance not installed")
+
+    results: list[dict] = []
+
+    # Heuristic: looks like a ticker → try direct resolution first
+    if len(query) <= 6 and re.fullmatch(r"[A-Za-z0-9.\-]+", query):
+        try:
+            t = yf.Ticker(query.upper())
+            info = getattr(t, "info", {}) or {}
+            longname = info.get("longName") or info.get("shortName")
+            if longname:
+                results.append({
+                    "ticker":   query.upper(),
+                    "name":     longname,
+                    "exchange": info.get("exchange") or info.get("fullExchangeName"),
+                    "score":    1.0,
+                })
+        except Exception:
+            pass
+
+    # Yahoo autocomplete via yfinance.Search()
+    try:
+        search_helper = getattr(yf, "Search", None)
+        if search_helper is None:
+            # Older yfinance — try the lookup endpoint directly via requests
+            import requests as _rq
+            r = _rq.get(
+                "https://query2.finance.yahoo.com/v1/finance/search",
+                params={"q": query, "quotesCount": 5, "newsCount": 0},
+                headers={"User-Agent": "Mozilla/5.0 DGA Research"},
+                timeout=4,
+            )
+            if r.ok:
+                data = r.json()
+                for hit in (data.get("quotes") or []):
+                    sym = (hit.get("symbol") or "").strip()
+                    if not sym or sym in {x["ticker"] for x in results}:
+                        continue
+                    results.append({
+                        "ticker":   sym,
+                        "name":     hit.get("longname") or hit.get("shortname") or sym,
+                        "exchange": hit.get("exchDisp") or hit.get("exchange"),
+                        "score":    float(hit.get("score") or 0) / 100000.0,
+                    })
+                    if len(results) >= 5:
+                        break
+        else:
+            s = search_helper(query, max_results=5, news_count=0)
+            for hit in (s.quotes or []):
+                sym = (hit.get("symbol") or "").strip()
+                if not sym or sym in {x["ticker"] for x in results}:
+                    continue
+                results.append({
+                    "ticker":   sym,
+                    "name":     hit.get("longname") or hit.get("shortname") or sym,
+                    "exchange": hit.get("exchDisp") or hit.get("exchange"),
+                    "score":    float(hit.get("score") or 0) / 100000.0,
+                })
+                if len(results) >= 5:
+                    break
+    except Exception as exc:
+        # Soft-fail — return whatever we got from the direct lookup
+        return {"results": results[:5], "warning": str(exc)[:120]}
+
+    return {"results": results[:5]}
+
+
+# ── GuruFocus fundamentals snapshot ─────────────────────────────────────────
+_GURUFOCUS_CACHE: dict[str, tuple] = {}      # { ticker: (data, ts) }
+_GURUFOCUS_TTL = 900                          # 15 min — saves API calls
+
+
+def _gurufocus_token() -> Optional[str]:
+    """Read the GuruFocus token from either env var name (supports both the
+    legacy GURUFOCUS_TOKEN used in claude_analyst.py and the newer
+    GURUFOCUS_API_TOKEN that was added to Railway for the v2 frontend)."""
+    return (os.environ.get("GURUFOCUS_API_TOKEN")
+            or os.environ.get("GURUFOCUS_TOKEN")
+            or "").strip() or None
+
+
+@app.get("/api/gurufocus/{ticker}")
+def gurufocus_snapshot(ticker: str):
+    """Return a compact GuruFocus snapshot for a ticker: market cap, PE,
+    GF Score, GF Value, financial strength, key ratios. Token never leaves
+    the server. Cached per-ticker for 15 min."""
+    tk = (ticker or "").strip().upper()
+    if not tk:
+        raise HTTPException(status_code=400, detail="ticker required")
+
+    token = _gurufocus_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="GURUFOCUS_API_TOKEN not configured")
+
+    now = time.time()
+    cached = _GURUFOCUS_CACHE.get(tk)
+    if cached and (now - cached[1]) < _GURUFOCUS_TTL:
+        return cached[0]
+
+    import requests as _rq
+
+    # The GuruFocus token may be in `key:secret` form (v2 API) or a single
+    # key (legacy public API). The summary endpoint accepts either when
+    # passed in the URL path; if v2 fails we fall back to public.
+    headers = {"User-Agent": "DGA Research Analyst", "Accept": "application/json"}
+    base = "https://api.gurufocus.com/public/user/{tok}/stock/{tk}/summary"
+
+    payload: dict = {"ticker": tk, "ok": False}
+    try:
+        url = base.format(tok=token, tk=tk)
+        r = _rq.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text[:2000]}
+            payload = {
+                "ticker":    tk,
+                "ok":        True,
+                "fetched_at": int(now),
+                "data":      data,
+            }
+        else:
+            # Fall back to the key portion if user passed key:secret
+            if ":" in token:
+                key_only = token.split(":", 1)[0]
+                r2 = _rq.get(base.format(tok=key_only, tk=tk), headers=headers, timeout=8)
+                if r2.status_code == 200:
+                    try:
+                        data = r2.json()
+                    except Exception:
+                        data = {"raw": r2.text[:2000]}
+                    payload = {
+                        "ticker":    tk,
+                        "ok":        True,
+                        "fetched_at": int(now),
+                        "data":      data,
+                    }
+                else:
+                    payload = {
+                        "ticker":    tk,
+                        "ok":        False,
+                        "error":     f"GuruFocus {r.status_code} / {r2.status_code}",
+                        "fetched_at": int(now),
+                    }
+            else:
+                payload = {
+                    "ticker":    tk,
+                    "ok":        False,
+                    "error":     f"GuruFocus HTTP {r.status_code}",
+                    "fetched_at": int(now),
+                }
+    except Exception as exc:
+        payload = {"ticker": tk, "ok": False, "error": str(exc)[:200], "fetched_at": int(now)}
+
+    _GURUFOCUS_CACHE[tk] = (payload, now)
+    return payload
+
+
+# ── Watchlist (per-user, v2-token scoped) ───────────────────────────────────
+_WATCHLISTS_FILE = Path(os.environ.get(
+    "DGA_WATCHLISTS_PATH",
+    str(analyst.STOCKS_FOLDER / "_dga_watchlists.json"),
+))
+_watchlists_lock = threading.Lock()
+
+
+def _load_watchlists() -> dict[str, list[str]]:
+    try:
+        if _WATCHLISTS_FILE.exists():
+            return json.loads(_WATCHLISTS_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_watchlists(data: dict[str, list[str]]) -> None:
+    _WATCHLISTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _WATCHLISTS_FILE.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _claims_or_401(request: Request) -> dict:
+    """Extract v2 auth claims attached by the middleware. 401 if missing
+    (i.e. the request only had a legacy v1 token, not a v2 token)."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims:
+        raise HTTPException(status_code=401, detail="v2 token required for /api/watchlist")
+    return claims
+
+
+@app.get("/api/watchlist")
+def watchlist_get(request: Request):
+    claims = _claims_or_401(request)
+    lp_id = claims["lp_id"]
+    with _watchlists_lock:
+        wl = _load_watchlists()
+    tickers = wl.get(lp_id, [])
+
+    # Enrich with live quotes so the UI doesn't need a second call
+    quotes: dict[str, dict] = {}
+    if tickers and yf is not None:
+        for tk in tickers:
+            try:
+                t = yf.Ticker(tk)
+                fi = t.fast_info
+                last = float(fi.last_price)      if fi.last_price      is not None else None
+                prev = float(fi.previous_close)  if fi.previous_close  is not None else None
+                pct  = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
+                quotes[tk] = {"price": last, "prev": prev, "pct": pct}
+            except Exception:
+                quotes[tk] = {"price": None, "prev": None, "pct": None}
+
+    return {"tickers": tickers, "quotes": quotes}
+
+
+class WatchlistAddRequest(BaseModel):
+    ticker: str
+
+
+@app.post("/api/watchlist")
+def watchlist_add(request: Request, body: WatchlistAddRequest):
+    claims = _claims_or_401(request)
+    lp_id = claims["lp_id"]
+    tk = (body.ticker or "").strip().upper()
+    if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+        raise HTTPException(status_code=400, detail="invalid ticker")
+
+    with _watchlists_lock:
+        wl = _load_watchlists()
+        cur = wl.get(lp_id, [])
+        if tk not in cur:
+            cur.append(tk)
+            wl[lp_id] = cur
+            _save_watchlists(wl)
+    return {"tickers": wl.get(lp_id, [])}
+
+
+@app.delete("/api/watchlist/{ticker}")
+def watchlist_remove(request: Request, ticker: str):
+    claims = _claims_or_401(request)
+    lp_id = claims["lp_id"]
+    tk = (ticker or "").strip().upper()
+    with _watchlists_lock:
+        wl = _load_watchlists()
+        cur = wl.get(lp_id, [])
+        wl[lp_id] = [t for t in cur if t != tk]
+        _save_watchlists(wl)
+    return {"tickers": wl[lp_id]}
+
+
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
@@ -1124,7 +1460,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65-20260510"
+WEB_BUILD_VERSION = "ui65b-20260510"
 
 
 @app.get("/api/build")

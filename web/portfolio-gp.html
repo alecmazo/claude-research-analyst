@@ -458,6 +458,133 @@
     letter-spacing: 0.5px;
   }
   .mockup-banner strong { color: white; }
+
+  /* ── Search results dropdown ─────────────────────────────── */
+  #search-results {
+    display: none;
+    position: absolute;
+    top: 44px; left: 0; right: 0;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.50);
+    overflow: hidden;
+    z-index: 50;
+    max-height: 400px; overflow-y: auto;
+  }
+  #search-results.open { display: block; }
+  .sr-item {
+    padding: 10px 14px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+    cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+    transition: background .12s;
+  }
+  .sr-item:first-child { border-top: none; }
+  .sr-item:hover, .sr-item.hl { background: rgba(91,184,212,0.10); }
+  .sr-tk {
+    font-size: 13px; font-weight: 800; color: #e0e8f0;
+    letter-spacing: 0.8px; min-width: 60px;
+  }
+  .sr-name { font-size: 12px; color: var(--mid); flex: 1; }
+  .sr-ex { font-size: 10px; color: var(--dim); letter-spacing: 0.5px; }
+
+  /* ── GuruFocus snapshot modal ────────────────────────────── */
+  #gf-modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 900;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(2px);
+    padding: 24px;
+  }
+  #gf-modal-overlay.open { display: flex; }
+  .gf-modal {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 12px;
+    max-width: 760px; width: 100%;
+    max-height: 86vh; overflow-y: auto;
+    padding: 24px 26px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+  }
+  .gf-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .gf-tk { font-size: 22px; font-weight: 800; color: #e0e8f0; letter-spacing: 1.5px; }
+  .gf-name { font-size: 13px; color: var(--mid); flex: 1; }
+  .gf-close {
+    background: rgba(255,255,255,0.06); border: none;
+    color: var(--mid); font-size: 18px; cursor: pointer;
+    padding: 4px 11px; border-radius: 5px; line-height: 1;
+    transition: background .15s, color .15s;
+  }
+  .gf-close:hover { background: rgba(239,68,68,0.20); color: #fca5a5; }
+  .gf-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .gf-stat {
+    background: var(--navy-mid);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .gf-stat-label {
+    font-size: 9px; font-weight: 800; color: var(--dim);
+    letter-spacing: 1.2px; text-transform: uppercase;
+  }
+  .gf-stat-val {
+    font-size: 16px; font-weight: 800; color: #e0e8f0;
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+  }
+  .gf-actions {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+  }
+  .gf-btn {
+    background: rgba(91,184,212,0.15);
+    color: var(--blue-light);
+    border: 1px solid rgba(91,184,212,0.35);
+    padding: 8px 14px; border-radius: 7px;
+    font-weight: 700; font-size: 11px;
+    letter-spacing: 0.9px; cursor: pointer;
+    text-transform: uppercase;
+    transition: background .15s, border-color .15s;
+    text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .gf-btn:hover { background: rgba(91,184,212,0.25); border-color: var(--blue); }
+  .gf-btn.primary {
+    background: linear-gradient(180deg, var(--blue-light) 0%, var(--blue) 50%, var(--blue-dark) 100%);
+    color: var(--navy); border: none;
+    box-shadow: 0 3px 10px rgba(91,184,212,0.30);
+  }
+  .gf-loading { text-align: center; padding: 40px; color: var(--mid); font-size: 13px; }
+  .gf-error { color: #fca5a5; text-align: center; padding: 20px; font-size: 13px; }
+
+  /* Watchlist remove button on hover */
+  .wl-row { position: relative; }
+  .wl-remove {
+    position: absolute; top: 50%; right: 6px;
+    transform: translateY(-50%);
+    background: rgba(239,68,68,0.18); color: #fca5a5;
+    border: none; border-radius: 4px;
+    width: 22px; height: 22px;
+    font-size: 14px; line-height: 1;
+    cursor: pointer; display: none;
+    padding: 0;
+  }
+  .wl-row:hover .wl-remove { display: inline-flex; align-items: center; justify-content: center; }
+  .wl-remove:hover { background: rgba(239,68,68,0.40); color: white; }
 </style>
 </head>
 <body>
@@ -468,10 +595,11 @@
     <img class="brand-logo" src="/branding/dga_logo_small.png" alt="DGA Capital">
   </div>
 
-  <div class="search-wrap">
+  <div class="search-wrap" id="search-wrap">
     <span class="search-icon">⌕</span>
-    <input class="search-input" placeholder="Search ticker, company, or topic — e.g. NVDA, “Apple”, “lithium miners”">
+    <input id="search-input" class="search-input" placeholder="Search ticker, company, or topic — e.g. NVDA, “Apple”, “lithium miners”" autocomplete="off">
     <span class="search-kbd">⌘K</span>
+    <div id="search-results"></div>
   </div>
 
   <nav class="topbar-right">
@@ -485,86 +613,10 @@
   </nav>
 </header>
 
-<!-- ── INDEX RIBBON ──────────────────────────────────────────── -->
+<!-- ── INDEX RIBBON ── populated by JS from /api/market/indices ── -->
 <div class="ribbon-wrap">
-  <div class="ribbon">
-    <div class="idx">
-      <div class="idx-name">S&amp;P 500</div>
-      <div class="idx-row">
-        <div class="idx-px">7,398.93</div>
-        <div class="idx-chg up">+0.84%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">DOW 30</div>
-      <div class="idx-row">
-        <div class="idx-px">49,609.16</div>
-        <div class="idx-chg up">+0.02%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">NASDAQ</div>
-      <div class="idx-row">
-        <div class="idx-px">26,247.08</div>
-        <div class="idx-chg up">+1.71%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">RUSSELL 2000</div>
-      <div class="idx-row">
-        <div class="idx-px">2,861.21</div>
-        <div class="idx-chg up">+0.76%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">VIX</div>
-      <div class="idx-row">
-        <div class="idx-px">17.19</div>
-        <div class="idx-chg up">+0.64%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">10Y TREASURY</div>
-      <div class="idx-row">
-        <div class="idx-px">4.32%</div>
-        <div class="idx-chg dn">−0.02</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">DOLLAR INDEX</div>
-      <div class="idx-row">
-        <div class="idx-px">102.81</div>
-        <div class="idx-chg dn">−0.18%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">GOLD</div>
-      <div class="idx-row">
-        <div class="idx-px">4,730.70</div>
-        <div class="idx-chg up">+0.42%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">CRUDE OIL</div>
-      <div class="idx-row">
-        <div class="idx-px">95.42</div>
-        <div class="idx-chg up">+0.64%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">BITCOIN</div>
-      <div class="idx-row">
-        <div class="idx-px">80,987.06</div>
-        <div class="idx-chg up">+0.23%</div>
-      </div>
-    </div>
-    <div class="idx">
-      <div class="idx-name">ETHEREUM</div>
-      <div class="idx-row">
-        <div class="idx-px">2,343.60</div>
-        <div class="idx-chg up">+0.62%</div>
-      </div>
-    </div>
+  <div class="ribbon" id="ribbon">
+    <div class="idx" style="opacity:0.5"><div class="idx-name">Loading…</div></div>
   </div>
 </div>
 
@@ -603,83 +655,15 @@
     <section class="panel">
       <header class="panel-head">
         <span class="panel-title">Watchlist</span>
-        <span class="panel-badge">7</span>
-        <span class="panel-action">EDIT</span>
+        <span class="panel-badge" id="wl-count">0</span>
       </header>
       <div class="panel-body" style="padding:0">
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">NVDA</div>
-            <div class="wl-name">NVIDIA Corp</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$1,247.80</div>
-            <div class="wl-chg up">+2.41%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">PLTR</div>
-            <div class="wl-name">Palantir Technologies</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$78.34</div>
-            <div class="wl-chg up">+4.18%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">TSLA</div>
-            <div class="wl-name">Tesla Inc</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$348.12</div>
-            <div class="wl-chg dn">−1.22%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">UBER</div>
-            <div class="wl-name">Uber Technologies</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$92.41</div>
-            <div class="wl-chg up">+0.78%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">MSTR</div>
-            <div class="wl-name">Microstrategy</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$612.04</div>
-            <div class="wl-chg dn">−3.40%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">SMCI</div>
-            <div class="wl-name">Super Micro Computer</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$48.92</div>
-            <div class="wl-chg up">+1.11%</div>
-          </div>
-        </div>
-        <div class="wl-row">
-          <div>
-            <div class="wl-tk">SOFI</div>
-            <div class="wl-name">SoFi Technologies</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-px">$14.06</div>
-            <div class="wl-chg up">+2.89%</div>
-          </div>
+        <div id="wl-rows">
+          <div class="wl-row" style="opacity:0.5"><div><div class="wl-tk">Loading…</div></div><div></div></div>
         </div>
         <div class="wl-add">
-          <input class="wl-add-input" placeholder="Add ticker…">
-          <button class="wl-add-btn">+</button>
+          <input id="wl-input" class="wl-add-input" placeholder="Add ticker…" autocomplete="off">
+          <button id="wl-add-btn" class="wl-add-btn" title="Add ticker">+</button>
         </div>
       </div>
     </section>
@@ -691,8 +675,8 @@
     <div class="hero-card">
       <div class="hero-label">Analyze Ticker — Single-name deep dive</div>
       <div class="hero-row">
-        <input class="hero-input" placeholder="AAPL">
-        <button class="hero-btn">RUN ANALYSIS</button>
+        <input id="hero-ticker" class="hero-input" placeholder="AAPL" autocapitalize="characters" autocomplete="off">
+        <button id="hero-run-btn" class="hero-btn">RUN ANALYSIS</button>
       </div>
       <div style="margin-top:10px; font-size:11px; color:var(--dim);">
         ⚡ Avg ~90s — pulls SEC filings, live X chatter, Grok-deep-research, then renders Wall Street-format docx + pptx.
@@ -740,7 +724,7 @@
     <section class="panel">
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
-        <span class="panel-badge">72</span>
+        <span class="panel-badge" id="reports-count">…</span>
         <span class="panel-action">SORT: TGT/UPSIDE ▼</span>
       </header>
       <table class="rep-table">
@@ -751,7 +735,7 @@
             <th class="rep-num">TGT / Upside</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="reports-tbody">
           <tr>
             <td>
               <span class="rep-tk">FNMA</span>
@@ -999,6 +983,389 @@
 
   </aside>
 </main>
+
+<!-- ── GuruFocus snapshot modal ─────────────────────────────── -->
+<div id="gf-modal-overlay">
+  <div class="gf-modal" role="dialog">
+    <div class="gf-head">
+      <span class="gf-tk" id="gf-tk">—</span>
+      <span class="gf-name" id="gf-name"></span>
+      <button class="gf-close" id="gf-close" title="Close">✕</button>
+    </div>
+    <div id="gf-body" class="gf-loading">Loading GuruFocus data…</div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// portfolio-gp data wiring — Phase B
+// All API calls use window.dgaFetch (provided by auth-guard.js) which
+// auto-includes x-auth-v2-token. The auth-guard already redirects to /
+// if there's no valid token before this script ever runs.
+// ════════════════════════════════════════════════════════════════════════
+(function () {
+  'use strict';
+
+  // ── Number formatters ───────────────────────────────────────────
+  const fmtPx = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const abs = Math.abs(v);
+    if (abs >= 10000)  return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    if (abs >= 100)    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const fmtPct = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  };
+  const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
+
+  // ── Index ribbon ────────────────────────────────────────────────
+  async function loadIndices() {
+    try {
+      const r = await window.dgaFetch('/api/market/indices');
+      if (!r.ok) throw new Error('indices ' + r.status);
+      const data = await r.json();
+      const ribbon = document.getElementById('ribbon');
+      ribbon.innerHTML = (data.indices || []).map(idx => `
+        <div class="idx" data-symbol="${idx.symbol}">
+          <div class="idx-name">${idx.label}</div>
+          <div class="idx-row">
+            <div class="idx-px">${idx.price != null ? fmtPx(idx.price) : '—'}</div>
+            <div class="idx-chg ${cssClass(idx.pct)}">${fmtPct(idx.pct)}</div>
+          </div>
+        </div>
+      `).join('');
+    } catch (e) {
+      console.warn('[indices]', e);
+    }
+  }
+
+  // ── Watchlist ───────────────────────────────────────────────────
+  async function loadWatchlist() {
+    try {
+      const r = await window.dgaFetch('/api/watchlist');
+      if (!r.ok) throw new Error('watchlist ' + r.status);
+      const data = await r.json();
+      renderWatchlist(data.tickers || [], data.quotes || {});
+    } catch (e) {
+      console.warn('[watchlist]', e);
+      document.getElementById('wl-rows').innerHTML =
+        '<div class="wl-row" style="opacity:0.6"><div><div class="wl-tk">—</div></div></div>';
+    }
+  }
+
+  function renderWatchlist(tickers, quotes) {
+    const rows = document.getElementById('wl-rows');
+    document.getElementById('wl-count').textContent = String(tickers.length);
+    if (!tickers.length) {
+      rows.innerHTML = `<div style="padding:14px; font-size:12px; color:var(--dim); text-align:center;">
+        No tickers yet. Add one below.
+      </div>`;
+      return;
+    }
+    rows.innerHTML = tickers.map(tk => {
+      const q = quotes[tk] || {};
+      return `
+        <div class="wl-row" data-ticker="${tk}">
+          <div>
+            <div class="wl-tk">${tk}</div>
+          </div>
+          <div class="wl-right">
+            <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
+            <div class="wl-chg ${cssClass(q.pct)}">${fmtPct(q.pct)}</div>
+          </div>
+          <button class="wl-remove" data-remove="${tk}" title="Remove">×</button>
+        </div>
+      `;
+    }).join('');
+
+    rows.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tk = btn.getAttribute('data-remove');
+        await window.dgaFetch(`/api/watchlist/${encodeURIComponent(tk)}`, { method: 'DELETE' });
+        loadWatchlist();
+      });
+    });
+    rows.querySelectorAll('.wl-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('[data-remove]')) return;
+        const tk = row.getAttribute('data-ticker');
+        if (tk) openGuruFocus(tk);
+      });
+    });
+  }
+
+  // Add ticker handler
+  const $wlInput = document.getElementById('wl-input');
+  const $wlAdd = document.getElementById('wl-add-btn');
+  async function addWatchlist() {
+    const tk = ($wlInput.value || '').trim().toUpperCase();
+    if (!tk) return;
+    $wlAdd.disabled = true;
+    try {
+      const r = await window.dgaFetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: tk }),
+      });
+      if (r.ok) {
+        $wlInput.value = '';
+        loadWatchlist();
+      }
+    } finally {
+      $wlAdd.disabled = false;
+    }
+  }
+  $wlAdd.addEventListener('click', addWatchlist);
+  $wlInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') addWatchlist(); });
+
+  // ── Saved Reports ───────────────────────────────────────────────
+  async function loadReports() {
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      if (!r.ok) throw new Error('reports ' + r.status);
+      const list = await r.json();
+      renderReports(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.warn('[reports]', e);
+    }
+  }
+
+  function renderReports(reports) {
+    const tbody = document.getElementById('reports-tbody');
+    document.getElementById('reports-count').textContent = String(reports.length);
+
+    // Live-quote fetch for each (parallel) — best-effort, soft-fail per ticker
+    Promise.all(reports.slice(0, 20).map(async (r) => {
+      try {
+        const q = await window.dgaFetch(`/api/quote/${encodeURIComponent(r.ticker)}`);
+        return q.ok ? await q.json() : null;
+      } catch { return null; }
+    })).then(quotes => {
+      tbody.innerHTML = reports.slice(0, 20).map((rep, i) => {
+        const q = quotes[i] || {};
+        const price = q.price != null ? Number(q.price) : null;
+        const pct = q.pct_change != null ? Number(q.pct_change) :
+                    (price != null && q.previous_close > 0 ? ((price - q.previous_close) / q.previous_close * 100) : null);
+        const target = rep.price_target != null ? Number(rep.price_target) : null;
+        const upside = (target != null && price != null && price > 0)
+                       ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
+        const dateStr = rep.generated_at ? new Date(rep.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        return `
+          <tr data-ticker="${rep.ticker}">
+            <td>
+              <span class="rep-tk">${rep.ticker}</span>
+              ${rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : ''}
+              ${rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : ''}
+              <div class="rep-date">${dateStr}</div>
+            </td>
+            <td class="rep-num">
+              <div style="color:#e0e8f0; font-weight:700;">${price != null ? '$' + fmtPx(price) : '—'}</div>
+              <div class="${cssClass(pct)}" style="font-size:10px;">${fmtPct(pct)}</div>
+            </td>
+            <td class="rep-num">
+              <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
+              <div style="color:#e0e8f0; font-weight:700;">${target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—'}</div>
+              <div class="${cssClass(upside)}" style="font-size:10px;">${fmtPct(upside)}</div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // Click → open GuruFocus snapshot
+      tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+        tr.addEventListener('click', () => openGuruFocus(tr.getAttribute('data-ticker')));
+      });
+    });
+  }
+
+  // ── Universal search ────────────────────────────────────────────
+  const $search = document.getElementById('search-input');
+  const $sr = document.getElementById('search-results');
+  let searchDebounce = null;
+  let searchSeq = 0;
+
+  $search.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    const q = $search.value.trim();
+    if (q.length < 2) { $sr.classList.remove('open'); $sr.innerHTML = ''; return; }
+    searchDebounce = setTimeout(() => doSearch(q), 250);
+  });
+  $search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const first = $sr.querySelector('.sr-item');
+      if (first) first.click();
+    } else if (e.key === 'Escape') {
+      $sr.classList.remove('open');
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#search-wrap')) $sr.classList.remove('open');
+  });
+
+  async function doSearch(q) {
+    const mySeq = ++searchSeq;
+    try {
+      const r = await window.dgaFetch('/api/search/resolve?q=' + encodeURIComponent(q));
+      if (!r.ok) throw new Error('search ' + r.status);
+      const data = await r.json();
+      if (mySeq !== searchSeq) return; // stale
+      const results = data.results || [];
+      if (!results.length) {
+        $sr.innerHTML = `<div class="sr-item" style="opacity:0.5; cursor:default;"><span class="sr-name">No matches</span></div>`;
+      } else {
+        $sr.innerHTML = results.map(r => `
+          <div class="sr-item" data-ticker="${r.ticker}">
+            <span class="sr-tk">${r.ticker}</span>
+            <span class="sr-name">${r.name || ''}</span>
+            <span class="sr-ex">${r.exchange || ''}</span>
+          </div>
+        `).join('');
+        $sr.querySelectorAll('.sr-item[data-ticker]').forEach(item => {
+          item.addEventListener('click', () => {
+            const tk = item.getAttribute('data-ticker');
+            $search.value = '';
+            $sr.classList.remove('open');
+            openGuruFocus(tk);
+          });
+        });
+      }
+      $sr.classList.add('open');
+    } catch (e) {
+      console.warn('[search]', e);
+    }
+  }
+
+  // ── GuruFocus snapshot modal ────────────────────────────────────
+  const $gfOverlay = document.getElementById('gf-modal-overlay');
+  const $gfTk     = document.getElementById('gf-tk');
+  const $gfName   = document.getElementById('gf-name');
+  const $gfBody   = document.getElementById('gf-body');
+  document.getElementById('gf-close').addEventListener('click', closeGuruFocus);
+  $gfOverlay.addEventListener('click', (e) => { if (e.target === $gfOverlay) closeGuruFocus(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeGuruFocus(); });
+
+  async function openGuruFocus(ticker) {
+    if (!ticker) return;
+    $gfTk.textContent  = ticker;
+    $gfName.textContent = '';
+    $gfBody.className   = 'gf-loading';
+    $gfBody.textContent = 'Loading GuruFocus data…';
+    $gfOverlay.classList.add('open');
+    try {
+      const r = await window.dgaFetch('/api/gurufocus/' + encodeURIComponent(ticker));
+      if (!r.ok) throw new Error('gf ' + r.status);
+      const payload = await r.json();
+      renderGuruFocus(ticker, payload);
+    } catch (e) {
+      $gfBody.className = 'gf-error';
+      $gfBody.textContent = 'Could not load GuruFocus data — ' + (e.message || 'unknown error');
+    }
+  }
+  function closeGuruFocus() { $gfOverlay.classList.remove('open'); }
+
+  function renderGuruFocus(ticker, payload) {
+    if (!payload.ok) {
+      $gfBody.className = 'gf-error';
+      $gfBody.innerHTML = `
+        <p style="margin-bottom:14px;">GuruFocus didn't return a snapshot for <strong>${ticker}</strong>.</p>
+        <p style="font-size:11px; color:var(--dim); margin-bottom:18px;">${payload.error || ''}</p>
+        <div class="gf-actions" style="justify-content:center; border:none;">
+          <a class="gf-btn primary" target="_blank" rel="noopener" href="https://www.gurufocus.com/stock/${encodeURIComponent(ticker)}/summary">
+            OPEN ON GURUFOCUS ↗
+          </a>
+        </div>
+      `;
+      return;
+    }
+
+    // The GuruFocus summary endpoint returns nested data. Extract the most
+    // common useful fields defensively (different ticker types may have
+    // different shapes — equities vs ETFs vs ADRs).
+    const d = payload.data || {};
+    const sumr = d.summary || d.summary_data || d;
+    const general = sumr.general || sumr || {};
+    const valuation = sumr.valuation || sumr.valuation_data || {};
+
+    const pick = (...keys) => {
+      for (const k of keys) {
+        // Search nested objects too
+        if (general[k] != null && general[k] !== '') return general[k];
+        if (valuation[k] != null && valuation[k] !== '') return valuation[k];
+        if (sumr[k] != null && sumr[k] !== '') return sumr[k];
+      }
+      return null;
+    };
+
+    const name      = pick('company', 'company_name', 'name');
+    const sector    = pick('sector', 'industry_sector');
+    const industry  = pick('industry');
+    const mcap      = pick('market_cap', 'mktcap');
+    const pe        = pick('pe_ratio', 'pe', 'pe_ttm');
+    const pb        = pick('pb_ratio', 'pb');
+    const ps        = pick('ps_ratio', 'ps');
+    const gfScore   = pick('gf_score', 'gf_score_total');
+    const gfValue   = pick('gf_value', 'gf_value_per_share', 'intrinsic_value');
+    const finStr    = pick('financial_strength', 'financial_strength_rank');
+    const profit    = pick('profitability', 'profitability_rank');
+    const growth    = pick('growth', 'growth_rank');
+    const debtEq    = pick('debt_to_equity', 'debt_equity');
+    const yieldVal  = pick('dividend_yield', 'div_yield');
+
+    const cell = (label, value) => value != null
+      ? `<div class="gf-stat"><div class="gf-stat-label">${label}</div><div class="gf-stat-val">${value}</div></div>`
+      : '';
+
+    $gfName.textContent = name ? `${name}${sector ? ' · ' + sector : ''}` : '';
+    $gfBody.className = '';
+    $gfBody.innerHTML = `
+      <div class="gf-stats">
+        ${cell('Market Cap', mcap)}
+        ${cell('P/E', pe)}
+        ${cell('P/B', pb)}
+        ${cell('P/S', ps)}
+        ${cell('GF Score', gfScore)}
+        ${cell('GF Value', gfValue)}
+        ${cell('Financial Strength', finStr)}
+        ${cell('Profitability', profit)}
+        ${cell('Growth', growth)}
+        ${cell('Debt/Equity', debtEq)}
+        ${cell('Dividend Yield', yieldVal)}
+        ${cell('Industry', industry)}
+      </div>
+      <details style="margin-top: 12px;">
+        <summary style="cursor:pointer; color:var(--mid); font-size:11px; letter-spacing:0.6px;">Raw GuruFocus response (debug) ▾</summary>
+        <pre style="background:rgba(0,0,0,0.3); padding:12px; border-radius:6px; margin-top:8px;
+                    font-size:10px; color:var(--dim); overflow:auto; max-height:240px;">${
+          JSON.stringify(payload.data, null, 2).replace(/[<>&]/g, (c) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))
+        }</pre>
+      </details>
+      <div class="gf-actions">
+        <a class="gf-btn primary" target="_blank" rel="noopener" href="https://www.gurufocus.com/stock/${encodeURIComponent(ticker)}/summary">
+          OPEN ON GURUFOCUS ↗
+        </a>
+        <button class="gf-btn" onclick="document.getElementById('hero-ticker').value='${ticker}'; document.getElementById('hero-run-btn').focus(); document.getElementById('gf-modal-overlay').classList.remove('open');">
+          ⚡ RUN DGA ANALYSIS
+        </button>
+        <button class="gf-btn" onclick="(async()=>{await window.dgaFetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:'${ticker}'})}); document.getElementById('gf-modal-overlay').classList.remove('open'); location.reload();})()">
+          ★ ADD TO WATCHLIST
+        </button>
+      </div>
+    `;
+  }
+
+  // ── Init ────────────────────────────────────────────────────────
+  loadIndices();
+  loadWatchlist();
+  loadReports();
+
+  // Refresh indices + watchlist every 60s (cheap given server cache)
+  setInterval(loadIndices,   60000);
+  setInterval(loadWatchlist, 60000);
+})();
+</script>
 
 </body>
 </html>
