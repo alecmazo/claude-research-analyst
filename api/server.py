@@ -1042,57 +1042,58 @@ def gurufocus_snapshot(ticker: str):
 
     import requests as _rq
 
-    # The GuruFocus token may be in `key:secret` form (v2 API) or a single
-    # key (legacy public API). The summary endpoint accepts either when
-    # passed in the URL path; if v2 fails we fall back to public.
-    headers = {"User-Agent": "DGA Research Analyst", "Accept": "application/json"}
+    # Browser-like headers — GuruFocus often blocks bare/empty UAs on
+    # cloud IPs. We rotate through a couple of strategies on failure.
     base = "https://api.gurufocus.com/public/user/{tok}/stock/{tk}/summary"
+    strategies = [
+        # 1) Full token in URL path with a Chrome-style UA
+        {
+            "url": base.format(tok=token, tk=tk),
+            "headers": {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/130.0.0.0 Safari/537.36",
+                "Accept":     "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer":    "https://www.gurufocus.com/",
+            },
+        },
+    ]
+    # If token looks like key:secret, try key-only as another path
+    if ":" in token:
+        strategies.append({
+            "url": base.format(tok=token.split(":", 1)[0], tk=tk),
+            "headers": strategies[0]["headers"],
+        })
 
+    last_status: list[str] = []
     payload: dict = {"ticker": tk, "ok": False}
     try:
-        url = base.format(tok=token, tk=tk)
-        r = _rq.get(url, headers=headers, timeout=8)
-        if r.status_code == 200:
-            try:
-                data = r.json()
-            except Exception:
-                data = {"raw": r.text[:2000]}
-            payload = {
-                "ticker":    tk,
-                "ok":        True,
-                "fetched_at": int(now),
-                "data":      data,
-            }
-        else:
-            # Fall back to the key portion if user passed key:secret
-            if ":" in token:
-                key_only = token.split(":", 1)[0]
-                r2 = _rq.get(base.format(tok=key_only, tk=tk), headers=headers, timeout=8)
-                if r2.status_code == 200:
-                    try:
-                        data = r2.json()
-                    except Exception:
-                        data = {"raw": r2.text[:2000]}
-                    payload = {
-                        "ticker":    tk,
-                        "ok":        True,
-                        "fetched_at": int(now),
-                        "data":      data,
-                    }
-                else:
-                    payload = {
-                        "ticker":    tk,
-                        "ok":        False,
-                        "error":     f"GuruFocus {r.status_code} / {r2.status_code}",
-                        "fetched_at": int(now),
-                    }
-            else:
+        for strat in strategies:
+            r = _rq.get(strat["url"], headers=strat["headers"], timeout=10)
+            last_status.append(f"HTTP {r.status_code}")
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {"raw": r.text[:2000]}
                 payload = {
-                    "ticker":    tk,
-                    "ok":        False,
-                    "error":     f"GuruFocus HTTP {r.status_code}",
+                    "ticker":     tk,
+                    "ok":         True,
                     "fetched_at": int(now),
+                    "data":       data,
                 }
+                break
+            else:
+                # Capture first chunk of body for diagnostics on failure
+                last_status[-1] += f" body={r.text[:120]!r}"
+        if not payload.get("ok"):
+            payload = {
+                "ticker":     tk,
+                "ok":         False,
+                "error":      "GuruFocus: " + " | ".join(last_status),
+                "fetched_at": int(now),
+            }
     except Exception as exc:
         payload = {"ticker": tk, "ok": False, "error": str(exc)[:200], "fetched_at": int(now)}
 
@@ -1460,7 +1461,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65b-20260510"
+WEB_BUILD_VERSION = "ui65c-20260510"
 
 
 @app.get("/api/build")
