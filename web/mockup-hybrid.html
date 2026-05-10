@@ -69,61 +69,27 @@
     z-index: 1;
   }
 
-  /* Logo */
+  /* Logo — real DGA Capital brand mark */
   .login-logo {
-    width: 130px; height: 130px;
+    height: 110px;
+    width: auto;
     background: white;
-    border-radius: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
+    border-radius: 14px;
+    padding: 14px 26px;
     margin-bottom: 28px;
+    object-fit: contain;
+    display: block;
     box-shadow:
       0 0 0 2.5px rgba(91,184,212,0.6),
       0 10px 36px rgba(91,184,212,0.30),
       0 4px 10px rgba(0,0,0,0.4);
-    position: relative;
   }
-  .login-logo-text {
-    font-weight: 900;
-    font-size: 36px;
-    color: var(--navy);
-    letter-spacing: 1px;
-    line-height: 1;
-  }
-  .login-logo-sub {
-    font-weight: 700;
-    font-size: 11px;
-    color: #666;
-    letter-spacing: 4.5px;
-    margin-top: 4px;
-  }
-  .login-logo::before, .login-logo::after {
-    content: '';
-    position: absolute;
-    width: 6px;
-    height: 30px;
-    background: var(--blue);
-    top: 26px;
-    border-radius: 1px;
-  }
-  .login-logo::before { left: 30px; }
-  .login-logo::after { left: 42px; }
 
-  #login-brand {
-    color: var(--blue);
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: 3px;
-    text-align: center;
-  }
   #login-subtitle {
-    color: rgba(255,255,255,0.45);
+    color: rgba(255,255,255,0.55);
     font-size: 11px;
     letter-spacing: 2px;
     text-transform: uppercase;
-    margin-top: 6px;
     margin-bottom: 36px;
     text-align: center;
   }
@@ -278,12 +244,8 @@
 <div id="login-overlay">
   <div id="login-card">
 
-    <div class="login-logo">
-      <div class="login-logo-text">DGA</div>
-      <div class="login-logo-sub">CAPITAL</div>
-    </div>
+    <img class="login-logo" src="/branding/dga_logo_small.png" alt="DGA Capital">
 
-    <div id="login-brand">DGA CAPITAL</div>
     <div id="login-subtitle">Portfolio Access · Authentication Required</div>
 
     <input
