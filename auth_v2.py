@@ -88,7 +88,7 @@ def _token_secret() -> bytes:
 LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
     {
         "lp_id":                "gp_alec",
-        "email":                "alecmazo@gmail.com",
+        "email":                "alecmazo1@gmail.com",
         "name":                 "Alec Mazo",
         "role":                 "gp",
         # plaintext: "genesis"
