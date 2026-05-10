@@ -987,6 +987,18 @@ async def serve_mockup_b():
     return FileResponse(str(path), headers=_NOCACHE)
 
 
+@app.get("/mockup-hybrid.html")
+@app.get("/preview")
+async def serve_mockup_hybrid():
+    """Unified login + role-router preview. Two-password gate (GP/LP)
+    routes to the appropriate layout mockup. Used to validate the
+    portfolio.dgacapital.com flow before shipping to production."""
+    path = WEB_DIR / "mockup-hybrid.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="mockup-hybrid.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
+
+
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
