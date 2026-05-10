@@ -587,6 +587,13 @@ app = FastAPI(title="DGA Research Analyst API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
+    # Wildcard is intentional — the API is consumed by:
+    #   • https://dga-portfolio.up.railway.app       (current Railway URL)
+    #   • https://portfolio.dgacapital.com           (new custom domain, ui65+)
+    #   • iOS app via Expo runtime                   (mobile)
+    # All auth happens via tokens in the x-auth-token / x-auth-v2-token
+    # headers, not cookies — so wildcard is safe here and credentials are
+    # never sent cross-origin via the browser's credentials channel.
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
@@ -596,7 +603,10 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Auth — stateless HMAC token (survives restarts, no DB needed)
 # ---------------------------------------------------------------------------
-_PUBLIC_PATHS = {"/health", "/info", "/api/auth", "/api/build", "/api/diagnostics", "/"}
+_PUBLIC_PATHS = {
+    "/health", "/info", "/api/auth", "/api/build", "/api/diagnostics", "/",
+    "/api/auth/v2/login",   # email+password login is unauthenticated by design
+}
 
 def _portfolio_password() -> str:
     return os.environ.get("PORTFOLIO_PASSWORD", "dgacapital").strip()
@@ -645,12 +655,28 @@ async def auth_middleware(request: Request, call_next):
             or path.startswith("/branding/")
             or not path.startswith("/api/")):
         return await call_next(request)
-    # Check main app token from header or query string
+
+    # ── v2 token (email+password JWT) — accepted on every /api/* path.
+    # When present, attach the decoded claims to request.state for
+    # downstream handlers to use for scope-based filtering.
+    v2_tok = (request.headers.get("x-auth-v2-token")
+              or request.query_params.get("v2_token")
+              or "")
+    if v2_tok:
+        import auth_v2 as _av2  # local import to avoid module-level cycles
+        claims = _av2.verify_token(v2_tok)
+        if claims:
+            request.state.auth_claims = claims
+            return await call_next(request)
+
+    # ── v1 token (legacy single-password HMAC) — backward compat for the
+    # existing web shell and mobile app until they're migrated to v2.
     token = (request.headers.get("x-auth-token")
              or request.query_params.get("token")
              or "")
     if _valid_token(token):
         return await call_next(request)
+
     # Fund paths may also be accessed with a valid fund token alone
     # (they perform their own _require_fund_token check internally).
     if path.startswith("/api/fund/"):
@@ -659,6 +685,7 @@ async def auth_middleware(request: Request, call_next):
                     or "")
         if _valid_fund_token(fund_tok):
             return await call_next(request)
+
     return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
@@ -761,6 +788,72 @@ def auth(req: AuthRequest):
     if hmac.compare_digest(req.password.strip(), _portfolio_password()):
         return {"token": _make_token(req.password.strip())}
     raise HTTPException(status_code=401, detail="Invalid password")
+
+
+# ---------------------------------------------------------------------------
+# v2 Auth — per-user email+password with role + scope claims
+# ---------------------------------------------------------------------------
+# Runs alongside /api/auth (which the current mobile app still uses).
+# Once the new web + mobile login flows ship, /api/auth can be deprecated.
+import auth_v2 as auth_v2_mod   # noqa: E402  — imported here to avoid top-of-file churn
+
+
+class AuthV2LoginRequest(BaseModel):
+    email:    str
+    password: str
+
+
+class AuthV2ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@app.post("/api/auth/v2/login")
+def auth_v2_login(req: AuthV2LoginRequest):
+    """Per-user email + password login. Returns a signed JWT-style token
+    carrying role + scope (fund memberships, managed accounts)."""
+    result = auth_v2_mod.login(req.email.strip(), req.password)
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return result
+
+
+@app.get("/api/auth/v2/me")
+def auth_v2_me(request: Request):
+    """Return the authenticated user's profile. Read from the
+    x-auth-v2-token header (or x-auth-token / token query param as
+    fallback so it composes with the existing middleware)."""
+    token = (request.headers.get("x-auth-v2-token")
+             or request.headers.get("x-auth-token")
+             or request.query_params.get("token")
+             or "")
+    user = auth_v2_mod.whoami(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user
+
+
+@app.post("/api/auth/v2/change-password")
+def auth_v2_change_password(request: Request, body: AuthV2ChangePasswordRequest):
+    """Change the current user's password. Requires a valid v2 token."""
+    token = (request.headers.get("x-auth-v2-token")
+             or request.headers.get("x-auth-token")
+             or request.query_params.get("token")
+             or "")
+    claims = auth_v2_mod.verify_token(token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    ok = auth_v2_mod.change_password(
+        lp_id=claims["lp_id"],
+        old_password=body.old_password,
+        new_password=body.new_password,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not change password — check old password and ensure new is ≥ 8 chars",
+        )
+    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # Background worker
