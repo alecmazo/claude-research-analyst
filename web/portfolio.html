@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="theme-color" content="#0A1628">
+<title>DGA Capital — Portfolio Access</title>
+<style>
+  :root {
+    --navy: #0A1628;
+    --navy-light: #132040;
+    --blue: #5BB8D4;
+    --blue-light: #84CCE3;
+    --blue-dark: #3E9AB8;
+    --green: #22C55E;
+    --red: #EF4444;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+    background: var(--navy);
+    color: white;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── LOGIN OVERLAY ─────────────────────────────────────────── */
+  #login-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--navy);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+  }
+
+  /* Animated radial blue glow */
+  #login-overlay::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 540px; height: 540px;
+    transform: translate(-50%, -58%);
+    background: radial-gradient(ellipse at center,
+      rgba(91,184,212,0.28) 0%,
+      rgba(91,184,212,0.10) 38%,
+      transparent 68%);
+    animation: loginGlow 4s ease-in-out infinite;
+    pointer-events: none;
+    border-radius: 50%;
+  }
+  @keyframes loginGlow {
+    0%, 100% { opacity: 0.6; transform: translate(-50%, -58%) scale(1);   }
+    50%       { opacity: 1;   transform: translate(-50%, -58%) scale(1.18); }
+  }
+
+  #login-card {
+    width: 100%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Logo */
+  .login-logo {
+    height: 110px;
+    width: auto;
+    background: white;
+    border-radius: 14px;
+    padding: 14px 26px;
+    margin-bottom: 28px;
+    object-fit: contain;
+    display: block;
+    box-shadow:
+      0 0 0 2.5px rgba(91,184,212,0.6),
+      0 10px 36px rgba(91,184,212,0.30),
+      0 4px 10px rgba(0,0,0,0.4);
+  }
+
+  #login-subtitle {
+    color: rgba(255,255,255,0.55);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+    text-align: center;
+  }
+
+  /* Inputs */
+  .login-input {
+    width: 100%;
+    height: 52px;
+    background: rgba(255,255,255,0.07);
+    border: 1.5px solid rgba(255,255,255,0.15);
+    border-radius: 11px;
+    color: white;
+    font-size: 15px;
+    text-align: center;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    margin-bottom: 12px;
+  }
+  .login-input::placeholder {
+    color: rgba(255,255,255,0.30);
+    letter-spacing: 0.5px;
+  }
+  .login-input:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(91,184,212,0.20);
+  }
+  #login-email { letter-spacing: 0.3px; text-align: left; padding: 0 18px; }
+  #login-password { letter-spacing: 4px; }
+
+  #login-btn {
+    width: 100%;
+    height: 56px;
+    background: linear-gradient(180deg, var(--blue-light) 0%, var(--blue) 50%, var(--blue-dark) 100%);
+    color: var(--navy);
+    border: none;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 2.5px;
+    cursor: pointer;
+    transition: filter 0.2s, transform 0.08s, box-shadow 0.2s;
+    margin-top: 6px;
+    margin-bottom: 18px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.50),
+      inset 0 -2px 0 rgba(0,0,0,0.18),
+      0 4px 18px rgba(91,184,212,0.40);
+  }
+  #login-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  #login-btn:active { transform: translateY(1px); }
+  #login-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  #login-error {
+    color: #ff6b6b;
+    font-size: 13px;
+    text-align: center;
+    min-height: 18px;
+    margin-bottom: 8px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  #login-hint {
+    color: rgba(255,255,255,0.30);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-align: center;
+    text-transform: uppercase;
+    line-height: 1.6;
+  }
+  #login-hint strong { color: var(--blue); font-weight: 700; }
+
+  /* Tiny spinner inside button while logging in */
+  .spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(10,22,40,0.3);
+    border-top-color: var(--navy);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="login-overlay">
+  <div id="login-card">
+
+    <img class="login-logo" src="/branding/dga_logo_small.png" alt="DGA Capital">
+
+    <div id="login-subtitle">Portfolio Access · Authentication Required</div>
+
+    <input
+      id="login-email"
+      class="login-input"
+      type="email"
+      placeholder="Email"
+      autocomplete="email"
+      autocapitalize="off"
+      autocorrect="off"
+      spellcheck="false">
+
+    <input
+      id="login-password"
+      class="login-input"
+      type="password"
+      placeholder="Password"
+      autocomplete="current-password">
+
+    <button id="login-btn">CONTINUE</button>
+
+    <div id="login-error"></div>
+
+    <div id="login-hint">
+      GP &amp; LP login · <strong>portfolio.dgacapital.com</strong>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Production login: POST email+password → /api/auth/v2/login ───────────
+  // On success, token is stored in sessionStorage (per-browser-session;
+  // closing the tab clears it, satisfying "enter password every time").
+  // User is then redirected to /gp or /lp based on the role in the response.
+
+  const $email   = document.getElementById('login-email');
+  const $pw      = document.getElementById('login-password');
+  const $btn     = document.getElementById('login-btn');
+  const $err     = document.getElementById('login-error');
+
+  // If a valid token already exists in sessionStorage, bypass login
+  // (browser refresh after login should not re-prompt).
+  (async function autoResume() {
+    const tok = sessionStorage.getItem('dga_v2_token');
+    if (!tok) return;
+    try {
+      const r = await fetch('/api/auth/v2/me', {
+        headers: { 'x-auth-v2-token': tok },
+      });
+      if (!r.ok) {
+        sessionStorage.removeItem('dga_v2_token');
+        return;
+      }
+      const me = await r.json();
+      window.location.href = me.role === 'gp' ? '/gp' : '/lp';
+    } catch (e) {
+      // Network error — leave login visible
+      sessionStorage.removeItem('dga_v2_token');
+    }
+  })();
+
+  async function handleLogin() {
+    const email = $email.value.trim();
+    const pw    = $pw.value;
+    if (!email || !pw) {
+      $err.textContent = 'Email and password are required.';
+      return;
+    }
+
+    $err.textContent = '';
+    $btn.disabled = true;
+    $btn.innerHTML = '<span class="spinner"></span>SIGNING IN…';
+
+    try {
+      const r = await fetch('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: pw }),
+      });
+
+      if (r.status === 401) {
+        $err.textContent = 'Invalid email or password.';
+        $pw.value = '';
+        $pw.focus();
+        shake();
+        return;
+      }
+      if (!r.ok) {
+        $err.textContent = `Server error (${r.status}) — try again.`;
+        return;
+      }
+
+      const data = await r.json();
+      sessionStorage.setItem('dga_v2_token', data.token);
+      // Stash a hint so the next page can render the user's name immediately
+      sessionStorage.setItem('dga_v2_user', JSON.stringify({
+        name:                 data.name,
+        email:                data.email,
+        role:                 data.role,
+        must_change_password: data.must_change_password,
+        fund_memberships:     data.fund_memberships || {},
+        managed_account_ids:  data.managed_account_ids || [],
+      }));
+
+      // Route to the appropriate dashboard
+      window.location.href = data.role === 'gp' ? '/gp' : '/lp';
+
+    } catch (err) {
+      console.error(err);
+      $err.textContent = 'Network error — check connection and retry.';
+    } finally {
+      $btn.disabled = false;
+      $btn.textContent = 'CONTINUE';
+    }
+  }
+
+  function shake() {
+    [$email, $pw].forEach(el => {
+      el.style.transition = 'transform 0.05s';
+      el.style.transform = 'translateX(-6px)';
+    });
+    setTimeout(() => [$email, $pw].forEach(el => { el.style.transform = 'translateX(6px)'; }), 50);
+    setTimeout(() => [$email, $pw].forEach(el => { el.style.transform = 'translateX(0)'; }), 100);
+  }
+
+  $btn.addEventListener('click', handleLogin);
+  $email.addEventListener('keypress', e => { if (e.key === 'Enter') $pw.focus(); });
+  $pw.addEventListener('keypress', e => { if (e.key === 'Enter') handleLogin(); });
+
+  setTimeout(() => $email.focus(), 80);
+</script>
+</body>
+</html>

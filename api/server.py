@@ -1020,9 +1020,38 @@ BRANDING_DIR = Path(__file__).resolve().parent.parent / "branding"
 
 
 @app.get("/")
-def root():
-    """Redirect to the web UI."""
+async def root():
+    """Serve the new production login page (portfolio.dgacapital.com entry point).
+
+    The legacy single-password app shell is still reachable at /app/ for
+    backward compat — only the root route has been re-pointed.
+    """
+    path = WEB_DIR / "portfolio.html"
+    if path.exists():
+        return FileResponse(str(path), headers=_NOCACHE)
+    # Fallback if portfolio.html missing (shouldn't happen post-deploy)
     return RedirectResponse(url="/app/")
+
+
+@app.get("/gp")
+async def serve_gp_dashboard():
+    """GP dashboard (Terminal Pro). Client-side auth-guard.js redirects
+    unauthenticated requests to /. Server doesn't enforce here — the
+    page is just static HTML; all sensitive data goes through /api/*
+    which has its own token check."""
+    path = WEB_DIR / "portfolio-gp.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="portfolio-gp.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
+
+
+@app.get("/lp")
+async def serve_lp_dashboard():
+    """LP dashboard. Same auth-guard pattern as /gp."""
+    path = WEB_DIR / "portfolio-lp.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="portfolio-lp.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
 
 
 # Hard-coded no-cache headers applied to every shell response.
