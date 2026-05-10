@@ -967,6 +967,26 @@ def info():
     return {"service": "DGA Research Analyst API", "status": "ok"}
 
 
+# ── Mockup preview routes — convenience short URLs ───────────────────────────
+# These serve the front-page redesign mockups from the project root so they're
+# accessible at /mockup-a.html (in addition to /app/mockup-a.html via the
+# StaticFiles mount). Used to preview proposed layouts before shipping.
+@app.get("/mockup-a.html")
+async def serve_mockup_a():
+    path = WEB_DIR / "mockup-a.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="mockup-a.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
+
+
+@app.get("/mockup-b.html")
+async def serve_mockup_b():
+    path = WEB_DIR / "mockup-b.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="mockup-b.html not found")
+    return FileResponse(str(path), headers=_NOCACHE)
+
+
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
