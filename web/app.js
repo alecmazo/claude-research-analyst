@@ -2263,10 +2263,14 @@ function _renderUnifiedYtdResult(data) {
       </div>
     </details>`;
 
-  // Render monthly chart after DOM is updated
+  // Render monthly chart in the YTD result box
   if (mc && mc.monthly && mc.monthly.length) {
     requestAnimationFrame(() => _drawMonthlyChart(mc));
   }
+
+  // Also refresh the dedicated Account History and Investment Balance sections
+  _renderAccountHistory(data.flows);
+  _renderAccountBalance(data.monthly_chart);
 
   // ── Live SPY YTD refresh ─────────────────────────────────────────────────
   // Fetch real-time SPY from the backend and overwrite the stored value that
@@ -2308,8 +2312,8 @@ function _renderUnifiedYtdResult(data) {
 }
 
 // ── Monthly YTD chart (Fidelity-style bar + balance line) ─────────────────
-function _drawMonthlyChart(mc) {
-  const canvas = document.getElementById('monthly-ytd-canvas');
+function _drawMonthlyChart(mc, canvasId = 'monthly-ytd-canvas', tooltipId = 'monthly-hover-tooltip') {
+  const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
@@ -2450,11 +2454,11 @@ function _drawMonthlyChart(mc) {
   // ── Mouse hover (desktop) ────────────────────────────────────────────────
   canvas.onmousemove = (e) => {
     const hit = _hitMonth(e.clientX, e.clientY);
-    if (!hit) { document.getElementById('monthly-hover-tooltip').style.display = 'none'; return; }
-    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect);
+    if (!hit) { document.getElementById(tooltipId).style.display = 'none'; return; }
+    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect, tooltipId);
   };
   canvas.onmouseleave = () => {
-    document.getElementById('monthly-hover-tooltip').style.display = 'none';
+    document.getElementById(tooltipId).style.display = 'none';
   };
 
   // ── Touch tap (mobile) ───────────────────────────────────────────────────
@@ -2462,24 +2466,21 @@ function _drawMonthlyChart(mc) {
     e.preventDefault();
     const t = e.touches[0];
     const hit = _hitMonth(t.clientX, t.clientY);
-    const tip = document.getElementById('monthly-hover-tooltip');
+    const tip = document.getElementById(tooltipId);
     if (!hit) { if (tip) tip.style.display = 'none'; return; }
-    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect);
+    _showMonthTooltip(hit.mData, hit.cx, hit.cy, hit.rect, tooltipId);
   };
-  canvas.ontouchend = (e) => {
-    // Keep tooltip visible briefly so user can read it, then hide on next tap elsewhere
-  };
-  // Tap outside canvas hides tooltip on mobile
+  canvas.ontouchend = () => { /* Keep tooltip visible on touch */ };
   document.addEventListener('touchstart', (e) => {
     if (e.target !== canvas) {
-      const tip = document.getElementById('monthly-hover-tooltip');
+      const tip = document.getElementById(tooltipId);
       if (tip) tip.style.display = 'none';
     }
   }, { passive: true });
 }
 
-function _showMonthTooltip(m, cx, cy, canvasRect) {
-  const tip = document.getElementById('monthly-hover-tooltip');
+function _showMonthTooltip(m, cx, cy, canvasRect, tooltipId = 'monthly-hover-tooltip') {
+  const tip = document.getElementById(tooltipId);
   if (!tip) return;
 
   const sign = v => v >= 0 ? '+' : '';
@@ -3311,16 +3312,25 @@ function showAccountDetailView(accountId, accountName) {
   if (listEl)   listEl.style.display   = 'none';
   if (detailEl) detailEl.style.display = '';
   if (titleEl)  titleEl.textContent    = accountName || 'Account';
-  if (rebalEl)  rebalEl.style.display  = 'none';  // rebalance hidden on detail
-  // Clear any previous account's YTD result before loading this one
+  if (rebalEl)  rebalEl.style.display  = 'none';
+
+  // Reset all sections to loading state for new account
+  const ovEl = document.getElementById('acct-overview-cards');
+  if (ovEl) ovEl.innerHTML = '<div class="fund-card-loading">Loading account…</div>';
+  const posWrap = document.getElementById('acct-positions-wrap');
+  if (posWrap) posWrap.innerHTML = '<div class="fund-card-loading">Loading positions…</div>';
+  const histWrap = document.getElementById('acct-history-wrap');
+  if (histWrap) histWrap.innerHTML = '<div class="fund-empty">Run YTD Calculation below to populate cash flow history.</div>';
+  const balWrap = document.getElementById('acct-balance-wrap');
+  if (balWrap) balWrap.innerHTML = '<div class="fund-table-wrap"><div class="fund-empty">Run YTD Calculation with Investment Balance CSV to see monthly chart.</div></div>';
   const _prevResultBox = document.getElementById('history-result-box');
   if (_prevResultBox) { _prevResultBox.style.display = 'none'; _prevResultBox.innerHTML = ''; }
-  // Always hide the Past YTD Runs card when switching accounts — user doesn't want
-  // to see another account's run history automatically. It stays hidden unless a new
-  // YTD calculation is triggered from this view.
   const _snapCard = document.getElementById('ytd-snapshots-card');
   if (_snapCard) _snapCard.style.display = 'none';
-  // Load account-specific YTD from DB (never spills across accounts)
+
+  // Load overview, positions, and cached YTD in parallel
+  _loadAccountOverview(accountId);
+  _loadAccountPositions(accountId);
   _rehydrateYtdFromDb(accountId);
 }
 
@@ -3330,19 +3340,228 @@ async function _rehydrateYtdFromDb(accountId) {
     const r = await fetch(`${API_BASE}/api/fund/account/${encodeURIComponent(accountId)}/ytd-cache`, {
       headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
     });
-    if (!r.ok) return;   // 404 = no cache yet, that's fine
+    if (!r.ok) return;
     const cache = await r.json();
     if (!cache.result_json) return;
     const data = JSON.parse(cache.result_json);
-    // Show the result box and render it
+    // Populate the 3 dedicated sections from the cached result
+    _renderAccountHistory(data.flows);
+    _renderAccountBalance(data.monthly_chart);
+    // Show the YTD summary result box
     const box = document.getElementById('history-result-box');
     if (box) {
       _renderUnifiedYtdResult(data);
       box.style.display = '';
     }
-    // Update localStorage fallback too
     try { localStorage.setItem('dga_ytd_return', String(cache.ytd_pct)); } catch (_) {}
   } catch (_) { /* non-fatal */ }
+}
+
+// ── Account overview (NAV, YTD, positions count, mgmt fee) ───────────────────
+async function _loadAccountOverview(accountId) {
+  const wrap = document.getElementById('acct-overview-cards');
+  if (!wrap) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/fund/overview?fund_id=${encodeURIComponent(accountId)}`, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (!r.ok) { wrap.innerHTML = ''; return; }
+    const ov = await r.json();
+    const gainColor = (ov.total_gain ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+    // Try to get YTD from cache
+    let ytdPct = null;
+    try {
+      const yc = await fetch(`${API_BASE}/api/fund/account/${encodeURIComponent(accountId)}/ytd-cache`, {
+        headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+      });
+      if (yc.ok) { const yj = await yc.json(); ytdPct = yj.ytd_pct ?? null; }
+    } catch (_) {}
+    const ytdColor = (ytdPct ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+    const ytdStr = ytdPct != null
+      ? `<div class="fund-stat-sub" style="color:${ytdColor}">${ytdPct >= 0 ? '+' : ''}${ytdPct.toFixed(2)}% YTD</div>`
+      : `<div class="fund-stat-sub" style="color:#4a6080">YTD not yet calculated</div>`;
+    wrap.innerHTML = `
+      <div class="fund-stat-grid">
+        <div class="fund-stat-card fund-stat-primary">
+          <div class="fund-stat-label">CURRENT VALUE</div>
+          <div class="fund-stat-value">${fmt$(ov.nav)}</div>
+          ${ytdStr}
+        </div>
+        <div class="fund-stat-card">
+          <div class="fund-stat-label">TOTAL GAIN</div>
+          <div class="fund-stat-value fund-stat-md" style="color:${gainColor}">${fmt$(ov.total_gain)}</div>
+          <div class="fund-stat-sub">since ${(ov.inception_date||'—').slice(0,4)}</div>
+        </div>
+        <div class="fund-stat-card">
+          <div class="fund-stat-label">POSITIONS</div>
+          <div class="fund-stat-value fund-stat-md">${ov.position_count ?? 0}</div>
+          <div class="fund-stat-sub">open holdings</div>
+        </div>
+        <div class="fund-stat-card">
+          <div class="fund-stat-label">MGMT FEE</div>
+          <div class="fund-stat-value fund-stat-sm">${((ov.mgmt_fee_pct ?? 0) * 100).toFixed(1)}%</div>
+          <div class="fund-stat-sub">annual advisory</div>
+        </div>
+      </div>`;
+  } catch (_) { if (wrap) wrap.innerHTML = ''; }
+}
+
+// ── Account positions (load from API + render table) ─────────────────────────
+async function _loadAccountPositions(accountId) {
+  const wrap = document.getElementById('acct-positions-wrap');
+  if (!wrap) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/fund/positions?fund_id=${encodeURIComponent(accountId)}`, {
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+    });
+    if (!r.ok) { wrap.innerHTML = '<div class="fund-empty">No positions yet.</div>'; return; }
+    const positions = await r.json();
+    _renderAccountPositions(positions);
+  } catch (e) {
+    wrap.innerHTML = `<div class="fund-empty" style="color:#e05a4e;">Could not load positions: ${e.message}</div>`;
+  }
+}
+
+function _renderAccountPositions(positions) {
+  const wrap = document.getElementById('acct-positions-wrap');
+  if (!wrap) return;
+  if (!positions || !positions.length) {
+    wrap.innerHTML = '<div class="fund-empty">No positions imported. Upload a Fidelity Positions CSV above.</div>';
+    return;
+  }
+  const totalMktVal = positions.reduce((s, p) => s + (p.market_value || 0), 0);
+  const totalCost   = positions.reduce((s, p) => s + (p.total_cost || 0), 0);
+  const totalGain   = positions.reduce((s, p) => s + (p.unrealized_gain || 0), 0);
+  const gainColor   = totalGain >= 0 ? '#4cc870' : '#e06050';
+
+  const rows = positions.map(p => {
+    const hasMkt = p.market_value != null;
+    const gc = (p.unrealized_gain || 0) >= 0 ? '#4cc870' : '#e06050';
+    return `<tr>
+      <td class="fund-td-ticker">${p.symbol}</td>
+      <td class="fund-td-name fund-td-dim">${p.name || ''}</td>
+      <td class="fund-td-num">${Number(p.total_qty).toLocaleString()}</td>
+      <td class="fund-td-num">${fmt$(p.avg_cost)}</td>
+      <td class="fund-td-num">${fmt$(p.total_cost)}</td>
+      <td class="fund-td-num" style="color:#c9a84c">${hasMkt ? fmt$(p.last_price) : '—'}</td>
+      <td class="fund-td-num fund-td-bold">${hasMkt ? fmt$(p.market_value) : '—'}</td>
+      <td class="fund-td-num" style="color:${gc}">${hasMkt ? fmt$(p.unrealized_gain) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const footer = totalMktVal > 0 ? `
+    <tr style="border-top:1px solid rgba(201,168,76,0.2);">
+      <td class="fund-td-ticker" style="color:#6a8aaa;font-size:10px;font-weight:600;">TOTAL</td>
+      <td></td><td></td><td></td>
+      <td class="fund-td-num fund-td-bold">${fmt$(totalCost)}</td>
+      <td></td>
+      <td class="fund-td-num fund-td-bold" style="color:#c9a84c">${fmt$(totalMktVal)}</td>
+      <td class="fund-td-num" style="color:${gainColor}">${fmt$(totalGain)}</td>
+    </tr>` : '';
+
+  wrap.innerHTML = `
+    <table class="fund-table">
+      <thead><tr>
+        <th class="fund-th">Symbol</th>
+        <th class="fund-th">Name</th>
+        <th class="fund-th fund-th-num">Qty</th>
+        <th class="fund-th fund-th-num">Avg Cost</th>
+        <th class="fund-th fund-th-num">Cost Basis</th>
+        <th class="fund-th fund-th-num" style="color:#c9a84c">Last Price</th>
+        <th class="fund-th fund-th-num" style="color:#c9a84c">Mkt Value</th>
+        <th class="fund-th fund-th-num">Unrealized G/L</th>
+      </tr></thead>
+      <tbody>${rows}${footer}</tbody>
+    </table>`;
+}
+
+// ── Account History (cash flows) ──────────────────────────────────────────────
+function _renderAccountHistory(flows) {
+  const wrap = document.getElementById('acct-history-wrap');
+  if (!wrap) return;
+  if (!flows || !flows.length) {
+    wrap.innerHTML = '<div class="fund-empty">No cash flows detected. Run YTD Calculation with Account History CSV.</div>';
+    return;
+  }
+  const rows = flows.map(f => {
+    const cls = f.amount >= 0 ? 'color:#4cc870' : 'color:#e06050';
+    const sign = f.amount >= 0 ? '+' : '−';
+    return `<tr>
+      <td class="fund-td-date">${f.date}</td>
+      <td class="fund-td-cat">${f.action}</td>
+      <td class="fund-td-num" style="${cls}">${sign}$${Math.round(Math.abs(f.amount)).toLocaleString('en-US',{maximumFractionDigits:0})}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <table class="fund-table">
+      <thead><tr>
+        <th class="fund-th">Date</th>
+        <th class="fund-th">Action</th>
+        <th class="fund-th fund-th-num">Amount</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ── Account Balance Chart (monthly) ──────────────────────────────────────────
+function _renderAccountBalance(mc) {
+  const wrap = document.getElementById('acct-balance-wrap');
+  if (!wrap) return;
+  if (!mc || !mc.monthly || !mc.monthly.length) {
+    wrap.innerHTML = '<div class="fund-table-wrap"><div class="fund-empty">No monthly balance data. Upload Investment Balance CSV in YTD Calculation.</div></div>';
+    return;
+  }
+  const accuracy = mc.has_exact_perf ? '' :
+    `<span class="monthly-chart-hint monthly-chart-estimated" title="Month-end balances estimated from yfinance. Upload a Fidelity Investment Balance CSV for exact values.">⚠ estimated</span>`;
+  wrap.innerHTML = `
+    <div class="monthly-chart-wrap">
+      <div class="monthly-chart-header">
+        <span class="section-label">MONTHLY PORTFOLIO BALANCE</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          ${accuracy}
+          <span class="monthly-chart-hint">Hover a month for breakdown</span>
+        </span>
+      </div>
+      <canvas id="acct-balance-canvas" width="1060" height="240" style="width:100%;height:240px"></canvas>
+      <div id="acct-balance-tooltip" class="monthly-tooltip" style="display:none"></div>
+    </div>`;
+  requestAnimationFrame(() => _drawMonthlyChart(mc, 'acct-balance-canvas', 'acct-balance-tooltip'));
+}
+
+// ── Account Positions upload ──────────────────────────────────────────────────
+function triggerAccountPositionsUpload() {
+  const el = document.getElementById('acct-positions-file-input');
+  if (el) el.click();
+}
+
+async function handleAccountPositionsUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('acct-positions-status');
+  if (statusEl) { statusEl.textContent = '⏳ Uploading positions…'; statusEl.className = 'fund-import-status fund-import-status-loading'; }
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    if (_activeAccountId) form.append('fund_id', _activeAccountId);
+    const r = await fetch(`${API_BASE}/api/fund/import-positions`, {
+      method: 'POST',
+      headers: { 'x-auth-token': getToken(), 'x-fund-token': getFundToken() },
+      body: form,
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    if (statusEl) {
+      const mkt = body.market_value_total != null ? ` · NAV ${fmt$(body.market_value_total)}` : '';
+      statusEl.textContent = `✓ Imported ${body.imported || 0} positions${mkt}`;
+      statusEl.className = 'fund-import-status fund-import-status-ok';
+    }
+    _loadAccountPositions(_activeAccountId);
+    _loadAccountOverview(_activeAccountId);
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = `✗ ${e.message}`; statusEl.className = 'fund-import-status fund-import-status-err'; }
+  }
+  input.value = '';
 }
 
 async function loadAccountList() {

@@ -430,6 +430,15 @@ export const api = {
     body:   JSON.stringify({ password }),
   }),
 
+  createFund: async (payload) => {
+    const ft = await getFundToken();
+    return request('/api/fund/admin/create', {
+      method:  'POST',
+      body:    JSON.stringify(payload),
+      headers: { 'x-fund-token': ft },
+    });
+  },
+
   fundList: async (fundType) => {
     const ft = await getFundToken();
     const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';

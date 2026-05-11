@@ -627,9 +627,12 @@
       </div>
 
       <!-- GP Waterfall -->
-      <div class="fund-section-row" style="margin-top:24px;">
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between; margin-top:24px;">
         <div class="label section-label">GP WATERFALL &amp; CARRY</div>
+        <button class="fund-import-btn" onclick="triggerAnnualNavUpload()">↑ Import Annual NAV Excel</button>
       </div>
+      <input type="file" id="annual-nav-file-input" accept=".csv,.xlsx,.xls" style="display:none;" onchange="handleAnnualNavUpload(this)">
+      <div id="fund-annual-nav-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
       <div id="fund-waterfall-wrap" class="fund-table-wrap">
         <div class="fund-card-loading">—</div>
       </div>
@@ -672,20 +675,53 @@
     </div>
 
     <!-- ════════════════════ ACCOUNT DETAIL VIEW ══════════════════════════ -->
-    <div id="account-detail-view" style="display:none;">
+    <div id="account-detail-view" style="display:none; padding-bottom:100px;">
 
-      <!-- Back nav + account name -->
-      <div class="acct-detail-nav">
-        <button class="btn-secondary acct-back-btn" onclick="showAccountListView()">← Accounts</button>
-        <h2 id="account-detail-name" class="acct-detail-title"></h2>
+      <!-- Back nav + account name (matches fund detail style) -->
+      <div class="fund-detail-nav">
+        <button class="fund-back-btn" onclick="showAccountListView()">← All Accounts</button>
+        <span id="account-detail-name" class="fund-detail-name"></span>
       </div>
 
-      <!-- ══════════════════════════════════════════════════════════════
-           SECTION 1 — LIVE PORTFOLIO YTD
-           ═══════════════════════════════════════════════════════════ -->
-      <div class="acct-section-header">
-        <span class="label">LIVE PORTFOLIO YTD</span>
-        <button id="history-upload-btn" class="fund-import-btn acct-calc-btn">⚡ Calculate</button>
+      <!-- Account Overview Stats -->
+      <div id="acct-overview-cards" class="fund-overview-cards">
+        <div class="fund-card-loading">Loading account…</div>
+      </div>
+
+      <!-- ══════ SECTION 1 — PORTFOLIO POSITIONS ══════════════════════════ -->
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between;">
+        <div class="label section-label">PORTFOLIO POSITIONS</div>
+        <button class="fund-import-btn" onclick="triggerAccountPositionsUpload()">↑ Import Positions CSV</button>
+      </div>
+      <input type="file" id="acct-positions-file-input" accept=".csv" style="display:none;" onchange="handleAccountPositionsUpload(this)">
+      <div id="acct-positions-status" class="fund-import-status" style="padding:0 16px 4px;"></div>
+      <div id="acct-positions-wrap" class="fund-table-wrap">
+        <div class="fund-empty">No positions imported yet. Upload a Fidelity Positions CSV above.</div>
+      </div>
+
+      <!-- ══════ SECTION 2 — ACCOUNT HISTORY ══════════════════════════════ -->
+      <div class="fund-section-row" style="display:flex; align-items:center; justify-content:space-between; margin-top:20px;">
+        <div class="label section-label">ACCOUNT HISTORY</div>
+        <span style="font-size:11px; color:#4a6080; letter-spacing:0.3px;">Cash flows from YTD calculation</span>
+      </div>
+      <div id="acct-history-wrap" class="fund-table-wrap">
+        <div class="fund-empty">Run YTD Calculation below to populate cash flow history.</div>
+      </div>
+
+      <!-- ══════ SECTION 3 — INVESTMENT BALANCE (Monthly Chart) ═══════════ -->
+      <div class="fund-section-row" style="margin-top:20px;">
+        <div class="label section-label">INVESTMENT BALANCE</div>
+      </div>
+      <div id="acct-balance-wrap" style="margin:0 16px 12px;">
+        <div class="fund-table-wrap">
+          <div class="fund-empty">Run YTD Calculation with Investment Balance CSV to see monthly chart.</div>
+        </div>
+      </div>
+
+      <!-- ══════ SECTION 4 — YTD PERFORMANCE ══════════════════════════════ -->
+      <div class="acct-section-header" style="margin-top:24px;">
+        <span class="label">YTD PERFORMANCE</span>
+        <button id="history-upload-btn" class="fund-import-btn acct-calc-btn">⚡ Calculate / Update</button>
       </div>
 
       <!-- Upload form — shown/hidden by the Calculate button in app.js -->
@@ -698,7 +734,7 @@
           <div class="history-field-row">
             <label class="history-field-label" for="history-begin-value">
               Jan 1 Portfolio Value ($)
-              <span class="history-optional-badge">optional w/ Income CSV</span>
+              <span class="history-optional-badge">optional w/ Balance CSV</span>
             </label>
             <input type="number" id="history-begin-value" class="fund-import-input"
                    placeholder="e.g. 3628719" min="1" step="1" style="margin-bottom:0;">
@@ -712,7 +748,7 @@
                    onchange="document.getElementById('history-positions-file-label').textContent='✓ '+(this.files[0]?.name||'↑ Choose File')">
           </div>
           <div class="history-field-row" style="margin-top:10px;">
-            <label class="history-field-label">Account History CSV (YTD transactions)</label>
+            <label class="history-field-label">Account History CSV (YTD cash flows)</label>
             <button class="fund-import-btn" onclick="document.getElementById('history-file').click()" style="display:block;margin-top:4px;">
               <span id="history-file-label">↑ Choose File</span>
             </button>
@@ -721,8 +757,8 @@
           </div>
           <div class="history-field-row" style="margin-top:10px;">
             <label class="history-field-label">
-              Investment Income Balance CSV
-              <span class="history-optional-badge">optional</span>
+              Investment Balance CSV
+              <span class="history-optional-badge">optional — enables monthly chart</span>
             </label>
             <button class="fund-import-btn" onclick="document.getElementById('history-monthly-perf-file').click()" style="display:block;margin-top:4px;">
               <span id="history-monthly-perf-file-label">↑ Choose File</span>
@@ -741,7 +777,7 @@
         <div id="ytd-snapshots-list"></div>
       </div>
 
-      <!-- YTD result renders inline here (never navigates away) -->
+      <!-- YTD summary result (MD return, SPY comparison, attribution) -->
       <div id="history-result-box" class="history-result-box" style="display:none;"></div>
 
     </div><!-- /account-detail-view -->

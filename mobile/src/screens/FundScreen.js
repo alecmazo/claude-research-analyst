@@ -90,11 +90,26 @@ export default function FundScreen({ navigation }) {
   const [ytdError,       setYtdError]       = useState(null);
   const [ytdSnapshots,   setYtdSnapshots]   = useState([]);
 
-  // ── Managed Account list (for YTD persistence) ──────────────────────────
+  // ── Managed Account list + detail state ─────────────────────────────────
   const [managedAccList,       setManagedAccList]       = useState([]);
   const [managedAccLoading,    setManagedAccLoading]    = useState(false);
   const [activeManagedAccId,   setActiveManagedAccId]   = useState(null);
   const [activeManagedAccName, setActiveManagedAccName] = useState('');
+  // Detail view state — null = show list, set = show detail for that account
+  const [acctDetailId,     setAcctDetailId]     = useState(null);
+  const [acctDetailName,   setAcctDetailName]   = useState('');
+  const [acctOverview,     setAcctOverview]     = useState(null);
+  const [acctPositions,    setAcctPositions]    = useState([]);
+  const [acctFlows,        setAcctFlows]        = useState([]);
+  const [acctLoadingDetail,setAcctLoadingDetail]= useState(false);
+  // Create account form state
+  const [showCreateAcct,  setShowCreateAcct]  = useState(false);
+  const [newAcctName,     setNewAcctName]     = useState('');
+  const [newAcctShort,    setNewAcctShort]    = useState('');
+  const [newAcctInception,setNewAcctInception]= useState('');
+  const [newAcctFee,      setNewAcctFee]      = useState('1');
+  const [createAcctBusy,  setCreateAcctBusy]  = useState(false);
+  const [createAcctStatus,setCreateAcctStatus]= useState(null);
 
   // ── Fund import state ────────────────────────────────────────────────────
   const [importPosStatus,  setImportPosStatus]  = useState(null);  // {ok, msg}
@@ -273,6 +288,63 @@ export default function FundScreen({ navigation }) {
       setManagedAccLoading(false);
     }
   }, [loadYtdCacheForAccount]); // eslint-disable-line
+
+  // ── Open managed account detail ──────────────────────────────────────────
+  const openAcctDetail = useCallback(async (acc) => {
+    setAcctDetailId(acc.id);
+    setAcctDetailName(acc.name || acc.short_name || 'Account');
+    setActiveManagedAccId(acc.id);
+    setActiveManagedAccName(acc.name || acc.short_name || 'Account');
+    setAcctOverview(null);
+    setAcctPositions([]);
+    setAcctFlows([]);
+    setYtdResult(null);
+    setAcctLoadingDetail(true);
+    try {
+      const [ov, pos, cache] = await Promise.allSettled([
+        api.fundOverview(acc.id),
+        api.fundPositions(acc.id),
+        api.getYtdCache(acc.id),
+      ]);
+      if (ov.status === 'fulfilled')  setAcctOverview(ov.value);
+      if (pos.status === 'fulfilled') setAcctPositions(Array.isArray(pos.value) ? pos.value : []);
+      if (cache.status === 'fulfilled' && cache.value?.result_json) {
+        const data = JSON.parse(cache.value.result_json);
+        setYtdResult(data);
+        setAcctFlows(data.flows || []);
+      }
+    } catch (_) {}
+    finally { setAcctLoadingDetail(false); }
+  }, []);
+
+  // ── Create managed account ───────────────────────────────────────────────
+  const submitCreateAccount = useCallback(async () => {
+    const name  = newAcctName.trim();
+    const short = newAcctShort.trim();
+    let inc     = newAcctInception.trim();
+    if (!name || !short || !inc) {
+      setCreateAcctStatus({ ok: false, msg: 'Name, short name, and inception date are required.' });
+      return;
+    }
+    if (/^\d{4}$/.test(inc)) inc = inc + '-01-01';
+    setCreateAcctBusy(true);
+    setCreateAcctStatus(null);
+    try {
+      await api.createFund({
+        name, short_name: short, inception_date: inc,
+        mgmt_fee_pct: parseFloat(newAcctFee || '1') / 100,
+        carry_pct: 0, hurdle_pct: 0, fund_type: 'managed_account',
+      });
+      setCreateAcctStatus({ ok: true, msg: `✓ Account "${name}" created!` });
+      setNewAcctName(''); setNewAcctShort(''); setNewAcctInception(''); setNewAcctFee('1');
+      setShowCreateAcct(false);
+      loadManagedAccList(null);
+    } catch (e) {
+      setCreateAcctStatus({ ok: false, msg: e.message });
+    } finally {
+      setCreateAcctBusy(false);
+    }
+  }, [newAcctName, newAcctShort, newAcctInception, newAcctFee, loadManagedAccList]);
 
   // ── File picker ──────────────────────────────────────────────────────────
   const pickCsv = async (setter) => {
@@ -768,322 +840,319 @@ export default function FundScreen({ navigation }) {
     );
   }
 
-  function MyPortfolioPanel() {
-    return (
-      <View style={s.portfolioBranch}>
+  // ── Account Detail View ──────────────────────────────────────────────────
+  function AccountDetailView() {
+    const ov = acctOverview;
+    const gainColor = (ov?.total_gain ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+    const ytdPct = ytdResult?.md_return_pct ?? null;
+    const ytdColor = (ytdPct ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
 
-        {/* ── Account selector ─────────────────────────────────────────── */}
+    return (
+      <View style={{ flex: 1 }}>
+        {/* Back nav */}
+        <View style={s.detailNavBar}>
+          <TouchableOpacity style={s.backBtn} onPress={() => { setAcctDetailId(null); setAcctDetailName(''); }}>
+            <Ionicons name="chevron-back" size={16} color={colors.gold} />
+            <Text style={s.backBtnText}>All Accounts</Text>
+          </TouchableOpacity>
+          <Text style={s.detailNavTitle} numberOfLines={1}>{acctDetailName}</Text>
+        </View>
+
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+          {acctLoadingDetail ? (
+            <View style={s.center}>
+              <ActivityIndicator color={colors.gold} size="large" />
+              <Text style={s.loadingText}>Loading account…</Text>
+            </View>
+          ) : (
+            <>
+              {/* ── Overview stats ─────────────────────────────────────── */}
+              {ov && (
+                <View style={s.acctOverviewGrid}>
+                  <View style={[s.acctStatCard, s.acctStatPrimary]}>
+                    <Text style={s.acctStatLabel}>CURRENT VALUE</Text>
+                    <Text style={s.acctStatValue}>{fmt$(ov.nav)}</Text>
+                    {ytdPct != null
+                      ? <Text style={[s.acctStatSub, { color: ytdColor }]}>{ytdPct >= 0 ? '+' : ''}{ytdPct.toFixed(2)}% YTD</Text>
+                      : <Text style={[s.acctStatSub, { color: '#4a6080' }]}>YTD not calculated</Text>}
+                  </View>
+                  <View style={s.acctStatCard}>
+                    <Text style={s.acctStatLabel}>TOTAL GAIN</Text>
+                    <Text style={[s.acctStatValue, { fontSize: 17, color: gainColor }]}>{fmt$(ov.total_gain)}</Text>
+                    <Text style={s.acctStatSub}>since {(ov.inception_date || '—').slice(0, 4)}</Text>
+                  </View>
+                  <View style={s.acctStatCard}>
+                    <Text style={s.acctStatLabel}>POSITIONS</Text>
+                    <Text style={[s.acctStatValue, { fontSize: 17 }]}>{ov.position_count ?? 0}</Text>
+                    <Text style={s.acctStatSub}>open holdings</Text>
+                  </View>
+                  <View style={s.acctStatCard}>
+                    <Text style={s.acctStatLabel}>MGMT FEE</Text>
+                    <Text style={[s.acctStatValue, { fontSize: 17 }]}>{((ov.mgmt_fee_pct ?? 0) * 100).toFixed(1)}%</Text>
+                    <Text style={s.acctStatSub}>annual advisory</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* ── Section 1: Portfolio Positions ─────────────────────── */}
+              <View style={s.fundSectionRow}>
+                <Text style={s.sectionLabel}>PORTFOLIO POSITIONS</Text>
+                <TouchableOpacity style={s.importBtn} onPress={() => pickCsv(async (f) => {
+                  try {
+                    await api.importPositions(acctDetailId, f.uri, f.name, f.mimeType);
+                    const pos = await api.fundPositions(acctDetailId);
+                    setAcctPositions(Array.isArray(pos) ? pos : []);
+                    const ov2 = await api.fundOverview(acctDetailId);
+                    setAcctOverview(ov2);
+                  } catch (e) { Alert.alert('Import failed', e.message); }
+                })}>
+                  <Ionicons name="cloud-upload-outline" size={13} color={colors.gold} />
+                  <Text style={s.importBtnText}>Import CSV</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={s.fundTableCard}>
+                {acctPositions.length === 0 ? (
+                  <Text style={s.emptyText}>No positions. Import a Fidelity Positions CSV above.</Text>
+                ) : (
+                  <>
+                    <View style={s.posTableHead}>
+                      <Text style={[s.posTh, { flex: 1.2, textAlign: 'left' }]}>SYMBOL</Text>
+                      <Text style={s.posTh}>QTY</Text>
+                      <Text style={s.posTh}>COST</Text>
+                      <Text style={[s.posTh, { color: colors.gold }]}>MKT VAL</Text>
+                      <Text style={s.posTh}>G/L</Text>
+                    </View>
+                    {acctPositions.map((p, i) => {
+                      const gc = (p.unrealized_gain ?? 0) >= 0 ? '#4cc870' : '#e06050';
+                      return (
+                        <View key={p.symbol + i} style={[s.posTableRow, i > 0 && s.posTableBorder]}>
+                          <View style={{ flex: 1.2 }}>
+                            <Text style={s.posTicker}>{p.symbol}</Text>
+                            <Text style={s.posName} numberOfLines={1}>{p.name || ''}</Text>
+                          </View>
+                          <Text style={s.posNum}>{Number(p.total_qty).toLocaleString()}</Text>
+                          <Text style={s.posNum}>{fmt$(p.total_cost)}</Text>
+                          <Text style={[s.posNum, { color: colors.gold }]}>{p.market_value != null ? fmt$(p.market_value) : '—'}</Text>
+                          <Text style={[s.posNum, { color: gc }]}>{p.unrealized_gain != null ? fmt$(p.unrealized_gain) : '—'}</Text>
+                        </View>
+                      );
+                    })}
+                    {/* Total row */}
+                    <View style={[s.posTableRow, s.posTotalRow]}>
+                      <Text style={[s.posTicker, { color: '#6a8aaa', fontSize: 10, flex: 1.2 }]}>TOTAL</Text>
+                      <Text style={s.posNum}></Text>
+                      <Text style={s.posNum}>{fmt$(acctPositions.reduce((a, p) => a + (p.total_cost || 0), 0))}</Text>
+                      <Text style={[s.posNum, { color: colors.gold, fontWeight: '700' }]}>{fmt$(acctPositions.reduce((a, p) => a + (p.market_value || 0), 0))}</Text>
+                      <Text style={[s.posNum, { color: acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0) >= 0 ? '#4cc870' : '#e06050', fontWeight: '700' }]}>
+                        {fmt$(acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0))}
+                      </Text>
+                    </View>
+                  </>
+                )}
+              </View>
+
+              {/* ── Section 2: Account History ─────────────────────────── */}
+              <View style={s.fundSectionRow}>
+                <Text style={s.sectionLabel}>ACCOUNT HISTORY</Text>
+                <Text style={[s.importBtnText, { color: '#4a6080', fontSize: 10 }]}>from YTD calculation</Text>
+              </View>
+              <View style={s.fundTableCard}>
+                {acctFlows.length === 0 ? (
+                  <Text style={s.emptyText}>No cash flows. Run YTD Calculation below.</Text>
+                ) : (
+                  acctFlows.map((f, i) => {
+                    const cls = f.amount >= 0 ? '#4cc870' : '#e06050';
+                    const sign = f.amount >= 0 ? '+' : '−';
+                    return (
+                      <View key={i} style={[s.flowRow, i > 0 && s.flowBorder]}>
+                        <Text style={s.flowDate}>{f.date}</Text>
+                        <Text style={s.flowAction} numberOfLines={1}>{f.action}</Text>
+                        <Text style={[s.flowAmt, { color: cls }]}>
+                          {sign}${Math.round(Math.abs(f.amount)).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </Text>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+
+              {/* ── Section 3: Investment Balance ─────────────────────────── */}
+              {ytdResult && (
+                <View style={s.ytdResultCard}>
+                  <Text style={s.ytdSectionLabel}>INVESTMENT BALANCE · YTD PERFORMANCE</Text>
+                  <View style={s.ytdMetricsRow}>
+                    <View style={s.ytdMetric}>
+                      <Text style={s.ytdMetricKey}>MD RETURN</Text>
+                      <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.md_return_pct) }]}>
+                        {fmtPct(ytdResult.md_return_pct, 2)}
+                      </Text>
+                    </View>
+                    {ytdResult.twrr_return_pct != null && (
+                      <View style={s.ytdMetric}>
+                        <Text style={s.ytdMetricKey}>TWRR</Text>
+                        <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.twrr_return_pct) }]}>
+                          {fmtPct(ytdResult.twrr_return_pct, 2)}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={s.ytdMetric}>
+                      <Text style={s.ytdMetricKey}>TOTAL GAIN</Text>
+                      <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.total_dollar_gain) }]}>
+                        {fmt$0(ytdResult.total_dollar_gain)}
+                      </Text>
+                    </View>
+                  </View>
+                  <SpyComparisonCard portfolioPct={ytdResult.md_return_pct} />
+                  {(ytdResult.attribution || []).length > 0 && (
+                    <YtdAttribView items={ytdResult.attribution} portfolioReturn={ytdResult.md_return_pct ?? 0} />
+                  )}
+                </View>
+              )}
+
+              {/* ── Section 4: YTD Calculation ─────────────────────────── */}
+              <View style={[s.ytdCard, { marginTop: 4 }]}>
+                <View style={s.ytdCardHead}>
+                  <Text style={s.ytdCardTitle}>COMPUTE YTD</Text>
+                  <View style={s.ytdBadge}><Text style={s.ytdBadgeText}>MODIFIED DIETZ</Text></View>
+                </View>
+                <Text style={s.ytdCardDesc}>
+                  Upload Fidelity CSVs to compute cash-flow adjusted returns with per-stock attribution.
+                </Text>
+                <FileRow label="Positions CSV" file={ytdPosFile} onPick={() => pickCsv(setYtdPosFile)} required />
+                <FileRow label="Account History CSV" file={ytdActFile} onPick={() => pickCsv(setYtdActFile)} required />
+                <FileRow label="Investment Balance CSV" file={ytdMonthlyFile} onPick={() => pickCsv(setYtdMonthlyFile)} />
+                <View style={s.beginValueRow}>
+                  <Text style={s.beginValueLabel}>Jan 1 Value (optional if balance CSV provided)</Text>
+                  <TextInput
+                    style={s.beginValueInput}
+                    value={ytdBeginValue}
+                    onChangeText={setYtdBeginValue}
+                    placeholder="e.g. 250000"
+                    placeholderTextColor="#3a5070"
+                    keyboardType="numeric"
+                  />
+                </View>
+                {ytdError ? <Text style={s.ytdError}>{ytdError}</Text> : null}
+                <TouchableOpacity
+                  style={[s.ytdBtn, ytdSubmitting && { opacity: 0.6 }]}
+                  onPress={submitYtd}
+                  disabled={ytdSubmitting}
+                >
+                  {ytdSubmitting
+                    ? <ActivityIndicator color={colors.navy} size="small" />
+                    : <Text style={s.ytdBtnText}>Calculate YTD &amp; Attribution</Text>}
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── Account List View ─────────────────────────────────────────────────────
+  function AccountListView() {
+    return (
+      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
         {managedAccLoading ? (
-          <ActivityIndicator color={colors.gold} style={{ marginBottom: 12 }} />
-        ) : managedAccList.length > 1 ? (
-          <View style={s.accSelectorRow}>
-            {managedAccList.map(acc => (
+          <View style={s.center}>
+            <ActivityIndicator color={colors.gold} size="large" />
+            <Text style={s.loadingText}>Loading accounts…</Text>
+          </View>
+        ) : managedAccList.length === 0 ? (
+          <View style={s.fundListEmpty}>
+            <Text style={s.fundListEmptyText}>No managed accounts yet.</Text>
+            <Text style={s.fundListEmptyHint}>Use + Create New Account below to add one.</Text>
+          </View>
+        ) : (
+          managedAccList.map(acc => {
+            let ytdVal = acc.ytd_pct ?? null;
+            const ytdColor2 = (ytdVal ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+            return (
               <TouchableOpacity
                 key={acc.id}
-                style={[s.accSelectorBtn, activeManagedAccId === acc.id && s.accSelectorBtnActive]}
-                onPress={() => {
-                  setActiveManagedAccId(acc.id);
-                  setSpyLive(null);
-                  setActiveManagedAccName(acc.name || acc.short_name || 'Account');
-                  setYtdResult(null);
-                  loadYtdCacheForAccount(acc.id);
-                }}
+                style={s.fundSummaryCard}
+                onPress={() => openAcctDetail(acc)}
+                activeOpacity={0.8}
               >
-                <Text
-                  style={[s.accSelectorText, activeManagedAccId === acc.id && s.accSelectorTextActive]}
-                  numberOfLines={1}
-                >
-                  {acc.short_name || acc.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        ) : activeManagedAccName ? (
-          <View style={s.accNameBadge}>
-            <Text style={s.accNameBadgeText}>{activeManagedAccName}</Text>
-          </View>
-        ) : null}
-
-        {/* ── YTD Result card ───────────────────────────────────────────── */}
-        {ytdResult && (
-          <View style={s.ytdResultCard}>
-            <Text style={s.ytdSectionLabel}>LATEST RUN</Text>
-
-            {/* Return metrics */}
-            <View style={s.ytdMetricsRow}>
-              <View style={s.ytdMetric}>
-                <Text style={s.ytdMetricKey}>YTD RETURN</Text>
-                <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.md_return_pct) }]}>
-                  {fmtPct(ytdResult.md_return_pct, 2)}
-                </Text>
-              </View>
-              {ytdResult.twrr_return_pct != null && (
-                <View style={s.ytdMetric}>
-                  <Text style={s.ytdMetricKey}>TWRR</Text>
-                  <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.twrr_return_pct) }]}>
-                    {fmtPct(ytdResult.twrr_return_pct, 2)}
-                  </Text>
-                </View>
-              )}
-              <View style={s.ytdMetric}>
-                <Text style={s.ytdMetricKey}>TOTAL GAIN</Text>
-                <Text style={[s.ytdMetricVal, { color: pctColor(ytdResult.total_dollar_gain) }]}>
-                  {fmt$0(ytdResult.total_dollar_gain)}
-                </Text>
-              </View>
-            </View>
-
-            {/* S&P 500 comparison — sits right after the MD return metrics */}
-            <SpyComparisonCard portfolioPct={ytdResult.md_return_pct} />
-
-            {ytdResult.net_flow != null && (
-              <Text style={s.ytdSubNote}>
-                Net flow: {ytdResult.net_flow >= 0 ? '+' : ''}{fmt$0(ytdResult.net_flow)}
-                {ytdResult.begin_value ? `  ·  Begin: ${fmt$0(ytdResult.begin_value)}` : ''}
-              </Text>
-            )}
-
-            {/* Attribution tornado */}
-            {(ytdResult.attribution || []).length > 0 && (
-              <YtdAttribView
-                items={ytdResult.attribution}
-                portfolioReturn={ytdResult.md_return_pct ?? 0}
-              />
-            )}
-
-            {/* Attribution table */}
-            {(ytdResult.attribution || []).length > 0 && (
-              <>
-                <Text style={[s.ytdSectionLabel, { marginTop: 14 }]}>
-                  POSITIONS · sorted by contribution
-                </Text>
-                <View style={s.attrTableHead}>
-                  <Text style={[s.attrTh, { flex: 1.3, textAlign: 'left' }]}>Ticker</Text>
-                  <Text style={s.attrTh}>$ Gain</Text>
-                  <Text style={s.attrTh}>Contrib</Text>
-                </View>
-                {(ytdResult.attribution || [])
-                  .slice()
-                  .sort((a, b) => (b.contribution_pct ?? -999) - (a.contribution_pct ?? -999))
-                  .map((a) => (
-                    <YtdHoldingRow key={a.ticker} a={a} />
-                  ))}
-              </>
-            )}
-          </View>
-        )}
-
-        {/* ── Past runs card ────────────────────────────────────────────── */}
-        {ytdSnapshots.length > 0 && (
-          <View style={s.snapsCard}>
-            <Text style={s.ytdSectionLabel}>PAST RUNS ({ytdSnapshots.length})</Text>
-            {ytdSnapshots.map((snap, i) => (
-              <View key={snap.id} style={[s.snapRow, i > 0 && s.snapRowBorder]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.snapDate}>{snap.uploaded_at?.slice(0, 16).replace('T', '  ')}</Text>
-                  <Text style={s.snapMeta}>
-                    {snap.positions_count} positions
-                    {snap.anchor_date ? `  ·  from ${snap.anchor_date}` : ''}
-                  </Text>
-                </View>
-                <View style={s.snapRight}>
-                  <Text style={[s.snapReturn, { color: pctColor(snap.md_return_pct) }]}>
-                    {fmtPct(snap.md_return_pct, 2)}
-                  </Text>
-                  <TouchableOpacity
-                    style={s.snapDeleteBtn}
-                    onPress={() => deleteSnapshot(snap.id)}
-                  >
-                    <Text style={s.snapDeleteText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* ── Run Rebalance section ─────────────────────────────────────── */}
-        <View style={s.rebalCard}>
-          <Text style={s.rebalCardTitle}>RUN REBALANCE</Text>
-          <Text style={s.rebalCardDesc}>
-            Upload a portfolio CSV/XLSX (Ticker + Weight columns) to run the AI rebalance analysis.
-          </Text>
-
-          {/* File picker */}
-          <TouchableOpacity style={s.rebalFilePicker} onPress={pickRebalFile} activeOpacity={0.8}>
-            <Ionicons name="document-attach-outline" size={20} color={colors.gold} />
-            <Text style={s.rebalFilePickerText} numberOfLines={1}>
-              {rebalFile ? rebalFile.name : 'Choose Portfolio File'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Toggles */}
-          <View style={s.rebalToggleRow}>
-            <Text style={s.rebalToggleLabel}>Reuse cached reports (faster)</Text>
-            <Switch
-              value={rebalReuseCache}
-              onValueChange={setRebalReuseCache}
-              trackColor={{ false: '#1e3a5f', true: colors.gold }}
-              thumbColor="#fff"
-            />
-          </View>
-          <View style={s.rebalToggleRow}>
-            <Text style={s.rebalToggleLabel}>Generate Gamma Presentations</Text>
-            <Switch
-              value={rebalGenerateGamma}
-              onValueChange={setRebalGenerateGamma}
-              trackColor={{ false: '#1e3a5f', true: colors.gold }}
-              thumbColor="#fff"
-            />
-          </View>
-
-          {/* Run button */}
-          <TouchableOpacity
-            style={[s.rebalRunBtn, (!rebalFile || rebalSubmitting ||
-              (rebalJob && rebalJob.status !== 'done' && rebalJob.status !== 'failed'))
-              && { opacity: 0.5 }]}
-            onPress={startRebal}
-            disabled={!rebalFile || rebalSubmitting ||
-              (rebalJob && rebalJob.status !== 'done' && rebalJob.status !== 'failed')}
-          >
-            {rebalSubmitting
-              ? <ActivityIndicator color={colors.navy} size="small" />
-              : <Text style={s.rebalRunBtnText}>RUN REBALANCE</Text>}
-          </TouchableOpacity>
-
-          {/* Progress / result */}
-          {rebalJob && (
-            <View style={{ marginTop: 12 }}>
-              {(rebalJob.status === 'queued' || rebalJob.status === 'running') && rebalJob.progress ? (
-                <View>
-                  <View style={s.rebalProgressTrack}>
-                    <View style={[s.rebalProgressFill, { width: `${Math.round((rebalJob.progress.pct ?? 0) * 100)}%` }]} />
+                <View style={s.fundSummaryHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.fundSummaryName}>{acc.name}</Text>
+                    <Text style={s.fundSummaryShort}>{acc.short_name}  ·  est. {(acc.inception_date || '').slice(0, 4)}</Text>
                   </View>
-                  <Text style={s.rebalProgressLabel} numberOfLines={1}>
-                    {rebalJob.progress.label || 'Analyzing…'}
-                  </Text>
+                  <View style={s.fundSummaryStatusBadge}>
+                    <Text style={s.fundSummaryStatusText}>ACTIVE</Text>
+                  </View>
                 </View>
-              ) : null}
-              {rebalJob.status === 'done' && (
-                <>
-                  <Text style={s.rebalStatusDone}>✅ Done — {rebalJob.n_tickers} tickers analyzed</Text>
-                  <RebalResultTable result={rebalJob.result} inputWeights={rebalJob.input_weights} />
-                  <TouchableOpacity style={[s.rebalRunBtn, { marginTop: 10 }]} onPress={openRebalDownload}>
-                    <Ionicons name="document-outline" size={16} color={colors.navy} style={{ marginRight: 6 }} />
-                    <Text style={s.rebalRunBtnText}>Download DGA-portfolio.xlsx</Text>
-                  </TouchableOpacity>
-                </>
+                <View style={s.fundSummaryMetrics}>
+                  <View style={s.fundSummaryMetric}>
+                    <Text style={s.fundSummaryMetricLabel}>VALUE</Text>
+                    <Text style={s.fundSummaryMetricValue}>{fmt$(acc.nav)}</Text>
+                  </View>
+                  <View style={s.fundSummaryMetric}>
+                    <Text style={s.fundSummaryMetricLabel}>YTD</Text>
+                    <Text style={[s.fundSummaryMetricValue, { color: ytdColor2 }]}>
+                      {ytdVal != null ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}%` : '—'}
+                    </Text>
+                  </View>
+                  <View style={s.fundSummaryMetric}>
+                    <Text style={s.fundSummaryMetricLabel}>POS</Text>
+                    <Text style={s.fundSummaryMetricValue}>{acc.position_count || 0}</Text>
+                  </View>
+                  <View style={s.fundSummaryMetric}>
+                    <Text style={s.fundSummaryMetricLabel}>FEE</Text>
+                    <Text style={s.fundSummaryMetricValue}>{((acc.mgmt_fee_pct || 0) * 100).toFixed(1)}%</Text>
+                  </View>
+                </View>
+                <Text style={s.fundSummaryCTA}>View Details →</Text>
+              </TouchableOpacity>
+            );
+          })
+        )}
+
+        {/* Create New Account form */}
+        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
+          {!showCreateAcct ? (
+            <TouchableOpacity style={s.importBtn2} onPress={() => setShowCreateAcct(true)}>
+              <Text style={s.importBtn2Text}>+ Create New Account</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={s.createFundForm}>
+              <Text style={s.createFundTitle}>New Managed Account</Text>
+              <TextInput style={s.createFundInput} value={newAcctName} onChangeText={setNewAcctName}
+                placeholder="Account Name (e.g. Smith Family Brokerage)" placeholderTextColor="#3a5070" />
+              <TextInput style={s.createFundInput} value={newAcctShort} onChangeText={setNewAcctShort}
+                placeholder="Short Name (e.g. SMITH-1)" placeholderTextColor="#3a5070" />
+              <TextInput style={s.createFundInput} value={newAcctInception} onChangeText={setNewAcctInception}
+                placeholder="Inception Date (YYYY-MM-DD or YYYY)" placeholderTextColor="#3a5070" />
+              <TextInput style={s.createFundInput} value={newAcctFee} onChangeText={setNewAcctFee}
+                placeholder="Mgmt Fee % (e.g. 1)" placeholderTextColor="#3a5070" keyboardType="numeric" />
+              {createAcctStatus && (
+                <Text style={{ color: createAcctStatus.ok ? '#4cc870' : '#e05a4e', fontSize: 12, marginBottom: 8 }}>
+                  {createAcctStatus.msg}
+                </Text>
               )}
-              {rebalJob.status === 'failed' && (
-                <Text style={s.rebalStatusFail}>❌ Failed</Text>
-              )}
-              {rebalError && <Text style={s.rebalStatusFail}>{rebalError}</Text>}
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={[s.importBtn2, { flex: 1, backgroundColor: colors.gold }]}
+                  onPress={submitCreateAccount} disabled={createAcctBusy}>
+                  {createAcctBusy
+                    ? <ActivityIndicator color={colors.navy} size="small" />
+                    : <Text style={[s.importBtn2Text, { color: colors.navy }]}>Create Account</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.importBtn2, { flex: 1 }]} onPress={() => { setShowCreateAcct(false); setCreateAcctStatus(null); }}>
+                  <Text style={s.importBtn2Text}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
         </View>
-
-        {/* ── Last Rebalance Run (persisted) ────────────────────────────── */}
-        {lastRebal && !rebalJob && (
-          <View style={s.rebalLastCard}>
-            <Text style={s.rebalCardTitle}>LAST PORTFOLIO RUN</Text>
-            <Text style={s.rebalLastMeta}>
-              {lastRebal.completed_at ? new Date(lastRebal.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
-              {lastRebal.n_tickers ? `  ·  ${lastRebal.n_tickers} tickers` : ''}
-            </Text>
-            {/* Strategy result table from last run */}
-            <RebalResultTable result={lastRebal.result} inputWeights={lastRebal.input_weights} />
-            <View style={[s.rebalLastActions, { marginTop: 10 }]}>
-              <TouchableOpacity
-                style={[s.rebalRunBtn, { flex: 1 }]}
-                onPress={() => navigation.navigate('PortfolioSummary')}
-              >
-                <Ionicons name="document-text-outline" size={15} color={colors.navy} style={{ marginRight: 5 }} />
-                <Text style={s.rebalRunBtnText}>View Summary</Text>
-              </TouchableOpacity>
-              {lastRebal.job_id && (
-                <TouchableOpacity
-                  style={[s.rebalRunBtn, { flex: 1 }]}
-                  onPress={openLastRebalDownload}
-                >
-                  <Ionicons name="download-outline" size={15} color={colors.navy} style={{ marginRight: 5 }} />
-                  <Text style={s.rebalRunBtnText}>Download xlsx</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        )}
-
-        {/* ── Quarterly Reports ─────────────────────────────────────────── */}
-        <View style={s.portfolioCard}>
-          <Text style={s.portfolioCardTitle}>📧  Quarterly Reports</Text>
-          <Text style={s.portfolioCardDesc}>
-            Email performance reports to investors.{'\n'}
-            (Available once LP email addresses are configured.)
-          </Text>
-          <View style={[s.portfolioBtn, { backgroundColor: 'rgba(91,184,212,0.1)', borderColor: 'rgba(91,184,212,0.3)' }]}>
-            <Text style={[s.portfolioBtnText, { color: '#6a8aaa' }]}>Coming soon</Text>
-          </View>
-        </View>
-
-        {/* ── YTD Upload card (last — upload/compute is a secondary action) ── */}
-        <View style={[s.ytdCard, { marginTop: 4 }]}>
-          <View style={s.ytdCardHead}>
-            <Text style={s.ytdCardTitle}>COMPUTE YTD</Text>
-            <View style={s.ytdBadge}>
-              <Text style={s.ytdBadgeText}>MODIFIED DIETZ</Text>
-            </View>
-          </View>
-          <Text style={s.ytdCardDesc}>
-            Upload Fidelity CSVs to compute cash-flow adjusted returns with per-stock attribution.
-          </Text>
-
-          <FileRow
-            label="Account Positions"
-            file={ytdPosFile}
-            onPick={() => pickCsv(setYtdPosFile)}
-            required
-          />
-          <FileRow
-            label="Account Activity"
-            file={ytdActFile}
-            onPick={() => pickCsv(setYtdActFile)}
-            required
-          />
-          <FileRow
-            label="Monthly Performance"
-            file={ytdMonthlyFile}
-            onPick={() => pickCsv(setYtdMonthlyFile)}
-          />
-
-          <View style={s.beginValueRow}>
-            <Text style={s.beginValueLabel}>Jan 1 Value (optional if monthly CSV provided)</Text>
-            <TextInput
-              style={s.beginValueInput}
-              value={ytdBeginValue}
-              onChangeText={setYtdBeginValue}
-              placeholder="e.g. 250000"
-              placeholderTextColor="#3a5070"
-              keyboardType="numeric"
-            />
-          </View>
-
-          {ytdError ? (
-            <Text style={s.ytdError}>{ytdError}</Text>
-          ) : null}
-
-          <TouchableOpacity
-            style={[s.ytdBtn, ytdSubmitting && { opacity: 0.6 }]}
-            onPress={submitYtd}
-            disabled={ytdSubmitting}
-          >
-            {ytdSubmitting
-              ? <ActivityIndicator color={colors.navy} size="small" />
-              : <Text style={s.ytdBtnText}>Compute YTD Return + Attribution</Text>}
-          </TouchableOpacity>
-        </View>
-
-      </View>
+      </ScrollView>
     );
+  }
+
+  function MyPortfolioPanel() {
+    if (acctDetailId) return <AccountDetailView />;
+    return <AccountListView />;
   }
 
   // ── Rebalanced branch panel ──────────────────────────────────────────────
@@ -1827,8 +1896,74 @@ const s = StyleSheet.create({
   subTabText:       { fontSize: 10, fontWeight: '600', color: '#4a6080', letterSpacing: 0.2 },
   subTabTextActive: { color: colors.gold },
 
+  // Account overview stats grid (matches fund overview style)
+  acctOverviewGrid:   { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, paddingTop: 12, gap: 8 },
+  acctStatCard:       { flex: 1, minWidth: '45%', backgroundColor: '#0e1e35', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.15)' },
+  acctStatPrimary:    { backgroundColor: '#11223d', borderColor: 'rgba(201,168,76,0.35)' },
+  acctStatLabel:      { fontSize: 9, fontWeight: '700', letterSpacing: 1.2, color: '#4a6080', marginBottom: 4 },
+  acctStatValue:      { fontSize: 20, fontWeight: '800', color: '#e8f0f8', letterSpacing: -0.5 },
+  acctStatSub:        { fontSize: 10, color: '#4a6080', marginTop: 2 },
+
+  // Section row header (label + button)
+  fundSectionRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 6 },
+  sectionLabel:       { fontSize: 10, fontWeight: '800', letterSpacing: 1.5, color: '#4a6080' },
+
+  // Import button (small, inline)
+  importBtn:          { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(201,168,76,0.08)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
+  importBtnText:      { fontSize: 11, fontWeight: '700', color: colors.gold },
+
+  // Full-width import button
+  importBtn2:         { backgroundColor: 'rgba(201,168,76,0.08)', borderRadius: 8, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)', marginBottom: 8 },
+  importBtn2Text:     { fontSize: 12, fontWeight: '700', color: colors.gold, letterSpacing: 0.5 },
+
+  // Table card container
+  fundTableCard:      { marginHorizontal: 12, backgroundColor: '#0e1e35', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(201,168,76,0.1)', overflow: 'hidden', marginBottom: 4 },
+
+  // Positions table
+  posTableHead:       { flexDirection: 'row', paddingHorizontal: 10, paddingVertical: 7, backgroundColor: '#081526', borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.1)' },
+  posTh:              { flex: 1, fontSize: 8, fontWeight: '800', color: '#3a5070', letterSpacing: 0.8, textAlign: 'right' },
+  posTableRow:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8 },
+  posTableBorder:     { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)' },
+  posTotalRow:        { borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,0.2)', backgroundColor: 'rgba(201,168,76,0.04)' },
+  posTicker:          { fontSize: 12, fontWeight: '700', color: '#e8f0f8', letterSpacing: 0.5 },
+  posName:            { fontSize: 9, color: '#3a5070' },
+  posNum:             { flex: 1, fontSize: 11, fontWeight: '600', color: '#8090a8', textAlign: 'right' },
+
+  // Account history / cash flow table
+  flowRow:            { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, gap: 8 },
+  flowBorder:         { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)' },
+  flowDate:           { fontSize: 11, color: '#6a8aaa', width: 72 },
+  flowAction:         { flex: 1, fontSize: 11, color: '#a0b0c8' },
+  flowAmt:            { fontSize: 12, fontWeight: '700', textAlign: 'right' },
+
+  // Fund / account summary cards (list view)
+  fundSummaryCard:    { marginHorizontal: 12, marginBottom: 10, backgroundColor: '#0e1e35', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', overflow: 'hidden' },
+  fundSummaryHeader:  { flexDirection: 'row', alignItems: 'center', padding: 14, paddingBottom: 8 },
+  fundSummaryName:    { fontSize: 14, fontWeight: '700', color: '#e8f0f8', marginBottom: 2 },
+  fundSummaryShort:   { fontSize: 11, color: '#4a6080' },
+  fundSummaryStatusBadge: { backgroundColor: 'rgba(74,200,112,0.12)', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(74,200,112,0.3)' },
+  fundSummaryStatusText:  { fontSize: 9, fontWeight: '800', color: '#4cc870', letterSpacing: 0.8 },
+  fundSummaryMetrics: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 14, paddingVertical: 10 },
+  fundSummaryMetric:  { flex: 1, alignItems: 'center' },
+  fundSummaryMetricLabel: { fontSize: 8, fontWeight: '700', color: '#3a5070', letterSpacing: 0.8, marginBottom: 3 },
+  fundSummaryMetricValue: { fontSize: 13, fontWeight: '700', color: '#e8f0f8' },
+  fundSummaryCTA:     { fontSize: 11, fontWeight: '700', color: colors.gold, textAlign: 'right', paddingHorizontal: 14, paddingBottom: 10 },
+
+  // Fund list empty state
+  fundListEmpty:      { alignItems: 'center', paddingTop: 40, paddingHorizontal: 24 },
+  fundListEmptyText:  { fontSize: 16, fontWeight: '700', color: '#4a6080', marginBottom: 6 },
+  fundListEmptyHint:  { fontSize: 12, color: '#3a5070', textAlign: 'center' },
+
+  // Create account form
+  createFundForm:     { backgroundColor: '#0e1e35', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', marginBottom: 12 },
+  createFundTitle:    { fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 1, marginBottom: 10 },
+  createFundInput:    { backgroundColor: '#081526', borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, color: '#e8f0f8', marginBottom: 8 },
+
+  // Detail nav title
+  detailNavTitle:     { flex: 1, fontSize: 13, fontWeight: '700', color: '#e8f0f8', textAlign: 'center', marginRight: 80 },
+
   // My Portfolio branch container
-  portfolioBranch: { padding: 14 },
+  portfolioBranch: { flex: 1 },
 
   // YTD Upload card
   ytdCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.25)' },
