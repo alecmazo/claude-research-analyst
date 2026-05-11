@@ -739,7 +739,7 @@
       $stats.innerHTML = ''; $hold.innerHTML = ''; return;
     }
 
-    const totalFundNav = funds.reduce((s, f) => s + (f.fund_nav || 0), 0);
+    const totalFundNav = funds.reduce((s, f) => s + (f.effective_nav || 0), 0);
     const totalAcctNav = accts.reduce((s, a) => s + (a.nav    || 0), 0);
     const totalCommit  = funds.reduce((s, f) => s + (f.commitment || 0), 0);
     const fundCount = funds.length, acctCount = accts.length;
@@ -770,7 +770,8 @@
       const effNav     = f.effective_nav || f.fund_nav;
       const totalCmt   = f.total_committed;
       const sharePct   = (f.commitment && totalCmt) ? (f.commitment / totalCmt * 100).toFixed(1) + '%' : '—';
-      const navSrc     = f.fund_nav ? 'Annual snapshot' : (f.market_nav ? 'Live market value' : 'Not available');
+      const navSrc     = f.fund_nav > 0 ? 'Annual snapshot' : (f.market_nav ? 'Live market value' : 'Not available');
+      const hasCarry   = f.gp_accrued_carry > 0;
       return `
       <div class="card lp-fund-card" data-fund-id="${esc(f.fund_id)}" style="cursor:pointer;transition:box-shadow .15s;" tabindex="0">
         <div class="card-head">
@@ -783,7 +784,7 @@
           <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">YOUR CURRENT STAKE</div>
             <div class="stat-val mono" style="color:var(--ink);font-size:22px;">${stakeVal != null ? fmtUSD(stakeVal) : '—'}</div>
-            <div class="stat-delta" style="color:var(--mid);">${sharePct} of fund · ${esc(navSrc)}</div>
+            <div class="stat-delta" style="color:var(--mid);">${sharePct} of fund · ${esc(navSrc)}${hasCarry ? ' · net of carry' : ''}</div>
           </div>
           <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">FUND NAV (TOTAL)</div>
@@ -1172,17 +1173,23 @@
   const _lpDetailCache = {};
 
   function buildFundDetail(f) {
-    const effNav   = f.effective_nav || f.fund_nav;
-    const totalCmt = f.total_committed;
-    const stake    = f.stake_value;
-    const sharePct = (f.commitment && totalCmt) ? (f.commitment / totalCmt * 100).toFixed(2) : null;
-    const navSrc   = f.fund_nav ? 'Annual NAV snapshot' : (f.market_nav ? 'Live market value (positions)' : null);
+    const effNav      = f.effective_nav || f.fund_nav;
+    const totalCmt    = f.total_committed;
+    const stake       = f.stake_value;
+    const sharePct    = (f.commitment && totalCmt) ? (f.commitment / totalCmt * 100).toFixed(2) : null;
+    const navSrc      = f.fund_nav > 0 ? 'Annual NAV snapshot' : (f.market_nav ? 'Live market value (positions)' : null);
+    const gpCarry     = f.gp_accrued_carry;
+    const lpNavNet    = f.lp_nav_after_carry;
     const rows = [
-      ['Your Commitment',     f.commitment ? fmtUSD(f.commitment) : '—'],
-      ['Total Fund Raised',   totalCmt     ? fmtUSD(totalCmt)     : '—'],
-      ['Your Pro-Rata Share', sharePct     ? sharePct + '%'       : '—'],
-      ['Fund NAV',            effNav       ? fmtUSD(effNav) + (navSrc ? ' (' + navSrc + ')' : '') : '—'],
-      ['Your Estimated Stake', stake       ? '<strong style="color:var(--green);font-size:15px;">' + fmtUSD(stake) + '</strong>' : '—'],
+      ['Your Commitment',       f.commitment ? fmtUSD(f.commitment) : '—'],
+      ['Total Fund Raised',     totalCmt     ? fmtUSD(totalCmt)     : '—'],
+      ['Your Pro-Rata Share',   sharePct     ? sharePct + '%'       : '—'],
+      ['Fund NAV',              effNav       ? fmtUSD(effNav) + (navSrc ? ' (' + navSrc + ')' : '') : '—'],
+      ...(gpCarry > 0 ? [
+        ['GP Accrued Carry',    `<span style="color:var(--red);">−${fmtUSD(gpCarry)}</span>`],
+        ['LP Distributable NAV', lpNavNet    ? fmtUSD(lpNavNet) : '—'],
+      ] : []),
+      ['Your Estimated Stake',  stake        ? '<strong style="color:var(--green);font-size:15px;">' + fmtUSD(stake) + '</strong>' : '—'],
     ];
     return `
       <div style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:1px;margin-bottom:10px;">STAKE BREAKDOWN</div>
@@ -1193,7 +1200,7 @@
         </tr>`).join('')}
       </table>
       <div style="margin-top:10px;font-size:11px;color:var(--mid);">
-        Stake value = Your Commitment ÷ Total Fund Raised × Fund NAV.
+        Stake = Your Commitment ÷ Total Fund Raised × LP Distributable NAV (Fund NAV minus accrued GP carry).
         K-1s and quarterly statements are distributed via Dropbox at period end.
       </div>`;
   }

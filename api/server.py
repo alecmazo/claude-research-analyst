@@ -1416,23 +1416,45 @@ def lp_me_overview(request: Request):
 
                 fund_nav_val = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
                 effective_nav = fund_nav_val or (market_nav_fund if market_nav_fund > 0 else None)
+
+                # GP carry: (last gp_equity_end / last end_nav) * current effective_nav
+                gp_accrued_carry = 0.0
+                try:
+                    cur.execute("""
+                        SELECT gp_equity_end, end_nav
+                          FROM fund_annual_snapshots
+                         WHERE fund_id = %s
+                         ORDER BY year DESC LIMIT 1
+                    """, (f["id"],))
+                    last_wf = cur.fetchone()
+                    if last_wf and effective_nav:
+                        last_gp_eq   = float(last_wf["gp_equity_end"] or 0)
+                        last_end_nav = float(last_wf["end_nav"] or 0)
+                        if last_end_nav > 0:
+                            gp_accrued_carry = (last_gp_eq / last_end_nav) * effective_nav
+                except Exception:
+                    pass
+
+                lp_nav_after_carry = max(0.0, (effective_nav or 0) - gp_accrued_carry)
                 stake_value = None
-                if effective_nav and total_committed_fund > 0 and commitment > 0:
-                    stake_value = round(commitment / total_committed_fund * effective_nav, 2)
+                if lp_nav_after_carry > 0 and total_committed_fund > 0 and commitment > 0:
+                    stake_value = round(commitment / total_committed_fund * lp_nav_after_carry, 2)
 
                 out["funds"].append({
-                    "fund_id":         str(f["id"]),
-                    "fund_name":       fname,
-                    "short_name":      f["short_name"],
-                    "lp_alias":        alias if role != "gp" else None,
-                    "lp_count":        len(lp_rows),
-                    "commitment":      commitment,
-                    "total_committed": total_committed_fund,
-                    "fund_nav":        fund_nav_val,
-                    "market_nav":      market_nav_fund if market_nav_fund > 0 else None,
-                    "effective_nav":   effective_nav,
-                    "stake_value":     stake_value,
-                    "fund_nav_as_of":  snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    "fund_id":           str(f["id"]),
+                    "fund_name":         fname,
+                    "short_name":        f["short_name"],
+                    "lp_alias":          alias if role != "gp" else None,
+                    "lp_count":          len(lp_rows),
+                    "commitment":        commitment,
+                    "total_committed":   total_committed_fund,
+                    "fund_nav":          fund_nav_val,
+                    "market_nav":        market_nav_fund if market_nav_fund > 0 else None,
+                    "effective_nav":     effective_nav,
+                    "gp_accrued_carry":  round(gp_accrued_carry, 2) if gp_accrued_carry else None,
+                    "lp_nav_after_carry": round(lp_nav_after_carry, 2) if lp_nav_after_carry else None,
+                    "stake_value":       stake_value,
+                    "fund_nav_as_of":    snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
                 })
 
             # ── Managed accounts ─────────────────────────────────────
@@ -1469,19 +1491,22 @@ def lp_me_overview(request: Request):
                 snap = cur.fetchone()
                 # Live market NAV from positions
                 acct_market_nav = _fund_market_nav(cur, a["id"])
-                # YTD data from cache
+                # YTD data from cache (also grab nav for fallback)
                 try:
                     cur.execute("""
-                        SELECT ytd_pct, updated_at FROM managed_account_ytd_cache
+                        SELECT nav, ytd_pct, updated_at FROM managed_account_ytd_cache
                          WHERE fund_id = %s
                     """, (a["id"],))
                     ytd_row = cur.fetchone()
                     acct_ytd_pct = float(ytd_row["ytd_pct"]) if ytd_row else None
                     acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row and ytd_row.get("updated_at") else None
                 except Exception:
-                    acct_ytd_pct = None; acct_ytd_upd = None
+                    acct_ytd_pct = None; acct_ytd_upd = None; ytd_row = None
                 snap_nav = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
                 effective_acct_nav = snap_nav or (acct_market_nav if acct_market_nav > 0 else None)
+                # Fall back to YTD-cache NAV (populated by fund_account_ytd_run)
+                if effective_acct_nav is None and ytd_row and float(ytd_row.get("nav") or 0) > 0:
+                    effective_acct_nav = float(ytd_row["nav"])
                 out["managed_accounts"].append({
                     "fund_id":         str(a["id"]),
                     "account_name":    a["name"],
@@ -2345,7 +2370,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui72-20260511"
+WEB_BUILD_VERSION = "ui73-20260511"
 
 
 @app.get("/api/build")
