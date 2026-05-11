@@ -1058,6 +1058,54 @@
         </div>
       </section>
 
+      <!-- Create Fund / Managed Account -->
+      <section class="panel" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">Fund Administration</span>
+          <span class="panel-badge">GP ONLY</span>
+        </header>
+        <div style="padding:14px;">
+          <div style="font-size:11px;color:var(--dim);margin-bottom:14px;">Create a new LP fund or managed account. Use the Fund tab to set NAV and view LP detail after creation.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="cf-name" type="text" class="settings-input" placeholder="e.g. DGA Capital Fund IV, LP" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <input id="cf-short" type="text" class="settings-input" placeholder="DGAF-IV" style="width:100%;text-transform:uppercase;" maxlength="12">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">TYPE</div>
+              <select id="cf-type" class="settings-input" style="width:100%;">
+                <option value="lp_fund">LP Fund</option>
+                <option value="managed_account">Managed Account</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INCEPTION DATE</div>
+              <input id="cf-inception" type="date" class="settings-input" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">MGMT FEE %</div>
+              <input id="cf-mgmt" type="number" class="settings-input" value="1.5" step="0.1" min="0" max="5" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">CARRY %</div>
+              <input id="cf-carry" type="number" class="settings-input" value="20" step="1" min="0" max="50" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">HURDLE %</div>
+              <input id="cf-hurdle" type="number" class="settings-input" value="8" step="0.5" min="0" max="20" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button id="cf-create-btn" class="tab-btn" style="width:100%;height:34px;">Create</button>
+              <div id="cf-msg" style="font-size:11px;min-height:16px;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </div>
   </div>
 </div><!-- #tab-settings -->
@@ -1757,48 +1805,50 @@
           <span data-nav-status="${fid}" style="font-size:10px;"></span>
         </div>`;
 
-      const fundHtml = funds.map(f => `
-        <div class="fund-card">
+      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct) => `
+        <div class="fund-card" style="cursor:pointer;" data-fund-id="${fid}" data-fund-name="${fname}">
           <div class="fund-card-head">
-            <span class="fund-card-name">${f.fund_name}</span>
-            <span class="fund-card-badge">${f.short_name}</span>
+            <span class="fund-card-name">${fname}</span>
+            <span class="fund-card-badge">${badge}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--blue);font-weight:700;letter-spacing:0.5px;opacity:0.8;">VIEW DETAILS →</span>
           </div>
           <div class="fund-stats">
             <div class="fund-stat">
-              <div class="fund-stat-label">Fund NAV</div>
-              <div class="fund-stat-val">${f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</div>
-              <div class="fund-stat-sub">${f.fund_nav_as_of ? 'as of ' + f.fund_nav_as_of : 'No snapshot entered yet'}</div>
+              <div class="fund-stat-label">${isAcct ? 'Account NAV' : 'Fund NAV'}</div>
+              <div class="fund-stat-val">${navVal != null ? fmtUSD(navVal) : '—'}</div>
+              <div class="fund-stat-sub">${navAsOf ? 'as of ' + navAsOf : 'No snapshot entered yet'}</div>
             </div>
+            ${!isAcct ? `
             <div class="fund-stat">
               <div class="fund-stat-label">LP Count</div>
-              <div class="fund-stat-val">${f.lp_count ?? '—'}</div>
+              <div class="fund-stat-val">${lpCount ?? '—'}</div>
               <div class="fund-stat-sub">limited partners</div>
             </div>
             <div class="fund-stat">
               <div class="fund-stat-label">Total Committed</div>
-              <div class="fund-stat-val">${f.commitment != null ? fmtUSD(f.commitment) : '—'}</div>
-            </div>
+              <div class="fund-stat-val">${committed != null ? fmtUSD(committed) : '—'}</div>
+            </div>` : ''}
           </div>
-          ${navEntryRow(f.fund_id, f.fund_nav)}
-        </div>`).join('');
+          ${navEntryRow(fid, navVal)}
+        </div>`;
 
-      const acctHtml = accts.map(a => `
-        <div class="fund-card">
-          <div class="fund-card-head">
-            <span class="fund-card-name">${a.account_name}</span>
-            <span class="fund-card-badge">MANAGED · ${a.short_name}</span>
-          </div>
-          <div class="fund-stats">
-            <div class="fund-stat">
-              <div class="fund-stat-label">Account NAV</div>
-              <div class="fund-stat-val">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
-              <div class="fund-stat-sub">${a.nav_as_of ? 'as of ' + a.nav_as_of : 'No snapshot entered yet'}</div>
-            </div>
-          </div>
-          ${navEntryRow(a.fund_id, a.nav)}
-        </div>`).join('');
+      const fundHtml = funds.map(f => fundCardHtml(
+        f.fund_id, f.fund_name, f.short_name, f.fund_nav, f.fund_nav_as_of, f.lp_count, f.commitment, false
+      )).join('');
+      const acctHtml = accts.map(a => fundCardHtml(
+        a.fund_id, a.account_name, 'MANAGED · ' + a.short_name, a.nav, a.nav_as_of, null, null, true
+      )).join('');
 
       el.innerHTML = fundHtml + acctHtml;
+
+      // Click card → open fund detail modal
+      el.querySelectorAll('[data-fund-id]').forEach(card => {
+        card.addEventListener('click', (e) => {
+          // Don't open modal if clicking the NAV form inputs/buttons
+          if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn]')) return;
+          openFundDetail(card.dataset.fundId, card.dataset.fundName);
+        });
+      });
 
       // Wire up Save buttons
       el.querySelectorAll('[data-nav-btn]').forEach(btn => {
@@ -1816,6 +1866,62 @@
 
     } catch (e) { el.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>'; }
   }
+
+  // ── Fund Detail Modal ──────────────────────────────────────────
+  async function openFundDetail(fundId, fundName) {
+    const modal = document.getElementById('fund-detail-modal');
+    const title = document.getElementById('fdm-title');
+    const body  = document.getElementById('fdm-body');
+    if (!modal) return;
+    title.textContent = fundName || '…';
+    body.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    modal.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      title.textContent = d.fund_name;
+      const fmtPct = v => v != null ? (v * 100).toFixed(1) + '%' : '—';
+      const metaRows = [
+        ['Type',       d.fund_type === 'managed_account' ? 'Managed Account' : 'LP Fund'],
+        ['Status',     (d.status || '').toUpperCase()],
+        ['Inception',  d.inception_date || '—'],
+        ['NAV',        d.nav != null ? fmtUSD(d.nav) : '—'],
+        ['As of',      d.nav_as_of || '—'],
+        ['Mgmt Fee',   fmtPct(d.mgmt_fee_pct)],
+        ['Carry',      fmtPct(d.carry_pct)],
+        ['Hurdle',     fmtPct(d.hurdle_pct)],
+      ].map(([k, v]) => `<tr><td style="color:var(--dim);padding:4px 12px 4px 0;white-space:nowrap;font-size:11px;">${k}</td><td style="font-weight:700;font-size:12px;color:#e0e8f0;">${v}</td></tr>`).join('');
+
+      const lpTable = d.lps && d.lps.length ? `
+        <div style="margin-top:18px;">
+          <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--dim);margin-bottom:8px;text-transform:uppercase;">LP Roster · ${d.lp_count} partners · ${fmtUSD(d.total_committed)} committed</div>
+          <table class="data-table" style="width:100%">
+            <thead><tr><th>Name</th><th>Email</th><th>Commitment</th></tr></thead>
+            <tbody>
+              ${d.lps.map(lp => `
+                <tr>
+                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
+                  <td style="font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : `<div class="tab-empty" style="margin-top:18px;">No LPs on record for this fund yet.</div>`;
+
+      body.innerHTML = `<table style="border-collapse:collapse;margin-bottom:4px;">${metaRows}</table>${lpTable}`;
+    } catch (e) {
+      body.innerHTML = `<div class="tab-error">Could not load details: ${e.message}</div>`;
+    }
+  }
+  document.getElementById('fdm-close')?.addEventListener('click', () => {
+    document.getElementById('fund-detail-modal').style.display = 'none';
+    document.body.style.overflow = '';
+  });
+  document.getElementById('fund-detail-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) { e.currentTarget.style.display = 'none'; document.body.style.overflow = ''; }
+  });
   document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
 
   // ── Sync Accounts: ensure fund / managed-account DB records exist ─
@@ -1950,6 +2056,45 @@
     } catch {}
   }
 
+  // ── Create Fund / Managed Account ────────────────────────────
+  document.getElementById('cf-create-btn')?.addEventListener('click', async () => {
+    const name    = document.getElementById('cf-name')?.value?.trim();
+    const short   = document.getElementById('cf-short')?.value?.trim().toUpperCase();
+    const type    = document.getElementById('cf-type')?.value;
+    const inc     = document.getElementById('cf-inception')?.value;
+    const mgmt    = parseFloat(document.getElementById('cf-mgmt')?.value || '1.5') / 100;
+    const carry   = parseFloat(document.getElementById('cf-carry')?.value || '20') / 100;
+    const hurdle  = parseFloat(document.getElementById('cf-hurdle')?.value || '8') / 100;
+    const msg     = document.getElementById('cf-msg');
+    const btn     = document.getElementById('cf-create-btn');
+
+    if (!name) { msg.style.color='var(--red)'; msg.textContent='Fund name is required.'; return; }
+    if (!short || short.length < 2) { msg.style.color='var(--red)'; msg.textContent='Short code must be at least 2 characters.'; return; }
+
+    btn.disabled = true; btn.textContent = '…';
+    msg.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, short_name: short, fund_type: type, inception_date: inc || '', mgmt_fee_pct: mgmt, carry_pct: carry, hurdle_pct: hurdle }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = d.created ? `✅ Created "${name}" (${short})` : `✓ Already exists: ${name}`;
+      document.getElementById('cf-name').value = '';
+      document.getElementById('cf-short').value = '';
+      // Refresh fund tab if it's visible
+      if (document.getElementById('tab-fund')?.classList.contains('active')) loadFundOverview();
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Create';
+    }
+  });
+
   // ── Ticker click → GuruFocus ─────────────────────────────────
   function openGuruFocus(ticker) {
     if (!ticker) return;
@@ -2035,10 +2180,11 @@
         );
         pptxBtn.style.display = '';
       }
-      if (!d.markdown) {
+      const mdText = d.report_md || d.markdown || '';
+      if (!mdText) {
         body.innerHTML = '<div class="tab-empty">Report exists but has no text content. Use the download buttons above.</div>';
       } else {
-        renderMd(body, d.markdown);
+        renderMd(body, mdText);
       }
     } catch (e) {
       body.innerHTML = `<div class="tab-error">Could not load report for ${ticker}: ${e.message}</div>`;
@@ -2278,6 +2424,17 @@
       </div>
     </div>
     <div id="rm-body" class="md-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- ── Fund Detail Modal ──────────────────────────────────────── -->
+<div id="fund-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,10,20,0.88);z-index:200;overflow-y:auto;padding:24px 16px;">
+  <div style="max-width:720px;margin:0 auto;background:var(--panel);border-radius:12px;border:1px solid var(--panel-edge);box-shadow:0 12px 48px rgba(0,0,0,0.65);">
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid rgba(255,255,255,0.07);">
+      <span id="fdm-title" style="font-size:16px;font-weight:800;color:#e0e8f0;letter-spacing:0.8px;flex:1;"></span>
+      <button id="fdm-close" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#c0cfe0;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
+    </div>
+    <div id="fdm-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
   </div>
 </div>
 

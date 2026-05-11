@@ -1493,6 +1493,155 @@ def gp_add_nav_snapshot(request: Request, body: NavSnapshotRequest):
         raise HTTPException(500, f"DB error: {str(exc)[:200]}")
 
 
+@app.get("/api/v2/gp/fund/{fund_id}/detail")
+def gp_fund_detail(fund_id: str, request: Request):
+    """GP-only: return full detail for a single fund or managed account.
+
+    Returns fund metadata, LP roster with commitments, and most recent
+    NAV snapshot.  Used by the Fund tab drill-down modal.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+    if not _PSYCOPG2_OK:
+        raise HTTPException(503, "psycopg2 not available")
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT id, name, short_name, fund_type, inception_date, status, mgmt_fee_pct, carry_pct, hurdle_pct FROM funds WHERE id = %s", (fund_id,))
+            fund = cur.fetchone()
+            if not fund:
+                raise HTTPException(404, f"Fund {fund_id} not found")
+
+            # LP roster
+            cur.execute("""
+                SELECT l.id, l.legal_name, l.primary_email,
+                       COALESCE(c.commitment, 0) AS commitment_amount
+                  FROM lps l
+                  LEFT JOIN (
+                      SELECT lp_id, SUM(commitment_amount) AS commitment
+                        FROM commitments WHERE superseded_by IS NULL GROUP BY lp_id
+                  ) c ON c.lp_id = l.id
+                 WHERE l.fund_id = %s ORDER BY l.legal_name
+            """, (fund_id,))
+            lps = [dict(r) for r in cur.fetchall()]
+            for lp in lps:
+                lp["commitment_amount"] = float(lp["commitment_amount"] or 0)
+
+            # Most recent NAV
+            cur.execute("""
+                SELECT net_nav, as_of_date FROM nav_snapshots
+                 WHERE fund_id = %s ORDER BY as_of_date DESC LIMIT 1
+            """, (fund_id,))
+            snap = cur.fetchone()
+
+            # YTD cache for managed accounts
+            ytd = None
+            if fund["fund_type"] == "managed_account":
+                try:
+                    cur.execute("""
+                        SELECT net_nav, as_of_date, ytd_pct FROM managed_account_ytd_cache
+                         WHERE fund_id = %s ORDER BY as_of_date DESC LIMIT 1
+                    """, (fund_id,))
+                    ytd = cur.fetchone()
+                except Exception:
+                    pass
+
+            return {
+                "fund_id":        fund_id,
+                "fund_name":      fund["name"],
+                "short_name":     fund["short_name"],
+                "fund_type":      fund["fund_type"],
+                "inception_date": str(fund["inception_date"]) if fund["inception_date"] else None,
+                "status":         fund["status"],
+                "mgmt_fee_pct":   float(fund["mgmt_fee_pct"] or 0),
+                "carry_pct":      float(fund["carry_pct"] or 0),
+                "hurdle_pct":     float(fund["hurdle_pct"] or 0) if fund["hurdle_pct"] is not None else None,
+                "lps":            lps,
+                "lp_count":       len(lps),
+                "total_committed": sum(lp["commitment_amount"] for lp in lps),
+                "nav":            float(snap["net_nav"]) if snap and snap["net_nav"] is not None else None,
+                "nav_as_of":      snap["as_of_date"].isoformat() if snap and snap["as_of_date"] else None,
+                "ytd_pct":        float(ytd["ytd_pct"]) if ytd and ytd.get("ytd_pct") is not None else None,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {str(exc)[:200]}")
+
+
+class CreateFundV2Request(BaseModel):
+    name:           str
+    short_name:     str
+    fund_type:      str = "lp_fund"       # 'lp_fund' | 'managed_account'
+    inception_date: str = ""              # YYYY-MM-DD
+    mgmt_fee_pct:   float = 0.015         # 1.5%
+    carry_pct:      float = 0.20          # 20%
+    hurdle_pct:     float = 0.08          # 8%
+
+@app.post("/api/v2/gp/fund/create")
+def gp_fund_create(request: Request, body: CreateFundV2Request):
+    """GP-only: create a new fund or managed account via v2 auth.
+
+    Full creation with all required fields. Idempotent on short_name.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+    if not _PSYCOPG2_OK:
+        raise HTTPException(503, "psycopg2 not available")
+
+    ftype = body.fund_type if body.fund_type in ("lp_fund", "managed_account") else "lp_fund"
+    inc = (body.inception_date or "").strip()
+    if not inc:
+        inc = str(__import__("datetime").date.today())
+    elif re.fullmatch(r'\d{4}', inc):
+        inc = f"{inc}-01-01"
+
+    try:
+        inc_year = inc.split("-")[0]
+        fye = f"{inc_year}-12-31"
+    except Exception:
+        fye = "2020-12-31"
+
+    structure = "separately_managed" if ftype == "managed_account" else "3c1"
+    sn = body.short_name.strip().upper()
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO funds (
+                    name, short_name, fund_type, inception_date, fiscal_year_end,
+                    structure, domicile, base_ccy,
+                    mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                    carry_pct, hurdle_pct, status
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, 'DE', 'USD',
+                    %s, 'nav', 'quarterly',
+                    %s, %s, 'open'
+                )
+                ON CONFLICT (short_name) DO UPDATE
+                    SET name      = EXCLUDED.name,
+                        fund_type = EXCLUDED.fund_type,
+                        updated_at = NOW()
+                RETURNING id, (xmax = 0) AS inserted
+            """, (body.name.strip(), sn, ftype, inc, fye, structure,
+                  body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct))
+            row = cur.fetchone()
+            conn.commit()
+            return {
+                "ok":       True,
+                "created":  bool(row["inserted"]),
+                "fund_id":  str(row["id"]),
+                "fund_name": body.name,
+                "fund_type": ftype,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {str(exc)[:200]}")
+
+
 class EnsureFundRequest(BaseModel):
     name:       str              # full fund/account name
     short_name: str              # 2-8 char display code

@@ -1144,10 +1144,11 @@
         );
         pptxBtn.style.display = '';
       }
-      if (!d.markdown) {
+      const mdText = d.report_md || d.markdown || '';
+      if (!mdText) {
         body.innerHTML = '<p style="color:var(--mid);padding:8px 0;">Report exists but has no text. Use the download buttons above.</p>';
       } else {
-        renderMd(body, d.markdown);
+        renderMd(body, mdText);
       }
     } catch (e) {
       body.innerHTML = `<p style="color:var(--red);">Could not load report for ${esc(ticker)}: ${esc(e.message)}</p>`;
