@@ -1377,6 +1377,7 @@ def lp_me_overview(request: Request):
 class FundDeleteRequest(BaseModel):
     fund_id: str
     confirm: bool = False   # must be True to actually delete
+    force:   bool = False   # bypass non-trivial-data safety guards (GP explicit override)
 
 
 @app.post("/api/v2/admin/fund/delete")
@@ -1496,7 +1497,7 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 if n_dist > 0:
                     refuse_reasons.append(f"{n_dist} distribution(s)")
 
-            if refuse_reasons:
+            if refuse_reasons and not body.force:
                 return {
                     "ok":              False,
                     "would_delete":    False,
@@ -1504,7 +1505,7 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                     "child_inventory": inventory,
                     "refuse_reasons":  refuse_reasons,
                     "message":         "Refusing to delete fund with non-trivial data. "
-                                       "Review and clean those rows manually first.",
+                                       "Pass force=true to override (GP explicit).",
                 }
 
             # 4) Dry-run mode → return what would happen
@@ -1897,7 +1898,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65j-20260510"
+WEB_BUILD_VERSION = "ui65k-20260510"
 
 
 @app.get("/api/build")
