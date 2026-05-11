@@ -71,18 +71,42 @@ def _fetch_prices(symbols: list) -> dict:
                 continue
         fetch.append((sym, clean))
 
+    def _ticker_variants(sym: str) -> list:
+        """Return yfinance ticker variants to try in priority order."""
+        variants = [sym]
+        import re as _rev
+        # BRK.B / BRK-B  ↔  BRKB
+        m = _rev.match(r'^([A-Z]{1,4})[\.\-]([A-Z])$', sym)
+        if m:
+            variants.append(m.group(1) + m.group(2))
+        m2 = _rev.match(r'^([A-Z]{2,4})([A-Z])$', sym)
+        if m2 and len(sym) >= 3:
+            root = sym[:-1]
+            last = sym[-1]
+            variants += [root + '.' + last, root + '-' + last]
+        # Preferred stock: BACPRL → BAC-PL, BAC^L
+        m3 = _rev.match(r'^([A-Z]{1,4})PR([A-Z])$', sym)
+        if m3:
+            variants.insert(0, m3.group(1) + '-P' + m3.group(2))
+            variants.append(m3.group(1) + '^' + m3.group(2))
+        return list(dict.fromkeys(variants))  # deduplicate, preserve order
+
     for sym, clean in fetch:
         # Fidelity money-market funds are always $1 NAV
-        if 'SPAXX' in clean or 'FDRXX' in clean or 'SPRXX' in clean:
+        if 'SPAXX' in clean or 'FDRXX' in clean or 'SPRXX' in clean or 'FZFXX' in clean:
             _price_cache[clean] = (1.0, now)
             out[sym] = 1.0
             continue
-        try:
-            t = yf.Ticker(clean)
-            p = t.fast_info.last_price
-            price = float(p) if p and float(p) > 0 else None
-        except Exception:
-            price = None
+        price = None
+        for variant in _ticker_variants(clean):
+            try:
+                t = yf.Ticker(variant)
+                p = t.fast_info.last_price
+                price = float(p) if p and float(p) > 0 else None
+            except Exception:
+                price = None
+            if price:
+                break
         _price_cache[clean] = (price, now)
         out[sym] = price
 
@@ -1377,6 +1401,25 @@ def lp_me_overview(request: Request):
                 """, (f["id"],))
                 snap = cur.fetchone()
 
+                # Total committed across all LPs for stake-value calculation
+                cur.execute("""
+                    SELECT COALESCE(SUM(c.commitment_amount), 0) AS total_committed
+                      FROM commitments c
+                      JOIN lps l ON l.id = c.lp_id
+                     WHERE l.fund_id = %s AND c.superseded_by IS NULL
+                """, (f["id"],))
+                tc_row = cur.fetchone()
+                total_committed_fund = float((tc_row or {}).get("total_committed") or 0)
+
+                # Live market NAV from positions (fallback when no nav_snapshot)
+                market_nav_fund = _fund_market_nav(cur, f["id"])
+
+                fund_nav_val = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
+                effective_nav = fund_nav_val or (market_nav_fund if market_nav_fund > 0 else None)
+                stake_value = None
+                if effective_nav and total_committed_fund > 0 and commitment > 0:
+                    stake_value = round(commitment / total_committed_fund * effective_nav, 2)
+
                 out["funds"].append({
                     "fund_id":         str(f["id"]),
                     "fund_name":       fname,
@@ -1384,7 +1427,11 @@ def lp_me_overview(request: Request):
                     "lp_alias":        alias if role != "gp" else None,
                     "lp_count":        len(lp_rows),
                     "commitment":      commitment,
-                    "fund_nav":        float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None,
+                    "total_committed": total_committed_fund,
+                    "fund_nav":        fund_nav_val,
+                    "market_nav":      market_nav_fund if market_nav_fund > 0 else None,
+                    "effective_nav":   effective_nav,
+                    "stake_value":     stake_value,
                     "fund_nav_as_of":  snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
                 })
 
@@ -1420,12 +1467,30 @@ def lp_me_overview(request: Request):
                      LIMIT 1
                 """, (a["id"],))
                 snap = cur.fetchone()
+                # Live market NAV from positions
+                acct_market_nav = _fund_market_nav(cur, a["id"])
+                # YTD data from cache
+                try:
+                    cur.execute("""
+                        SELECT ytd_pct, updated_at FROM managed_account_ytd_cache
+                         WHERE fund_id = %s
+                    """, (a["id"],))
+                    ytd_row = cur.fetchone()
+                    acct_ytd_pct = float(ytd_row["ytd_pct"]) if ytd_row else None
+                    acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row and ytd_row.get("updated_at") else None
+                except Exception:
+                    acct_ytd_pct = None; acct_ytd_upd = None
+                snap_nav = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
+                effective_acct_nav = snap_nav or (acct_market_nav if acct_market_nav > 0 else None)
                 out["managed_accounts"].append({
                     "fund_id":         str(a["id"]),
                     "account_name":    a["name"],
                     "short_name":      a["short_name"],
-                    "nav":             float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None,
+                    "nav":             effective_acct_nav,
+                    "market_nav":      acct_market_nav if acct_market_nav > 0 else None,
                     "nav_as_of":       snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    "ytd_pct":         acct_ytd_pct,
+                    "ytd_as_of":       acct_ytd_upd,
                 })
 
     except HTTPException:
@@ -1545,17 +1610,25 @@ def gp_fund_detail(fund_id: str, request: Request):
             """, (fund_id,))
             snap = cur.fetchone()
 
-            # YTD cache for managed accounts
-            ytd = None
+            # YTD cache for managed accounts (correct column names: nav, ytd_pct, updated_at)
+            ytd_pct_val = None
             if fund["fund_type"] == "managed_account":
                 try:
                     cur.execute("""
-                        SELECT net_nav, as_of_date, ytd_pct FROM managed_account_ytd_cache
-                         WHERE fund_id = %s ORDER BY as_of_date DESC LIMIT 1
+                        SELECT nav, ytd_pct, updated_at
+                          FROM managed_account_ytd_cache
+                         WHERE fund_id = %s
                     """, (fund_id,))
-                    ytd = cur.fetchone()
+                    ytd_row = cur.fetchone()
+                    if ytd_row and ytd_row.get("ytd_pct") is not None:
+                        ytd_pct_val = float(ytd_row["ytd_pct"])
                 except Exception:
                     pass
+
+            # Live market NAV from positions (sum of qty × live price)
+            market_nav = _fund_market_nav(cur, fund_id)
+            snap_nav   = float(snap["net_nav"]) if snap and snap["net_nav"] is not None else None
+            effective_nav = snap_nav or (market_nav if market_nav > 0 else None)
 
             return {
                 "fund_id":        fund_id,
@@ -1570,9 +1643,10 @@ def gp_fund_detail(fund_id: str, request: Request):
                 "lps":            lps,
                 "lp_count":       len(lps),
                 "total_committed": sum(lp["commitment_amount"] for lp in lps),
-                "nav":            float(snap["net_nav"]) if snap and snap["net_nav"] is not None else None,
+                "nav":            effective_nav,
+                "market_nav":     market_nav if market_nav > 0 else None,
                 "nav_as_of":      snap["as_of_date"].isoformat() if snap and snap["as_of_date"] else None,
-                "ytd_pct":        float(ytd["ytd_pct"]) if ytd and ytd.get("ytd_pct") is not None else None,
+                "ytd_pct":        ytd_pct_val,
             }
     except HTTPException:
         raise
@@ -2271,7 +2345,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui67-20260511"
+WEB_BUILD_VERSION = "ui68-20260511"
 
 
 @app.get("/api/build")
@@ -5249,48 +5323,87 @@ async def fund_import_annual_nav(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SPY monthly closes — for benchmark overlay on managed-account balance chart
+# Benchmark monthly closes — for overlay on managed-account balance chart
+# Supports SPY (default) and any other ETF/index the UI requests.
 # ─────────────────────────────────────────────────────────────────────────────
-_spy_monthly_cache: dict = {}
+_bench_monthly_cache: dict = {}   # keyed by ticker symbol
+
+_ALLOWED_BENCH = {"SPY", "QQQ", "DIA", "URTH", "EFA", "AGG",
+                  "IWM", "VTI", "GLD", "TLT", "VNQ", "VXUS"}
 
 @app.get("/api/market/spy-monthly")
-def get_spy_monthly():
-    """Return SPY month-end closes for the current calendar year, indexed to
-    the first trading day's close (so the series is comparable to a portfolio
-    starting at $X on Jan 1). Cached 15 min."""
+def get_spy_monthly(ticker: str = "SPY"):
+    """Return month-end closes for the requested benchmark ticker for the
+    current calendar year, indexed to the first trading day's close.
+    Cached 15 min per ticker. Defaults to SPY."""
+    sym = (ticker or "SPY").upper().strip()
+    if sym not in _ALLOWED_BENCH:
+        sym = "SPY"
     import time as _time
-    now = _time.time()
-    cached = _spy_monthly_cache.get("ts")
-    if cached and (now - cached) < 900:
-        return {k: v for k, v in _spy_monthly_cache.items() if k != "ts"}
+    now    = _time.time()
+    cached = _bench_monthly_cache.get(sym, {})
+    if cached.get("ts") and (now - cached["ts"]) < 900:
+        return {k: v for k, v in cached.items() if k != "ts"}
     try:
         import yfinance as yf
         from datetime import date as _date
-        spy   = yf.Ticker("SPY")
+        tkr   = yf.Ticker(sym)
         start = f"{_date.today().year}-01-01"
-        hist  = spy.history(start=start, interval="1d")
+        hist  = tkr.history(start=start, interval="1d")
         if hist.empty:
-            raise ValueError("Empty SPY history")
+            raise ValueError(f"Empty history for {sym}")
         first_close = float(hist.iloc[0]["Close"])
-        # Take the last close of each month
         monthly = hist.resample("ME").last().dropna(subset=["Close"])
         points = []
         for ts, row in monthly.iterrows():
             close = float(row["Close"])
             points.append({
-                "month":     ts.strftime("%Y-%m"),
-                "close":     round(close, 2),
-                "ytd_pct":   round((close / first_close - 1.0) * 100, 4),
-                "norm":      round(close / first_close, 6),
+                "month":   ts.strftime("%Y-%m"),
+                "close":   round(close, 2),
+                "ytd_pct": round((close / first_close - 1.0) * 100, 4),
+                "norm":    round(close / first_close, 6),
             })
-        result = {"first_close": round(first_close, 2), "points": points}
-        _spy_monthly_cache.update({**result, "ts": now})
+        result = {"ticker": sym, "first_close": round(first_close, 2), "points": points}
+        _bench_monthly_cache[sym] = {**result, "ts": now}
         return result
     except Exception as exc:
-        # Stale cache fallback
-        if _spy_monthly_cache:
-            return {k: v for k, v in _spy_monthly_cache.items() if k != "ts"}
-        raise HTTPException(status_code=503, detail=f"SPY monthly fetch failed: {exc}")
+        if _bench_monthly_cache.get(sym):
+            return {k: v for k, v in _bench_monthly_cache[sym].items() if k != "ts"}
+        # Legacy fallback key for old _spy_monthly_cache callers
+        raise HTTPException(status_code=503, detail=f"{sym} monthly fetch failed: {exc}")
+
+
+def get_spy_monthly_data():
+    """Internal helper — returns SPY monthly dict (same shape as the endpoint)."""
+    try:
+        import yfinance as yf
+        from datetime import date as _date
+        now = __import__("time").time()
+        cached = _bench_monthly_cache.get("SPY", {})
+        if cached.get("ts") and (now - cached["ts"]) < 900:
+            return {k: v for k, v in cached.items() if k != "ts"}
+        sym = "SPY"
+        tkr = yf.Ticker(sym)
+        start = f"{_date.today().year}-01-01"
+        hist  = tkr.history(start=start, interval="1d")
+        if hist.empty:
+            raise ValueError("Empty SPY history")
+        first_close = float(hist.iloc[0]["Close"])
+        monthly = hist.resample("ME").last().dropna(subset=["Close"])
+        points = []
+        for ts, row in monthly.iterrows():
+            close = float(row["Close"])
+            points.append({
+                "month":   ts.strftime("%Y-%m"),
+                "close":   round(close, 2),
+                "ytd_pct": round((close / first_close - 1.0) * 100, 4),
+                "norm":    round(close / first_close, 6),
+            })
+        result = {"ticker": sym, "first_close": round(first_close, 2), "points": points}
+        _bench_monthly_cache[sym] = {**result, "ts": now}
+        return result
+    except Exception:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5337,9 +5450,9 @@ async def fund_account_ytd_run(
 
     # Attach SPY benchmark for chart overlay
     try:
-        spy = get_spy_monthly()
+        spy = get_spy_monthly_data()
         result["spy_monthly"] = spy
-    except HTTPException:
+    except Exception:
         result["spy_monthly"] = None
 
     # Persist into managed_account_ytd_cache

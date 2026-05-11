@@ -1183,26 +1183,11 @@
     </div>
 
     <div id="acd-meta" class="tab-loading">Loading…</div>
-    <div id="acd-positions"   style="margin-top:18px;"></div>
+    <div id="acd-perf-tiles"  style="margin-top:14px;"></div>
     <div id="acd-balance"     style="margin-top:18px;"></div>
+    <div id="acd-positions"   style="margin-top:18px;"></div>
     <div id="acd-attribution" style="margin-top:18px;"></div>
     <div id="acd-history"     style="margin-top:18px;"></div>
-
-    <section class="panel" style="margin-top:18px;">
-      <header class="panel-head">
-        <span class="panel-title">Data Import</span>
-        <span class="panel-badge">Positions only</span>
-      </header>
-      <div style="padding:14px;">
-        <div class="fd-upload-card" style="max-width:480px;">
-          <div class="fd-upload-title">📊 Portfolio Positions</div>
-          <div class="fd-upload-hint">Fidelity Account Positions export. This is the only static upload — YTD analytics come from the calculator below.</div>
-          <input id="acd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="acd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
-          <div id="acd-pos-status" class="fd-upload-status"></div>
-        </div>
-      </div>
-    </section>
 
     <section class="panel" style="margin-top:18px;">
       <header class="panel-head">
@@ -2561,13 +2546,6 @@
         document.getElementById('lpd-nav-status'),
         e.target, 'Upload Annual NAV');
     }
-    // Managed-account upload
-    if (e.target.id === 'acd-upload-pos-btn') {
-      uploadFundCsv('/api/fund/import-positions',
-        document.getElementById('acd-pos-file'),
-        document.getElementById('acd-pos-status'),
-        e.target, 'Upload Positions');
-    }
     // Managed-account YTD run
     if (e.target.id === 'acd-ytd-run-btn') {
       runAccountYtd(e.target);
@@ -2813,19 +2791,31 @@
   }
 
   // ── Managed Account renderers ────────────────────────────────
+  // benchmark choices for the chart overlay
+  const BENCH_OPTIONS = [
+    { key: 'SPY',  label: 'SPY — S&P 500' },
+    { key: 'QQQ',  label: 'QQQ — Nasdaq 100' },
+    { key: 'DIA',  label: 'DIA — Dow Jones' },
+    { key: 'URTH', label: 'URTH — MSCI World' },
+    { key: 'EFA',  label: 'EFA — MSCI EAFE' },
+    { key: 'AGG',  label: 'AGG — US Bonds' },
+  ];
+  let _acctBenchKey = 'SPY';
+  let _acctChartData = null; // cached {mc, spy} for re-draw on bench change
+
   function renderAcctMeta(d) {
     const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
     const tile = (label, value, sub) => `
       <div class="fd-tile">
         <div class="fd-tile-label">${label}</div>
-        <div class="fd-tile-val">${value}</div>
+        <div class="fd-tile-val" id="${label === 'NAV' ? 'acd-nav-tile-val' : ''}">${value}</div>
         ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
       </div>`;
     document.getElementById('acd-meta').innerHTML = `
       <div class="fd-tile-grid">
         ${tile('TYPE',     'Managed Account', d.short_name)}
         ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
-        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions')}
         ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), 'Annual advisory')}
       </div>`;
   }
@@ -2838,61 +2828,148 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const rows = await r.json();
       el.innerHTML = renderPositionsPanel(rows);
+      // Sum market values from positions and update NAV tile
+      let totalMV = 0;
+      (rows || []).forEach(p => {
+        totalMV += parseFloat(p.market_value || 0);
+      });
+      if (totalMV > 0) {
+        const navEl = document.getElementById('acd-nav-tile-val');
+        if (navEl) navEl.textContent = fmtUSD(totalMV);
+      }
     } catch (e) {
       el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
     }
   }
 
   async function loadAcctYtdSections(fundId) {
+    const elP = document.getElementById('acd-perf-tiles');
     const elB = document.getElementById('acd-balance');
     const elA = document.getElementById('acd-attribution');
     const elH = document.getElementById('acd-history');
-    elB.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
-    elA.innerHTML = '';
-    elH.innerHTML = '';
+    elB.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    elA.innerHTML = ''; elH.innerHTML = ''; if (elP) elP.innerHTML = '';
     try {
       const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const cache = await r.json();
-      const data = cache.result_json ? (typeof cache.result_json === 'string' ? JSON.parse(cache.result_json) : cache.result_json) : null;
+      const data = cache.result_json
+        ? (typeof cache.result_json === 'string' ? JSON.parse(cache.result_json) : cache.result_json)
+        : null;
       if (!data) throw new Error('no data');
+      renderAcctPerfTiles(data, cache.ytd_pct);
       renderAcctBalance(data, cache.ytd_pct);
       renderAcctAttribution(data);
       renderAcctHistory(data);
     } catch (e) {
-      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-empty">No YTD calculation run yet. Use the "Run YTD Calculation" form below with 3 Fidelity CSVs.</div></section>`;
+      if (elP) elP.innerHTML = '';
+      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header><div class="tab-empty">No YTD calculation run yet. Use the "Run YTD Calculation" form below with 3 Fidelity CSVs.</div></section>`;
     }
+  }
+
+  function renderAcctPerfTiles(data, cachedYtdPct) {
+    const elP = document.getElementById('acd-perf-tiles');
+    if (!elP) return;
+    const mc   = data.monthly_chart;
+    const spy  = data.spy_monthly;
+    // md_return_pct is already a % value (e.g. 8.4 means 8.4%)
+    const mdPct  = data.md_return_pct != null ? data.md_return_pct
+                 : (cachedYtdPct != null ? cachedYtdPct : null);
+    const spyPts = spy && spy.points ? spy.points : [];
+    const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
+    const alpha  = (mdPct != null && spyPct != null) ? mdPct - spyPct : null;
+    const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+
+    // Benchmark selector (scrollable)
+    const selOpts = BENCH_OPTIONS.map(o =>
+      `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    elP.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));flex:1;margin:0;">
+          <div class="fd-tile"><div class="fd-tile-label">YTD (MOD. DIETZ)</div><div class="fd-tile-val" style="${cls(mdPct)}">${fmtP(mdPct)}</div></div>
+          <div class="fd-tile" id="acd-bench-tile"><div class="fd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div><div class="fd-tile-val" id="acd-bench-val" style="${cls(spyPct)}">${fmtP(spyPct)}</div></div>
+          <div class="fd-tile"><div class="fd-tile-label">ALPHA</div><div class="fd-tile-val" id="acd-alpha-val" style="${cls(alpha)}">${fmtP(alpha)}</div></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;min-width:170px;">
+          <label style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;">BENCHMARK</label>
+          <select id="acd-bench-select" style="background:var(--navy-mid);border:1px solid var(--panel-edge);color:white;border-radius:6px;padding:5px 8px;font-size:12px;height:32px;cursor:pointer;">
+            ${selOpts}
+          </select>
+        </div>
+      </div>`;
+
+    document.getElementById('acd-bench-select')?.addEventListener('change', e => {
+      _acctBenchKey = e.target.value;
+      if (_acctChartData) fetchBenchAndRedraw(_acctChartData.mc, _acctChartData.spy);
+    });
+  }
+
+  async function fetchBenchAndRedraw(mc, baseSpy) {
+    // baseSpy is the stored SPY data; if user picks different bench, fetch it
+    let benchData = baseSpy;
+    if (_acctBenchKey !== 'SPY') {
+      try {
+        const r = await window.dgaFetch('/api/market/spy-monthly?ticker=' + encodeURIComponent(_acctBenchKey));
+        if (r.ok) benchData = await r.json();
+      } catch (_) {}
+    }
+    // Update bench tile values
+    const pts = benchData && benchData.points ? benchData.points : [];
+    const benchYtd = pts.length ? pts[pts.length - 1].ytd_pct : null;
+    const benchLabel = BENCH_OPTIONS.find(o => o.key === _acctBenchKey)?.key || _acctBenchKey;
+    const el = document.getElementById('acd-bench-label');
+    if (el) el.textContent = benchLabel + ' YTD';
+    const bv = document.getElementById('acd-bench-val');
+    if (bv) {
+      bv.textContent = benchYtd != null ? (benchYtd >= 0 ? '+' : '') + benchYtd.toFixed(2) + '%' : '—';
+      bv.style.color = benchYtd != null ? (benchYtd >= 0 ? 'var(--green)' : 'var(--red)') : '';
+    }
+    // Alpha update
+    const mc2 = mc;
+    const mdPct = _acctChartData?.mdPct;
+    if (mdPct != null && benchYtd != null) {
+      const alpha = mdPct - benchYtd;
+      const av = document.getElementById('acd-alpha-val');
+      if (av) {
+        av.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
+        av.style.color = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+    }
+    drawAcctBalanceChart(mc, benchData);
   }
 
   function renderAcctBalance(data, cachedYtdPct) {
     const elB = document.getElementById('acd-balance');
-    const mc  = data.monthly_chart;
-    const spy = data.spy_monthly;
-    const mdPct  = (data.modified_dietz != null ? data.modified_dietz : cachedYtdPct);
-    const spyPct = spy && spy.points && spy.points.length ? spy.points[spy.points.length-1].ytd_pct : null;
-    const alpha  = (mdPct != null && spyPct != null) ? mdPct - spyPct : null;
-    const fmtPct = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-    const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
-    const tiles = `
-      <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:0 0 12px;">
-        <div class="fd-tile"><div class="fd-tile-label">YTD (MOD. DIETZ)</div><div class="fd-tile-val" style="${cls(mdPct)}">${fmtPct(mdPct)}</div></div>
-        <div class="fd-tile"><div class="fd-tile-label">SPY YTD</div><div class="fd-tile-val" style="${cls(spyPct)}">${fmtPct(spyPct)}</div></div>
-        <div class="fd-tile"><div class="fd-tile-label">ALPHA</div><div class="fd-tile-val" style="${cls(alpha)}">${fmtPct(alpha)}</div></div>
-      </div>`;
-    if (!mc || !mc.points || !mc.points.length) {
-      elB.innerHTML = tiles + `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-empty">Upload an Investment Balance CSV during YTD calculation to enable the chart.</div></section>`;
+    // monthly_chart returns { ok, monthly: [...], begin_value, end_value }
+    const mc   = data.monthly_chart;
+    const spy  = data.spy_monthly;
+    const pts  = mc && mc.monthly ? mc.monthly : [];
+
+    // Store for benchmark re-draw
+    const mdPct = data.md_return_pct != null ? data.md_return_pct : (cachedYtdPct || null);
+    _acctChartData = { mc, spy, mdPct };
+
+    if (!pts.length) {
+      elB.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header>
+          <div class="tab-empty">Upload a Fidelity "Investment Balance" CSV in the YTD calculator to enable the monthly chart.</div>
+        </section>`;
       return;
     }
-    elB.innerHTML = tiles + `
+    elB.innerHTML = `
       <section class="panel">
         <header class="panel-head">
-          <span class="panel-title">Monthly Investment Balance vs SPY</span>
-          <span class="panel-badge">${mc.points.length} months</span>
+          <span class="panel-title">Monthly Investment Balance vs Benchmark</span>
+          <span class="panel-badge">${pts.length} months</span>
         </header>
         <div class="fd-balance-canvas-wrap"><canvas id="acd-balance-canvas"></canvas></div>
-        <div style="display:flex;gap:18px;justify-content:center;padding:8px 0 12px;font-size:11px;">
+        <div style="display:flex;gap:18px;justify-content:center;padding:8px 0 12px;font-size:11px;" id="acd-chart-legend">
           <span style="color:#5BB8D4;">● Account balance (normalized)</span>
-          <span style="color:#c9a84c;">● SPY benchmark (normalized)</span>
+          <span style="color:#c9a84c;" id="acd-bench-legend">● ${_acctBenchKey} benchmark (normalized)</span>
         </div>
       </section>`;
     drawAcctBalanceChart(mc, spy);
@@ -2901,28 +2978,43 @@
   function drawAcctBalanceChart(mc, spy) {
     const canvas = document.getElementById('acd-balance-canvas');
     if (!canvas) return;
-    const pts = mc.points || [];
+    // monthly_chart data uses .monthly[], each entry has .end_value and .label
+    const pts = (mc && mc.monthly) ? mc.monthly : [];
     if (!pts.length) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
+    if (!rect.width) return;
     canvas.width  = rect.width  * dpr;
     canvas.height = rect.height * dpr;
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     const W = rect.width, H = rect.height;
-    const padL = 60, padR = 18, padT = 14, padB = 36;
+    const padL = 62, padR = 18, padT = 14, padB = 36;
 
-    // Normalize to first point = 1.0 so account & SPY are on same y-axis
-    const acctVals = pts.map(p => p.balance ?? p.value ?? 0);
+    // Normalize account: each point starts at 1.0 (first month = 1.0)
+    const acctVals = pts.map(p => p.end_value ?? 0);
     const acctBase = acctVals[0] || 1;
     const acctNorm = acctVals.map(v => v / acctBase);
-    let spyNorm = [];
+
+    // Build SPY norm aligned to account months by month number
+    let benchNorm = [];
     if (spy && spy.points && spy.points.length) {
-      // Align SPY points to account months by index (best effort).
-      spyNorm = spy.points.map(p => p.norm).slice(0, pts.length);
-      while (spyNorm.length < pts.length) spyNorm.push(spyNorm[spyNorm.length - 1] || 1);
+      // spy.points[i].month is "2026-01" format, pts[i].month is 1..12 integer
+      const spyByMonth = {};
+      spy.points.forEach(p => {
+        const m = parseInt((p.month || '').slice(5, 7), 10);
+        spyByMonth[m] = p.norm;
+      });
+      // Normalize SPY to 1.0 at the same starting month as account
+      const firstMo = pts[0].month;
+      const spyStart = spyByMonth[firstMo] || spy.points[0].norm || 1;
+      benchNorm = pts.map(p => {
+        const n = spyByMonth[p.month];
+        return n != null ? n / spyStart : null;
+      });
     }
-    const allVals = [...acctNorm, ...spyNorm.filter(v => v != null)];
+
+    const allVals = [...acctNorm, ...benchNorm.filter(v => v != null)];
     const minV = Math.min(...allVals) * 0.98, maxV = Math.max(...allVals) * 1.02;
     const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
     const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(0.0001, maxV - minV));
@@ -2939,31 +3031,39 @@
       ctx.textAlign = 'right';
       ctx.fillText(((v - 1) * 100 >= 0 ? '+' : '') + ((v - 1) * 100).toFixed(1) + '%', padL - 6, y + 3);
     }
-    // X labels
+    // X labels — pts[i].label = "Jan", "Feb" etc.
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = '10px -apple-system,sans-serif';
     ctx.textAlign = 'center';
     pts.forEach((p, i) => {
       if (pts.length > 12 && i % 2) return;
-      ctx.fillText((p.month || p.label || '').slice(0, 7), xAt(i), H - 18);
+      ctx.fillText(p.label || String(p.month || ''), xAt(i), H - 18);
     });
-    // Account line
+    // Account line (cyan)
     ctx.strokeStyle = '#5BB8D4';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     acctNorm.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yAt(v)) : ctx.lineTo(xAt(i), yAt(v)));
     ctx.stroke();
     ctx.fillStyle = '#5BB8D4';
     acctNorm.forEach((v, i) => { ctx.beginPath(); ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2); ctx.fill(); });
-    // SPY line
-    if (spyNorm.length) {
+    // Benchmark line (gold dashed)
+    if (benchNorm.length) {
       ctx.strokeStyle = '#c9a84c';
-      ctx.setLineDash([4, 4]);
+      ctx.setLineDash([5, 4]);
       ctx.lineWidth = 2;
       ctx.beginPath();
-      spyNorm.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yAt(v)) : ctx.lineTo(xAt(i), yAt(v)));
+      let started = false;
+      benchNorm.forEach((v, i) => {
+        if (v == null) return;
+        if (!started) { ctx.moveTo(xAt(i), yAt(v)); started = true; }
+        else ctx.lineTo(xAt(i), yAt(v));
+      });
       ctx.stroke();
       ctx.setLineDash([]);
+      // Update legend label
+      const leg = document.getElementById('acd-bench-legend');
+      if (leg) leg.textContent = '● ' + _acctBenchKey + ' benchmark (normalized)';
     }
   }
 
@@ -2971,36 +3071,43 @@
     const el = document.getElementById('acd-attribution');
     const rows = data.attribution || [];
     if (!rows.length) { el.innerHTML = ''; return; }
-    const fmtPct = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+    // contribution_pct and ticker_return_pct are already in % (e.g. 1.5 = 1.5%)
+    const fmtP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const sortedRows = [...rows].sort((a, b) =>
+      (b.contribution_pct || 0) - (a.contribution_pct || 0));
     el.innerHTML = `
       <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">YTD Attribution (per-stock contribution)</span>
-          <span class="panel-badge">${rows.length} names</span>
-        </header>
-        <table class="data-table" style="width:100%;">
-          <thead><tr>
-            <th>Symbol</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th>
-            <th style="text-align:right;">Last</th><th style="text-align:right;">P/L</th>
-            <th style="text-align:right;">% Return</th><th style="text-align:right;">Contribution to YTD</th>
-          </tr></thead>
-          <tbody>
-            ${rows.map(r => {
-              const pl = r.gain_loss ?? r.pl ?? 0;
-              const pct = r.return_pct ?? r.pct_return;
-              const contrib = r.contribution_pct ?? r.contribution;
-              return `<tr>
-                <td style="font-weight:800;color:var(--blue);">${r.symbol}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${(r.qty || r.quantity || 0).toFixed(2)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.avg_cost != null ? fmtUSD(r.avg_cost) : '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.last_price != null ? fmtUSD(r.last_price) : '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;${pl >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(pl)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;${(pct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtPct(pct)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;${(contrib||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtPct(contrib)}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
+        <details>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">YTD Attribution (per-stock contribution)</span>
+            <span class="panel-badge">${rows.length} names</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <table class="data-table" style="width:100%;">
+            <thead><tr>
+              <th>Ticker</th><th style="text-align:right;">End Shares</th>
+              <th style="text-align:right;">Jan 1 Price</th><th style="text-align:right;">End Price</th>
+              <th style="text-align:right;">Dollar Gain</th><th style="text-align:right;">Stock Return</th>
+              <th style="text-align:right;">Portfolio Contribution</th>
+            </tr></thead>
+            <tbody>
+              ${sortedRows.map(r => {
+                const gain    = r.dollar_gain ?? 0;
+                const retPct  = r.ticker_return_pct;
+                const contrib = r.contribution_pct;
+                return `<tr>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_shares != null ? r.end_shares.toFixed(3) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_price != null ? fmtUSD(r.end_price) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;${gain >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(gain)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;${(contrib||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(contrib)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </details>
       </section>`;
   }
 
@@ -3010,21 +3117,24 @@
     if (!flows.length) { el.innerHTML = ''; return; }
     el.innerHTML = `
       <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">YTD Account History (Cash Flows)</span>
-          <span class="panel-badge">${flows.length} transactions</span>
-        </header>
-        <table class="data-table" style="width:100%;">
-          <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
-          <tbody>
-            ${flows.map(f => `<tr>
-              <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
-              <td>${f.action || f.type || '—'}</td>
-              <td style="color:var(--blue);font-weight:700;">${f.symbol || '—'}</td>
-              <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
+        <details>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">YTD Account History (Cash Flows)</span>
+            <span class="panel-badge">${flows.length} transactions</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
+            <tbody>
+              ${flows.map(f => `<tr>
+                <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
+                <td>${f.action || f.type || '—'}</td>
+                <td style="color:var(--blue);font-weight:700;">${f.symbol || f.ticker || '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </details>
       </section>`;
   }
 

@@ -713,6 +713,7 @@
       const r = await window.dgaFetch('/api/v2/lp/me/overview');
       if (!r.ok) throw new Error('overview ' + r.status);
       const data = await r.json();
+      window._lpOverviewData = data;
       renderOverview(data);
     } catch (err) {
       console.warn('[lp-overview]', err);
@@ -764,51 +765,77 @@
     tiles.push(tile('YOUR ROLE', me.role === 'gp' ? 'General Partner' : 'Limited Partner', esc(me.email)));
     $stats.innerHTML = tiles.join('');
 
-    const fundCards = funds.map(f => `
-      <div class="card">
+    const fundCards = funds.map(f => {
+      const stakeVal   = f.stake_value;
+      const effNav     = f.effective_nav || f.fund_nav;
+      const totalCmt   = f.total_committed;
+      const sharePct   = (f.commitment && totalCmt) ? (f.commitment / totalCmt * 100).toFixed(1) + '%' : '—';
+      const navSrc     = f.fund_nav ? 'Annual snapshot' : (f.market_nav ? 'Live market value' : 'Not available');
+      return `
+      <div class="card lp-fund-card" data-fund-id="${esc(f.fund_id)}" style="cursor:pointer;transition:box-shadow .15s;" tabindex="0">
         <div class="card-head">
           <span class="card-title">${esc(f.fund_name)}</span>
           <span class="card-badge">${esc(f.short_name)}</span>
           ${f.lp_alias ? `<span style="font-size:10px;color:var(--mid);margin-left:8px;letter-spacing:0.6px;">YOUR ALIAS · <strong style="color:var(--blue-dark);">${esc(f.lp_alias)}</strong></span>` : ''}
+          <span style="margin-left:auto;font-size:10px;color:var(--blue);letter-spacing:0.5px;">View details ›</span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:2px;">
           <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
-            <div class="stat-label">FUND NAV</div>
-            <div class="stat-val mono">${f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</div>
+            <div class="stat-label">YOUR CURRENT STAKE</div>
+            <div class="stat-val mono" style="color:var(--ink);font-size:22px;">${stakeVal != null ? fmtUSD(stakeVal) : '—'}</div>
+            <div class="stat-delta" style="color:var(--mid);">${sharePct} of fund · ${esc(navSrc)}</div>
+          </div>
+          <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
+            <div class="stat-label">FUND NAV (TOTAL)</div>
+            <div class="stat-val mono">${effNav != null ? fmtUSD(effNav) : '—'}</div>
             ${f.fund_nav_as_of
               ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(f.fund_nav_as_of)}</div>`
-              : `<div class="stat-delta" style="color:var(--mid);">No snapshot entered yet</div>`}
+              : `<div class="stat-delta" style="color:var(--mid);">Live from positions</div>`}
           </div>
           <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">YOUR COMMITMENT</div>
             <div class="stat-val mono">${f.commitment ? fmtUSD(f.commitment) : '—'}</div>
-            <div class="stat-delta" style="color:var(--mid);">${f.lp_count} LP${f.lp_count !== 1 ? 's' : ''} in fund</div>
+            <div class="stat-delta" style="color:var(--mid);">${f.lp_count} LP${f.lp_count !== 1 ? 's' : ''} in fund · ${fmtUSD(totalCmt || 0)} total raised</div>
           </div>
         </div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--mid);">
-          Detailed capital account activity, NAV history, K-1s and quarterly statements will appear here as they are published.
+        <!-- Expandable detail panel -->
+        <div class="lp-detail-panel" id="lp-detail-${esc(f.fund_id)}" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);">
+          <div class="lp-detail-loading" style="font-size:12px;color:var(--mid);padding:8px 0;">Loading positions…</div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
-    const acctCards = accts.map(a => `
-      <div class="card">
+    const acctCards = accts.map(a => {
+      const ytd = a.ytd_pct;
+      const ytdStr = ytd != null ? (ytd >= 0 ? '+' : '') + ytd.toFixed(2) + '%' : '—';
+      const ytdColor = ytd != null ? (ytd >= 0 ? 'color:var(--green);' : 'color:var(--red);') : '';
+      return `
+      <div class="card lp-acct-card" data-fund-id="${esc(a.fund_id)}" style="cursor:pointer;transition:box-shadow .15s;" tabindex="0">
         <div class="card-head">
           <span class="card-title">${esc(a.account_name)}</span>
           <span class="card-badge">MANAGED ACCOUNT · ${esc(a.short_name)}</span>
+          <span style="margin-left:auto;font-size:10px;color:var(--blue);letter-spacing:0.5px;">View details ›</span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:2px;">
           <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
-            <div class="stat-label">ACCOUNT NAV</div>
-            <div class="stat-val mono">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
+            <div class="stat-label">ACCOUNT VALUE</div>
+            <div class="stat-val mono" style="color:var(--ink);font-size:22px;">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
             ${a.nav_as_of
               ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(a.nav_as_of)}</div>`
-              : `<div class="stat-delta" style="color:var(--mid);">No snapshot entered yet</div>`}
+              : `<div class="stat-delta" style="color:var(--mid);">Live from positions</div>`}
+          </div>
+          <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
+            <div class="stat-label">YTD RETURN</div>
+            <div class="stat-val mono" style="${ytdColor}">${ytdStr}</div>
+            ${a.ytd_as_of ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(a.ytd_as_of)}</div>` : ''}
           </div>
         </div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--mid);">
-          Direct managed account in your name. Rebalance suggestions and recent activity will appear here.
+        <!-- Expandable detail panel -->
+        <div class="lp-detail-panel" id="lp-acct-detail-${esc(a.fund_id)}" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);">
+          <div class="lp-detail-loading" style="font-size:12px;color:var(--mid);padding:8px 0;">Loading positions…</div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     const sectionHeader = (label, count) => `
       <div style="margin:18px 0 8px;display:flex;align-items:center;gap:10px;">
@@ -1140,6 +1167,86 @@
     return iso ? new Date(iso).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   }
+
+  // ── LP Fund / Account card expand/collapse ───────────────────────
+  const _lpDetailCache = {};
+
+  function buildFundDetail(f) {
+    const effNav   = f.effective_nav || f.fund_nav;
+    const totalCmt = f.total_committed;
+    const stake    = f.stake_value;
+    const sharePct = (f.commitment && totalCmt) ? (f.commitment / totalCmt * 100).toFixed(2) : null;
+    const navSrc   = f.fund_nav ? 'Annual NAV snapshot' : (f.market_nav ? 'Live market value (positions)' : null);
+    const rows = [
+      ['Your Commitment',     f.commitment ? fmtUSD(f.commitment) : '—'],
+      ['Total Fund Raised',   totalCmt     ? fmtUSD(totalCmt)     : '—'],
+      ['Your Pro-Rata Share', sharePct     ? sharePct + '%'       : '—'],
+      ['Fund NAV',            effNav       ? fmtUSD(effNav) + (navSrc ? ' (' + navSrc + ')' : '') : '—'],
+      ['Your Estimated Stake', stake       ? '<strong style="color:var(--green);font-size:15px;">' + fmtUSD(stake) + '</strong>' : '—'],
+    ];
+    return `
+      <div style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:1px;margin-bottom:10px;">STAKE BREAKDOWN</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        ${rows.map((r,i) => `<tr style="background:${i%2===0?'var(--offwhite)':'white'};">
+          <td style="padding:7px 10px;color:var(--mid);font-weight:600;border:1px solid var(--line);">${r[0]}</td>
+          <td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;border:1px solid var(--line);">${r[1]}</td>
+        </tr>`).join('')}
+      </table>
+      <div style="margin-top:10px;font-size:11px;color:var(--mid);">
+        Stake value = Your Commitment ÷ Total Fund Raised × Fund NAV.
+        K-1s and quarterly statements are distributed via Dropbox at period end.
+      </div>`;
+  }
+
+  function buildAcctDetail(a) {
+    const ytd    = a.ytd_pct;
+    const ytdStr = ytd != null ? (ytd >= 0 ? '+' : '') + ytd.toFixed(2) + '%' : '—';
+    const ytdC   = ytd != null ? (ytd >= 0 ? 'var(--green)' : 'var(--red)') : 'inherit';
+    const rows = [
+      ['Account Value',    a.nav        ? fmtUSD(a.nav)                                     : '—'],
+      ['YTD Return',       ytd != null  ? `<span style="color:${ytdC};font-weight:700;">${ytdStr}</span>` : '—'],
+      ['Value as of',      a.nav_as_of  || (a.market_nav ? 'Live (positions)' : '—')],
+      ['YTD updated',      a.ytd_as_of  || '—'],
+    ];
+    return `
+      <div style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:1px;margin-bottom:10px;">ACCOUNT SUMMARY</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        ${rows.map((r,i) => `<tr style="background:${i%2===0?'var(--offwhite)':'white'};">
+          <td style="padding:7px 10px;color:var(--mid);font-weight:600;border:1px solid var(--line);">${r[0]}</td>
+          <td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;border:1px solid var(--line);">${r[1]}</td>
+        </tr>`).join('')}
+      </table>
+      <div style="margin-top:10px;font-size:11px;color:var(--mid);">
+        This is your directly managed account. Full position-level detail and performance reports are available from your advisor.
+      </div>`;
+  }
+
+  document.addEventListener('click', e => {
+    const fundCard = e.target.closest('.lp-fund-card');
+    const acctCard = e.target.closest('.lp-acct-card');
+    if (!fundCard && !acctCard) return;
+    const card = fundCard || acctCard;
+    const fid  = card.dataset.fundId;
+    const panelId = fundCard ? `lp-detail-${fid}` : `lp-acct-detail-${fid}`;
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen && !panel.dataset.loaded) {
+      panel.dataset.loaded = '1';
+      // Build detail from cached overview data
+      const overviewData = window._lpOverviewData;
+      if (fundCard && overviewData) {
+        const f = (overviewData.funds || []).find(x => x.fund_id === fid);
+        panel.innerHTML = f ? buildFundDetail(f)
+          : '<div style="color:var(--mid);font-size:12px;">No data available.</div>';
+      } else if (acctCard && overviewData) {
+        const a = (overviewData.managed_accounts || []).find(x => x.fund_id === fid);
+        panel.innerHTML = a ? buildAcctDetail(a)
+          : '<div style="color:var(--mid);font-size:12px;">No data available.</div>';
+      }
+    }
+  });
 
   function closeReportModal() {
     const m = document.getElementById('report-modal');
