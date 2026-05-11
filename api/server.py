@@ -2271,7 +2271,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui66-20260511"
+WEB_BUILD_VERSION = "ui67-20260511"
 
 
 @app.get("/api/build")
@@ -5532,10 +5532,11 @@ async def fund_export_excel(request: Request, fund_id: str = None):
             # ── Fund metadata ─────────────────────────────────────────────────
             cur.execute("""
                 SELECT name, short_name, inception_date, status,
-                       mgmt_fee_pct, carry_pct, hurdle_pct
+                       mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
                   FROM funds WHERE id = %s
             """, (fid,))
             fund = dict(cur.fetchone())
+            is_acct = fund.get('fund_type') == 'managed_account'
 
             # ── Market NAV ────────────────────────────────────────────────────
             nav = _fund_market_nav(cur, fid)
@@ -5557,51 +5558,309 @@ async def fund_export_excel(request: Request, fund_id: str = None):
             symbols   = [p['symbol'] for p in positions if p['symbol']]
             prices    = _fetch_prices(symbols)
 
-            # ── LPs ───────────────────────────────────────────────────────────
-            cur.execute("""
-                SELECT l.legal_name, l.entity_type,
-                       COALESCE(SUM(c.commitment_amount), 0) AS commitment
-                  FROM lps l
-                  LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
-                 WHERE l.fund_id = %s AND l.status = 'active'
-                 GROUP BY l.id, l.legal_name, l.entity_type
-                HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
-                 ORDER BY commitment DESC
-            """, (fid,))
-            lps = [dict(r) for r in cur.fetchall()]
-            total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
+            # ── YTD cache (managed accounts only) ────────────────────────────
+            ytd_cache = None
+            if is_acct:
+                try:
+                    cur.execute("""
+                        SELECT nav, ytd_pct, result_json, updated_at
+                          FROM managed_account_ytd_cache WHERE fund_id = %s
+                    """, (fid,))
+                    row = cur.fetchone()
+                    if row:
+                        import json as _json2
+                        ytd_cache = dict(row)
+                        if ytd_cache.get('result_json'):
+                            ytd_cache['result'] = _json2.loads(ytd_cache['result_json'])
+                except Exception:
+                    ytd_cache = None
 
-            # ── Annual snapshots ──────────────────────────────────────────────
-            try:
+            # ── LPs (LP funds only) ───────────────────────────────────────────
+            lps             = []
+            total_committed = 0.0
+            snapshots       = []
+            txns            = []
+            if not is_acct:
                 cur.execute("""
-                    SELECT year, start_nav, end_nav, contributions,
-                           hurdle_amount, gross_profit, carry_earned,
-                           carry_paid, carry_rolled, gp_equity_end
-                      FROM fund_annual_snapshots
-                     WHERE fund_id = %s ORDER BY year ASC
+                    SELECT l.legal_name, l.entity_type,
+                           COALESCE(SUM(c.commitment_amount), 0) AS commitment
+                      FROM lps l
+                      LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
+                     WHERE l.fund_id = %s AND l.status = 'active'
+                     GROUP BY l.id, l.legal_name, l.entity_type
+                    HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
+                     ORDER BY commitment DESC
                 """, (fid,))
-                snapshots = [dict(r) for r in cur.fetchall()]
-            except Exception:
-                snapshots = []
+                lps = [dict(r) for r in cur.fetchall()]
+                total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
 
-            # ── Recent transactions ───────────────────────────────────────────
-            cur.execute("""
-                SELECT t.effective_date, t.category, t.description,
-                       ROUND(SUM(CASE WHEN tl.debit  > 0 THEN tl.debit  ELSE 0 END), 2) AS total_debit,
-                       ROUND(SUM(CASE WHEN tl.credit > 0 THEN tl.credit ELSE 0 END), 2) AS total_credit
-                  FROM transactions t
-                  JOIN transaction_lines tl ON tl.transaction_id = t.id
-                 WHERE t.fund_id = %s
-                 GROUP BY t.id, t.effective_date, t.category, t.description
-                 ORDER BY t.effective_date DESC
-                 LIMIT 200
-            """, (fid,))
-            txns = [dict(r) for r in cur.fetchall()]
+                try:
+                    cur.execute("""
+                        SELECT year, start_nav, end_nav, contributions,
+                               hurdle_amount, gross_profit, carry_earned,
+                               carry_paid, carry_rolled, gp_equity_end
+                          FROM fund_annual_snapshots
+                         WHERE fund_id = %s ORDER BY year ASC
+                    """, (fid,))
+                    snapshots = [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    snapshots = []
+
+                cur.execute("""
+                    SELECT t.effective_date, t.category, t.description,
+                           ROUND(SUM(CASE WHEN tl.debit  > 0 THEN tl.debit  ELSE 0 END), 2) AS total_debit,
+                           ROUND(SUM(CASE WHEN tl.credit > 0 THEN tl.credit ELSE 0 END), 2) AS total_credit
+                      FROM transactions t
+                      JOIN transaction_lines tl ON tl.transaction_id = t.id
+                     WHERE t.fund_id = %s
+                     GROUP BY t.id, t.effective_date, t.category, t.description
+                     ORDER BY t.effective_date DESC
+                     LIMIT 200
+                """, (fid,))
+                txns = [dict(r) for r in cur.fetchall()]
 
     finally:
         conn.close()
 
-    # ── Build workbook ────────────────────────────────────────────────────────
+    # ── Managed account: separate workbook ───────────────────────────────────
+    if is_acct:
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        from fastapi.responses import StreamingResponse as _SR2
+
+        NAVY2  = '0E1D38'; GOLD2  = 'C9A84C'; LGRAY2 = 'F4F6F9'
+        WHITE2 = 'FFFFFF'; DKGRAY2= '444444'; GREEN2 = '1A7F40'; RED2 = 'CC3333'
+        thin2 = Side(style='thin', color='CCCCCC')
+        bdr2  = Border(left=thin2, right=thin2, top=thin2, bottom=thin2)
+
+        def _fill2(h): return PatternFill('solid', fgColor=h)
+        def _hf2(sz=10, c=GOLD2): return Font(bold=True, color=c, size=sz, name='Calibri')
+        def _bf2(sz=10, bold=False, c=DKGRAY2): return Font(bold=bold, size=sz, color=c, name='Calibri')
+        def _ctr2(): return Alignment(horizontal='center', vertical='center')
+        def _rgt2(): return Alignment(horizontal='right', vertical='center')
+
+        def _arow2(ws, ri, vals, fmts=None, bg=None, bold=False, fc=DKGRAY2):
+            for ci, val in enumerate(vals, 1):
+                cell = ws.cell(row=ri, column=ci, value=val)
+                cell.font   = Font(bold=bold, size=10, color=fc, name='Calibri')
+                cell.border = bdr2
+                if bg: cell.fill = _fill2(bg)
+                if fmts and ci-1 < len(fmts) and fmts[ci-1]:
+                    cell.number_format = fmts[ci-1]; cell.alignment = _rgt2()
+                else:
+                    cell.alignment = Alignment(vertical='center')
+
+        def _whdr2(ws, ri, cols, bg=NAVY2):
+            for ci, c in enumerate(cols, 1):
+                cell = ws.cell(row=ri, column=ci, value=c)
+                cell.font = _hf2(); cell.fill = _fill2(bg)
+                cell.border = bdr2; cell.alignment = _ctr2()
+            ws.row_dimensions[ri].height = 18
+
+        def _aw2(ws, mn=10, mx=40):
+            for col in ws.columns:
+                best = mn
+                for cell in col:
+                    try: best = max(best, len(str(cell.value or '')) + 2)
+                    except: pass
+                ws.column_dimensions[get_column_letter(col[0].column)].width = min(best, mx)
+
+        def _sec2(ws, ri, text, span):
+            cell = ws.cell(row=ri, column=1, value=text)
+            cell.font = Font(bold=True, size=11, color=NAVY2, name='Calibri')
+            cell.fill = _fill2('E8F0F8'); cell.border = bdr2
+            cell.alignment = Alignment(horizontal='left', vertical='center')
+            ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=span)
+            ws.row_dimensions[ri].height = 16
+
+        FMT_USD = '$#,##0.00'; FMT_USD0 = '$#,##0'
+        FMT_PCT = '0.00%';    FMT_PCT1 = '0.0%'
+        FMT_NUM = '#,##0.##'; FMT_DATE = 'YYYY-MM-DD'
+        today_str2 = datetime.utcnow().strftime('%B %d, %Y')
+
+        result   = (ytd_cache or {}).get('result') or {}
+        ytd_pct  = float((ytd_cache or {}).get('ytd_pct') or result.get('md_return_pct') or 0) / 100.0
+        begin_v  = float(result.get('begin_value') or 0)
+        end_v    = float(result.get('end_value') or nav or 0)
+        net_flow = float(result.get('net_flow') or 0)
+        attribution = result.get('attribution') or []
+        monthly_raw = (result.get('monthly_chart') or {}).get('monthly') or []
+        spy_monthly = result.get('spy_monthly') or []
+        flows       = result.get('flows') or []
+        updated_at  = str((ytd_cache or {}).get('updated_at') or '')[:10] or today_str2
+
+        # SPY YTD
+        spy_ytd = 0.0
+        if spy_monthly:
+            spy_ytd = float(spy_monthly[-1].get('ytd_pct') or 0) / 100.0
+        alpha = ytd_pct - spy_ytd
+
+        wb2 = openpyxl.Workbook(); wb2.remove(wb2.active)
+
+        # ── Sheet 1: Account Summary ──────────────────────────────────────────
+        s1 = wb2.create_sheet('Account Summary')
+        s1.sheet_view.showGridLines = False
+        t = s1.cell(row=1, column=1, value=fund['name'])
+        t.font = Font(bold=True, size=16, color=NAVY2, name='Calibri')
+        s1.merge_cells('A1:D1'); s1.row_dimensions[1].height = 28
+        sub2 = s1.cell(row=2, column=1,
+                       value=f'DGA Capital — Managed Account Report  |  As of {today_str2}')
+        sub2.font = Font(size=10, color='888888', name='Calibri')
+        s1.merge_cells('A2:D2')
+
+        r = 4
+        _sec2(s1, r, 'ACCOUNT INFORMATION', 4); r += 1
+        info_rows = [
+            ('Account Name',   fund['name']),
+            ('Short Name',     fund.get('short_name', '')),
+            ('Inception Date', str(fund.get('inception_date', ''))[:10]),
+            ('Status',         (fund.get('status') or '').title()),
+            ('YTD Data As Of', updated_at),
+        ]
+        for i, (lbl, val) in enumerate(info_rows):
+            bg = LGRAY2 if i % 2 == 0 else WHITE2
+            _arow2(s1, r, [lbl, val, '', ''], bg=bg)
+            s1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY2, name='Calibri')
+            r += 1
+
+        r += 1
+        _sec2(s1, r, 'YTD PERFORMANCE', 4); r += 1
+        perf_data = [
+            ('Account NAV (End Value)', end_v,    FMT_USD0),
+            ('Jan 1 Value (Begin)',     begin_v,  FMT_USD0),
+            ('Net External Flows',      net_flow, FMT_USD0),
+            ('YTD Return (Mod Dietz)',  ytd_pct,  FMT_PCT),
+            ('SPY YTD Return',          spy_ytd,  FMT_PCT),
+            ('Alpha vs SPY',            alpha,    FMT_PCT),
+        ]
+        for i, (lbl, val, fmt) in enumerate(perf_data):
+            bg = LGRAY2 if i % 2 == 0 else WHITE2
+            _arow2(s1, r, [lbl, val, '', ''], fmts=[None, fmt, None, None], bg=bg)
+            s1.cell(row=r, column=1).font = Font(bold=True, size=10, color=DKGRAY2, name='Calibri')
+            vc = GREEN2 if lbl in ('Alpha vs SPY', 'YTD Return (Mod Dietz)') and val >= 0 \
+                 else RED2 if lbl in ('Alpha vs SPY', 'YTD Return (Mod Dietz)') and val < 0 \
+                 else DKGRAY2
+            s1.cell(row=r, column=2).font = Font(bold=True, size=10, color=vc, name='Calibri')
+            r += 1
+
+        s1.column_dimensions['A'].width = 30
+        s1.column_dimensions['B'].width = 22
+        s1.sheet_properties.tabColor = GOLD2
+
+        # ── Sheet 2: Portfolio Positions ──────────────────────────────────────
+        s2 = wb2.create_sheet('Portfolio Positions')
+        s2.sheet_view.showGridLines = False; s2.freeze_panes = 'A2'
+        pos_cols2 = ['Symbol', 'Security Name', 'Asset Class', 'Shares',
+                     'Avg Cost', 'Cost Basis', 'Last Price', 'Market Value',
+                     'Unrealized P/L', 'P/L %', 'Weight %']
+        _whdr2(s2, 1, pos_cols2)
+        total_mv2 = total_cb2 = total_unrl2 = 0.0
+        for i, p in enumerate(positions):
+            qty = float(p['qty'] or 0); avg = float(p['avg_cost'] or 0)
+            cb  = float(p['cost_basis'] or 0)
+            last = prices.get(p['symbol']) or avg
+            mv  = qty * last; unrl = mv - cb
+            pl_pct = (unrl / cb) if cb else 0.0
+            wt_pct = (mv / end_v) if end_v else 0.0
+            total_mv2 += mv; total_cb2 += cb; total_unrl2 += unrl
+            bg = WHITE2 if i % 2 == 0 else LGRAY2
+            _arow2(s2, i+2, [p['symbol'], p['sec_name'], p['asset_class'],
+                             qty, avg, cb, last, mv, unrl, pl_pct, wt_pct],
+                   fmts=[None, None, None, FMT_NUM, FMT_USD, FMT_USD0,
+                         FMT_USD, FMT_USD0, FMT_USD0, FMT_PCT1, FMT_PCT1], bg=bg)
+            c = s2.cell(row=i+2, column=9)
+            c.font = Font(size=10, color=GREEN2 if unrl >= 0 else RED2, name='Calibri')
+        tr2 = len(positions) + 2
+        _arow2(s2, tr2, ['TOTAL', '', '', '', '', total_cb2, '', total_mv2, total_unrl2, '', ''],
+               fmts=[None]*5 + [FMT_USD0, None, FMT_USD0, FMT_USD0, None, None],
+               bg=NAVY2, bold=True, fc=GOLD2)
+        _aw2(s2); s2.column_dimensions['B'].width = 38
+        s2.sheet_properties.tabColor = NAVY2
+
+        # ── Sheet 3: Monthly Balance vs SPY ───────────────────────────────────
+        if monthly_raw or spy_monthly:
+            s3 = wb2.create_sheet('Monthly Balance vs SPY')
+            s3.sheet_view.showGridLines = False; s3.freeze_panes = 'A2'
+            _whdr2(s3, 1, ['Month', 'Account End Balance', 'Account (Normalized)',
+                           'SPY (Normalized)', 'Spread'])
+            spy_by_month = {str(pt.get('month', ''))[:7]: pt for pt in spy_monthly}
+            norm_start = float(monthly_raw[0]['end_balance']) if monthly_raw else None
+            spy_start  = None
+            for i, mo in enumerate(monthly_raw):
+                mo_key = str(mo.get('month', ''))[:7]
+                spy_pt = spy_by_month.get(mo_key) or {}
+                bal    = float(mo.get('end_balance') or 0)
+                norm_a = (bal / norm_start) if norm_start else None
+                spy_n  = float(spy_pt.get('norm') or 0) or None
+                if spy_n and spy_start is None: spy_start = spy_n
+                spread = ((norm_a or 0) - (spy_n or 0)) if (norm_a and spy_n) else None
+                bg = WHITE2 if i % 2 == 0 else LGRAY2
+                _arow2(s3, i+2,
+                       [mo_key, bal, norm_a, spy_n, spread],
+                       fmts=[None, FMT_USD0, '0.000', '0.000', '+0.000;-0.000'], bg=bg)
+                if spread is not None:
+                    s3.cell(row=i+2, column=5).font = Font(
+                        size=10, color=GREEN2 if spread >= 0 else RED2, name='Calibri')
+            _aw2(s3)
+            s3.sheet_properties.tabColor = NAVY2
+
+        # ── Sheet 4: YTD Attribution ──────────────────────────────────────────
+        if attribution:
+            s4 = wb2.create_sheet('YTD Attribution')
+            s4.sheet_view.showGridLines = False; s4.freeze_panes = 'A2'
+            _whdr2(s4, 1, ['Ticker', 'Security Name', 'Contribution ($)',
+                           'Contribution %', 'Shares', 'Avg Cost', 'Current Price',
+                           'P/L ($)', 'P/L %'])
+            for i, a in enumerate(sorted(attribution,
+                                         key=lambda x: float(x.get('contribution_pct') or 0),
+                                         reverse=True)):
+                contrib_d  = float(a.get('contribution_dollar') or 0)
+                contrib_p  = float(a.get('contribution_pct') or 0) / 100.0
+                pl_d       = float(a.get('gain_loss') or 0)
+                pl_p       = float(a.get('gain_loss_pct') or 0) / 100.0
+                bg = WHITE2 if i % 2 == 0 else LGRAY2
+                _arow2(s4, i+2,
+                       [a.get('ticker', ''), a.get('name', ''),
+                        contrib_d, contrib_p,
+                        float(a.get('shares') or 0),
+                        float(a.get('avg_cost') or 0),
+                        float(a.get('current_price') or 0),
+                        pl_d, pl_p],
+                       fmts=[None, None, FMT_USD0, FMT_PCT, FMT_NUM,
+                             FMT_USD, FMT_USD, FMT_USD0, FMT_PCT1],
+                       bg=bg)
+                c4 = s4.cell(row=i+2, column=3)
+                c4.font = Font(size=10, color=GREEN2 if contrib_d >= 0 else RED2, name='Calibri')
+            _aw2(s4); s4.column_dimensions['B'].width = 32
+            s4.sheet_properties.tabColor = NAVY2
+
+        # ── Sheet 5: Cash Flow History ────────────────────────────────────────
+        if flows:
+            s5 = wb2.create_sheet('Cash Flow History')
+            s5.sheet_view.showGridLines = False; s5.freeze_panes = 'A2'
+            _whdr2(s5, 1, ['Date', 'Description', 'Amount', 'Type'])
+            for i, f in enumerate(sorted(flows, key=lambda x: x.get('date', ''), reverse=True)):
+                amt = float(f.get('amount') or 0)
+                bg  = WHITE2 if i % 2 == 0 else LGRAY2
+                _arow2(s5, i+2,
+                       [f.get('date', ''), f.get('description', ''), amt,
+                        'Inflow' if amt > 0 else 'Outflow'],
+                       fmts=[None, None, FMT_USD0, None], bg=bg)
+                s5.cell(row=i+2, column=3).font = Font(
+                    size=10, color=GREEN2 if amt > 0 else RED2, name='Calibri')
+            _aw2(s5); s5.column_dimensions['B'].width = 38
+            s5.sheet_properties.tabColor = NAVY2
+
+        buf2 = io.BytesIO(); wb2.save(buf2); buf2.seek(0)
+        safe2 = fund.get('short_name', 'Account').replace('/', '-').replace('\\', '-')
+        fname2 = f"{safe2}_AccountReport_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+        return _SR2(
+            buf2,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': f'attachment; filename="{fname2}"'},
+        )
+
+    # ── Build workbook (LP fund) ──────────────────────────────────────────────
     wb = openpyxl.Workbook()
     wb.remove(wb.active)   # remove default sheet
 
@@ -5949,10 +6208,11 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
             fid = _resolve_fund_id(cur, fund_id)
             cur.execute("""
                 SELECT name, short_name, inception_date, status,
-                       mgmt_fee_pct, carry_pct, hurdle_pct
+                       mgmt_fee_pct, carry_pct, hurdle_pct, fund_type
                   FROM funds WHERE id = %s
             """, (fid,))
             fund = dict(cur.fetchone())
+            is_acct_pdf = fund.get('fund_type') == 'managed_account'
             nav = _fund_market_nav(cur, fid)
 
             cur.execute("""
@@ -5971,41 +6231,57 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
             symbols   = [p['symbol'] for p in positions if p['symbol']]
             prices    = _fetch_prices(symbols)
 
-            cur.execute("""
-                SELECT l.legal_name, l.entity_type,
-                       COALESCE(SUM(c.commitment_amount), 0) AS commitment
-                  FROM lps l
-                  LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
-                 WHERE l.fund_id = %s AND l.status = 'active'
-                 GROUP BY l.id, l.legal_name, l.entity_type
-                HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
-                 ORDER BY commitment DESC
-            """, (fid,))
-            lps = [dict(r) for r in cur.fetchall()]
-            total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
+            # YTD cache for managed accounts
+            ytd_cache_pdf = None
+            if is_acct_pdf:
+                try:
+                    cur.execute("""
+                        SELECT nav, ytd_pct, result_json, updated_at
+                          FROM managed_account_ytd_cache WHERE fund_id = %s
+                    """, (fid,))
+                    row = cur.fetchone()
+                    if row:
+                        import json as _json3
+                        ytd_cache_pdf = dict(row)
+                        if ytd_cache_pdf.get('result_json'):
+                            ytd_cache_pdf['result'] = _json3.loads(ytd_cache_pdf['result_json'])
+                except Exception:
+                    ytd_cache_pdf = None
+
+            lps             = []
+            total_committed = 0.0
+            if not is_acct_pdf:
+                cur.execute("""
+                    SELECT l.legal_name, l.entity_type,
+                           COALESCE(SUM(c.commitment_amount), 0) AS commitment
+                      FROM lps l
+                      LEFT JOIN commitments c ON c.lp_id = l.id AND c.superseded_by IS NULL
+                     WHERE l.fund_id = %s AND l.status = 'active'
+                     GROUP BY l.id, l.legal_name, l.entity_type
+                    HAVING COALESCE(SUM(c.commitment_amount), 0) > 0
+                     ORDER BY commitment DESC
+                """, (fid,))
+                lps = [dict(r) for r in cur.fetchall()]
+                total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
     finally:
         conn.close()
 
-    # ── Build PDF ─────────────────────────────────────────────────────────────
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter,
-                            leftMargin=0.75*inch, rightMargin=0.75*inch,
-                            topMargin=0.75*inch, bottomMargin=0.75*inch)
+    # ── Shared PDF helpers ────────────────────────────────────────────────────
+    _NAVY_PDF  = colors.HexColor('#0a1628')
+    _GOLD_PDF  = colors.HexColor('#c9a84c')
+    _LGRAY_PDF = colors.HexColor('#e8ecf2')
+    _GREEN_PDF = colors.HexColor('#1a7f40')
+    _RED_PDF   = colors.HexColor('#cc3333')
+    _WHITE_PDF = colors.white
+    _styles    = getSampleStyleSheet()
+    today_pdf  = datetime.utcnow().strftime('%B %d, %Y')
 
-    styles = getSampleStyleSheet()
-    NAVY   = colors.HexColor('#0a1628')
-    GOLD   = colors.HexColor('#c9a84c')
-    LGRAY  = colors.HexColor('#e8ecf2')
-    WHITE  = colors.white
-
-    h1  = ParagraphStyle('h1', parent=styles['Heading1'],
-                         fontSize=18, textColor=NAVY, spaceAfter=4)
-    h2  = ParagraphStyle('h2', parent=styles['Heading2'],
-                         fontSize=12, textColor=NAVY, spaceAfter=4, spaceBefore=14)
-    sub = ParagraphStyle('sub', parent=styles['Normal'],
-                         fontSize=9, textColor=colors.HexColor('#4a6080'), spaceAfter=2)
-    body = ParagraphStyle('body', parent=styles['Normal'],
-                          fontSize=9, textColor=NAVY)
+    _h1  = ParagraphStyle('h1p', parent=_styles['Heading1'],
+                           fontSize=18, textColor=_NAVY_PDF, spaceAfter=4)
+    _h2  = ParagraphStyle('h2p', parent=_styles['Heading2'],
+                           fontSize=12, textColor=_NAVY_PDF, spaceAfter=4, spaceBefore=14)
+    _sub = ParagraphStyle('subp', parent=_styles['Normal'],
+                           fontSize=9, textColor=colors.HexColor('#4a6080'), spaceAfter=2)
 
     def money(v):
         if v is None: return '—'
@@ -6013,6 +6289,192 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         if abs(v) >= 1e6: return f'${v/1e6:,.2f}M'
         if abs(v) >= 1e3: return f'${v/1e3:,.1f}K'
         return f'${v:,.2f}'
+
+    def pct(v, decimals=2):
+        if v is None: return '—'
+        return f'{float(v)*100:+.{decimals}f}%'
+
+    def _tbl_pdf(data, col_widths, header_rows=1):
+        t = Table(data, colWidths=col_widths)
+        sty = [
+            ('BACKGROUND', (0,0), (-1, header_rows-1), _NAVY_PDF),
+            ('TEXTCOLOR',  (0,0), (-1, header_rows-1), _WHITE_PDF),
+            ('FONTNAME',   (0,0), (-1, header_rows-1), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,-1), 8.5),
+            ('ROWBACKGROUNDS', (0, header_rows), (-1,-1), [_WHITE_PDF, _LGRAY_PDF]),
+            ('GRID',       (0,0), (-1,-1), 0.4, colors.HexColor('#c0ccd8')),
+            ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 3),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ]
+        t.setStyle(TableStyle(sty))
+        return t
+
+    # ── Managed account PDF ───────────────────────────────────────────────────
+    if is_acct_pdf:
+        from fastapi.responses import StreamingResponse as _SR3
+
+        result_pdf   = (ytd_cache_pdf or {}).get('result') or {}
+        ytd_pct_pdf  = float((ytd_cache_pdf or {}).get('ytd_pct') or
+                             result_pdf.get('md_return_pct') or 0) / 100.0
+        begin_v_pdf  = float(result_pdf.get('begin_value') or 0)
+        end_v_pdf    = float(result_pdf.get('end_value') or nav or 0)
+        net_flow_pdf = float(result_pdf.get('net_flow') or 0)
+        attr_pdf     = result_pdf.get('attribution') or []
+        monthly_pdf  = (result_pdf.get('monthly_chart') or {}).get('monthly') or []
+        spy_pdf      = result_pdf.get('spy_monthly') or []
+        flows_pdf    = result_pdf.get('flows') or []
+        upd_pdf      = str((ytd_cache_pdf or {}).get('updated_at') or '')[:10] or today_pdf
+
+        spy_ytd_pdf  = float(spy_pdf[-1].get('ytd_pct') or 0) / 100.0 if spy_pdf else 0.0
+        alpha_pdf    = ytd_pct_pdf - spy_ytd_pdf
+
+        buf_a = io.BytesIO()
+        doc_a = SimpleDocTemplate(buf_a, pagesize=letter,
+                                  leftMargin=0.75*inch, rightMargin=0.75*inch,
+                                  topMargin=0.75*inch, bottomMargin=0.75*inch)
+        usable = 7.0 * inch
+        story_a = []
+
+        # Cover header
+        story_a.append(Paragraph(fund['name'], _h1))
+        story_a.append(Paragraph(
+            f"DGA Capital  ·  Managed Account Report  ·  As of {today_pdf}  ·  "
+            f"YTD data updated {upd_pdf}", _sub))
+        story_a.append(HRFlowable(width='100%', thickness=1.5,
+                                  color=_GOLD_PDF, spaceAfter=8))
+
+        # Summary tiles
+        gain_color = _GREEN_PDF if ytd_pct_pdf >= 0 else _RED_PDF
+        alpha_color = _GREEN_PDF if alpha_pdf >= 0 else _RED_PDF
+        metrics_a = [
+            ['Account NAV', 'Jan 1 Value', 'YTD Return', 'SPY YTD', 'Alpha vs SPY'],
+            [money(end_v_pdf), money(begin_v_pdf),
+             f'{ytd_pct_pdf*100:+.2f}%', f'{spy_ytd_pdf*100:+.2f}%',
+             f'{alpha_pdf*100:+.2f}%'],
+        ]
+        t_metrics = _tbl_pdf(metrics_a, [usable/5]*5)
+        t_metrics.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), _NAVY_PDF),
+            ('TEXTCOLOR',  (0,0), (-1,0), _GOLD_PDF),
+            ('TEXTCOLOR',  (2,1), (2,1), gain_color),
+            ('TEXTCOLOR',  (4,1), (4,1), alpha_color),
+            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTNAME',   (0,1), (-1,1), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,-1), 9),
+            ('ALIGN',      (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('GRID',       (0,0), (-1,-1), 0.4, colors.HexColor('#c0ccd8')),
+        ]))
+        story_a.append(t_metrics)
+        story_a.append(Spacer(1, 12))
+
+        # Positions
+        if positions:
+            story_a.append(Paragraph('Portfolio Positions', _h2))
+            rows_a = [['Ticker', 'Name', 'Qty', 'Avg Cost', 'Cost Basis',
+                       'Live Price', 'Market Value', 'P/L']]
+            for p in positions:
+                sym  = p['symbol'] or ''
+                qty  = float(p['qty'] or 0)
+                cost = float(p['cost_basis'] or 0)
+                price = prices.get(sym)
+                mv   = qty * price if price else None
+                pl   = (mv - cost) if mv else None
+                rows_a.append([sym, (p['sec_name'] or '')[:22],
+                                f'{qty:,.0f}', money(p['avg_cost']),
+                                money(cost), money(price), money(mv), money(pl)])
+            cw_a = [0.6, 2.0, 0.65, 0.75, 0.85, 0.75, 0.8, 0.8]
+            story_a.append(_tbl_pdf(rows_a, [w*inch for w in cw_a]))
+            story_a.append(Spacer(1, 12))
+
+        # YTD Attribution
+        if attr_pdf:
+            story_a.append(Paragraph('YTD Attribution by Position', _h2))
+            rows_attr = [['Ticker', 'Name', 'Contribution $', 'Contribution %',
+                          'P/L $', 'P/L %']]
+            for a in sorted(attr_pdf,
+                            key=lambda x: float(x.get('contribution_pct') or 0),
+                            reverse=True):
+                rows_attr.append([
+                    a.get('ticker', ''),
+                    (a.get('name', '') or '')[:24],
+                    money(a.get('contribution_dollar')),
+                    f"{float(a.get('contribution_pct') or 0):+.2f}%",
+                    money(a.get('gain_loss')),
+                    f"{float(a.get('gain_loss_pct') or 0):+.2f}%",
+                ])
+            story_a.append(_tbl_pdf(rows_attr,
+                                    [0.65*inch, 2.1*inch, 0.95*inch, 0.9*inch,
+                                     0.85*inch, 0.85*inch]))
+            story_a.append(Spacer(1, 12))
+
+        # Monthly balance vs SPY
+        if monthly_pdf:
+            story_a.append(Paragraph('Monthly Balance vs SPY', _h2))
+            spy_by_m = {str(pt.get('month', ''))[:7]: pt for pt in spy_pdf}
+            rows_mo = [['Month', 'Account Balance', 'Account (Norm)', 'SPY (Norm)', 'Spread']]
+            norm_s = float(monthly_pdf[0]['end_balance']) if monthly_pdf else None
+            for mo in monthly_pdf:
+                mo_key = str(mo.get('month', ''))[:7]
+                bal    = float(mo.get('end_balance') or 0)
+                norm_a2 = f'{bal/norm_s:.3f}' if norm_s else '—'
+                spy_n2  = spy_by_m.get(mo_key, {}).get('norm')
+                spy_str = f'{float(spy_n2):.3f}' if spy_n2 else '—'
+                if norm_s and spy_n2:
+                    spread_str = f'{bal/norm_s - float(spy_n2):+.3f}'
+                else:
+                    spread_str = '—'
+                rows_mo.append([mo_key, money(bal), norm_a2, spy_str, spread_str])
+            story_a.append(_tbl_pdf(rows_mo,
+                                    [1.0*inch, 1.4*inch, 1.1*inch, 1.1*inch, 1.1*inch]))
+            story_a.append(Spacer(1, 12))
+
+        # Cash flows
+        if flows_pdf:
+            story_a.append(Paragraph('Cash Flow History', _h2))
+            rows_fl = [['Date', 'Description', 'Amount', 'Type']]
+            for f in sorted(flows_pdf, key=lambda x: x.get('date', ''), reverse=True):
+                amt = float(f.get('amount') or 0)
+                rows_fl.append([f.get('date', ''), (f.get('description', '') or '')[:38],
+                                 money(amt), 'Inflow' if amt > 0 else 'Outflow'])
+            story_a.append(_tbl_pdf(rows_fl,
+                                    [0.9*inch, 3.5*inch, 1.0*inch, 0.9*inch]))
+            story_a.append(Spacer(1, 12))
+
+        story_a.append(HRFlowable(width='100%', thickness=0.5,
+                                  color=_LGRAY_PDF, spaceAfter=4))
+        story_a.append(Paragraph(
+            f'Report generated {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC  ·  '
+            f'DGA Capital  ·  Confidential', _sub))
+
+        doc_a.build(story_a)
+        buf_a.seek(0)
+        safe_a = fund.get('short_name', 'Account').replace('/', '-').replace('\\', '-')
+        fname_a = f"{safe_a}_AccountReport_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+        return _SR3(
+            buf_a,
+            media_type='application/pdf',
+            headers={'Content-Disposition': f'attachment; filename="{fname_a}"'},
+        )
+
+    # ── Build PDF (LP fund) ───────────────────────────────────────────────────
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=0.75*inch, rightMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.75*inch)
+
+    styles = getSampleStyleSheet()
+    NAVY   = _NAVY_PDF
+    GOLD   = _GOLD_PDF
+    LGRAY  = _LGRAY_PDF
+    WHITE  = _WHITE_PDF
+
+    h1  = _h1
+    h2  = _h2
+    sub = _sub
 
     def tbl(data, col_widths, header_rows=1):
         t = Table(data, colWidths=col_widths)

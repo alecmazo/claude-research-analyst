@@ -1132,6 +1132,10 @@
     <div class="tab-toolbar">
       <button class="tab-btn secondary" id="lpd-back-btn">← Back to Funds</button>
       <h2 id="lpd-title" style="margin-left:8px;">…</h2>
+      <span style="margin-left:auto;display:flex;gap:8px;">
+        <button class="tab-btn" id="lpd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
+        <button class="tab-btn" id="lpd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
+      </span>
     </div>
 
     <div id="lpd-meta" class="tab-loading">Loading…</div>
@@ -1172,6 +1176,10 @@
     <div class="tab-toolbar">
       <button class="tab-btn secondary" id="acd-back-btn">← Back to Accounts</button>
       <h2 id="acd-title" style="margin-left:8px;">…</h2>
+      <span style="margin-left:auto;display:flex;gap:8px;">
+        <button class="tab-btn" id="acd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
+        <button class="tab-btn" id="acd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
+      </span>
     </div>
 
     <div id="acd-meta" class="tab-loading">Loading…</div>
@@ -2564,7 +2572,41 @@
     if (e.target.id === 'acd-ytd-run-btn') {
       runAccountYtd(e.target);
     }
+    // Exports — LP fund
+    if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);
+    if (e.target.id === 'lpd-export-pdf-btn')   triggerExport('pdf',   e.target);
+    // Exports — managed account
+    if (e.target.id === 'acd-export-excel-btn') triggerExport('excel', e.target);
+    if (e.target.id === 'acd-export-pdf-btn')   triggerExport('pdf',   e.target);
   });
+
+  function triggerExport(type, btn) {
+    if (!CURRENT_FUND_ID) { alert('No fund selected.'); return; }
+    const token  = sessionStorage.getItem('gp_token') || '';
+    const url    = `/api/fund/export-${type}?fund_id=${encodeURIComponent(CURRENT_FUND_ID)}`;
+    const orig   = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = type === 'excel' ? '⏳ Excel…' : '⏳ PDF…';
+
+    fetch(url, { headers: { 'x-fund-token': token } })
+      .then(r => {
+        if (!r.ok) return r.text().then(t => { throw new Error(t); });
+        return r.blob().then(blob => {
+          const disp = r.headers.get('content-disposition') || '';
+          const m    = disp.match(/filename="([^"]+)"/);
+          const name = m ? m[1] : (type === 'excel' ? 'report.xlsx' : 'report.pdf');
+          const a    = document.createElement('a');
+          a.href     = URL.createObjectURL(blob);
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+        });
+      })
+      .catch(err => alert('Export failed: ' + err.message))
+      .finally(() => { btn.disabled = false; btn.textContent = orig; });
+  }
 
   // ── LP Fund renderers ────────────────────────────────────────
   function renderLpMeta(d) {
