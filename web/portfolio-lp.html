@@ -540,226 +540,19 @@
 <!-- ── MAIN GRID (2 col) ──────────────────────────────────────────── -->
 <main class="shell">
 
-  <!-- LEFT — main content -->
+  <!-- LEFT — main content (populated dynamically by JS from /api/v2/lp/me/overview) -->
   <section>
-    <!-- HERO: DGA Capital Fund Performance — LP-focused -->
+    <!-- HERO: dynamic per-LP -->
     <div class="hero-card">
-      <div class="hero-eyebrow">⚡ DGA Capital Fund — Q2 2026</div>
-      <div class="hero-title">Fund NAV $14,247,820 · YTD +18.04%</div>
-      <div class="hero-sub">Welcome back. Your capital account is healthy and outpacing the benchmark by 8.6 points YTD. Latest LP report dated May 9, 2026 · auto-distributed via Dropbox.</div>
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top:18px;">
-        <div style="background: rgba(91,184,212,0.08); border:1px solid rgba(91,184,212,0.20); padding:12px 14px; border-radius:9px;">
-          <div style="font-size:9px; font-weight:800; color:var(--blue); letter-spacing:1.2px;">CURRENT NAV</div>
-          <div style="font-size:20px; font-weight:800; color:white; margin-top:4px;" class="mono">$14.25M</div>
-          <div style="font-size:11px; color:rgba(255,255,255,0.55); margin-top:2px;">+$2.18M YTD</div>
-        </div>
-        <div style="background: rgba(91,184,212,0.08); border:1px solid rgba(91,184,212,0.20); padding:12px 14px; border-radius:9px;">
-          <div style="font-size:9px; font-weight:800; color:var(--blue); letter-spacing:1.2px;">FUND YTD (TWRR)</div>
-          <div style="font-size:20px; font-weight:800; color:#4ADE80; margin-top:4px;" class="mono">+18.04%</div>
-          <div style="font-size:11px; color:rgba(255,255,255,0.55); margin-top:2px;">vs SPY +9.42%</div>
-        </div>
-        <div style="background: rgba(91,184,212,0.08); border:1px solid rgba(91,184,212,0.20); padding:12px 14px; border-radius:9px;">
-          <div style="font-size:9px; font-weight:800; color:var(--blue); letter-spacing:1.2px;">SINCE INCEPTION</div>
-          <div style="font-size:20px; font-weight:800; color:#4ADE80; margin-top:4px;" class="mono">+62.4%</div>
-          <div style="font-size:11px; color:rgba(255,255,255,0.55); margin-top:2px;">Net of fees · 3.2y</div>
-        </div>
-      </div>
-      <div style="margin-top:18px; padding-top:14px; border-top: 1px solid rgba(255,255,255,0.10); display:flex; gap:10px; flex-wrap: wrap;">
-        <button style="background: rgba(91,184,212,0.15); color: var(--blue-light); border: 1px solid rgba(91,184,212,0.35); padding: 9px 16px; border-radius: 7px; font-weight: 700; font-size: 11px; letter-spacing: 1px; cursor: pointer;">📄 LATEST LP REPORT</button>
-        <button style="background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); border: 1px solid rgba(255,255,255,0.15); padding: 9px 16px; border-radius: 7px; font-weight: 700; font-size: 11px; letter-spacing: 1px; cursor: pointer;">📊 PERFORMANCE HISTORY</button>
-        <button style="background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); border: 1px solid rgba(255,255,255,0.15); padding: 9px 16px; border-radius: 7px; font-weight: 700; font-size: 11px; letter-spacing: 1px; cursor: pointer;">📑 K-1 &amp; TAX DOCS</button>
-      </div>
+      <div class="hero-eyebrow" id="lp-hero-eyebrow">DGA Capital · Loading…</div>
+      <div class="hero-title" id="lp-hero-title">Loading your portfolio…</div>
+      <div class="hero-sub" id="lp-hero-sub"></div>
+      <div id="lp-hero-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top:18px;"></div>
     </div>
 
-    <!-- STAT BAND: YOUR capital account (LP-specific) -->
-    <div class="stat-band">
-      <div class="stat">
-        <div class="stat-label">YOUR STAKE</div>
-        <div class="stat-val mono">$1,847,210</div>
-        <div class="stat-delta" style="color:var(--mid);">12.96% of fund</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">YOUR YTD GAIN</div>
-        <div class="stat-val up mono">+$282,470</div>
-        <div class="stat-delta up">+18.04% on capital</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">COMMITMENT</div>
-        <div class="stat-val mono">$2,000,000</div>
-        <div class="stat-delta" style="color:var(--mid);">$152,790 uncalled</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">DISTRIBUTIONS YTD</div>
-        <div class="stat-val mono">$0</div>
-        <div class="stat-delta" style="color:var(--mid);">Next: Q3 2026</div>
-      </div>
-    </div>
+    <!-- Per-fund + per-account cards -->
+    <div id="lp-holdings"></div>
 
-    <!-- CAPITAL ACCOUNT TIMELINE -->
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">Your Capital Account Activity</span>
-        <span class="card-badge">DGA FUND I</span>
-        <span class="card-action">FULL HISTORY →</span>
-      </div>
-      <table style="width:100%; border-collapse:collapse;">
-        <thead>
-          <tr>
-            <th style="text-align:left; padding:8px 0; font-size:9px; font-weight:800; color:var(--mid); letter-spacing:1.2px; border-bottom:1px solid var(--line);">DATE</th>
-            <th style="text-align:left; padding:8px 0; font-size:9px; font-weight:800; color:var(--mid); letter-spacing:1.2px; border-bottom:1px solid var(--line);">EVENT</th>
-            <th style="text-align:right; padding:8px 0; font-size:9px; font-weight:800; color:var(--mid); letter-spacing:1.2px; border-bottom:1px solid var(--line);">AMOUNT</th>
-            <th style="text-align:right; padding:8px 0; font-size:9px; font-weight:800; color:var(--mid); letter-spacing:1.2px; border-bottom:1px solid var(--line);">CUM. NAV</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="padding:9px 0; font-size:12px; color:var(--dark); border-bottom:1px solid var(--line);">May 9, 2026</td>
-            <td style="padding:9px 0; font-size:12px; color:var(--ink); border-bottom:1px solid var(--line); font-weight:600;">Q1 NAV Mark-to-market</td>
-            <td class="rep-num up" style="padding:9px 0; font-weight:700; border-bottom:1px solid var(--line);">+$282,470</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700; border-bottom:1px solid var(--line);">$1,847,210</td>
-          </tr>
-          <tr>
-            <td style="padding:9px 0; font-size:12px; color:var(--dark); border-bottom:1px solid var(--line);">Feb 14, 2026</td>
-            <td style="padding:9px 0; font-size:12px; color:var(--ink); border-bottom:1px solid var(--line); font-weight:600;">Capital Call #4</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700; color:var(--dark); border-bottom:1px solid var(--line);">$200,000</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700; border-bottom:1px solid var(--line);">$1,564,740</td>
-          </tr>
-          <tr>
-            <td style="padding:9px 0; font-size:12px; color:var(--dark); border-bottom:1px solid var(--line);">Dec 31, 2025</td>
-            <td style="padding:9px 0; font-size:12px; color:var(--ink); border-bottom:1px solid var(--line); font-weight:600;">FY 2025 close NAV</td>
-            <td class="rep-num up" style="padding:9px 0; font-weight:700; border-bottom:1px solid var(--line);">+$172,140</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700; border-bottom:1px solid var(--line);">$1,364,740</td>
-          </tr>
-          <tr>
-            <td style="padding:9px 0; font-size:12px; color:var(--dark);">Oct 1, 2025</td>
-            <td style="padding:9px 0; font-size:12px; color:var(--ink); font-weight:600;">Capital Call #3</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700; color:var(--dark);">$300,000</td>
-            <td class="rep-num" style="padding:9px 0; font-weight:700;">$1,192,600</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- FUND RESEARCH LIBRARY (read-only) -->
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">Fund Research Library</span>
-        <span class="card-badge">12 RECENT</span>
-        <span class="card-action">VIEW ALL →</span>
-      </div>
-      <div style="font-size: 11px; color: var(--mid); margin-bottom: 14px;">
-        Research authored by DGA Capital underpinning current fund holdings. Click any row to read the full memo.
-      </div>
-      <table class="rep-table">
-        <thead>
-          <tr>
-            <th style="width:50%">Ticker</th>
-            <th class="rep-num">Price · Day</th>
-            <th class="rep-num">Target · Upside</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <span class="rep-tk">FNMA</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <div class="rep-date">Federal Nat'l Mortgage Assn · May 9</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$7.86</div>
-              <div class="rep-num-delta dn">−1.75%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$15</div>
-              <div class="rep-num-delta up">+90.8%</div>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span class="rep-tk">SMR</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <div class="rep-date">NuScale Power Corp · May 9</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$12.55</div>
-              <div class="rep-num-delta up">+6.18%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$22</div>
-              <div class="rep-num-delta up">+75.3%</div>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span class="rep-tk">IBRX</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <span class="rep-pill rep-pill-ppt">PPT</span>
-              <div class="rep-date">ImmunityBio Inc · May 9</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$8.51</div>
-              <div class="rep-num-delta up">+10.95%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$15</div>
-              <div class="rep-num-delta up">+76.3%</div>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span class="rep-tk">FMCCM</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <div class="rep-date">Freddie Mac Pfd · May 9</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$14.84</div>
-              <div class="rep-num-delta dn">−1.07%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$25</div>
-              <div class="rep-num-delta up">+68.5%</div>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span class="rep-tk">NVDA</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <span class="rep-pill rep-pill-ppt">PPT</span>
-              <div class="rep-date">NVIDIA Corp · May 8</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$1,247.80</div>
-              <div class="rep-num-delta up">+2.41%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$1,650</div>
-              <div class="rep-num-delta up">+32.2%</div>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span class="rep-tk">PLTR</span>
-              <span class="rep-pill rep-pill-doc">DOC</span>
-              <div class="rep-date">Palantir Technologies · May 8</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-num-val">$78.34</div>
-              <div class="rep-num-delta up">+4.18%</div>
-            </td>
-            <td class="rep-num">
-              <div class="rep-target-eyebrow">TGT</div>
-              <div class="rep-num-val">$95</div>
-              <div class="rep-num-delta up">+21.3%</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
   </section>
 
   <!-- RIGHT RAIL — widgets -->
@@ -903,6 +696,148 @@
 
   </aside>
 </main>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// portfolio-lp data wiring — Phase A
+// Pulls /api/v2/lp/me/overview (scope-filtered to the authenticated LP)
+// and renders the hero + per-fund / per-account cards.
+// ════════════════════════════════════════════════════════════════════════
+(function () {
+  'use strict';
+
+  const $eyebrow = document.getElementById('lp-hero-eyebrow');
+  const $title   = document.getElementById('lp-hero-title');
+  const $sub     = document.getElementById('lp-hero-sub');
+  const $stats   = document.getElementById('lp-hero-stats');
+  const $hold    = document.getElementById('lp-holdings');
+
+  const fmtUSD = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const n = Number(v);
+    if (Math.abs(n) >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+    if (Math.abs(n) >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+    if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
+    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  };
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  async function load() {
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/overview');
+      if (!r.ok) throw new Error('overview ' + r.status);
+      const data = await r.json();
+      render(data);
+    } catch (err) {
+      console.warn('[lp-overview]', err);
+      $title.textContent = "Couldn't load your portfolio";
+      $sub.textContent = String(err.message || err);
+    }
+  }
+
+  function render(data) {
+    const me = data.profile || {};
+    const funds = data.funds || [];
+    const accts = data.managed_accounts || [];
+    const firstName = (me.name || '').split(/\s+/)[0] || 'there';
+
+    // Empty state (no funds AND no accounts)
+    if (funds.length === 0 && accts.length === 0) {
+      $eyebrow.textContent = `Welcome, ${firstName}`;
+      $title.textContent  = 'No funds or accounts assigned yet';
+      $sub.innerHTML = `
+        We don't have any DGA Capital funds or managed accounts linked to your
+        login (<strong>${esc(me.email)}</strong>) yet. Once the GP assigns one,
+        it will appear here automatically. Reach out to <strong>alecmazo1@gmail.com</strong>
+        with any questions.
+      `;
+      $stats.innerHTML = '';
+      $hold.innerHTML  = '';
+      return;
+    }
+
+    const totalFundNav = funds.reduce((s, f) => s + (f.fund_nav || 0), 0);
+    const totalAcctNav = accts.reduce((s, a) => s + (a.nav    || 0), 0);
+    const totalCommit  = funds.reduce((s, f) => s + (f.commitment || 0), 0);
+    const fundCount = funds.length, acctCount = accts.length;
+    const segments = [];
+    if (fundCount) segments.push(`${fundCount} fund${fundCount > 1 ? 's' : ''}`);
+    if (acctCount) segments.push(`${acctCount} managed account${acctCount > 1 ? 's' : ''}`);
+
+    $eyebrow.textContent = `DGA Capital · ${me.role === 'gp' ? 'GP Overview' : 'Your Portfolio'}`;
+    $title.textContent  = `Welcome back, ${firstName}`;
+    $sub.textContent    = `You have ${segments.join(' + ')}. Snapshot data shown below. Latest LP reports are auto-distributed via Dropbox; tax docs (K-1) are sent at year-end.`;
+
+    const tile = (label, value, sub) => `
+      <div style="background: rgba(91,184,212,0.08); border:1px solid rgba(91,184,212,0.20); padding:12px 14px; border-radius:9px;">
+        <div style="font-size:9px; font-weight:800; color:var(--blue); letter-spacing:1.2px;">${esc(label)}</div>
+        <div style="font-size:20px; font-weight:800; color:white; margin-top:4px;" class="mono">${esc(value)}</div>
+        ${sub ? `<div style="font-size:11px; color:rgba(255,255,255,0.55); margin-top:2px;">${esc(sub)}</div>` : ''}
+      </div>
+    `;
+    const tiles = [];
+    if (fundCount) tiles.push(tile('FUND NAV (TOTAL)', totalFundNav ? fmtUSD(totalFundNav) : '—',
+                                   totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : ''));
+    if (acctCount) tiles.push(tile('MANAGED ACCT NAV', totalAcctNav ? fmtUSD(totalAcctNav) : '—',
+                                   `${acctCount} account${acctCount > 1 ? 's' : ''}`));
+    tiles.push(tile('YOUR ROLE', me.role === 'gp' ? 'General Partner' : 'Limited Partner', esc(me.email)));
+    $stats.innerHTML = tiles.join('');
+
+    const fundCards = funds.map(f => `
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(f.fund_name)}</span>
+          <span class="card-badge">${esc(f.short_name)}</span>
+          ${f.lp_alias ? `<span style="font-size: 10px; color: var(--mid); margin-left: 8px; letter-spacing: 0.6px;">YOUR ALIAS · <strong style="color:var(--blue-dark);">${esc(f.lp_alias)}</strong></span>` : ''}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 2px;">
+          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+            <div class="stat-label">FUND NAV</div>
+            <div class="stat-val mono">${f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</div>
+            ${f.fund_nav_as_of ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(f.fund_nav_as_of)}</div>` : '<div class="stat-delta" style="color:var(--mid);">No snapshot yet</div>'}
+          </div>
+          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+            <div class="stat-label">YOUR COMMITMENT</div>
+            <div class="stat-val mono">${f.commitment ? fmtUSD(f.commitment) : '—'}</div>
+            <div class="stat-delta" style="color:var(--mid);">${f.lp_count} LP${f.lp_count !== 1 ? 's' : ''} in fund</div>
+          </div>
+        </div>
+        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--mid);">
+          Detailed capital account activity, NAV history, K-1s and quarterly statements will appear here as they are published.
+        </div>
+      </div>
+    `).join('');
+
+    const acctCards = accts.map(a => `
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(a.account_name)}</span>
+          <span class="card-badge">MANAGED ACCOUNT · ${esc(a.short_name)}</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 2px;">
+          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+            <div class="stat-label">ACCOUNT NAV</div>
+            <div class="stat-val mono">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
+            ${a.nav_as_of ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(a.nav_as_of)}</div>` : '<div class="stat-delta" style="color:var(--mid);">No snapshot yet</div>'}
+          </div>
+        </div>
+        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--mid);">
+          Direct managed account in your name. Rebalance suggestions and recent activity will appear here.
+        </div>
+      </div>
+    `).join('');
+
+    $hold.innerHTML = fundCards + acctCards;
+
+    if (data.warnings && data.warnings.length) {
+      console.warn('[lp-overview] warnings:', data.warnings);
+    }
+  }
+
+  load();
+})();
+</script>
 
 </body>
 </html>

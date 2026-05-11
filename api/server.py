@@ -1192,6 +1192,167 @@ def watchlist_remove(request: Request, ticker: str):
     return {"tickers": wl[lp_id]}
 
 
+# ===========================================================================
+# Phase C / A — LP-scoped data endpoints
+#
+# These endpoints filter by the authenticated user's lp_id + scope claims.
+# GPs (role='gp') see ALL data unfiltered; LPs see ONLY their own funds
+# and managed accounts.
+# ===========================================================================
+
+@app.get("/api/v2/lp/me/overview")
+def lp_me_overview(request: Request):
+    """Return the authenticated LP's personal overview:
+      • profile: lp_id, name, email, role
+      • funds[]: one row per fund the LP is a member of, with their
+                 commitment + contributed + distributed + current NAV
+                 (zeros if those columns aren't populated yet).
+      • managed_accounts[]: one row per managed account the LP owns.
+    GPs see all funds/accounts (no scope filtering) so the same endpoint
+    works as a "fund overview" for them too."""
+    claims = _claims_or_401(request)
+    role           = claims.get("role", "lp")
+    fund_memberships  = claims.get("fund_memberships", {}) or {}
+    managed_accts     = claims.get("managed_account_ids", []) or []
+
+    out = {
+        "profile": {
+            "lp_id": claims["lp_id"],
+            "name":  claims.get("name", ""),
+            "email": claims.get("email", ""),
+            "role":  role,
+        },
+        "funds":             [],
+        "managed_accounts":  [],
+        "warnings":          [],
+    }
+
+    if not _PSYCOPG2_OK:
+        out["warnings"].append("psycopg2 not installed — returning empty data")
+        return out
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # ── Funds ────────────────────────────────────────────────
+            if role == "gp":
+                # GP: list every LP fund and aggregate cap table
+                cur.execute("""
+                    SELECT id, name, short_name, fund_type
+                      FROM funds
+                     WHERE fund_type = 'lp_fund'
+                     ORDER BY name, short_name
+                """)
+                fund_rows = cur.fetchall()
+            else:
+                # LP: only funds whose .name is in their memberships dict
+                # (case-insensitive match)
+                names_lower = [n.lower() for n in fund_memberships.keys()]
+                if names_lower:
+                    cur.execute("""
+                        SELECT id, name, short_name, fund_type
+                          FROM funds
+                         WHERE LOWER(name) = ANY(%s)
+                         ORDER BY name, short_name
+                    """, (names_lower,))
+                    fund_rows = cur.fetchall()
+                else:
+                    fund_rows = []
+
+            for f in fund_rows:
+                fname  = f["name"]
+                alias  = (fund_memberships.get(fname)
+                          or fund_memberships.get(fname.upper())
+                          or fund_memberships.get(fname.lower())
+                          or None) if role != "gp" else None
+
+                # Find this LP's row(s) within the fund
+                if role == "gp":
+                    cur.execute("""
+                        SELECT legal_name, commitment_amount, primary_email
+                          FROM lps
+                         WHERE fund_id = %s
+                         ORDER BY legal_name
+                    """, (f["id"],))
+                else:
+                    cur.execute("""
+                        SELECT legal_name, commitment_amount, primary_email
+                          FROM lps
+                         WHERE fund_id = %s
+                           AND LOWER(TRIM(legal_name)) = LOWER(%s)
+                    """, (f["id"], alias or ""))
+                lp_rows = cur.fetchall()
+
+                commitment = sum((float(r.get("commitment_amount") or 0) for r in lp_rows), 0.0)
+
+                # Most recent NAV snapshot for this fund (whole-fund level)
+                cur.execute("""
+                    SELECT nav, period_end
+                      FROM nav_snapshots
+                     WHERE fund_id = %s
+                     ORDER BY period_end DESC
+                     LIMIT 1
+                """, (f["id"],))
+                snap = cur.fetchone()
+
+                out["funds"].append({
+                    "fund_id":         str(f["id"]),
+                    "fund_name":       fname,
+                    "short_name":      f["short_name"],
+                    "lp_alias":        alias if role != "gp" else None,
+                    "lp_count":        len(lp_rows),
+                    "commitment":      commitment,
+                    "fund_nav":        float(snap["nav"]) if snap and snap.get("nav") is not None else None,
+                    "fund_nav_as_of":  snap["period_end"].isoformat() if snap and snap.get("period_end") else None,
+                })
+
+            # ── Managed accounts ─────────────────────────────────────
+            if role == "gp":
+                cur.execute("""
+                    SELECT id, name, short_name
+                      FROM funds
+                     WHERE fund_type = 'managed_account'
+                     ORDER BY name, short_name
+                """)
+                acct_rows = cur.fetchall()
+            else:
+                accts_lower = [a.lower() for a in managed_accts]
+                if accts_lower:
+                    cur.execute("""
+                        SELECT id, name, short_name
+                          FROM funds
+                         WHERE fund_type = 'managed_account'
+                           AND LOWER(name) = ANY(%s)
+                         ORDER BY name, short_name
+                    """, (accts_lower,))
+                    acct_rows = cur.fetchall()
+                else:
+                    acct_rows = []
+
+            for a in acct_rows:
+                cur.execute("""
+                    SELECT nav, period_end
+                      FROM nav_snapshots
+                     WHERE fund_id = %s
+                     ORDER BY period_end DESC
+                     LIMIT 1
+                """, (a["id"],))
+                snap = cur.fetchone()
+                out["managed_accounts"].append({
+                    "fund_id":         str(a["id"]),
+                    "account_name":    a["name"],
+                    "short_name":      a["short_name"],
+                    "nav":             float(snap["nav"]) if snap and snap.get("nav") is not None else None,
+                    "nav_as_of":       snap["period_end"].isoformat() if snap and snap.get("period_end") else None,
+                })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        out["warnings"].append(f"DB query failed: {str(exc)[:200]}")
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
@@ -1461,7 +1622,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65d-20260510"
+WEB_BUILD_VERSION = "ui65e-20260510"
 
 
 @app.get("/api/build")

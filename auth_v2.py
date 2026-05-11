@@ -108,7 +108,10 @@ LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
         "password_hash_hex":    "43849d0fd0354f3bba114c4a56a8bf4a02512c35f4c1965afe3cdf35cb3790ed",
         "password_salt_hex":    "46f1f0cd975fe9c3235e45380a49e857",
         "fund_memberships":     {},
-        "managed_account_ids":  ["Anat TOD"],
+        # Matches the funds.name in the production DB (uppercase, as
+        # imported). Use case-insensitive comparison in the data layer
+        # to tolerate any future capitalization changes.
+        "managed_account_ids":  ["ANAT TOD"],
         "must_change_password": True,
         "created_at":           "2026-05-10",
     },
