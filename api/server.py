@@ -1442,6 +1442,7 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 ("lp_statements",        "fund_id"),
                 ("annual_lp_balances",   "fund_id"),
                 ("managed_account_ytd_cache", "fund_id"),
+                ("accounts",             "fund_id"),   # chart-of-accounts rows seeded per fund
             ]
             for tbl, col in child_tables:
                 if tbl not in existing_tables:
@@ -1579,7 +1580,8 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 _delete(cur, "DELETE FROM lps WHERE fund_id = %s",
                         (fund_id,), "lps")
             for tbl in ("annual_lp_balances", "managed_account_ytd_cache",
-                        "lp_statements", "carry_runs", "mgmt_fee_runs"):
+                        "lp_statements", "carry_runs", "mgmt_fee_runs",
+                        "accounts"):
                 if tbl in existing_tables:
                     _delete(cur, f"DELETE FROM {tbl} WHERE fund_id = %s",
                             (fund_id,), tbl)
@@ -1895,7 +1897,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65h-20260510"
+WEB_BUILD_VERSION = "ui65i-20260510"
 
 
 @app.get("/api/build")
