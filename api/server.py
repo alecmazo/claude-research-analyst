@@ -2271,7 +2271,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65n-20260510"
+WEB_BUILD_VERSION = "ui65s-20260511"
 
 
 @app.get("/api/build")
