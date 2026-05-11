@@ -1456,6 +1456,16 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                     backup[tbl] = [{k: (str(v) if hasattr(v, 'isoformat') else v)
                                     for k, v in r.items()} for r in rows]
 
+            # transaction_lines has no fund_id — count via transactions + accounts join
+            if "transaction_lines" in existing_tables and "transactions" in existing_tables:
+                cur.execute("""
+                    SELECT COUNT(*)::int AS n FROM transaction_lines
+                     WHERE transaction_id IN (SELECT id FROM transactions WHERE fund_id = %s)
+                """, (fund_id,))
+                inventory["transaction_lines"] = cur.fetchone()["n"]
+            else:
+                inventory["transaction_lines"] = 0
+
             # 3) Safety guards
             if "commitments" in existing_tables:
                 cur.execute("""
@@ -1580,6 +1590,14 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
             if "lps" in existing_tables:
                 _delete(cur, "DELETE FROM lps WHERE fund_id = %s",
                         (fund_id,), "lps")
+            # transaction_lines refs accounts.id + transactions.id — must go first
+            if "transaction_lines" in existing_tables and "transactions" in existing_tables:
+                _delete(cur, """
+                    DELETE FROM transaction_lines
+                     WHERE transaction_id IN (
+                         SELECT id FROM transactions WHERE fund_id = %s
+                     )
+                """, (fund_id,), "transaction_lines")
             for tbl in ("annual_lp_balances", "managed_account_ytd_cache",
                         "lp_statements", "carry_runs", "mgmt_fee_runs",
                         "accounts"):
@@ -1898,7 +1916,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65k-20260510"
+WEB_BUILD_VERSION = "ui65l-20260510"
 
 
 @app.get("/api/build")
