@@ -41,7 +41,7 @@
   .tabular { font-variant-numeric: tabular-nums; }
   .mono { font-family: "SF Mono", Menlo, Courier, monospace; }
 
-  /* ── TOP NAV BAR ────────────────────────────────────────────── */
+  /* ── TOP NAV BAR ────────────────────────────────────────────────── */
   .topbar {
     background: var(--navy);
     padding: 12px 24px;
@@ -259,21 +259,7 @@
       inset 0 -2px 0 rgba(0,0,0,0.18),
       0 4px 18px rgba(91,184,212,0.45);
   }
-  .hero-toggle {
-    margin-top: 14px; padding-top: 14px;
-    border-top: 1px solid rgba(255,255,255,0.10);
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .hero-toggle-label { font-size: 12px; color: rgba(255,255,255,0.7); }
-  .hero-toggle-switch {
-    width: 40px; height: 24px; background: rgba(255,255,255,0.15);
-    border-radius: 12px; position: relative; cursor: pointer;
-  }
-  .hero-toggle-switch::after {
-    content: ''; position: absolute; top: 3px; left: 3px;
-    width: 18px; height: 18px; border-radius: 50%; background: white;
-    transition: transform 0.18s;
-  }
+  .hero-btn:disabled { opacity: 0.6; cursor: default; }
 
   /* ── STAT BAND ────────────────────────────────────────────── */
   .stat-band {
@@ -340,10 +326,6 @@
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; }
   .rep-num-val { color: var(--ink); font-weight: 700; font-size: 13px; }
   .rep-num-delta { font-size: 11px; font-weight: 700; margin-top: 2px; }
-  .rep-target-eyebrow {
-    color: var(--blue-dark); font-size: 8px; font-weight: 800;
-    letter-spacing: 1px; line-height: 1; margin-bottom: 2px;
-  }
 
   /* ── RIGHT RAIL WIDGETS ───────────────────────────────────── */
   .widget {
@@ -396,27 +378,8 @@
   .wl-right { text-align: right; }
   .wl-px { font-size: 13px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
   .wl-chg { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .wl-add { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-  .wl-add-input {
-    flex: 1; height: 34px;
-    background: var(--offwhite);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    color: var(--ink); font-size: 13px;
-    padding: 0 12px;
-    outline: none; text-transform: uppercase;
-    letter-spacing: 1.5px; font-weight: 700;
-  }
-  .wl-add-input:focus { border-color: var(--blue); background: white; }
-  .wl-add-btn {
-    width: 34px; height: 34px;
-    background: var(--blue); color: var(--navy);
-    border: none; border-radius: 6px;
-    font-weight: 800; font-size: 18px; line-height: 1;
-    cursor: pointer;
-  }
 
-  /* Trending */
+  /* Activity rows */
   .tr-row {
     display: grid;
     grid-template-columns: auto 1fr auto;
@@ -435,12 +398,12 @@
   }
   .tr-main { min-width: 0; }
   .tr-tk { font-size: 13px; font-weight: 800; color: var(--ink); letter-spacing: 0.6px; }
-  .tr-meta { font-size: 10px; color: var(--mid); margin-top: 2px; }
+  .tr-meta { font-size: 10px; color: var(--mid); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tr-right { text-align: right; }
   .tr-px { font-size: 13px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
   .tr-chg { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
 
-  /* News */
+  /* News rows */
   .news-row {
     padding: 12px 16px;
     border-bottom: 1px solid var(--line);
@@ -468,34 +431,25 @@
   .news-impact.mid  { background: rgba(245,158,11,0.15); color: #b45309; }
   .news-impact.low  { background: var(--green-bg); color: var(--green); }
 
-  /* Section label */
-  .section-h {
-    display: flex; align-items: center; gap: 10px;
-    margin: 4px 0 10px;
-  }
-  .section-h-title {
-    font-size: 11px; font-weight: 800; color: var(--mid);
-    letter-spacing: 1.5px; text-transform: uppercase;
-  }
-  .section-h-count {
-    font-size: 11px; font-weight: 800; color: var(--blue);
-    background: var(--navy); padding: 2px 8px; border-radius: 10px;
-    letter-spacing: 0.5px;
+  /* ── TAB PANELS ────────────────────────────────────────────── */
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Research / Documents tab layout */
+  .lp-tab-shell {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
   }
 
-  /* Mockup banner */
-  .mockup-banner {
-    background: linear-gradient(90deg, rgba(91,184,212,0.10), rgba(91,184,212,0.05));
-    border: 1px dashed var(--blue);
-    color: var(--blue-dark);
-    padding: 12px 18px;
-    border-radius: 8px;
-    margin: 0 24px 24px;
+  /* Loading / empty states */
+  .widget-loading, .widget-empty {
+    padding: 18px 16px;
     font-size: 12px;
+    color: var(--mid);
     text-align: center;
-    letter-spacing: 0.4px;
+    line-height: 1.5;
   }
-  .mockup-banner strong { color: var(--navy); }
 </style>
 </head>
 <body>
@@ -508,36 +462,30 @@
 
   <div class="search-wrap">
     <span class="search-icon">⌕</span>
-    <input class="search-input" placeholder="Search fund research — e.g. NVDA, “rebalance Q1”, “energy thesis”">
+    <input class="search-input" placeholder="Search fund research — e.g. NVDA, &quot;rebalance Q1&quot;">
     <span class="search-kbd">⌘K</span>
   </div>
 
   <nav class="topbar-right">
-    <span class="topbar-link active">Performance</span>
-    <span class="topbar-link">Research</span>
-    <span class="topbar-link">Documents</span>
+    <span class="topbar-link active" data-tab="performance">Performance</span>
+    <span class="topbar-link" data-tab="research">Research</span>
+    <span class="topbar-link" data-tab="documents">Documents</span>
     <span class="status-dot" title="API online"></span>
   </nav>
 </header>
 
-<!-- ── INDEX RIBBON ───────────────────────────────────────────────── -->
+<!-- ── INDEX RIBBON ── populated by JS ───────────────────────────── -->
 <div class="ribbon-wrap">
-  <div class="ribbon">
-    <div class="idx"><div class="idx-name">S&amp;P 500</div><div class="idx-row"><div class="idx-px">7,398.93</div><div class="idx-chg up">+0.84%</div></div></div>
-    <div class="idx"><div class="idx-name">DOW 30</div><div class="idx-row"><div class="idx-px">49,609.16</div><div class="idx-chg up">+0.02%</div></div></div>
-    <div class="idx"><div class="idx-name">NASDAQ</div><div class="idx-row"><div class="idx-px">26,247.08</div><div class="idx-chg up">+1.71%</div></div></div>
-    <div class="idx"><div class="idx-name">RUSSELL 2000</div><div class="idx-row"><div class="idx-px">2,861.21</div><div class="idx-chg up">+0.76%</div></div></div>
-    <div class="idx"><div class="idx-name">VIX</div><div class="idx-row"><div class="idx-px">17.19</div><div class="idx-chg up">+0.64%</div></div></div>
-    <div class="idx"><div class="idx-name">10Y TREASURY</div><div class="idx-row"><div class="idx-px">4.32%</div><div class="idx-chg dn">−0.02</div></div></div>
-    <div class="idx"><div class="idx-name">DOLLAR INDEX</div><div class="idx-row"><div class="idx-px">102.81</div><div class="idx-chg dn">−0.18%</div></div></div>
-    <div class="idx"><div class="idx-name">GOLD</div><div class="idx-row"><div class="idx-px">4,730.70</div><div class="idx-chg up">+0.42%</div></div></div>
-    <div class="idx"><div class="idx-name">CRUDE OIL</div><div class="idx-row"><div class="idx-px">95.42</div><div class="idx-chg up">+0.64%</div></div></div>
-    <div class="idx"><div class="idx-name">BITCOIN</div><div class="idx-row"><div class="idx-px">80,987.06</div><div class="idx-chg up">+0.23%</div></div></div>
-    <div class="idx"><div class="idx-name">ETHEREUM</div><div class="idx-row"><div class="idx-px">2,343.60</div><div class="idx-chg up">+0.62%</div></div></div>
+  <div class="ribbon" id="ribbon">
+    <div class="idx" style="opacity:0.5"><div class="idx-name">Loading market data…</div></div>
   </div>
 </div>
 
-<!-- ── MAIN GRID (2 col) ──────────────────────────────────────────── -->
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PERFORMANCE TAB (default)                                      -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="tab-performance" class="tab-panel active">
 <main class="shell">
 
   <!-- LEFT — main content (populated dynamically by JS from /api/v2/lp/me/overview) -->
@@ -552,166 +500,123 @@
 
     <!-- Per-fund + per-account cards -->
     <div id="lp-holdings"></div>
-
   </section>
 
-  <!-- RIGHT RAIL — widgets -->
+  <!-- RIGHT RAIL — live widgets -->
   <aside>
-    <!-- Fund Top Positions (replaces watchlist for LP view) -->
+
+    <!-- Fund Top Positions — live watchlist -->
     <section class="widget">
       <header class="widget-head">
         <span class="widget-title">Fund Top Positions</span>
-        <span class="widget-badge">TOP 8</span>
-        <span class="widget-action">FULL ROSTER →</span>
+        <span class="widget-badge" id="positions-badge">LIVE</span>
+        <span class="widget-action" id="positions-gf" style="cursor:default;">CLICK TO VIEW →</span>
       </header>
-      <div class="wl-row">
-        <div><div class="wl-tk">NVDA</div><div class="wl-name">12.4% of fund · NVIDIA</div></div>
-        <div class="wl-right"><div class="wl-px">$1,247.80</div><div class="wl-chg up">+2.41%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">FNMA</div><div class="wl-name">9.8% · Fannie Mae</div></div>
-        <div class="wl-right"><div class="wl-px">$7.86</div><div class="wl-chg dn">−1.75%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">INTC</div><div class="wl-name">8.2% · Intel</div></div>
-        <div class="wl-right"><div class="wl-px">$124.92</div><div class="wl-chg up">+15.44%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">PLTR</div><div class="wl-name">7.4% · Palantir</div></div>
-        <div class="wl-right"><div class="wl-px">$78.34</div><div class="wl-chg up">+4.18%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">SMR</div><div class="wl-name">6.1% · NuScale Power</div></div>
-        <div class="wl-right"><div class="wl-px">$12.55</div><div class="wl-chg up">+6.18%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">IBRX</div><div class="wl-name">5.8% · ImmunityBio</div></div>
-        <div class="wl-right"><div class="wl-px">$8.51</div><div class="wl-chg up">+10.95%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">MU</div><div class="wl-name">5.3% · Micron Technology</div></div>
-        <div class="wl-right"><div class="wl-px">$192.84</div><div class="wl-chg up">+15.51%</div></div>
-      </div>
-      <div class="wl-row">
-        <div><div class="wl-tk">META</div><div class="wl-name">4.7% · Meta Platforms</div></div>
-        <div class="wl-right"><div class="wl-px">$609.63</div><div class="wl-chg dn">−0.99%</div></div>
+      <div id="fund-positions">
+        <div class="widget-loading">Loading positions…</div>
       </div>
     </section>
 
-    <!-- Recent Fund Activity (replaces Trending Tickers for LP view) -->
+    <!-- Recent Fund Activity — latest scan results -->
     <section class="widget">
       <header class="widget-head">
-        <span class="widget-title">Recent Fund Activity</span>
-        <span class="widget-badge">LAST 30D</span>
-        <span class="widget-action">FULL LOG →</span>
+        <span class="widget-title">Fund Activity</span>
+        <span class="widget-badge">SCAN</span>
+        <span class="widget-action" id="activity-ts">—</span>
       </header>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--green);">▲</div>
-        <div class="tr-main"><div class="tr-tk">NVDA</div><div class="tr-meta">Added 850 shares · May 7</div></div>
-        <div class="tr-right"><div class="tr-px">+$1.06M</div><div class="tr-chg" style="color:var(--mid);">@ $1,247</div></div>
-      </div>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--red);">▼</div>
-        <div class="tr-main"><div class="tr-tk">TSLA</div><div class="tr-meta">Trimmed 35% · May 5</div></div>
-        <div class="tr-right"><div class="tr-px">−$420K</div><div class="tr-chg" style="color:var(--mid);">@ $352</div></div>
-      </div>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--green);">▲</div>
-        <div class="tr-main"><div class="tr-tk">SMR</div><div class="tr-meta">New position · May 2</div></div>
-        <div class="tr-right"><div class="tr-px">+$860K</div><div class="tr-chg" style="color:var(--mid);">@ $11.84</div></div>
-      </div>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--red);">▼</div>
-        <div class="tr-main"><div class="tr-tk">MSTR</div><div class="tr-meta">Exited fully · Apr 28</div></div>
-        <div class="tr-right"><div class="tr-px">−$612K</div><div class="tr-chg" style="color:var(--mid);">@ $634</div></div>
-      </div>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--green);">▲</div>
-        <div class="tr-main"><div class="tr-tk">IBRX</div><div class="tr-meta">Added on FDA news · Apr 22</div></div>
-        <div class="tr-right"><div class="tr-px">+$340K</div><div class="tr-chg" style="color:var(--mid);">@ $7.69</div></div>
-      </div>
-      <div class="tr-row">
-        <div class="tr-rank" style="color:var(--green);">▲</div>
-        <div class="tr-main"><div class="tr-tk">FNMA</div><div class="tr-meta">Increased position · Apr 17</div></div>
-        <div class="tr-right"><div class="tr-px">+$580K</div><div class="tr-chg" style="color:var(--mid);">@ $7.94</div></div>
+      <div id="fund-activity">
+        <div class="widget-loading">Loading activity…</div>
       </div>
     </section>
 
-    <!-- Latest market news (X) -->
+    <!-- Market Pulse — scan results as news, auto-refreshes every 15 min -->
     <section class="widget">
       <header class="widget-head">
-        <span class="widget-title">Market Pulse · From X</span>
+        <span class="widget-title">Market Pulse</span>
         <span class="widget-badge">LIVE</span>
-        <span class="widget-action">⟳ 2m ago</span>
+        <span class="widget-action" id="market-pulse-ts">⟳ now</span>
       </header>
-      <div class="news-row">
-        <div class="news-title">Fed's Powell signals one more hike possible if Q2 CPI prints above 3.1% — Bloomberg headlines move 2Y +6bps</div>
-        <div class="news-meta">
-          <span class="news-impact high">HIGH</span>
-          <span class="news-source">@FirstSquawk</span>
-          <span>· 12m ago</span>
-        </div>
-      </div>
-      <div class="news-row">
-        <div class="news-title">Trump heads to Beijing — China trade framework expected. Semis, ag-chem, rare-earth names in focus.</div>
-        <div class="news-meta">
-          <span class="news-impact high">HIGH</span>
-          <span class="news-source">@WSJmarkets</span>
-          <span>· 35m ago</span>
-        </div>
-      </div>
-      <div class="news-row">
-        <div class="news-title">Strait of Hormuz drone strike — Aramco rerouting tankers, brent +2.4% intraday</div>
-        <div class="news-meta">
-          <span class="news-impact mid">MID</span>
-          <span class="news-source">@DeItaone</span>
-          <span>· 1h ago</span>
-        </div>
-      </div>
-      <div class="news-row">
-        <div class="news-title">Microstrategy adds 12,400 BTC — Saylor confirms via X, $MSTR pre-market −3.4%</div>
-        <div class="news-meta">
-          <span class="news-impact mid">MID</span>
-          <span class="news-source">@unusual_whales</span>
-          <span>· 1h ago</span>
-        </div>
-      </div>
-      <div class="news-row">
-        <div class="news-title">Nvidia Blackwell-Ultra availability slipping into H2 — supply check from TF chain</div>
-        <div class="news-meta">
-          <span class="news-impact mid">MID</span>
-          <span class="news-source">@KobeissiLetter</span>
-          <span>· 2h ago</span>
-        </div>
-      </div>
-      <div class="news-row">
-        <div class="news-title">Goldman raises S&P year-end target to 7,800 — soft-landing path, EPS rev'd +4%</div>
-        <div class="news-meta">
-          <span class="news-impact low">LOW</span>
-          <span class="news-source">@LizAnnSonders</span>
-          <span>· 3h ago</span>
-        </div>
+      <div id="market-pulse">
+        <div class="widget-loading">Loading…</div>
       </div>
     </section>
 
   </aside>
 </main>
+</div><!-- #tab-performance -->
+
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- RESEARCH TAB                                                    -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="tab-research" class="tab-panel">
+  <div class="lp-tab-shell">
+
+    <!-- Analyze Ticker hero -->
+    <div class="hero-card" style="margin-bottom:20px;">
+      <div class="hero-eyebrow">Research &amp; Analysis</div>
+      <div class="hero-title">Analyze any ticker</div>
+      <div class="hero-sub">Get an AI-generated investment thesis, price target, and risk assessment for any publicly traded company.</div>
+      <div class="hero-row">
+        <input id="lp-research-ticker" class="hero-input" placeholder="e.g. AAPL" autocapitalize="characters" autocomplete="off">
+        <button id="lp-research-run" class="hero-btn">⚡ RUN</button>
+      </div>
+      <div id="lp-research-hint" style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:10px;min-height:16px;"></div>
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.10);display:flex;align-items:center;gap:14px;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="lp-research-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+          <span style="font-size:10px;color:rgba(255,255,255,0.55);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Saved Reports -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Saved Reports</span>
+        <span class="card-badge" id="lp-reports-count">…</span>
+        <span class="card-action" id="lp-reports-sort">SORT: DATE ▼</span>
+      </div>
+      <div id="lp-reports">
+        <div style="padding:14px 0;font-size:12px;color:var(--mid);">Loading…</div>
+      </div>
+    </div>
+
+  </div>
+</div><!-- #tab-research -->
+
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- DOCUMENTS TAB                                                   -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="tab-documents" class="tab-panel">
+  <div class="lp-tab-shell">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Documents &amp; Reports</span>
+      </div>
+      <div style="padding:32px 0;text-align:center;">
+        <div style="font-size:44px;margin-bottom:16px;">📄</div>
+        <div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:10px;">Documents Coming Soon</div>
+        <div style="font-size:12px;color:var(--mid);line-height:1.7;max-width:480px;margin:0 auto;">
+          K-1 tax documents, quarterly statements, capital call notices, and GP letters will appear here once published by DGA Capital.<br><br>
+          Copies are also sent directly to your email on file. Contact <strong>alecmazo1@gmail.com</strong> with any questions.
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- #tab-documents -->
+
 
 <script>
 // ════════════════════════════════════════════════════════════════════════
-// portfolio-lp data wiring — Phase A
-// Pulls /api/v2/lp/me/overview (scope-filtered to the authenticated LP)
-// and renders the hero + per-fund / per-account cards.
+// LP Portal — fully wired SPA
+// Tabs: Performance | Research | Documents
 // ════════════════════════════════════════════════════════════════════════
 (function () {
   'use strict';
 
-  const $eyebrow = document.getElementById('lp-hero-eyebrow');
-  const $title   = document.getElementById('lp-hero-title');
-  const $sub     = document.getElementById('lp-hero-sub');
-  const $stats   = document.getElementById('lp-hero-stats');
-  const $hold    = document.getElementById('lp-holdings');
-
+  // ── Formatters ──────────────────────────────────────────────────
   const fmtUSD = (v) => {
     if (v == null || isNaN(v)) return '—';
     const n = Number(v);
@@ -720,15 +625,75 @@
     if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   };
+  const fmtPx = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const abs = Math.abs(v);
+    if (abs >= 10000) return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const fmtPct = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+  };
+  const cssChg = (v) => v == null ? 'nc' : (Number(v) >= 0 ? 'up' : 'dn');
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-  async function load() {
+  // ── Tab routing ─────────────────────────────────────────────────
+  const TAB_LOADERS = {
+    research:  () => loadResearchTab(),
+    documents: () => { /* static — nothing to load */ },
+  };
+
+  function showTab(name) {
+    document.querySelectorAll('.topbar-link[data-tab]').forEach(l =>
+      l.classList.toggle('active', l.dataset.tab === name));
+    document.querySelectorAll('.tab-panel').forEach(p =>
+      p.classList.toggle('active', p.id === 'tab-' + name));
+    if (TAB_LOADERS[name]) { TAB_LOADERS[name](); delete TAB_LOADERS[name]; }
+  }
+
+  document.querySelectorAll('.topbar-link[data-tab]').forEach(l =>
+    l.addEventListener('click', () => showTab(l.dataset.tab)));
+
+
+  // ══════════════════════════════════════════════════════════════
+  // INDEX RIBBON — /api/market/indices, refresh every 60s
+  // ══════════════════════════════════════════════════════════════
+  async function loadIndices() {
+    try {
+      const r = await window.dgaFetch('/api/market/indices');
+      if (!r.ok) throw new Error('indices ' + r.status);
+      const data = await r.json();
+      const ribbon = document.getElementById('ribbon');
+      if (!ribbon) return;
+      ribbon.innerHTML = (data.indices || []).map(idx => `
+        <div class="idx">
+          <div class="idx-name">${esc(idx.label)}</div>
+          <div class="idx-row">
+            <div class="idx-px">${idx.price != null ? fmtPx(idx.price) : '—'}</div>
+            <div class="idx-chg ${cssChg(idx.pct)}">${fmtPct(idx.pct)}</div>
+          </div>
+        </div>
+      `).join('');
+    } catch (e) { console.warn('[lp-indices]', e); }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // LP OVERVIEW — /api/v2/lp/me/overview
+  // ══════════════════════════════════════════════════════════════
+  const $eyebrow = document.getElementById('lp-hero-eyebrow');
+  const $title   = document.getElementById('lp-hero-title');
+  const $sub     = document.getElementById('lp-hero-sub');
+  const $stats   = document.getElementById('lp-hero-stats');
+  const $hold    = document.getElementById('lp-holdings');
+
+  async function loadOverview() {
     try {
       const r = await window.dgaFetch('/api/v2/lp/me/overview');
       if (!r.ok) throw new Error('overview ' + r.status);
       const data = await r.json();
-      render(data);
+      renderOverview(data);
     } catch (err) {
       console.warn('[lp-overview]', err);
       $title.textContent = "Couldn't load your portfolio";
@@ -736,25 +701,21 @@
     }
   }
 
-  function render(data) {
+  function renderOverview(data) {
     const me = data.profile || {};
     const funds = data.funds || [];
     const accts = data.managed_accounts || [];
     const firstName = (me.name || '').split(/\s+/)[0] || 'there';
 
-    // Empty state (no funds AND no accounts)
     if (funds.length === 0 && accts.length === 0) {
       $eyebrow.textContent = `Welcome, ${firstName}`;
-      $title.textContent  = 'No funds or accounts assigned yet';
+      $title.textContent   = 'No funds or accounts assigned yet';
       $sub.innerHTML = `
         We don't have any DGA Capital funds or managed accounts linked to your
         login (<strong>${esc(me.email)}</strong>) yet. Once the GP assigns one,
         it will appear here automatically. Reach out to <strong>alecmazo1@gmail.com</strong>
-        with any questions.
-      `;
-      $stats.innerHTML = '';
-      $hold.innerHTML  = '';
-      return;
+        with any questions.`;
+      $stats.innerHTML = ''; $hold.innerHTML = ''; return;
     }
 
     const totalFundNav = funds.reduce((s, f) => s + (f.fund_nav || 0), 0);
@@ -766,16 +727,15 @@
     if (acctCount) segments.push(`${acctCount} managed account${acctCount > 1 ? 's' : ''}`);
 
     $eyebrow.textContent = `DGA Capital · ${me.role === 'gp' ? 'GP Overview' : 'Your Portfolio'}`;
-    $title.textContent  = `Welcome back, ${firstName}`;
-    $sub.textContent    = `You have ${segments.join(' + ')}. Snapshot data shown below. Latest LP reports are auto-distributed via Dropbox; tax docs (K-1) are sent at year-end.`;
+    $title.textContent   = `Welcome back, ${firstName}`;
+    $sub.textContent     = `You have ${segments.join(' + ')}. Snapshot data shown below. Latest LP reports are auto-distributed via Dropbox; tax docs (K-1) are sent at year-end.`;
 
     const tile = (label, value, sub) => `
-      <div style="background: rgba(91,184,212,0.08); border:1px solid rgba(91,184,212,0.20); padding:12px 14px; border-radius:9px;">
-        <div style="font-size:9px; font-weight:800; color:var(--blue); letter-spacing:1.2px;">${esc(label)}</div>
-        <div style="font-size:20px; font-weight:800; color:white; margin-top:4px;" class="mono">${esc(value)}</div>
-        ${sub ? `<div style="font-size:11px; color:rgba(255,255,255,0.55); margin-top:2px;">${esc(sub)}</div>` : ''}
-      </div>
-    `;
+      <div style="background:rgba(91,184,212,0.08);border:1px solid rgba(91,184,212,0.20);padding:12px 14px;border-radius:9px;">
+        <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.2px;">${esc(label)}</div>
+        <div style="font-size:20px;font-weight:800;color:white;margin-top:4px;" class="mono">${esc(value)}</div>
+        ${sub ? `<div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:2px;">${esc(sub)}</div>` : ''}
+      </div>`;
     const tiles = [];
     if (fundCount) tiles.push(tile('FUND NAV (TOTAL)', totalFundNav ? fmtUSD(totalFundNav) : '—',
                                    totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : ''));
@@ -789,25 +749,26 @@
         <div class="card-head">
           <span class="card-title">${esc(f.fund_name)}</span>
           <span class="card-badge">${esc(f.short_name)}</span>
-          ${f.lp_alias ? `<span style="font-size: 10px; color: var(--mid); margin-left: 8px; letter-spacing: 0.6px;">YOUR ALIAS · <strong style="color:var(--blue-dark);">${esc(f.lp_alias)}</strong></span>` : ''}
+          ${f.lp_alias ? `<span style="font-size:10px;color:var(--mid);margin-left:8px;letter-spacing:0.6px;">YOUR ALIAS · <strong style="color:var(--blue-dark);">${esc(f.lp_alias)}</strong></span>` : ''}
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 2px;">
-          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:2px;">
+          <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">FUND NAV</div>
             <div class="stat-val mono">${f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</div>
-            ${f.fund_nav_as_of ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(f.fund_nav_as_of)}</div>` : '<div class="stat-delta" style="color:var(--mid);">No snapshot yet</div>'}
+            ${f.fund_nav_as_of
+              ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(f.fund_nav_as_of)}</div>`
+              : `<div class="stat-delta" style="color:var(--mid);">No snapshot entered yet</div>`}
           </div>
-          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+          <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">YOUR COMMITMENT</div>
             <div class="stat-val mono">${f.commitment ? fmtUSD(f.commitment) : '—'}</div>
             <div class="stat-delta" style="color:var(--mid);">${f.lp_count} LP${f.lp_count !== 1 ? 's' : ''} in fund</div>
           </div>
         </div>
-        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--mid);">
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--mid);">
           Detailed capital account activity, NAV history, K-1s and quarterly statements will appear here as they are published.
         </div>
-      </div>
-    `).join('');
+      </div>`).join('');
 
     const acctCards = accts.map(a => `
       <div class="card">
@@ -815,29 +776,389 @@
           <span class="card-title">${esc(a.account_name)}</span>
           <span class="card-badge">MANAGED ACCOUNT · ${esc(a.short_name)}</span>
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 2px;">
-          <div class="stat" style="background: var(--offwhite); border:1px solid var(--line);">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:2px;">
+          <div class="stat" style="background:var(--offwhite);border:1px solid var(--line);">
             <div class="stat-label">ACCOUNT NAV</div>
             <div class="stat-val mono">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
-            ${a.nav_as_of ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(a.nav_as_of)}</div>` : '<div class="stat-delta" style="color:var(--mid);">No snapshot yet</div>'}
+            ${a.nav_as_of
+              ? `<div class="stat-delta" style="color:var(--mid);">as of ${esc(a.nav_as_of)}</div>`
+              : `<div class="stat-delta" style="color:var(--mid);">No snapshot entered yet</div>`}
           </div>
         </div>
-        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--mid);">
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--mid);">
           Direct managed account in your name. Rebalance suggestions and recent activity will appear here.
         </div>
-      </div>
-    `).join('');
+      </div>`).join('');
 
     $hold.innerHTML = fundCards + acctCards;
+    if (data.warnings && data.warnings.length) console.warn('[lp-overview] warnings:', data.warnings);
+  }
 
-    if (data.warnings && data.warnings.length) {
-      console.warn('[lp-overview] warnings:', data.warnings);
+  // ══════════════════════════════════════════════════════════════
+  // FUND TOP POSITIONS — /api/watchlist with live quotes
+  // ══════════════════════════════════════════════════════════════
+  async function loadFundPositions() {
+    const el = document.getElementById('fund-positions');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/watchlist');
+      if (!r.ok) throw new Error('watchlist ' + r.status);
+      const data = await r.json();
+      const tickers = data.tickers || [];
+      const quotes  = data.quotes  || {};
+      const badge = document.getElementById('positions-badge');
+      if (badge) badge.textContent = tickers.length ? `TOP ${Math.min(tickers.length, 8)}` : 'LIVE';
+
+      if (!tickers.length) {
+        el.innerHTML = '<div class="widget-empty">No fund positions tracked yet.</div>';
+        return;
+      }
+      el.innerHTML = tickers.slice(0, 8).map(tk => {
+        const q = quotes[tk] || {};
+        const gfUrl = 'https://www.gurufocus.com/stock/' + encodeURIComponent(tk) + '/summary';
+        return `
+          <div class="wl-row" data-ticker="${esc(tk)}" data-url="${gfUrl}">
+            <div>
+              <div class="wl-tk">${esc(tk)}</div>
+              <div class="wl-name">Fund holding · tap to view</div>
+            </div>
+            <div class="wl-right">
+              <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
+              <div class="wl-chg ${cssChg(q.pct)}">${fmtPct(q.pct)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.wl-row[data-url]').forEach(row =>
+        row.addEventListener('click', () =>
+          window.open(row.getAttribute('data-url'), '_blank', 'noopener')));
+    } catch (e) {
+      console.warn('[lp-positions]', e);
+      if (el) el.innerHTML = '<div class="widget-empty">Could not load positions.</div>';
     }
   }
 
-  load();
+  // ══════════════════════════════════════════════════════════════
+  // FUND ACTIVITY — /api/scan/latest (latest per-ticker scan)
+  // ══════════════════════════════════════════════════════════════
+  async function loadFundActivity() {
+    const el = document.getElementById('fund-activity');
+    const ts = document.getElementById('activity-ts');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      if (!d.exists || !d.results || !Object.keys(d.results).length) {
+        el.innerHTML = '<div class="widget-empty">No scan data yet. Activity will appear after the next portfolio scan.</div>';
+        return;
+      }
+      if (ts) {
+        const age = d.scanned_at ? Math.round((Date.now() - new Date(d.scanned_at)) / 60000) : null;
+        ts.textContent = age != null ? `${age}m ago` : 'recent';
+      }
+      const entries = Object.entries(d.results).slice(0, 6);
+      el.innerHTML = entries.map(([tk, res]) => {
+        const sent = (res.sentiment || '').toUpperCase();
+        const color = sent === 'BULLISH' ? 'var(--green)' : sent === 'BEARISH' ? 'var(--red)' : 'var(--mid)';
+        const arrow = sent === 'BULLISH' ? '▲' : sent === 'BEARISH' ? '▼' : '●';
+        const summary = (res.markdown || '')
+          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ')
+          .trim().slice(0, 65);
+        const gfUrl = 'https://www.gurufocus.com/stock/' + encodeURIComponent(tk) + '/summary';
+        return `
+          <div class="tr-row" data-url="${gfUrl}">
+            <div class="tr-rank" style="color:${color};">${arrow}</div>
+            <div class="tr-main">
+              <div class="tr-tk">${esc(tk)}</div>
+              <div class="tr-meta">${esc(summary || sent || 'Update')}</div>
+            </div>
+            <div class="tr-right">
+              <div class="tr-px">${res.price != null ? '$' + fmtPx(res.price) : '—'}</div>
+              <div class="tr-chg ${cssChg(res.pct_change)}">${fmtPct(res.pct_change)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.tr-row[data-url]').forEach(row =>
+        row.addEventListener('click', () =>
+          window.open(row.getAttribute('data-url'), '_blank', 'noopener')));
+    } catch (e) {
+      console.warn('[lp-activity]', e);
+      if (el) el.innerHTML = '<div class="widget-empty">Could not load activity.</div>';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // MARKET PULSE — /api/scan/latest as clickable news items
+  // Auto-refreshes every 15 minutes
+  // ══════════════════════════════════════════════════════════════
+  async function loadMarketPulse() {
+    const el  = document.getElementById('market-pulse');
+    const act = document.getElementById('market-pulse-ts');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      if (!d.exists || !d.results || !Object.keys(d.results).length) {
+        el.innerHTML = '<div class="widget-empty">Market pulse will populate after the first portfolio scan.</div>';
+        return;
+      }
+      if (act) {
+        const age = d.scanned_at
+          ? Math.round((Date.now() - new Date(d.scanned_at)) / 60000)
+          : null;
+        act.textContent = age != null ? `⟳ ${age}m ago` : '⟳ now';
+      }
+      const entries = Object.entries(d.results).slice(0, 6);
+      el.innerHTML = entries.map(([tk, res]) => {
+        const sent    = (res.sentiment || 'NEUTRAL').toUpperCase();
+        const impCls  = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
+        const summary = (res.markdown || '')
+          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ')
+          .trim().slice(0, 110);
+        const gfUrl = 'https://www.gurufocus.com/stock/' + encodeURIComponent(tk) + '/summary';
+        return `
+          <div class="news-row" data-url="${gfUrl}">
+            <div class="news-title">${esc(tk)}: ${esc(summary || 'Analysis available — click to view.')}</div>
+            <div class="news-meta">
+              <span class="news-impact ${impCls}">${sent}</span>
+              <span class="news-source">DGA Scan</span>
+              ${res.price != null ? `<span>· $${fmtPx(res.price)} <span class="${cssChg(res.pct_change)}">${fmtPct(res.pct_change)}</span></span>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.news-row[data-url]').forEach(row =>
+        row.addEventListener('click', () =>
+          window.open(row.getAttribute('data-url'), '_blank', 'noopener')));
+    } catch (e) {
+      console.warn('[lp-market-pulse]', e);
+      if (el) el.innerHTML = '<div class="widget-empty">Could not load market pulse.</div>';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RESEARCH TAB — Analyze Ticker + Saved Reports
+  // ══════════════════════════════════════════════════════════════
+  function loadResearchTab() {
+    loadLPReports();
+  }
+
+  async function loadLPReports() {
+    const el    = document.getElementById('lp-reports');
+    const badge = document.getElementById('lp-reports-count');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      if (!r.ok) throw new Error(r.status);
+      const list = await r.json();
+      const reports = Array.isArray(list) ? list : [];
+      if (badge) badge.textContent = String(reports.length);
+      if (!reports.length) {
+        el.innerHTML = '<div style="padding:14px 0;font-size:12px;color:var(--mid);">No reports yet. Enter a ticker above and click RUN to generate one.</div>';
+        return;
+      }
+      el.innerHTML = `
+        <table class="rep-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th class="rep-num">Date</th>
+              <th class="rep-num">Target</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reports.slice(0, 20).map(rep => {
+              const dateStr = rep.generated_at
+                ? new Date(rep.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : '';
+              const target = rep.price_target != null ? Number(rep.price_target) : null;
+              return `
+                <tr data-ticker="${esc(rep.ticker)}">
+                  <td>
+                    <span class="rep-tk">${esc(rep.ticker)}</span>
+                    ${rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : ''}
+                    ${rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : ''}
+                    <div class="rep-date">${dateStr}</div>
+                  </td>
+                  <td class="rep-num"><div class="rep-num-val" style="font-size:12px;color:var(--mid);">${dateStr}</div></td>
+                  <td class="rep-num">
+                    ${target != null ? `<div class="rep-num-val up">$${target >= 100 ? target.toFixed(0) : target.toFixed(2)}</div>` : '<div class="rep-num-val" style="color:var(--mid);">—</div>'}
+                  </td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+      el.querySelectorAll('tr[data-ticker]').forEach(tr =>
+        tr.addEventListener('click', () => openReport(tr.getAttribute('data-ticker'))));
+    } catch (e) {
+      console.warn('[lp-reports]', e);
+      if (el) el.innerHTML = '<div style="padding:14px 0;font-size:12px;color:var(--mid);">Could not load reports.</div>';
+    }
+  }
+
+  // Analyze ticker (Research tab)
+  const $ticker  = document.getElementById('lp-research-ticker');
+  const $runBtn  = document.getElementById('lp-research-run');
+  const $hint    = document.getElementById('lp-research-hint');
+
+  async function runLPAnalysis() {
+    if (!$ticker || !$runBtn) return;
+    const ticker = ($ticker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g, '');
+    if (!ticker) {
+      if ($hint) { $hint.style.color = 'rgba(255,100,100,0.9)'; $hint.textContent = 'Enter a ticker first.'; }
+      return;
+    }
+    $runBtn.disabled = true; $runBtn.textContent = '⏳ Queued…';
+    if ($hint) { $hint.style.color = 'rgba(255,255,255,0.55)'; $hint.textContent = ''; }
+    try {
+      const r = await window.dgaFetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, generate_gamma: document.getElementById('lp-research-gamma')?.checked === true }),
+      });
+      if (!r.ok) throw new Error(r.status);
+      const job = await r.json();
+      const iv = setInterval(async () => {
+        try {
+          const rp = await window.dgaFetch('/api/jobs/' + job.job_id);
+          const jp = await rp.json();
+          const pct = jp.progress?.pct;
+          if (pct != null) $runBtn.textContent = Math.round(pct) + '% …';
+          if (jp.status === 'done') {
+            clearInterval(iv);
+            $runBtn.disabled = false; $runBtn.textContent = '⚡ RUN';
+            if ($hint) { $hint.style.color = 'rgba(100,220,100,0.9)'; $hint.textContent = `✅ ${ticker} analysis complete — see Saved Reports below.`; }
+            loadLPReports();
+          } else if (jp.status === 'failed') {
+            clearInterval(iv);
+            $runBtn.disabled = false; $runBtn.textContent = '⚡ RUN';
+            if ($hint) { $hint.style.color = 'rgba(255,100,100,0.9)'; $hint.textContent = 'Analysis failed — try again.'; }
+          }
+        } catch { clearInterval(iv); $runBtn.disabled = false; $runBtn.textContent = '⚡ RUN'; }
+      }, 4000);
+    } catch (e) {
+      $runBtn.disabled = false; $runBtn.textContent = '⚡ RUN';
+      if ($hint) { $hint.style.color = 'rgba(255,100,100,0.9)'; $hint.textContent = 'Error: ' + (e.message || 'unknown'); }
+    }
+  }
+
+  if ($runBtn) $runBtn.addEventListener('click', runLPAnalysis);
+  if ($ticker) $ticker.addEventListener('keydown', e => { if (e.key === 'Enter') runLPAnalysis(); });
+
+  // ══════════════════════════════════════════════════════════════
+  // REPORT VIEWER MODAL
+  // ══════════════════════════════════════════════════════════════
+  function renderMd(el, md) {
+    if (!md) { el.innerHTML = '<p style="color:var(--mid);">No content.</p>'; return; }
+    let h = md
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^---+$/gm,'<hr style="border:none;border-top:1px solid var(--line);margin:14px 0;">')
+      .replace(/^### (.+)$/gm,'<h3 style="font-size:13px;font-weight:800;color:var(--ink);margin:12px 0 4px;">$1</h3>')
+      .replace(/^## (.+)$/gm,'<h2 style="font-size:14px;font-weight:800;color:var(--blue-dark);margin:16px 0 6px;letter-spacing:0.3px;">$1</h2>')
+      .replace(/^# (.+)$/gm,'<h2 style="font-size:15px;font-weight:800;color:var(--blue-dark);margin:16px 0 6px;">$1</h2>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,'<em>$1</em>')
+      .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
+      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul style="padding-left:18px;margin:6px 0;">' + s + '</ul>')
+      .replace(/\n{2,}/g,'</p><p style="margin-bottom:8px;">')
+      .replace(/\n/g,'<br>');
+    el.innerHTML = '<p style="margin-bottom:8px;">' + h + '</p>';
+  }
+
+  function fmtDateLP(iso) {
+    return iso ? new Date(iso).toLocaleDateString('en-US',
+      { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  }
+
+  function closeReportModal() {
+    const m = document.getElementById('report-modal');
+    if (m) m.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  document.getElementById('rm-close')?.addEventListener('click', closeReportModal);
+  document.getElementById('report-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeReportModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReportModal();
+  });
+
+  async function openReport(ticker) {
+    if (!ticker) return;
+    const modal    = document.getElementById('report-modal');
+    const tkEl     = document.getElementById('rm-ticker');
+    const dateEl   = document.getElementById('rm-date');
+    const body     = document.getElementById('rm-body');
+    const gammaBtn = document.getElementById('rm-gamma-btn');
+    const docxBtn  = document.getElementById('rm-docx-btn');
+    const pptxBtn  = document.getElementById('rm-pptx-btn');
+    if (!modal) {
+      window.open('https://www.gurufocus.com/stock/' + encodeURIComponent(ticker) + '/summary', '_blank', 'noopener');
+      return;
+    }
+    tkEl.textContent  = ticker;
+    dateEl.textContent = '';
+    body.innerHTML    = '<div style="padding:24px;text-align:center;color:var(--mid);">Loading report…</div>';
+    gammaBtn.style.display = 'none';
+    docxBtn.style.display  = 'none';
+    pptxBtn.style.display  = 'none';
+    modal.style.display    = 'block';
+    document.body.style.overflow = 'hidden';
+    modal.scrollTop = 0;
+
+    try {
+      const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (d.generated_at) dateEl.textContent = '· ' + fmtDateLP(d.generated_at);
+      if (d.gamma_url)  { gammaBtn.href = d.gamma_url; gammaBtn.style.display = ''; }
+      if (d.has_docx)   { docxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/docx'; docxBtn.style.display = ''; }
+      if (d.has_pptx)   { pptxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/pptx'; pptxBtn.style.display = ''; }
+      if (!d.markdown) {
+        body.innerHTML = '<p style="color:var(--mid);padding:8px 0;">Report exists but has no text. Use the download buttons above.</p>';
+      } else {
+        renderMd(body, d.markdown);
+      }
+    } catch (e) {
+      body.innerHTML = `<p style="color:var(--red);">Could not load report for ${esc(ticker)}: ${esc(e.message)}</p>`;
+    }
+  }
+
+  // ── Init ─────────────────────────────────────────────────────
+  loadOverview();
+  loadIndices();
+  loadFundPositions();
+  loadFundActivity();
+  loadMarketPulse();
+
+  // Refresh indices every 60s, market pulse every 15 min
+  setInterval(loadIndices,     60_000);
+  setInterval(loadMarketPulse, 900_000);
 })();
 </script>
+
+<!-- ── Report Viewer Modal ─────────────────────────────────── -->
+<div id="report-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:200;overflow-y:auto;padding:24px 16px;">
+  <div style="max-width:860px;margin:0 auto;background:var(--paper);border-radius:12px;border:1px solid var(--line);box-shadow:0 12px 48px rgba(0,0,0,0.30);">
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid var(--line);flex-wrap:wrap;">
+      <span id="rm-ticker" style="font-size:16px;font-weight:800;color:var(--ink);letter-spacing:0.8px;"></span>
+      <span id="rm-date"   style="font-size:10px;color:var(--mid);margin-left:4px;"></span>
+      <div style="margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
+        <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
+           style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
+        <a id="rm-docx-btn" href="#" target="_blank" rel="noopener"
+           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ DOCX</a>
+        <a id="rm-pptx-btn" href="#" target="_blank" rel="noopener"
+           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ PPTX</a>
+        <button id="rm-close"
+          style="background:var(--offwhite);border:1px solid var(--line);color:var(--dark);border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;">✕</button>
+      </div>
+    </div>
+    <!-- Rendered markdown -->
+    <div id="rm-body" style="padding:20px 24px;max-height:78vh;overflow-y:auto;font-size:13px;line-height:1.7;color:var(--dark);">
+    </div>
+  </div>
+</div>
 
 </body>
 </html>

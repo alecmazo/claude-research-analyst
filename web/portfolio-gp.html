@@ -738,6 +738,13 @@
         <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
       </div>
       <div id="hero-hint"></div>
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;gap:14px;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+          <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
+        </label>
+        <span id="hero-gamma-status" style="font-size:9px;color:var(--dimmer);font-style:italic;">requires Gamma API key</span>
+      </div>
     </div>
 
     <!-- Two-up: last portfolio + market scan -->
@@ -756,18 +763,22 @@
       <section class="panel">
         <header class="panel-head">
           <span class="panel-title">Market Scan</span>
-          <span class="panel-badge">5 tickers</span>
-          <span class="panel-action">⚡ SCAN NOW</span>
+          <span class="panel-badge" id="mini-scan-badge">—</span>
+          <button id="mini-scan-btn"
+            style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ SCAN NOW</button>
         </header>
-        <div class="panel-body" style="padding:10px 14px;">
-          <div style="display:flex; flex-wrap:wrap; gap:6px;">
-            <span style="background:var(--navy-mid); color:var(--blue); padding:4px 10px; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:1px;">INTC ×</span>
-            <span style="background:var(--navy-mid); color:var(--blue); padding:4px 10px; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:1px;">IBRX ×</span>
-            <span style="background:var(--navy-mid); color:var(--blue); padding:4px 10px; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:1px;">FNMA ×</span>
-            <span style="background:var(--navy-mid); color:var(--blue); padding:4px 10px; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:1px;">META ×</span>
-            <span style="background:var(--navy-mid); color:var(--blue); padding:4px 10px; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:1px;">NFLX ×</span>
+        <div class="panel-body" style="padding:10px 14px 12px;">
+          <!-- Live ticker chips (mirror watchlist — click × to remove) -->
+          <div id="mini-scan-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:22px;margin-bottom:8px;"></div>
+          <!-- Add-ticker input -->
+          <div style="display:flex;gap:5px;">
+            <input id="mini-scan-input"
+              style="flex:1;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:white;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
+              placeholder="Add ticker…" autocomplete="off">
+            <button id="mini-scan-add-btn"
+              style="width:28px;height:28px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:16px;cursor:pointer;line-height:1;">+</button>
           </div>
-          <div style="margin-top:8px; font-size:10px; color:var(--dim);">Last scan: May 9, 2026, 5:39 PM</div>
+          <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
         </div>
       </section>
     </div>
@@ -878,158 +889,27 @@
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
   <aside class="col-right">
 
-    <!-- Trending tickers -->
+    <!-- Trending tickers — live watchlist quotes -->
     <section class="panel">
       <header class="panel-head">
-        <span class="panel-title">Trending Tickers</span>
-        <span class="panel-badge">LIVE</span>
-        <span class="panel-action">⟳ AUTO</span>
+        <span class="panel-title">Watchlist · Live</span>
+        <span class="panel-badge" id="trending-count">LIVE</span>
+        <span class="panel-action" id="trending-action" style="cursor:default;">⟳ AUTO</span>
       </header>
-      <div class="panel-body" style="padding:0">
-        <div class="tr-row">
-          <div class="tr-rank">1</div>
-          <div class="tr-main">
-            <div class="tr-tk">NVDA</div>
-            <div class="tr-meta">Mentions +247% · vol 4.2x avg</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$1,247.80</div>
-            <div class="tr-chg up">+2.41%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">2</div>
-          <div class="tr-main">
-            <div class="tr-tk">AMD</div>
-            <div class="tr-meta">Earnings Q1 beat — guide raised</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$248.91</div>
-            <div class="tr-chg up">+11.44%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">3</div>
-          <div class="tr-main">
-            <div class="tr-tk">MU</div>
-            <div class="tr-meta">HBM supply tightness — 5 analyst upgrades</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$192.84</div>
-            <div class="tr-chg up">+15.51%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">4</div>
-          <div class="tr-main">
-            <div class="tr-tk">INTC</div>
-            <div class="tr-meta">Foundry win rumor — TSM share shift</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$124.92</div>
-            <div class="tr-chg up">+15.44%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">5</div>
-          <div class="tr-main">
-            <div class="tr-tk">META</div>
-            <div class="tr-meta">Llama 4 release · capex commentary</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$609.63</div>
-            <div class="tr-chg dn">−0.99%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">6</div>
-          <div class="tr-main">
-            <div class="tr-tk">PLTR</div>
-            <div class="tr-meta">DoD contract +$480M announced</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$78.34</div>
-            <div class="tr-chg up">+4.18%</div>
-          </div>
-        </div>
-        <div class="tr-row">
-          <div class="tr-rank">7</div>
-          <div class="tr-main">
-            <div class="tr-tk">TSLA</div>
-            <div class="tr-meta">Robotaxi launch slipping to Q3</div>
-          </div>
-          <div class="tr-right">
-            <div class="tr-px">$348.12</div>
-            <div class="tr-chg dn">−1.22%</div>
-          </div>
-        </div>
+      <div class="panel-body" style="padding:0" id="trending-rows">
+        <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
       </div>
     </section>
 
-    <!-- Latest market news (from X) -->
+    <!-- Market Pulse — live scan results, auto-refreshes every 15 min -->
     <section class="panel">
       <header class="panel-head">
-        <span class="panel-title">Market Pulse · From X</span>
-        <span class="panel-badge">LIVE</span>
-        <span class="panel-action">⟳ 2 min ago</span>
+        <span class="panel-title">Market Pulse</span>
+        <span class="panel-badge">SCAN</span>
+        <span class="panel-action" id="gp-pulse-ts">⟳ now</span>
       </header>
-      <div class="panel-body" style="padding:0">
-        <div class="news-row">
-          <div class="news-title">Fed's Powell signals one more hike possible if Q2 CPI prints above 3.1% — Bloomberg headlines move 2Y +6bps</div>
-          <div class="news-meta">
-            <span class="news-impact high">HIGH</span>
-            <span class="news-source">@FirstSquawk</span>
-            <span>· 12m ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Trump heads to Beijing — China trade framework expected. Semis, ag-chem, rare-earth names in focus.</div>
-          <div class="news-meta">
-            <span class="news-impact high">HIGH</span>
-            <span class="news-source">@WSJmarkets</span>
-            <span>· 35m ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Strait of Hormuz drone strike — Aramco rerouting tankers, brent +2.4% intraday</div>
-          <div class="news-meta">
-            <span class="news-impact mid">MID</span>
-            <span class="news-source">@DeItaone</span>
-            <span>· 1h ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Microstrategy adds 12,400 BTC — Saylor confirms via X, $MSTR pre-market −3.4%</div>
-          <div class="news-meta">
-            <span class="news-impact mid">MID</span>
-            <span class="news-source">@unusual_whales</span>
-            <span>· 1h ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Nvidia Blackwell-Ultra availability slipping into H2 — supply check from TF chain</div>
-          <div class="news-meta">
-            <span class="news-impact mid">MID</span>
-            <span class="news-source">@KobeissiLetter</span>
-            <span>· 2h ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Goldman raises S&P year-end target to 7,800 — soft-landing path, EPS rev'd +4%</div>
-          <div class="news-meta">
-            <span class="news-impact low">LOW</span>
-            <span class="news-source">@LizAnnSonders</span>
-            <span>· 3h ago</span>
-          </div>
-        </div>
-        <div class="news-row">
-          <div class="news-title">Mother's Day floral basket index +9.4% YoY — pricing pressure across consumer staples</div>
-          <div class="news-meta">
-            <span class="news-impact low">LOW</span>
-            <span class="news-source">@CNBCnow</span>
-            <span>· 4h ago</span>
-          </div>
-        </div>
+      <div class="panel-body" style="padding:0" id="gp-pulse-rows">
+        <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
       </div>
     </section>
 
@@ -1449,9 +1329,9 @@
         `;
       }).join('');
 
-      // Click → open GuruFocus snapshot
+      // Click row → open inline report viewer
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
-        tr.addEventListener('click', () => openGuruFocus(tr.getAttribute('data-ticker')));
+        tr.addEventListener('click', () => openReport(tr.getAttribute('data-ticker')));
       });
     });
   }
@@ -1471,7 +1351,7 @@
       const r = await window.dgaFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker }),
+        body: JSON.stringify({ ticker, generate_gamma: document.getElementById('hero-gamma')?.checked === true }),
       });
       if (!r.ok) throw new Error('analyze ' + r.status);
       const job = await r.json();
@@ -1976,15 +1856,306 @@
     window.open('https://www.gurufocus.com/stock/' + encodeURIComponent(ticker) + '/summary', '_blank', 'noopener');
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // REPORT VIEWER MODAL — fetches /api/report/{ticker}
+  // ══════════════════════════════════════════════════════════════
+  function closeReportModal() {
+    const m = document.getElementById('report-modal');
+    if (m) m.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  document.getElementById('rm-close')?.addEventListener('click', closeReportModal);
+  document.getElementById('report-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeReportModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReportModal();
+  });
+
+  async function openReport(ticker) {
+    if (!ticker) return;
+    const modal    = document.getElementById('report-modal');
+    const tkEl     = document.getElementById('rm-ticker');
+    const dateEl   = document.getElementById('rm-date');
+    const body     = document.getElementById('rm-body');
+    const gammaBtn = document.getElementById('rm-gamma-btn');
+    const docxBtn  = document.getElementById('rm-docx-btn');
+    const pptxBtn  = document.getElementById('rm-pptx-btn');
+    if (!modal) { openGuruFocus(ticker); return; }
+
+    // Show modal with loading state
+    tkEl.textContent  = ticker;
+    dateEl.textContent = '';
+    body.innerHTML    = '<div class="tab-loading"><span class="spin">↻</span> Loading report…</div>';
+    gammaBtn.style.display = 'none';
+    docxBtn.style.display  = 'none';
+    pptxBtn.style.display  = 'none';
+    modal.style.display    = 'block';
+    document.body.style.overflow = 'hidden';
+    modal.scrollTop = 0;
+
+    try {
+      const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (d.generated_at) dateEl.textContent = '· ' + fmtDate(d.generated_at);
+      if (d.gamma_url) {
+        gammaBtn.href = d.gamma_url;
+        gammaBtn.style.display = '';
+      }
+      if (d.has_docx) {
+        docxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/docx';
+        docxBtn.style.display = '';
+      }
+      if (d.has_pptx) {
+        pptxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/pptx';
+        pptxBtn.style.display = '';
+      }
+      if (!d.markdown) {
+        body.innerHTML = '<div class="tab-empty">Report exists but has no text content. Use the download buttons above.</div>';
+      } else {
+        renderMd(body, d.markdown);
+      }
+    } catch (e) {
+      body.innerHTML = `<div class="tab-error">Could not load report for ${ticker}: ${e.message}</div>`;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // MINI SCAN CARD — mirrors watchlist, SCAN NOW → Scan tab
+  // ══════════════════════════════════════════════════════════════
+  async function loadMiniScanChips() {
+    const el     = document.getElementById('mini-scan-chips');
+    const badge  = document.getElementById('mini-scan-badge');
+    const status = document.getElementById('mini-scan-status');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/watchlist');
+      if (!r.ok) return;
+      const data    = await r.json();
+      const tickers = data.tickers || [];
+      if (badge) badge.textContent = tickers.length ? tickers.length + ' tickers' : '—';
+
+      if (!tickers.length) {
+        el.innerHTML = '<span style="font-size:11px;color:var(--dimmer);">No tickers — add one below.</span>';
+      } else {
+        el.innerHTML = tickers.map(tk => `
+          <span style="display:inline-flex;align-items:center;gap:4px;background:var(--navy-mid);color:var(--blue);
+            padding:3px 8px;border-radius:4px;font-size:11px;font-weight:800;letter-spacing:0.8px;cursor:pointer;"
+            data-mini-chip="${tk}">
+            ${tk}
+            <span data-mini-remove="${tk}"
+              style="opacity:0.55;font-size:13px;line-height:1;padding:0 1px;cursor:pointer;" title="Remove">×</span>
+          </span>`).join('');
+
+        el.querySelectorAll('[data-mini-remove]').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const tk = btn.getAttribute('data-mini-remove');
+            await window.dgaFetch('/api/watchlist/' + encodeURIComponent(tk), { method: 'DELETE' });
+            loadMiniScanChips();
+            loadWatchlist();
+            loadTrendingTickers();
+          });
+        });
+        el.querySelectorAll('[data-mini-chip]').forEach(chip => {
+          chip.addEventListener('click', (e) => {
+            if (e.target.closest('[data-mini-remove]')) return;
+            openGuruFocus(chip.getAttribute('data-mini-chip'));
+          });
+        });
+      }
+
+      // Last scan timestamp
+      try {
+        const rs = await window.dgaFetch('/api/scan/latest');
+        if (rs.ok) {
+          const ds = await rs.json();
+          if (ds.exists && ds.scanned_at && status) {
+            const age = Math.round((Date.now() - new Date(ds.scanned_at)) / 60000);
+            status.textContent = `Last scan: ${age < 2 ? 'just now' : age + 'm ago'} · ${Object.keys(ds.results || {}).length} tickers`;
+          } else if (status) {
+            status.textContent = 'No scan run yet.';
+          }
+        }
+      } catch {}
+    } catch (e) { console.warn('[mini-scan-chips]', e); }
+  }
+
+  const $miniInput  = document.getElementById('mini-scan-input');
+  const $miniAddBtn = document.getElementById('mini-scan-add-btn');
+  const $miniBtn    = document.getElementById('mini-scan-btn');
+
+  async function addMiniTicker() {
+    const tk = ($miniInput?.value || '').trim().toUpperCase().replace(/[^A-Z.]/g, '');
+    if (!tk) return;
+    if ($miniAddBtn) $miniAddBtn.disabled = true;
+    try {
+      await window.dgaFetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: tk }),
+      });
+      if ($miniInput) $miniInput.value = '';
+      loadMiniScanChips();
+      loadWatchlist();
+      loadTrendingTickers();
+    } finally {
+      if ($miniAddBtn) $miniAddBtn.disabled = false;
+    }
+  }
+
+  $miniAddBtn?.addEventListener('click', addMiniTicker);
+  $miniInput?.addEventListener('keypress', (e) => { if (e.key === 'Enter') addMiniTicker(); });
+
+  // SCAN NOW → switch to Scan tab and trigger the scan
+  $miniBtn?.addEventListener('click', () => {
+    showTab('scan');
+    setTimeout(() => document.getElementById('run-scan-btn')?.click(), 350);
+  });
+
+  // Check if Gamma API key is configured, update label
+  (async () => {
+    try {
+      const r = await window.dgaFetch('/api/build');
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = document.getElementById('hero-gamma-status');
+      if (st) {
+        st.textContent = d.gamma_api_key_set
+          ? '✓ Gamma connected'
+          : 'requires Gamma API key';
+        st.style.color = d.gamma_api_key_set ? 'var(--green)' : 'var(--dimmer)';
+      }
+    } catch {}
+  })();
+
+  // ══════════════════════════════════════════════════════════════
+  // RIGHT COLUMN — Trending Tickers (live watchlist)
+  // ══════════════════════════════════════════════════════════════
+  async function loadTrendingTickers() {
+    const el    = document.getElementById('trending-rows');
+    const badge = document.getElementById('trending-count');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/watchlist');
+      if (!r.ok) throw new Error('watchlist ' + r.status);
+      const data = await r.json();
+      const tickers = data.tickers || [];
+      const quotes  = data.quotes  || {};
+      if (badge) badge.textContent = tickers.length ? 'LIVE' : '0';
+      if (!tickers.length) {
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No watchlist tickers yet.</div>';
+        return;
+      }
+      el.innerHTML = tickers.map((tk, i) => {
+        const q = quotes[tk] || {};
+        return `
+          <div class="tr-row" data-ticker="${tk}">
+            <div class="tr-rank">${i + 1}</div>
+            <div class="tr-main">
+              <div class="tr-tk">${tk}</div>
+              <div class="tr-meta">Watchlist · live price</div>
+            </div>
+            <div class="tr-right">
+              <div class="tr-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
+              <div class="tr-chg ${cssClass(q.pct)}">${fmtPct(q.pct)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.tr-row[data-ticker]').forEach(row =>
+        row.addEventListener('click', () =>
+          openGuruFocus(row.getAttribute('data-ticker'))));
+    } catch (e) {
+      console.warn('[trending]', e);
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load tickers.</div>';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RIGHT COLUMN — Market Pulse (scan results as news)
+  // Auto-refreshes every 15 minutes
+  // ══════════════════════════════════════════════════════════════
+  async function loadGPMarketPulse() {
+    const el = document.getElementById('gp-pulse-rows');
+    const ts = document.getElementById('gp-pulse-ts');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      if (!d.exists || !d.results || !Object.keys(d.results).length) {
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No scan data yet. Run a scan to populate.</div>';
+        return;
+      }
+      if (ts) {
+        const age = d.scanned_at
+          ? Math.round((Date.now() - new Date(d.scanned_at)) / 60000)
+          : null;
+        ts.textContent = age != null ? `⟳ ${age}m ago` : '⟳ now';
+      }
+      const entries = Object.entries(d.results).slice(0, 7);
+      el.innerHTML = entries.map(([tk, res]) => {
+        const sent   = (res.sentiment || 'NEUTRAL').toUpperCase();
+        const impCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
+        const summary = (res.markdown || '')
+          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ')
+          .trim().slice(0, 105);
+        return `
+          <div class="news-row" data-ticker="${tk}">
+            <div class="news-title">${tk}: ${summary || 'Analysis available.'}</div>
+            <div class="news-meta">
+              <span class="news-impact ${impCls}">${sent}</span>
+              <span class="news-source">DGA Scan</span>
+              ${res.price != null ? `<span>· $${fmtPx(res.price)} <span class="${cssClass(res.pct_change)}">${fmtPct(res.pct_change)}</span></span>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+      el.querySelectorAll('.news-row[data-ticker]').forEach(row =>
+        row.addEventListener('click', () =>
+          openGuruFocus(row.getAttribute('data-ticker'))));
+    } catch (e) {
+      console.warn('[gp-pulse]', e);
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load market pulse.</div>';
+    }
+  }
+
   // ── Init ─────────────────────────────────────────────────────
   loadIndices();
   loadWatchlist();
   loadReports();
   loadLastPortfolio();
-  setInterval(loadIndices,   60000);
-  setInterval(loadWatchlist, 60000);
+  loadTrendingTickers();
+  loadGPMarketPulse();
+  loadMiniScanChips();
+
+  setInterval(loadIndices,          60_000);   // ribbon: every 60s
+  setInterval(loadWatchlist,        60_000);   // watchlist: every 60s
+  setInterval(loadTrendingTickers,  60_000);   // trending: every 60s
+  setInterval(loadGPMarketPulse,   900_000);   // pulse: every 15 min
 })();
 </script>
+
+<!-- ── Report Viewer Modal ─────────────────────────────────── -->
+<div id="report-modal" style="display:none;position:fixed;inset:0;background:rgba(0,10,20,0.88);z-index:200;overflow-y:auto;padding:24px 16px;">
+  <div style="max-width:860px;margin:0 auto;background:var(--panel);border-radius:12px;border:1px solid var(--panel-edge);box-shadow:0 12px 48px rgba(0,0,0,0.65);">
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid rgba(255,255,255,0.07);flex-wrap:wrap;">
+      <span id="rm-ticker" style="font-size:16px;font-weight:800;color:#e0e8f0;letter-spacing:0.8px;"></span>
+      <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:4px;"></span>
+      <div style="margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
+        <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
+           style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
+        <a id="rm-docx-btn"  href="#" target="_blank" rel="noopener"
+           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ DOCX</a>
+        <a id="rm-pptx-btn"  href="#" target="_blank" rel="noopener"
+           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ PPTX</a>
+        <button id="rm-close"
+          style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#c0cfe0;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
+      </div>
+    </div>
+    <div id="rm-body" class="md-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
+  </div>
+</div>
 
 </body>
 </html>
