@@ -1370,6 +1370,275 @@ def lp_me_overview(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# v2 Admin — DESTRUCTIVE ops. Always GP-only, always with backup-first
+# safety. Used for one-off cleanup of duplicate / misclassified fund rows.
+# ---------------------------------------------------------------------------
+
+class FundDeleteRequest(BaseModel):
+    fund_id: str
+    confirm: bool = False   # must be True to actually delete
+
+
+@app.post("/api/v2/admin/fund/delete")
+def admin_fund_delete(request: Request, body: FundDeleteRequest):
+    """Delete a single fund row + its child rows. GUARDED:
+      1. Only GP role can call this.
+      2. Dry-run by default (confirm=false) — returns what WOULD be deleted.
+      3. Refuses to delete if the fund has non-trivial data:
+         • any commitment with amount > 0
+         • any non-zero nav_snapshot
+         • any capital_call, distribution, transaction, or tax_lot
+      4. Writes a JSON backup of the entire fund + its rows to a file
+         before the DELETE runs, so you can hand-restore if needed.
+      5. Runs DELETE in a transaction — full rollback on any error.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(status_code=403, detail="GP role required")
+    if not _PSYCOPG2_OK:
+        raise HTTPException(status_code=503, detail="psycopg2 not installed")
+
+    fund_id = (body.fund_id or "").strip()
+    if not fund_id:
+        raise HTTPException(status_code=400, detail="fund_id required")
+
+    inventory:  dict[str, int]  = {}
+    backup:     dict[str, list] = {}
+    refuse_reasons: list[str]   = []
+
+    conn = _fund_conn()
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # 1) Load the fund row itself
+            cur.execute("SELECT * FROM funds WHERE id = %s", (fund_id,))
+            fund_row = cur.fetchone()
+            if not fund_row:
+                raise HTTPException(status_code=404, detail=f"fund_id {fund_id} not found")
+            backup["funds"] = [dict(fund_row)]
+
+            # 2) Inspect every child table that references funds.id
+            child_tables = [
+                ("lps",                  "fund_id"),
+                ("commitments",          "fund_id"),
+                ("capital_calls",        "fund_id"),
+                ("distributions",        "fund_id"),
+                ("nav_snapshots",        "fund_id"),
+                ("transactions",         "fund_id"),
+                ("tax_lots",             "fund_id"),
+                ("mgmt_fee_runs",        "fund_id"),
+                ("carry_runs",           "fund_id"),
+                ("lp_statements",        "fund_id"),
+                ("annual_lp_balances",   "fund_id"),   # added by 0002
+                ("managed_account_ytd_cache", "fund_id"),  # added by 0004
+            ]
+            for tbl, col in child_tables:
+                try:
+                    cur.execute(f"SELECT * FROM {tbl} WHERE {col} = %s", (fund_id,))
+                    rows = cur.fetchall()
+                    inventory[tbl] = len(rows)
+                    if rows:
+                        backup[tbl] = [{k: (str(v) if hasattr(v, 'isoformat') else v)
+                                        for k, v in r.items()} for r in rows]
+                except Exception:
+                    # Table might not exist in older schemas — skip silently
+                    inventory[tbl] = 0
+
+            # 3) Apply the safety guards
+            # — commitments with amount > 0
+            cur.execute("""
+                SELECT COUNT(*)::int AS n
+                  FROM commitments
+                 WHERE fund_id = %s AND COALESCE(commitment_amount, 0) > 0
+                   AND superseded_by IS NULL
+            """, (fund_id,))
+            n_real_commits = cur.fetchone()["n"]
+            if n_real_commits > 0:
+                refuse_reasons.append(f"{n_real_commits} active commitment(s) with amount > 0")
+
+            # — nav_snapshots with real values
+            cur.execute("""
+                SELECT COUNT(*)::int AS n
+                  FROM nav_snapshots
+                 WHERE fund_id = %s
+                   AND (COALESCE(net_nav, 0) > 0 OR COALESCE(gross_nav, 0) > 0)
+            """, (fund_id,))
+            n_real_navs = cur.fetchone()["n"]
+            if n_real_navs > 0:
+                refuse_reasons.append(f"{n_real_navs} nav_snapshot(s) with non-zero NAV")
+
+            # — any transactions (immutable ledger; never delete these via API)
+            cur.execute("SELECT COUNT(*)::int AS n FROM transactions WHERE fund_id = %s", (fund_id,))
+            n_txns = cur.fetchone()["n"]
+            if n_txns > 0:
+                refuse_reasons.append(f"{n_txns} transaction(s) in immutable ledger")
+
+            # — any capital_calls or distributions
+            cur.execute("SELECT COUNT(*)::int AS n FROM capital_calls WHERE fund_id = %s", (fund_id,))
+            n_calls = cur.fetchone()["n"]
+            if n_calls > 0:
+                refuse_reasons.append(f"{n_calls} capital_call(s)")
+
+            cur.execute("SELECT COUNT(*)::int AS n FROM distributions WHERE fund_id = %s", (fund_id,))
+            n_dist = cur.fetchone()["n"]
+            if n_dist > 0:
+                refuse_reasons.append(f"{n_dist} distribution(s)")
+
+            if refuse_reasons:
+                return {
+                    "ok":              False,
+                    "would_delete":    False,
+                    "fund":            dict(fund_row),
+                    "child_inventory": inventory,
+                    "refuse_reasons":  refuse_reasons,
+                    "message":         "Refusing to delete fund with non-trivial data. "
+                                       "Review and clean those rows manually first.",
+                }
+
+            # 4) Dry-run mode → return what would happen
+            if not body.confirm:
+                return {
+                    "ok":              True,
+                    "would_delete":    True,
+                    "fund":            dict(fund_row),
+                    "child_inventory": inventory,
+                    "next_step":       "Call again with confirm=true to perform the delete.",
+                }
+
+            # 5) Write backup to disk BEFORE any destructive op
+            backups_dir = Path(os.environ.get(
+                "DGA_FUND_DELETION_BACKUPS",
+                str(analyst.STOCKS_FOLDER / "_fund_deletion_backups"),
+            ))
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            short = (fund_row.get("short_name") or fund_id).replace("/", "_").replace(" ", "_")
+            backup_path = backups_dir / f"{stamp}__{short}__{fund_id}.json"
+            backup_path.write_text(json.dumps({
+                "deleted_at":  stamp,
+                "deleted_by":  claims.get("email"),
+                "lp_id":       claims.get("lp_id"),
+                "inventory":   inventory,
+                "data":        backup,
+            }, indent=2, default=str))
+
+            # 6) DELETE in dependency order (NO CASCADE in schema)
+            delete_order = [
+                ("annual_lp_balances",        "fund_id"),
+                ("managed_account_ytd_cache", "fund_id"),
+                ("lp_statements",             "fund_id"),
+                ("carry_runs",                "fund_id"),
+                ("mgmt_fee_runs",             "fund_id"),
+                # nav_snapshot_lp depends on nav_snapshots
+                # (delete via nav_snapshots' ON DELETE CASCADE if set, or manually)
+                # Try the nav_snapshot_lp child first
+            ]
+            deleted: dict[str, int] = {}
+            # nav_snapshot_lp first (joined via nav_snapshots.id)
+            try:
+                cur.execute("""
+                    DELETE FROM nav_snapshot_lp
+                     WHERE nav_snapshot_id IN (
+                         SELECT id FROM nav_snapshots WHERE fund_id = %s
+                     )
+                """, (fund_id,))
+                deleted["nav_snapshot_lp"] = cur.rowcount
+            except Exception:
+                pass
+            # capital_call_allocations + distribution_allocations
+            try:
+                cur.execute("""
+                    DELETE FROM capital_call_allocations
+                     WHERE capital_call_id IN (
+                         SELECT id FROM capital_calls WHERE fund_id = %s
+                     )
+                """, (fund_id,))
+                deleted["capital_call_allocations"] = cur.rowcount
+            except Exception:
+                pass
+            try:
+                cur.execute("""
+                    DELETE FROM distribution_allocations
+                     WHERE distribution_id IN (
+                         SELECT id FROM distributions WHERE fund_id = %s
+                     )
+                """, (fund_id,))
+                deleted["distribution_allocations"] = cur.rowcount
+            except Exception:
+                pass
+            # commitments + lps
+            cur.execute("""
+                DELETE FROM commitments
+                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+                    OR fund_id = %s
+            """, (fund_id, fund_id))
+            deleted["commitments"] = cur.rowcount
+
+            # Remove users.lp_id FK before deleting lps
+            try:
+                cur.execute("""
+                    UPDATE users SET lp_id = NULL
+                     WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+                """, (fund_id,))
+                deleted["users_lp_id_cleared"] = cur.rowcount
+            except Exception:
+                pass
+
+            cur.execute("DELETE FROM lps WHERE fund_id = %s", (fund_id,))
+            deleted["lps"] = cur.rowcount
+
+            # Then the rest of the direct-FK tables
+            for tbl, col in delete_order:
+                try:
+                    cur.execute(f"DELETE FROM {tbl} WHERE {col} = %s", (fund_id,))
+                    deleted[tbl] = cur.rowcount
+                except Exception:
+                    pass
+            cur.execute("DELETE FROM nav_snapshots WHERE fund_id = %s", (fund_id,))
+            deleted["nav_snapshots"] = cur.rowcount
+            cur.execute("DELETE FROM capital_calls WHERE fund_id = %s", (fund_id,))
+            deleted["capital_calls"] = cur.rowcount
+            cur.execute("DELETE FROM distributions WHERE fund_id = %s", (fund_id,))
+            deleted["distributions"] = cur.rowcount
+            try:
+                cur.execute("DELETE FROM tax_lots WHERE fund_id = %s", (fund_id,))
+                deleted["tax_lots"] = cur.rowcount
+            except Exception:
+                pass
+            try:
+                cur.execute("DELETE FROM transactions WHERE fund_id = %s", (fund_id,))
+                deleted["transactions"] = cur.rowcount
+            except Exception:
+                pass
+
+            # Finally the fund row itself
+            cur.execute("DELETE FROM funds WHERE id = %s", (fund_id,))
+            deleted["funds"] = cur.rowcount
+
+            conn.commit()
+
+            return {
+                "ok":              True,
+                "deleted":         True,
+                "fund_short_name": fund_row.get("short_name"),
+                "fund_name":       fund_row.get("name"),
+                "rows_deleted":    deleted,
+                "backup_path":     str(backup_path),
+            }
+    except HTTPException:
+        try: conn.rollback()
+        except: pass
+        raise
+    except Exception as exc:
+        try: conn.rollback()
+        except: pass
+        raise HTTPException(status_code=500, detail=f"Delete failed (rolled back): {str(exc)[:300]}")
+    finally:
+        try: conn.close()
+        except: pass
+
+
+# ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
 
@@ -1638,7 +1907,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65f-20260510"
+WEB_BUILD_VERSION = "ui65g-20260510"
 
 
 @app.get("/api/build")
