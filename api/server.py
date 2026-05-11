@@ -1408,8 +1408,19 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
 
     conn = _fund_conn()
     try:
-        conn.autocommit = False
+        # Phase 1 (inspection) runs in autocommit so a missing-table error
+        # doesn't poison the whole transaction. We flip back to false before
+        # the destructive DELETEs.
+        conn.autocommit = True
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Discover which tables actually exist in this DB
+            cur.execute("""
+                SELECT table_name
+                  FROM information_schema.tables
+                 WHERE table_schema = 'public'
+            """)
+            existing_tables = {r["table_name"] for r in cur.fetchall()}
+
             # 1) Load the fund row itself
             cur.execute("SELECT * FROM funds WHERE id = %s", (fund_id,))
             fund_row = cur.fetchone()
@@ -1417,7 +1428,7 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 raise HTTPException(status_code=404, detail=f"fund_id {fund_id} not found")
             backup["funds"] = [dict(fund_row)]
 
-            # 2) Inspect every child table that references funds.id
+            # 2) Inventory every child table that references funds.id
             child_tables = [
                 ("lps",                  "fund_id"),
                 ("commitments",          "fund_id"),
@@ -1429,60 +1440,60 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 ("mgmt_fee_runs",        "fund_id"),
                 ("carry_runs",           "fund_id"),
                 ("lp_statements",        "fund_id"),
-                ("annual_lp_balances",   "fund_id"),   # added by 0002
-                ("managed_account_ytd_cache", "fund_id"),  # added by 0004
+                ("annual_lp_balances",   "fund_id"),
+                ("managed_account_ytd_cache", "fund_id"),
             ]
             for tbl, col in child_tables:
-                try:
-                    cur.execute(f"SELECT * FROM {tbl} WHERE {col} = %s", (fund_id,))
-                    rows = cur.fetchall()
-                    inventory[tbl] = len(rows)
-                    if rows:
-                        backup[tbl] = [{k: (str(v) if hasattr(v, 'isoformat') else v)
-                                        for k, v in r.items()} for r in rows]
-                except Exception:
-                    # Table might not exist in older schemas — skip silently
+                if tbl not in existing_tables:
                     inventory[tbl] = 0
+                    continue
+                cur.execute(f"SELECT * FROM {tbl} WHERE {col} = %s", (fund_id,))
+                rows = cur.fetchall()
+                inventory[tbl] = len(rows)
+                if rows:
+                    backup[tbl] = [{k: (str(v) if hasattr(v, 'isoformat') else v)
+                                    for k, v in r.items()} for r in rows]
 
-            # 3) Apply the safety guards
-            # — commitments with amount > 0
-            cur.execute("""
-                SELECT COUNT(*)::int AS n
-                  FROM commitments
-                 WHERE fund_id = %s AND COALESCE(commitment_amount, 0) > 0
-                   AND superseded_by IS NULL
-            """, (fund_id,))
-            n_real_commits = cur.fetchone()["n"]
-            if n_real_commits > 0:
-                refuse_reasons.append(f"{n_real_commits} active commitment(s) with amount > 0")
+            # 3) Safety guards
+            if "commitments" in existing_tables:
+                cur.execute("""
+                    SELECT COUNT(*)::int AS n
+                      FROM commitments
+                     WHERE fund_id = %s AND COALESCE(commitment_amount, 0) > 0
+                       AND superseded_by IS NULL
+                """, (fund_id,))
+                n_real_commits = cur.fetchone()["n"]
+                if n_real_commits > 0:
+                    refuse_reasons.append(f"{n_real_commits} active commitment(s) with amount > 0")
 
-            # — nav_snapshots with real values
-            cur.execute("""
-                SELECT COUNT(*)::int AS n
-                  FROM nav_snapshots
-                 WHERE fund_id = %s
-                   AND (COALESCE(net_nav, 0) > 0 OR COALESCE(gross_nav, 0) > 0)
-            """, (fund_id,))
-            n_real_navs = cur.fetchone()["n"]
-            if n_real_navs > 0:
-                refuse_reasons.append(f"{n_real_navs} nav_snapshot(s) with non-zero NAV")
+            if "nav_snapshots" in existing_tables:
+                cur.execute("""
+                    SELECT COUNT(*)::int AS n
+                      FROM nav_snapshots
+                     WHERE fund_id = %s
+                       AND (COALESCE(net_nav, 0) > 0 OR COALESCE(gross_nav, 0) > 0)
+                """, (fund_id,))
+                n_real_navs = cur.fetchone()["n"]
+                if n_real_navs > 0:
+                    refuse_reasons.append(f"{n_real_navs} nav_snapshot(s) with non-zero NAV")
 
-            # — any transactions (immutable ledger; never delete these via API)
-            cur.execute("SELECT COUNT(*)::int AS n FROM transactions WHERE fund_id = %s", (fund_id,))
-            n_txns = cur.fetchone()["n"]
-            if n_txns > 0:
-                refuse_reasons.append(f"{n_txns} transaction(s) in immutable ledger")
+            if "transactions" in existing_tables:
+                cur.execute("SELECT COUNT(*)::int AS n FROM transactions WHERE fund_id = %s", (fund_id,))
+                n_txns = cur.fetchone()["n"]
+                if n_txns > 0:
+                    refuse_reasons.append(f"{n_txns} transaction(s) in immutable ledger")
 
-            # — any capital_calls or distributions
-            cur.execute("SELECT COUNT(*)::int AS n FROM capital_calls WHERE fund_id = %s", (fund_id,))
-            n_calls = cur.fetchone()["n"]
-            if n_calls > 0:
-                refuse_reasons.append(f"{n_calls} capital_call(s)")
+            if "capital_calls" in existing_tables:
+                cur.execute("SELECT COUNT(*)::int AS n FROM capital_calls WHERE fund_id = %s", (fund_id,))
+                n_calls = cur.fetchone()["n"]
+                if n_calls > 0:
+                    refuse_reasons.append(f"{n_calls} capital_call(s)")
 
-            cur.execute("SELECT COUNT(*)::int AS n FROM distributions WHERE fund_id = %s", (fund_id,))
-            n_dist = cur.fetchone()["n"]
-            if n_dist > 0:
-                refuse_reasons.append(f"{n_dist} distribution(s)")
+            if "distributions" in existing_tables:
+                cur.execute("SELECT COUNT(*)::int AS n FROM distributions WHERE fund_id = %s", (fund_id,))
+                n_dist = cur.fetchone()["n"]
+                if n_dist > 0:
+                    refuse_reasons.append(f"{n_dist} distribution(s)")
 
             if refuse_reasons:
                 return {
@@ -1522,98 +1533,75 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
                 "data":        backup,
             }, indent=2, default=str))
 
-            # 6) DELETE in dependency order (NO CASCADE in schema)
-            delete_order = [
-                ("annual_lp_balances",        "fund_id"),
-                ("managed_account_ytd_cache", "fund_id"),
-                ("lp_statements",             "fund_id"),
-                ("carry_runs",                "fund_id"),
-                ("mgmt_fee_runs",             "fund_id"),
-                # nav_snapshot_lp depends on nav_snapshots
-                # (delete via nav_snapshots' ON DELETE CASCADE if set, or manually)
-                # Try the nav_snapshot_lp child first
-            ]
+            # 6) Switch to transactional mode for the destructive ops.
+            conn.autocommit = False
+
+            # We only DELETE from tables that actually exist (existing_tables
+            # set built above). Helper:
+            def _delete(cur, sql, params, key):
+                cur.execute(sql, params)
+                deleted[key] = cur.rowcount
+
             deleted: dict[str, int] = {}
-            # nav_snapshot_lp first (joined via nav_snapshots.id)
-            try:
-                cur.execute("""
+            if "nav_snapshot_lp" in existing_tables:
+                _delete(cur, """
                     DELETE FROM nav_snapshot_lp
                      WHERE nav_snapshot_id IN (
                          SELECT id FROM nav_snapshots WHERE fund_id = %s
                      )
-                """, (fund_id,))
-                deleted["nav_snapshot_lp"] = cur.rowcount
-            except Exception:
-                pass
-            # capital_call_allocations + distribution_allocations
-            try:
-                cur.execute("""
+                """, (fund_id,), "nav_snapshot_lp")
+            if "capital_call_allocations" in existing_tables:
+                _delete(cur, """
                     DELETE FROM capital_call_allocations
                      WHERE capital_call_id IN (
                          SELECT id FROM capital_calls WHERE fund_id = %s
                      )
-                """, (fund_id,))
-                deleted["capital_call_allocations"] = cur.rowcount
-            except Exception:
-                pass
-            try:
-                cur.execute("""
+                """, (fund_id,), "capital_call_allocations")
+            if "distribution_allocations" in existing_tables:
+                _delete(cur, """
                     DELETE FROM distribution_allocations
                      WHERE distribution_id IN (
                          SELECT id FROM distributions WHERE fund_id = %s
                      )
-                """, (fund_id,))
-                deleted["distribution_allocations"] = cur.rowcount
-            except Exception:
-                pass
-            # commitments + lps
-            cur.execute("""
-                DELETE FROM commitments
-                 WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
-                    OR fund_id = %s
-            """, (fund_id, fund_id))
-            deleted["commitments"] = cur.rowcount
-
-            # Remove users.lp_id FK before deleting lps
-            try:
-                cur.execute("""
+                """, (fund_id,), "distribution_allocations")
+            if "commitments" in existing_tables:
+                _delete(cur, """
+                    DELETE FROM commitments
+                     WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
+                        OR fund_id = %s
+                """, (fund_id, fund_id), "commitments")
+            if "users" in existing_tables and "lps" in existing_tables:
+                _delete(cur, """
                     UPDATE users SET lp_id = NULL
                      WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)
-                """, (fund_id,))
-                deleted["users_lp_id_cleared"] = cur.rowcount
-            except Exception:
-                pass
-
-            cur.execute("DELETE FROM lps WHERE fund_id = %s", (fund_id,))
-            deleted["lps"] = cur.rowcount
-
-            # Then the rest of the direct-FK tables
-            for tbl, col in delete_order:
-                try:
-                    cur.execute(f"DELETE FROM {tbl} WHERE {col} = %s", (fund_id,))
-                    deleted[tbl] = cur.rowcount
-                except Exception:
-                    pass
-            cur.execute("DELETE FROM nav_snapshots WHERE fund_id = %s", (fund_id,))
-            deleted["nav_snapshots"] = cur.rowcount
-            cur.execute("DELETE FROM capital_calls WHERE fund_id = %s", (fund_id,))
-            deleted["capital_calls"] = cur.rowcount
-            cur.execute("DELETE FROM distributions WHERE fund_id = %s", (fund_id,))
-            deleted["distributions"] = cur.rowcount
-            try:
-                cur.execute("DELETE FROM tax_lots WHERE fund_id = %s", (fund_id,))
-                deleted["tax_lots"] = cur.rowcount
-            except Exception:
-                pass
-            try:
-                cur.execute("DELETE FROM transactions WHERE fund_id = %s", (fund_id,))
-                deleted["transactions"] = cur.rowcount
-            except Exception:
-                pass
+                """, (fund_id,), "users_lp_id_cleared")
+            if "lps" in existing_tables:
+                _delete(cur, "DELETE FROM lps WHERE fund_id = %s",
+                        (fund_id,), "lps")
+            for tbl in ("annual_lp_balances", "managed_account_ytd_cache",
+                        "lp_statements", "carry_runs", "mgmt_fee_runs"):
+                if tbl in existing_tables:
+                    _delete(cur, f"DELETE FROM {tbl} WHERE fund_id = %s",
+                            (fund_id,), tbl)
+            if "nav_snapshots" in existing_tables:
+                _delete(cur, "DELETE FROM nav_snapshots WHERE fund_id = %s",
+                        (fund_id,), "nav_snapshots")
+            if "capital_calls" in existing_tables:
+                _delete(cur, "DELETE FROM capital_calls WHERE fund_id = %s",
+                        (fund_id,), "capital_calls")
+            if "distributions" in existing_tables:
+                _delete(cur, "DELETE FROM distributions WHERE fund_id = %s",
+                        (fund_id,), "distributions")
+            if "tax_lots" in existing_tables:
+                _delete(cur, "DELETE FROM tax_lots WHERE fund_id = %s",
+                        (fund_id,), "tax_lots")
+            if "transactions" in existing_tables:
+                _delete(cur, "DELETE FROM transactions WHERE fund_id = %s",
+                        (fund_id,), "transactions")
 
             # Finally the fund row itself
-            cur.execute("DELETE FROM funds WHERE id = %s", (fund_id,))
-            deleted["funds"] = cur.rowcount
+            _delete(cur, "DELETE FROM funds WHERE id = %s",
+                    (fund_id,), "funds")
 
             conn.commit()
 
@@ -1907,7 +1895,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65g-20260510"
+WEB_BUILD_VERSION = "ui65h-20260510"
 
 
 @app.get("/api/build")
