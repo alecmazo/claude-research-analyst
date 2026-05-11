@@ -1126,67 +1126,108 @@
 </div><!-- #tab-fund -->
 
 
-<!-- ══ FUND DETAIL — full-page view (one fund / account) ═══════════ -->
-<div id="tab-fund-detail" class="tab-panel">
+<!-- ══ LP FUND DETAIL ════════════════════════════════════════════ -->
+<div id="tab-lp-detail" class="tab-panel">
   <div class="wide-shell">
     <div class="tab-toolbar">
-      <button class="tab-btn secondary" id="fd-back-btn">← Back to Funds</button>
-      <h2 id="fd-title" style="margin-left:8px;">…</h2>
+      <button class="tab-btn secondary" id="lpd-back-btn">← Back to Funds</button>
+      <h2 id="lpd-title" style="margin-left:8px;">…</h2>
     </div>
 
-    <!-- Top tile grid (metadata) -->
-    <div id="fd-meta" class="tab-loading">Loading…</div>
+    <div id="lpd-meta" class="tab-loading">Loading…</div>
+    <div id="lpd-lps"          style="margin-top:18px;"></div>
+    <div id="lpd-positions"    style="margin-top:18px;"></div>
+    <div id="lpd-waterfall"    style="margin-top:18px;"></div>
+    <div id="lpd-lp-allocation" style="margin-top:18px;"></div>
 
-    <!-- LP roster panel (LP funds only) -->
-    <div id="fd-lps" style="margin-top:18px;"></div>
-
-    <!-- Positions panel -->
-    <div id="fd-positions" style="margin-top:18px;"></div>
-
-    <!-- Waterfall panel (LP funds only — populated from /api/fund/waterfall) -->
-    <div id="fd-waterfall" class="fd-section"></div>
-
-    <!-- Account history table (managed accounts only) -->
-    <div id="fd-history" class="fd-section"></div>
-
-    <!-- Monthly balance chart (managed accounts only) -->
-    <div id="fd-balance" class="fd-section"></div>
-
-    <!-- CSV upload widgets -->
     <section class="panel" style="margin-top:18px;">
       <header class="panel-head">
         <span class="panel-title">Data Import</span>
-        <span class="panel-badge">CSV / XLSX</span>
+        <span class="panel-badge">Two uploads</span>
       </header>
-      <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;">
-        <!-- Positions -->
+      <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">
         <div class="fd-upload-card">
-          <div class="fd-upload-title">📊 Account Positions</div>
-          <div class="fd-upload-hint">Fidelity Account Positions export (CSV or XLSX). Replaces current open tax-lots.</div>
-          <input id="fd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="fd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
-          <div id="fd-pos-status" class="fd-upload-status"></div>
+          <div class="fd-upload-title">📊 Portfolio Positions</div>
+          <div class="fd-upload-hint">Fidelity Account Positions export (CSV/XLSX). Replaces open tax-lots.</div>
+          <input id="lpd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="lpd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
+          <div id="lpd-pos-status" class="fd-upload-status"></div>
         </div>
-        <!-- Cap Table -->
         <div class="fd-upload-card">
-          <div class="fd-upload-title">👥 Cap Table</div>
-          <div class="fd-upload-hint">LP roster CSV: name, email, commitment_amount (per LP). Replaces existing LPs for this fund.</div>
-          <input id="fd-cap-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="fd-upload-cap-btn" class="tab-btn" style="width:100%;">Upload Cap Table</button>
-          <div id="fd-cap-status" class="fd-upload-status"></div>
-        </div>
-        <!-- Annual NAV -->
-        <div class="fd-upload-card">
-          <div class="fd-upload-title">📈 Annual NAV / Waterfall</div>
-          <div class="fd-upload-hint">Historical year-by-year NAV (Year, Jan 1 NAV, Dec 31 NAV, Contributions, Hurdle, Carry, GP equity).</div>
-          <input id="fd-nav-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="fd-upload-nav-btn" class="tab-btn" style="width:100%;">Upload Annual NAV</button>
-          <div id="fd-nav-status" class="fd-upload-status"></div>
+          <div class="fd-upload-title">📈 Annual NAV / Waterfall (single upload)</div>
+          <div class="fd-upload-hint">One Excel that contains <strong>everything</strong>: year-by-year NAV (Jan 1, Dec 31, contributions, hurdle, carry, GP equity), <strong>LP roster + initial contributions</strong>, <strong>economics</strong>, and <strong>fund established</strong> year. Replaces all four on import.</div>
+          <input id="lpd-nav-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="lpd-upload-nav-btn" class="tab-btn" style="width:100%;">Upload Annual NAV</button>
+          <div id="lpd-nav-status" class="fd-upload-status"></div>
         </div>
       </div>
     </section>
   </div>
-</div><!-- #tab-fund-detail -->
+</div><!-- #tab-lp-detail -->
+
+
+<!-- ══ MANAGED ACCOUNT DETAIL ═══════════════════════════════════ -->
+<div id="tab-acct-detail" class="tab-panel">
+  <div class="wide-shell">
+    <div class="tab-toolbar">
+      <button class="tab-btn secondary" id="acd-back-btn">← Back to Accounts</button>
+      <h2 id="acd-title" style="margin-left:8px;">…</h2>
+    </div>
+
+    <div id="acd-meta" class="tab-loading">Loading…</div>
+    <div id="acd-positions"   style="margin-top:18px;"></div>
+    <div id="acd-balance"     style="margin-top:18px;"></div>
+    <div id="acd-attribution" style="margin-top:18px;"></div>
+    <div id="acd-history"     style="margin-top:18px;"></div>
+
+    <section class="panel" style="margin-top:18px;">
+      <header class="panel-head">
+        <span class="panel-title">Data Import</span>
+        <span class="panel-badge">Positions only</span>
+      </header>
+      <div style="padding:14px;">
+        <div class="fd-upload-card" style="max-width:480px;">
+          <div class="fd-upload-title">📊 Portfolio Positions</div>
+          <div class="fd-upload-hint">Fidelity Account Positions export. This is the only static upload — YTD analytics come from the calculator below.</div>
+          <input id="acd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="acd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
+          <div id="acd-pos-status" class="fd-upload-status"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:18px;">
+      <header class="panel-head">
+        <span class="panel-title">Run YTD Calculation</span>
+        <span class="panel-badge">3 Fidelity CSVs</span>
+      </header>
+      <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">Positions CSV</div>
+          <div class="fd-upload-hint">Current holdings (Fidelity Positions export).</div>
+          <input id="acd-ytd-pos" type="file" accept=".csv,.txt" class="fd-upload-file">
+        </div>
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">Account History CSV</div>
+          <div class="fd-upload-hint">YTD transactions / cash flows.</div>
+          <input id="acd-ytd-act" type="file" accept=".csv,.txt" class="fd-upload-file">
+        </div>
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">Investment Balance CSV <span style="color:var(--mid);font-weight:400;">(optional)</span></div>
+          <div class="fd-upload-hint">Fidelity monthly summary — enables the month-end chart with exact balances.</div>
+          <input id="acd-ytd-mp" type="file" accept=".csv,.txt" class="fd-upload-file">
+        </div>
+      </div>
+      <div style="padding:0 14px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:11px;color:var(--mid);">Jan 1 begin value (optional)
+          <input id="acd-ytd-begin" type="number" step="1" min="0" placeholder="auto" style="width:140px;height:30px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:white;padding:0 8px;margin-left:6px;">
+        </label>
+        <button id="acd-ytd-run-btn" class="tab-btn" style="margin-left:auto;">⚡ Run YTD &amp; Save</button>
+        <div id="acd-ytd-status" class="fd-upload-status"></div>
+      </div>
+    </section>
+  </div>
+</div><!-- #tab-acct-detail -->
 
 
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
@@ -2109,32 +2150,55 @@
     });
   });
 
-  // ── Fund Detail FULL PAGE ──────────────────────────────────────
-  // Opens as a separate tab panel (#tab-fund-detail). Has Back button
-  // and shows: metadata, LP roster, positions, CSV upload widgets.
-  let CURRENT_FUND_ID = null;
+  // ── Fund / Account Detail routing ─────────────────────────────
+  // Routes to either #tab-lp-detail or #tab-acct-detail based on fund_type.
+  // The two pages are genuinely separate: LP funds get waterfall + LP roster;
+  // managed accounts get monthly balance chart, SPY overlay, attribution, YTD calc.
+  let CURRENT_FUND_ID   = null;
+  let CURRENT_FUND_TYPE = null;   // 'lp_fund' | 'managed_account'
 
-  function openFundDetail(fundId, fundName) {
+  async function openFundDetail(fundId, fundName) {
     CURRENT_FUND_ID = fundId;
-    // Switch to the detail tab
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    const panel = document.getElementById('tab-fund-detail');
-    if (!panel) { console.warn('fund-detail panel missing'); return; }
-    panel.classList.add('active');
-    document.querySelectorAll('.topbar-link[data-tab]').forEach(l => l.classList.remove('active'));
-    document.querySelector('.topbar-link[data-tab="fund"]')?.classList.add('active');
-    window.scrollTo(0, 0);
-    document.getElementById('fd-title').textContent = fundName || '…';
-    loadFundDetailContent(fundId);
+    // First peek to decide which page to open. /api/v2/gp/fund/{id}/detail returns fund_type.
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      CURRENT_FUND_TYPE = d.fund_type === 'managed_account' ? 'managed_account' : 'lp_fund';
+      const isAcct = CURRENT_FUND_TYPE === 'managed_account';
+      const panelId = isAcct ? 'tab-acct-detail' : 'tab-lp-detail';
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById(panelId).classList.add('active');
+      document.querySelectorAll('.topbar-link[data-tab]').forEach(l => l.classList.remove('active'));
+      document.querySelector('.topbar-link[data-tab="fund"]')?.classList.add('active');
+      window.scrollTo(0, 0);
+      if (isAcct) {
+        document.getElementById('acd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
+        renderAcctMeta(d);
+        loadAcctPositions(fundId);
+        loadAcctYtdSections(fundId);
+      } else {
+        document.getElementById('lpd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
+        renderLpMeta(d);
+        renderLpRoster(d);
+        loadLpPositions(fundId);
+        loadLpWaterfall(fundId);
+      }
+    } catch (e) {
+      alert('Could not load detail: ' + e.message);
+    }
   }
 
-  async function loadFundDetailContent(fundId) {
+  // Stub kept for legacy click handlers; not used.
+  async function loadFundDetailContent(fundId) { return openFundDetail(fundId); }
+  async function _unused_loadFundDetailContent(fundId) {
     const meta = document.getElementById('fd-meta');
     const lps  = document.getElementById('fd-lps');
     const pos  = document.getElementById('fd-positions');
     const wfl  = document.getElementById('fd-waterfall');
     const hst  = document.getElementById('fd-history');
     const bal  = document.getElementById('fd-balance');
+    if (!meta) return;
     meta.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading fund detail…</div>';
     lps.innerHTML = ''; pos.innerHTML = '';
     if (wfl) wfl.innerHTML = '';
@@ -2444,7 +2508,7 @@
     }
   }
 
-  // CSV uploaders for the fund detail page
+  // CSV uploaders (shared between LP-fund and managed-account upload widgets)
   async function uploadFundCsv(endpoint, fileInput, statusEl, btnEl, idleLabel) {
     if (!CURRENT_FUND_ID) { statusEl.textContent = 'No fund selected'; return; }
     const file = fileInput.files?.[0];
@@ -2470,31 +2534,489 @@
     }
   }
 
-  // Wire upload buttons (event delegation since these elements live in a tab)
+  // Wire upload + back buttons (event delegation)
   document.addEventListener('click', (e) => {
-    if (e.target.id === 'fd-back-btn') {
+    if (e.target.id === 'lpd-back-btn' || e.target.id === 'acd-back-btn') {
       showTab('fund');
       return;
     }
-    if (e.target.id === 'fd-upload-pos-btn') {
+    // LP-fund uploads
+    if (e.target.id === 'lpd-upload-pos-btn') {
       uploadFundCsv('/api/fund/import-positions',
-        document.getElementById('fd-pos-file'),
-        document.getElementById('fd-pos-status'),
+        document.getElementById('lpd-pos-file'),
+        document.getElementById('lpd-pos-status'),
         e.target, 'Upload Positions');
     }
-    if (e.target.id === 'fd-upload-cap-btn') {
-      uploadFundCsv('/api/fund/import-captable',
-        document.getElementById('fd-cap-file'),
-        document.getElementById('fd-cap-status'),
-        e.target, 'Upload Cap Table');
-    }
-    if (e.target.id === 'fd-upload-nav-btn') {
+    if (e.target.id === 'lpd-upload-nav-btn') {
       uploadFundCsv('/api/fund/import-annual-nav',
-        document.getElementById('fd-nav-file'),
-        document.getElementById('fd-nav-status'),
+        document.getElementById('lpd-nav-file'),
+        document.getElementById('lpd-nav-status'),
         e.target, 'Upload Annual NAV');
     }
+    // Managed-account upload
+    if (e.target.id === 'acd-upload-pos-btn') {
+      uploadFundCsv('/api/fund/import-positions',
+        document.getElementById('acd-pos-file'),
+        document.getElementById('acd-pos-status'),
+        e.target, 'Upload Positions');
+    }
+    // Managed-account YTD run
+    if (e.target.id === 'acd-ytd-run-btn') {
+      runAccountYtd(e.target);
+    }
   });
+
+  // ── LP Fund renderers ────────────────────────────────────────
+  function renderLpMeta(d) {
+    const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+    const tile = (label, value, sub) => `
+      <div class="fd-tile">
+        <div class="fd-tile-label">${label}</div>
+        <div class="fd-tile-val">${value}</div>
+        ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
+      </div>`;
+    document.getElementById('lpd-meta').innerHTML = `
+      <div class="fd-tile-grid">
+        ${tile('TYPE',     'LP Fund', d.short_name)}
+        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
+        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+        ${tile('LP COUNT', d.lp_count, fmtUSD(d.total_committed) + ' committed')}
+        ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), '')}
+        ${tile('CARRY',    fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
+      </div>`;
+  }
+
+  function renderLpRoster(d) {
+    const el = document.getElementById('lpd-lps');
+    el.innerHTML = d.lps && d.lps.length ? `
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">LP Roster</span>
+          <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
+        </header>
+        <table class="data-table" style="width:100%;">
+          <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th></tr></thead>
+          <tbody>
+            ${d.lps.map(lp => {
+              const share = d.total_committed ? (lp.commitment_amount / d.total_committed * 100) : 0;
+              return `<tr>
+                <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
+                <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${share.toFixed(2)}%</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </section>` : `
+      <section class="panel">
+        <header class="panel-head"><span class="panel-title">LP Roster</span></header>
+        <div class="tab-empty">No LPs yet. Upload the Annual NAV / Waterfall Excel below — it imports the LP roster, initial contributions, economics, inception year, <em>and</em> year-by-year NAV in one shot.</div>
+      </section>`;
+  }
+
+  async function loadLpPositions(fundId) {
+    const el = document.getElementById('lpd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();
+      el.innerHTML = renderPositionsPanel(rows);
+    } catch (e) {
+      el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet. Upload the Fidelity Account Positions CSV below.</div></section>`;
+    }
+  }
+
+  function renderPositionsPanel(rows) {
+    const totalMv   = rows.reduce((s, p) => s + (p.market_value || 0), 0);
+    const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
+    if (!rows.length) {
+      return `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
+    }
+    return `
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">Open Positions</span>
+          <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
+        </header>
+        <table class="data-table" style="width:100%;">
+          <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
+          <tbody>
+            ${rows.map(p => {
+              const unr = p.unrealized_gain;
+              const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+              return `<tr>
+                <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
+                <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </section>`;
+  }
+
+  // ── LP Waterfall (CORRECT FIELD NAMES from /api/fund/waterfall) ─
+  async function loadLpWaterfall(fundId) {
+    const elW = document.getElementById('lpd-waterfall');
+    const elL = document.getElementById('lpd-lp-allocation');
+    elW.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/waterfall?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const wf = await r.json();
+      const rows = wf.annual_snapshots || [];
+      const fmtPct = v => v == null ? '—' : v.toFixed(2) + '%';
+
+      // Summary tiles
+      const summaryTiles = `
+        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+          <div class="fd-tile">
+            <div class="fd-tile-label">CURRENT NAV</div>
+            <div class="fd-tile-val">${fmtUSD(wf.nav)}</div>
+            <div class="fd-tile-sub">Live market value</div>
+          </div>
+          <div class="fd-tile">
+            <div class="fd-tile-label">HIGH WATERMARK</div>
+            <div class="fd-tile-val">${wf.high_watermark != null ? fmtUSD(wf.high_watermark) : '—'}</div>
+            <div class="fd-tile-sub">Hurdle ${wf.hurdle_cleared ? '✓ cleared' : 'not cleared'}</div>
+          </div>
+          <div class="fd-tile">
+            <div class="fd-tile-label">GP ACCRUED CARRY</div>
+            <div class="fd-tile-val">${wf.gp_accrued_carry != null ? fmtUSD(wf.gp_accrued_carry) : '—'}</div>
+            <div class="fd-tile-sub">${wf.gp_equity_pct != null ? wf.gp_equity_pct.toFixed(2) + '% of NAV' : ''}</div>
+          </div>
+          <div class="fd-tile">
+            <div class="fd-tile-label">LP NAV (NET OF CARRY)</div>
+            <div class="fd-tile-val">${wf.lp_nav_after_carry != null ? fmtUSD(wf.lp_nav_after_carry) : '—'}</div>
+            <div class="fd-tile-sub">After fractional carry</div>
+          </div>
+        </div>`;
+
+      if (!rows.length) {
+        elW.innerHTML = summaryTiles + `
+          <section class="panel" style="margin-top:14px;">
+            <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+            <div class="tab-empty">${wf.data_source_warning || 'No annual snapshots yet — upload the Annual NAV / Waterfall Excel.'}</div>
+          </section>`;
+        elL.innerHTML = '';
+        return;
+      }
+
+      elW.innerHTML = summaryTiles + `
+        <section class="panel" style="margin-top:14px;">
+          <header class="panel-head">
+            <span class="panel-title">GP Waterfall &amp; Carry</span>
+            <span class="panel-badge">${rows.length} year${rows.length !== 1 ? 's' : ''}</span>
+          </header>
+          <table class="fd-waterfall-table">
+            <thead><tr>
+              <th>Year</th><th>Jan 1 NAV</th><th>Dec 31 NAV</th>
+              <th>Gross Profit</th><th>HWM Threshold</th><th>Hurdle</th>
+              <th>Carry Earned</th><th>GP Equity</th><th>Accum GP %</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => `<tr>
+                <td>${r.year}</td>
+                <td>${fmtUSD(r.start_nav)}</td>
+                <td>${fmtUSD(r.end_nav)}</td>
+                <td style="${r.gross_profit >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(r.gross_profit)}</td>
+                <td>${fmtUSD(r.hwm_threshold)}</td>
+                <td>${fmtUSD(r.hurdle_amount)}</td>
+                <td>${r.carry_earned > 0 ? '<span style="color:var(--blue);font-weight:700;">' + fmtUSD(r.carry_earned) + '</span>' : '—'}</td>
+                <td>${fmtUSD(r.gp_equity_end)}</td>
+                <td>${fmtPct(r.accum_gp_pct)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>`;
+
+      // Per-LP allocation table
+      if (wf.per_lp && wf.per_lp.length) {
+        elL.innerHTML = `
+          <section class="panel">
+            <header class="panel-head">
+              <span class="panel-title">Per-LP Allocation (After Carry)</span>
+              <span class="panel-badge">${wf.per_lp.length} LP${wf.per_lp.length !== 1 ? 's' : ''}</span>
+            </header>
+            <table class="data-table" style="width:100%;">
+              <thead><tr>
+                <th>LP</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th>
+                <th style="text-align:right;">Carry Charge</th><th style="text-align:right;">NAV After Carry</th>
+              </tr></thead>
+              <tbody>
+                ${wf.per_lp.map(lp => `<tr>
+                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${lp.share_pct.toFixed(2)}%</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--red);">${fmtUSD(lp.carry_charge || 0)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;">${fmtUSD(lp.nav_after_carry || 0)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </section>`;
+      } else {
+        elL.innerHTML = '';
+      }
+    } catch (e) {
+      elW.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-empty">Could not load: ${e.message}</div></section>`;
+      elL.innerHTML = '';
+    }
+  }
+
+  // ── Managed Account renderers ────────────────────────────────
+  function renderAcctMeta(d) {
+    const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+    const tile = (label, value, sub) => `
+      <div class="fd-tile">
+        <div class="fd-tile-label">${label}</div>
+        <div class="fd-tile-val">${value}</div>
+        ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
+      </div>`;
+    document.getElementById('acd-meta').innerHTML = `
+      <div class="fd-tile-grid">
+        ${tile('TYPE',     'Managed Account', d.short_name)}
+        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
+        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+        ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), 'Annual advisory')}
+      </div>`;
+  }
+
+  async function loadAcctPositions(fundId) {
+    const el = document.getElementById('acd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();
+      el.innerHTML = renderPositionsPanel(rows);
+    } catch (e) {
+      el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
+    }
+  }
+
+  async function loadAcctYtdSections(fundId) {
+    const elB = document.getElementById('acd-balance');
+    const elA = document.getElementById('acd-attribution');
+    const elH = document.getElementById('acd-history');
+    elB.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    elA.innerHTML = '';
+    elH.innerHTML = '';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json ? (typeof cache.result_json === 'string' ? JSON.parse(cache.result_json) : cache.result_json) : null;
+      if (!data) throw new Error('no data');
+      renderAcctBalance(data, cache.ytd_pct);
+      renderAcctAttribution(data);
+      renderAcctHistory(data);
+    } catch (e) {
+      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-empty">No YTD calculation run yet. Use the "Run YTD Calculation" form below with 3 Fidelity CSVs.</div></section>`;
+    }
+  }
+
+  function renderAcctBalance(data, cachedYtdPct) {
+    const elB = document.getElementById('acd-balance');
+    const mc  = data.monthly_chart;
+    const spy = data.spy_monthly;
+    const mdPct  = (data.modified_dietz != null ? data.modified_dietz : cachedYtdPct);
+    const spyPct = spy && spy.points && spy.points.length ? spy.points[spy.points.length-1].ytd_pct : null;
+    const alpha  = (mdPct != null && spyPct != null) ? mdPct - spyPct : null;
+    const fmtPct = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+    const tiles = `
+      <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:0 0 12px;">
+        <div class="fd-tile"><div class="fd-tile-label">YTD (MOD. DIETZ)</div><div class="fd-tile-val" style="${cls(mdPct)}">${fmtPct(mdPct)}</div></div>
+        <div class="fd-tile"><div class="fd-tile-label">SPY YTD</div><div class="fd-tile-val" style="${cls(spyPct)}">${fmtPct(spyPct)}</div></div>
+        <div class="fd-tile"><div class="fd-tile-label">ALPHA</div><div class="fd-tile-val" style="${cls(alpha)}">${fmtPct(alpha)}</div></div>
+      </div>`;
+    if (!mc || !mc.points || !mc.points.length) {
+      elB.innerHTML = tiles + `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs SPY</span></header><div class="tab-empty">Upload an Investment Balance CSV during YTD calculation to enable the chart.</div></section>`;
+      return;
+    }
+    elB.innerHTML = tiles + `
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">Monthly Investment Balance vs SPY</span>
+          <span class="panel-badge">${mc.points.length} months</span>
+        </header>
+        <div class="fd-balance-canvas-wrap"><canvas id="acd-balance-canvas"></canvas></div>
+        <div style="display:flex;gap:18px;justify-content:center;padding:8px 0 12px;font-size:11px;">
+          <span style="color:#5BB8D4;">● Account balance (normalized)</span>
+          <span style="color:#c9a84c;">● SPY benchmark (normalized)</span>
+        </div>
+      </section>`;
+    drawAcctBalanceChart(mc, spy);
+  }
+
+  function drawAcctBalanceChart(mc, spy) {
+    const canvas = document.getElementById('acd-balance-canvas');
+    if (!canvas) return;
+    const pts = mc.points || [];
+    if (!pts.length) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = rect.width  * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    const padL = 60, padR = 18, padT = 14, padB = 36;
+
+    // Normalize to first point = 1.0 so account & SPY are on same y-axis
+    const acctVals = pts.map(p => p.balance ?? p.value ?? 0);
+    const acctBase = acctVals[0] || 1;
+    const acctNorm = acctVals.map(v => v / acctBase);
+    let spyNorm = [];
+    if (spy && spy.points && spy.points.length) {
+      // Align SPY points to account months by index (best effort).
+      spyNorm = spy.points.map(p => p.norm).slice(0, pts.length);
+      while (spyNorm.length < pts.length) spyNorm.push(spyNorm[spyNorm.length - 1] || 1);
+    }
+    const allVals = [...acctNorm, ...spyNorm.filter(v => v != null)];
+    const minV = Math.min(...allVals) * 0.98, maxV = Math.max(...allVals) * 1.02;
+    const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
+    const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(0.0001, maxV - minV));
+
+    // Grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (H - padT - padB) * (i / 4);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      const v = maxV - (maxV - minV) * (i / 4);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(((v - 1) * 100 >= 0 ? '+' : '') + ((v - 1) * 100).toFixed(1) + '%', padL - 6, y + 3);
+    }
+    // X labels
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    pts.forEach((p, i) => {
+      if (pts.length > 12 && i % 2) return;
+      ctx.fillText((p.month || p.label || '').slice(0, 7), xAt(i), H - 18);
+    });
+    // Account line
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    acctNorm.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yAt(v)) : ctx.lineTo(xAt(i), yAt(v)));
+    ctx.stroke();
+    ctx.fillStyle = '#5BB8D4';
+    acctNorm.forEach((v, i) => { ctx.beginPath(); ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2); ctx.fill(); });
+    // SPY line
+    if (spyNorm.length) {
+      ctx.strokeStyle = '#c9a84c';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      spyNorm.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yAt(v)) : ctx.lineTo(xAt(i), yAt(v)));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  function renderAcctAttribution(data) {
+    const el = document.getElementById('acd-attribution');
+    const rows = data.attribution || [];
+    if (!rows.length) { el.innerHTML = ''; return; }
+    const fmtPct = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+    el.innerHTML = `
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">YTD Attribution (per-stock contribution)</span>
+          <span class="panel-badge">${rows.length} names</span>
+        </header>
+        <table class="data-table" style="width:100%;">
+          <thead><tr>
+            <th>Symbol</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th>
+            <th style="text-align:right;">Last</th><th style="text-align:right;">P/L</th>
+            <th style="text-align:right;">% Return</th><th style="text-align:right;">Contribution to YTD</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => {
+              const pl = r.gain_loss ?? r.pl ?? 0;
+              const pct = r.return_pct ?? r.pct_return;
+              const contrib = r.contribution_pct ?? r.contribution;
+              return `<tr>
+                <td style="font-weight:800;color:var(--blue);">${r.symbol}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${(r.qty || r.quantity || 0).toFixed(2)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.avg_cost != null ? fmtUSD(r.avg_cost) : '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.last_price != null ? fmtUSD(r.last_price) : '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${pl >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(pl)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${(pct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtPct(pct)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;${(contrib||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtPct(contrib)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </section>`;
+  }
+
+  function renderAcctHistory(data) {
+    const el = document.getElementById('acd-history');
+    const flows = data.flows || [];
+    if (!flows.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">YTD Account History (Cash Flows)</span>
+          <span class="panel-badge">${flows.length} transactions</span>
+        </header>
+        <table class="data-table" style="width:100%;">
+          <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
+          <tbody>
+            ${flows.map(f => `<tr>
+              <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
+              <td>${f.action || f.type || '—'}</td>
+              <td style="color:var(--blue);font-weight:700;">${f.symbol || '—'}</td>
+              <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </section>`;
+  }
+
+  // ── Managed-Account YTD runner ───────────────────────────────
+  async function runAccountYtd(btn) {
+    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
+    const pos = document.getElementById('acd-ytd-pos').files[0];
+    const act = document.getElementById('acd-ytd-act').files[0];
+    const mp  = document.getElementById('acd-ytd-mp').files[0];
+    const beg = document.getElementById('acd-ytd-begin').value;
+    const stat = document.getElementById('acd-ytd-status');
+    if (!pos || !act) { stat.textContent = '❌ Positions + Account History CSVs are required.'; stat.style.color = 'var(--red)'; return; }
+    btn.disabled = true; btn.textContent = 'Running…'; stat.textContent = '';
+    try {
+      const fd = new FormData();
+      fd.append('positions_file', pos);
+      fd.append('activity_file', act);
+      if (mp)  fd.append('monthly_perf_file', mp);
+      if (beg) fd.append('begin_value', beg);
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run', {
+        method: 'POST', body: fd,
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+      stat.style.color = 'var(--green)';
+      stat.textContent = '✅ YTD calculated & saved. Reloading…';
+      setTimeout(() => loadAcctYtdSections(CURRENT_FUND_ID), 400);
+    } catch (e) {
+      stat.style.color = 'var(--red)';
+      stat.textContent = '❌ ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = '⚡ Run YTD & Save';
+    }
+  }
 
   document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
 

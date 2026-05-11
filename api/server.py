@@ -2271,7 +2271,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65u-20260511"
+WEB_BUILD_VERSION = "ui66-20260511"
 
 
 @app.get("/api/build")
@@ -5132,33 +5132,79 @@ async def fund_import_annual_nav(
     fund_id: str = Form(None),
     file: UploadFile = File(...),
 ):
-    """Upload an annual NAV / waterfall spreadsheet to populate
-    fund_annual_snapshots and unlock the year-by-year waterfall table.
+    """SINGLE LP-FUND ADMIN UPLOAD. Parses one spreadsheet that contains:
+      • Year-by-year NAV / hurdle / carry / GP equity rows  → fund_annual_snapshots
+      • LP roster + initial contributions                   → lps + commitments
+      • Economics ("0/25, 5% hurdle")                        → funds.mgmt_fee_pct, carry_pct, hurdle_pct
+      • "Fund Established | <year>"                          → funds.inception_date
 
-    Accepted column layout (flexible, header-keyword matched):
-        Year | Jan 1 NAV | Dec 31 NAV | Contributions | Hurdle Amount |
-        Carry Owed | GP Equity Allocated | LP Allocations | … |
-        accum GP equity in fund
-
-    Rows without a Dec 31 NAV are silently skipped (current partial year).
-    Existing rows for the same fund+year are overwritten (upsert).
+    Everything is keyword-detected; rows can be in any order. Re-uploading
+    safely overwrites all four destinations.
     """
     _require_fund_token(request)
-    raw  = await file.read()
-    rows = _parse_annual_nav(raw, file.filename or '')
-    if not rows:
+    raw       = await file.read()
+    nav_rows  = _parse_annual_nav(raw, file.filename or '')
+    lp_rows, economics, fund_estab_year = _parse_captable(raw, file.filename or '')
+
+    if not nav_rows and not lp_rows:
         raise HTTPException(400,
-            "No valid annual NAV rows found. Expected columns: Year, "
-            "Jan 1 NAV, Dec 31 NAV, Contributions, Hurdle Amount, Carry Owed, "
-            "accum GP equity in fund.")
+            "No valid data found. Expected the annual NAV worksheet to contain "
+            "either a 'Year | Jan 1 NAV | Dec 31 NAV | …' header block, or an "
+            "'LP Name | <partners…>' / 'initial contribution | <amounts…>' block, "
+            "or both.")
 
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             fid = _resolve_fund_id(cur, fund_id)
 
-            upserted = 0
-            for r in rows:
+            # ── 1. LP roster + commitments (only if present in the file) ─────
+            lp_imported = 0
+            if lp_rows:
+                # Wipe existing LPs/commitments — fresh import is the contract.
+                cur.execute("""
+                    DELETE FROM transaction_lines
+                     WHERE transaction_id IN (
+                         SELECT id FROM transactions
+                          WHERE fund_id = %s AND category = 'contribution')
+                """, (fid,))
+                cur.execute("DELETE FROM transactions WHERE fund_id = %s AND category = 'contribution'", (fid,))
+                cur.execute("DELETE FROM commitments WHERE fund_id = %s", (fid,))
+                cur.execute("DELETE FROM lps WHERE fund_id = %s", (fid,))
+                for row in lp_rows:
+                    cur.execute("""
+                        INSERT INTO lps (fund_id, legal_name, entity_type, accred_type, status)
+                        VALUES (%s, %s, %s, 'net_worth', 'active')
+                        RETURNING id
+                    """, (fid, row["legal_name"], row.get("entity_type", "individual")))
+                    r2 = cur.fetchone()
+                    if not r2: continue
+                    cur.execute("""
+                        INSERT INTO commitments (lp_id, fund_id, commitment_amount, effective_date)
+                        VALUES (%s, %s, %s, %s)
+                    """, (str(r2["id"]), fid, float(row["commitment"]), row["effective_date"]))
+                    lp_imported += 1
+
+            # ── 2. Fund economics + inception (only if present in file) ──────
+            econ_applied = {}
+            updates, vals = [], []
+            for col, key in [("mgmt_fee_pct", "mgmt_fee_pct"),
+                             ("carry_pct",    "carry_pct"),
+                             ("hurdle_pct",   "hurdle_pct")]:
+                if key in economics:
+                    updates.append(f"{col} = %s")
+                    vals.append(economics[key])
+                    econ_applied[key] = economics[key]
+            if fund_estab_year:
+                updates.append("inception_date = %s")
+                vals.append(f"{fund_estab_year}-01-01")
+            if updates:
+                vals.append(fid)
+                cur.execute(f"UPDATE funds SET {', '.join(updates)} WHERE id = %s", vals)
+
+            # ── 3. Year-by-year NAV snapshots (only if present in file) ──────
+            nav_imported = 0
+            for r in nav_rows:
                 cur.execute("""
                     INSERT INTO fund_annual_snapshots
                         (fund_id, year, start_nav, end_nav, contributions,
@@ -5180,18 +5226,144 @@ async def fund_import_annual_nav(
                       r['contributions'], r['hurdle_amount'], r['gross_profit'],
                       r['carry_earned'], r['carry_paid'], r['carry_rolled'],
                       r['gp_equity_end']))
-                upserted += 1
+                nav_imported += 1
 
         conn.commit()
-        years = sorted(r['year'] for r in rows)
+        years = sorted(r['year'] for r in nav_rows) if nav_rows else []
+        parts = []
+        if lp_imported:   parts.append(f"{lp_imported} LP{'s' if lp_imported != 1 else ''}")
+        if nav_imported:  parts.append(f"{nav_imported} annual NAV row{'s' if nav_imported != 1 else ''} ({min(years)}–{max(years)})")
+        if econ_applied:  parts.append("economics")
+        if fund_estab_year: parts.append(f"inception {fund_estab_year}")
         return {
-            "fund_id":  fid,
-            "imported": upserted,
-            "years":    years,
-            "message":  f"Imported {upserted} annual NAV rows ({min(years)}–{max(years)}).",
+            "fund_id":       fid,
+            "nav_imported":  nav_imported,
+            "lp_imported":   lp_imported,
+            "economics":     econ_applied,
+            "inception_year": fund_estab_year,
+            "years":         years,
+            "message":       "Imported " + ", ".join(parts) + "." if parts else "Nothing imported.",
         }
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPY monthly closes — for benchmark overlay on managed-account balance chart
+# ─────────────────────────────────────────────────────────────────────────────
+_spy_monthly_cache: dict = {}
+
+@app.get("/api/market/spy-monthly")
+def get_spy_monthly():
+    """Return SPY month-end closes for the current calendar year, indexed to
+    the first trading day's close (so the series is comparable to a portfolio
+    starting at $X on Jan 1). Cached 15 min."""
+    import time as _time
+    now = _time.time()
+    cached = _spy_monthly_cache.get("ts")
+    if cached and (now - cached) < 900:
+        return {k: v for k, v in _spy_monthly_cache.items() if k != "ts"}
+    try:
+        import yfinance as yf
+        from datetime import date as _date
+        spy   = yf.Ticker("SPY")
+        start = f"{_date.today().year}-01-01"
+        hist  = spy.history(start=start, interval="1d")
+        if hist.empty:
+            raise ValueError("Empty SPY history")
+        first_close = float(hist.iloc[0]["Close"])
+        # Take the last close of each month
+        monthly = hist.resample("ME").last().dropna(subset=["Close"])
+        points = []
+        for ts, row in monthly.iterrows():
+            close = float(row["Close"])
+            points.append({
+                "month":     ts.strftime("%Y-%m"),
+                "close":     round(close, 2),
+                "ytd_pct":   round((close / first_close - 1.0) * 100, 4),
+                "norm":      round(close / first_close, 6),
+            })
+        result = {"first_close": round(first_close, 2), "points": points}
+        _spy_monthly_cache.update({**result, "ts": now})
+        return result
+    except Exception as exc:
+        # Stale cache fallback
+        if _spy_monthly_cache:
+            return {k: v for k, v in _spy_monthly_cache.items() if k != "ts"}
+        raise HTTPException(status_code=503, detail=f"SPY monthly fetch failed: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Managed-account YTD calc — server-side wrapper that runs the existing
+# unified Modified Dietz + attribution + monthly-balance computation,
+# overlays the SPY benchmark series, and persists everything to the cache.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/fund/account/{fund_id}/ytd-run")
+async def fund_account_ytd_run(
+    fund_id: str,
+    request: Request,
+    positions_file:    UploadFile     = File(...),
+    activity_file:     UploadFile     = File(...),
+    monthly_perf_file: UploadFile     = File(None),
+    begin_value:       float | None   = Form(None),
+):
+    """Run YTD for a managed account from 3 Fidelity CSVs, attach SPY
+    benchmark, persist to managed_account_ytd_cache, return the merged
+    result."""
+    _require_fund_token(request)
+
+    try:
+        pos_text = (await positions_file.read()).decode("utf-8", errors="replace")
+        act_text = (await activity_file.read()).decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise HTTPException(422, f"Could not read Fidelity files: {exc}")
+
+    mp_text = None
+    if monthly_perf_file and monthly_perf_file.filename:
+        try:
+            mp_text = (await monthly_perf_file.read()).decode("utf-8", errors="replace")
+        except Exception as exc:
+            raise HTTPException(422, f"Could not read monthly performance file: {exc}")
+
+    try:
+        result = analyst.compute_unified_ytd(
+            pos_text, act_text, begin_value, monthly_perf_text=mp_text,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"YTD computation failed: {exc}\n\n{traceback.format_exc()}")
+
+    if not result.get("ok"):
+        raise HTTPException(422, result.get("error", "YTD computation returned no data"))
+
+    # Attach SPY benchmark for chart overlay
+    try:
+        spy = get_spy_monthly()
+        result["spy_monthly"] = spy
+    except HTTPException:
+        result["spy_monthly"] = None
+
+    # Persist into managed_account_ytd_cache
+    nav     = result.get("end_value") or result.get("end_nav") or 0.0
+    ytd_pct = result.get("ytd_pct")   or result.get("modified_dietz") or 0.0
+    import json as _json
+    conn = _fund_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO managed_account_ytd_cache
+                       (fund_id, nav, ytd_pct, result_json, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                   SET nav         = EXCLUDED.nav,
+                       ytd_pct     = EXCLUDED.ytd_pct,
+                       result_json = EXCLUDED.result_json,
+                       updated_at  = now()
+            """, (fund_id, float(nav), float(ytd_pct), _json.dumps(result)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return result
 
 
 # ---------------------------------------------------------------------------
