@@ -547,6 +547,10 @@
     background: var(--navy-mid); color: var(--blue);
     border: 1px solid var(--panel-edge); box-shadow: none;
   }
+  .tab-btn.sm {
+    height: 22px; padding: 0 9px; font-size: 9px; letter-spacing: 0.6px;
+    border-radius: 4px; box-shadow: 0 1px 4px rgba(91,184,212,0.20);
+  }
   .tab-meta { font-size: 10px; color: var(--dim); }
 
   /* Markdown render area */
@@ -1132,9 +1136,9 @@
     <div class="tab-toolbar">
       <button class="tab-btn secondary" id="lpd-back-btn">← Back to Funds</button>
       <h2 id="lpd-title" style="margin-left:8px;">…</h2>
-      <span style="margin-left:auto;display:flex;gap:8px;">
-        <button class="tab-btn" id="lpd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
-        <button class="tab-btn" id="lpd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
+      <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+        <button class="tab-btn sm" id="lpd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
+        <button class="tab-btn sm" id="lpd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
       </span>
     </div>
 
@@ -1177,8 +1181,8 @@
       <button class="tab-btn secondary" id="acd-back-btn">← Back to Accounts</button>
       <h2 id="acd-title" style="margin-left:8px;">…</h2>
       <span style="margin-left:auto;display:flex;gap:8px;">
-        <button class="tab-btn" id="acd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
-        <button class="tab-btn" id="acd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
+        <button class="tab-btn sm" id="acd-export-excel-btn" title="Download Excel workbook">⬇ Excel</button>
+        <button class="tab-btn sm" id="acd-export-pdf-btn"   title="Download PDF report">⬇ PDF</button>
       </span>
     </div>
 
@@ -2065,7 +2069,7 @@
           <span data-nav-status="${fid}" style="font-size:10px;"></span>
         </div>`;
 
-      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct) => `
+      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav) => `
         <div class="fund-card" style="cursor:pointer;" data-fund-id="${fid}" data-fund-name="${fname}">
           <div class="fund-card-head">
             <span class="fund-card-name">${fname}</span>
@@ -2076,7 +2080,7 @@
             <div class="fund-stat">
               <div class="fund-stat-label">${isAcct ? 'Account NAV' : 'Fund NAV'}</div>
               <div class="fund-stat-val">${navVal != null ? fmtUSD(navVal) : '—'}</div>
-              <div class="fund-stat-sub">${navAsOf ? 'as of ' + navAsOf : 'No snapshot entered yet'}</div>
+              <div class="fund-stat-sub">${navAsOf ? 'as of ' + navAsOf : (marketNav > 0 ? 'Live from positions' : 'No snapshot entered yet')}</div>
             </div>
             ${!isAcct ? `
             <div class="fund-stat">
@@ -2093,10 +2097,10 @@
         </div>`;
 
       const fundHtml = funds.map(f => fundCardHtml(
-        f.fund_id, f.fund_name, f.short_name, f.fund_nav, f.fund_nav_as_of, f.lp_count, f.commitment, false
+        f.fund_id, f.fund_name, f.short_name, f.fund_nav, f.fund_nav_as_of, f.lp_count, f.commitment, false, f.market_nav
       )).join('');
       const acctHtml = accts.map(a => fundCardHtml(
-        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true
+        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav
       )).join('');
 
       elFunds.innerHTML = funds.length ? fundHtml :
@@ -2217,7 +2221,7 @@
         <div class="fd-tile-grid">
           ${tile('TYPE',       d.fund_type === 'managed_account' ? 'Managed Account' : 'LP Fund', d.short_name)}
           ${tile('STATUS',     (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
-          ${tile('NAV',        d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+          ${tile('NAV',        d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot'))}
           ${tile('LP COUNT',   d.lp_count, fmtUSD(d.total_committed) + ' committed')}
           ${tile('MGMT FEE',   fmtPct(d.mgmt_fee_pct), '')}
           ${tile('CARRY',      fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
@@ -2558,32 +2562,36 @@
     if (e.target.id === 'acd-export-pdf-btn')   triggerExport('pdf',   e.target);
   });
 
-  function triggerExport(type, btn) {
+  async function triggerExport(type, btn) {
     if (!CURRENT_FUND_ID) { alert('No fund selected.'); return; }
-    const token  = sessionStorage.getItem('gp_token') || '';
-    const url    = `/api/fund/export-${type}?fund_id=${encodeURIComponent(CURRENT_FUND_ID)}`;
-    const orig   = btn.textContent;
+    const url  = `/api/fund/export-${type}?fund_id=${encodeURIComponent(CURRENT_FUND_ID)}`;
+    const orig = btn.textContent;
     btn.disabled = true;
-    btn.textContent = type === 'excel' ? '⏳ Excel…' : '⏳ PDF…';
-
-    fetch(url, { headers: { 'x-fund-token': token } })
-      .then(r => {
-        if (!r.ok) return r.text().then(t => { throw new Error(t); });
-        return r.blob().then(blob => {
-          const disp = r.headers.get('content-disposition') || '';
-          const m    = disp.match(/filename="([^"]+)"/);
-          const name = m ? m[1] : (type === 'excel' ? 'report.xlsx' : 'report.pdf');
-          const a    = document.createElement('a');
-          a.href     = URL.createObjectURL(blob);
-          a.download = name;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(a.href);
-        });
-      })
-      .catch(err => alert('Export failed: ' + err.message))
-      .finally(() => { btn.disabled = false; btn.textContent = orig; });
+    btn.textContent = '⏳…';
+    try {
+      // Use window.dgaFetch so the v2 JWT is sent automatically (x-auth-v2-token)
+      const r = await window.dgaFetch(url);
+      if (!r.ok) {
+        const t = await r.text().catch(() => 'HTTP ' + r.status);
+        throw new Error(t);
+      }
+      const blob = await r.blob();
+      const disp = r.headers.get('content-disposition') || '';
+      const m    = disp.match(/filename="([^"]+)"/);
+      const name = m ? m[1] : (type === 'excel' ? 'report.xlsx' : 'report.pdf');
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
   }
 
   // ── LP Fund renderers ────────────────────────────────────────
@@ -2599,7 +2607,7 @@
       <div class="fd-tile-grid">
         ${tile('TYPE',     'LP Fund', d.short_name)}
         ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
-        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot'))}
         ${tile('LP COUNT', d.lp_count, fmtUSD(d.total_committed) + ' committed')}
         ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), '')}
         ${tile('CARRY',    fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
