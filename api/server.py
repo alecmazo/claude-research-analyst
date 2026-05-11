@@ -2345,7 +2345,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui71-20260511"
+WEB_BUILD_VERSION = "ui72-20260511"
 
 
 @app.get("/api/build")
@@ -6469,7 +6469,7 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
     from reportlab.lib.units import inch
     from reportlab.lib import colors
     from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
     )
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from fastapi.responses import StreamingResponse
@@ -6551,6 +6551,15 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         conn.close()
 
     # ── Shared PDF helpers ────────────────────────────────────────────────────
+    _LOGO_PATH = Path(__file__).parent.parent / 'branding' / 'dga_logo_small.png'
+
+    def _logo_img(height=0.45*inch):
+        if _LOGO_PATH.exists():
+            img = RLImage(str(_LOGO_PATH))
+            aspect = img.imageWidth / img.imageHeight if img.imageHeight else 1.0
+            return RLImage(str(_LOGO_PATH), width=height*aspect, height=height)
+        return None
+
     _NAVY_PDF  = colors.HexColor('#0a1628')
     _GOLD_PDF  = colors.HexColor('#c9a84c')
     _LGRAY_PDF = colors.HexColor('#e8ecf2')
@@ -6630,8 +6639,19 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         usable = 7.0 * inch
         story_a = []
 
-        # Cover header
-        story_a.append(Paragraph(fund['name'], _h1))
+        # Cover header with logo
+        logo_img_a = _logo_img(0.5*inch)
+        if logo_img_a:
+            hdr_data = [[logo_img_a, Paragraph(fund['name'], _h1)]]
+            hdr_tbl = Table(hdr_data, colWidths=[0.9*inch, usable - 0.9*inch])
+            hdr_tbl.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('LEFTPADDING', (0,0), (-1,-1), 0),
+                ('RIGHTPADDING', (0,0), (-1,-1), 0),
+            ]))
+            story_a.append(hdr_tbl)
+        else:
+            story_a.append(Paragraph(fund['name'], _h1))
         story_a.append(Paragraph(
             f"DGA Capital  ·  Managed Account Report  ·  As of {today_pdf}  ·  "
             f"YTD data updated {upd_pdf}", _sub))
@@ -6799,7 +6819,18 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         return t
 
     story = []
-    story.append(Paragraph(fund['name'], h1))
+    logo_img_lp = _logo_img(0.5*inch)
+    if logo_img_lp:
+        hdr_data_lp = [[logo_img_lp, Paragraph(fund['name'], h1)]]
+        hdr_tbl_lp = Table(hdr_data_lp, colWidths=[0.9*inch, usable_w - 0.9*inch])
+        hdr_tbl_lp.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('LEFTPADDING', (0,0), (-1,-1), 0),
+            ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ]))
+        story.append(hdr_tbl_lp)
+    else:
+        story.append(Paragraph(fund['name'], h1))
     story.append(Paragraph(
         f"Short name: {fund['short_name']}  ·  "
         f"Inception: {str(fund['inception_date'])[:10]}  ·  "
@@ -6882,23 +6913,29 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
     # Per-LP Allocation After Carry
     if lps and total_committed and nav > 0:
         story.append(Paragraph('Per-LP Allocation After Carry', h2))
-        # Use most recent carry_earned to reduce distributable NAV
-        total_carry = float(snapshots_pdf[-1].get('carry_earned') or 0) if snapshots_pdf else 0.0
-        distributable = max(0.0, nav - total_carry)
-        alloc_rows = [['LP Name', 'Commitment', 'Share %', 'Allocated Value', 'Carry Offset']]
+        # Cumulative GP equity: carry accrued = (last gp_equity_end / last end_nav) * current nav
+        gp_accrued_pdf = 0.0
+        if snapshots_pdf:
+            last_s = snapshots_pdf[-1]
+            last_gp_eq  = float(last_s.get('gp_equity_end') or 0)
+            last_end_nav = float(last_s.get('end_nav') or 0)
+            if last_end_nav > 0:
+                gp_accrued_pdf = (last_gp_eq / last_end_nav) * nav
+        lp_distributable = max(0.0, nav - gp_accrued_pdf)
+        alloc_rows = [['LP Name', 'Commitment', 'Share %', 'Carry Offset', 'Net Allocation']]
         for lp in lps:
             comm = float(lp['commitment'])
             share = comm / total_committed if total_committed else 0.0
-            alloc = distributable * share
-            carry_offset = total_carry * share
+            carry_offset = gp_accrued_pdf * share
+            alloc = lp_distributable * share
             alloc_rows.append([
                 (lp['legal_name'] or '')[:32],
                 money(comm),
                 f'{share*100:.2f}%',
-                money(alloc),
                 money(carry_offset),
+                money(alloc),
             ])
-        story.append(tbl(alloc_rows, [2.8*inch, 1.2*inch, 0.8*inch, 1.2*inch, 1.0*inch]))
+        story.append(tbl(alloc_rows, [2.8*inch, 1.2*inch, 0.8*inch, 1.0*inch, 1.2*inch]))
         story.append(Spacer(1, 12))
 
     story.append(Spacer(1, 20))

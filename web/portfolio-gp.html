@@ -2066,11 +2066,11 @@
           <input data-nav-input="${fid}" type="text" placeholder="${currentNav != null ? fmtUSD(currentNav) : 'Enter or 0 for auto'}" style="${navInputStyle()}">
           <input data-nav-date="${fid}" type="date" value="${today}" style="${navInputStyle()}width:140px;">
           <button data-nav-btn="${fid}" class="tab-btn" style="height:28px;padding:0 12px;font-size:10px;">Save</button>
-          ${marketNav > 0 ? `<button data-nav-mkt="${fid}" class="tab-btn secondary" style="height:28px;padding:0 10px;font-size:9px;" title="Fill with live market value from positions">↺ ${fmtUSD(marketNav)}</button>` : ''}
+          ${marketNav > 0 ? `<button data-nav-mkt="${fid}" data-mkt-val="${marketNav}" class="tab-btn secondary" style="height:28px;padding:0 10px;font-size:9px;" title="Fill with live market value and save">↺ ${fmtUSD(marketNav)}</button>` : ''}
           <span data-nav-status="${fid}" style="font-size:10px;"></span>
         </div>`;
 
-      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav) => `
+      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct) => `
         <div class="fund-card" style="cursor:pointer;" data-fund-id="${fid}" data-fund-name="${fname}">
           <div class="fund-card-head">
             <span class="fund-card-name">${fname}</span>
@@ -2083,6 +2083,12 @@
               <div class="fund-stat-val">${navVal != null ? fmtUSD(navVal) : '—'}</div>
               <div class="fund-stat-sub">${navAsOf ? 'as of ' + navAsOf : (marketNav > 0 ? 'Live from positions' : 'No snapshot entered yet')}</div>
             </div>
+            ${isAcct && ytdPct != null ? `
+            <div class="fund-stat">
+              <div class="fund-stat-label">YTD Return</div>
+              <div class="fund-stat-val" style="color:${ytdPct >= 0 ? 'var(--green)' : 'var(--red)'};">${ytdPct >= 0 ? '+' : ''}${ytdPct.toFixed(2)}%</div>
+              <div class="fund-stat-sub">year to date</div>
+            </div>` : ''}
             ${!isAcct ? `
             <div class="fund-stat">
               <div class="fund-stat-label">LP Count</div>
@@ -2098,10 +2104,13 @@
         </div>`;
 
       const fundHtml = funds.map(f => fundCardHtml(
-        f.fund_id, f.fund_name, f.short_name, f.fund_nav, f.fund_nav_as_of, f.lp_count, f.commitment, false, f.market_nav
+        f.fund_id, f.fund_name, f.short_name,
+        f.effective_nav,
+        (f.fund_nav > 0 ? f.fund_nav_as_of : null),
+        f.lp_count, f.commitment, false, f.market_nav, null
       )).join('');
       const acctHtml = accts.map(a => fundCardHtml(
-        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav
+        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav, a.ytd_pct
       )).join('');
 
       elFunds.innerHTML = funds.length ? fundHtml :
@@ -2128,13 +2137,18 @@
             );
           });
         });
-        // "Use market value" fills input with 0 → backend uses live position NAV
+        // ↺ fills input with actual market value and auto-saves
         el.querySelectorAll('[data-nav-mkt]').forEach(btn => {
-          const fid = btn.dataset.navMkt;
+          const fid    = btn.dataset.navMkt;
+          const mktVal = parseFloat(btn.dataset.mktVal || '0');
           btn.addEventListener('click', e => {
             e.stopPropagation();
-            const inp = el.querySelector(`[data-nav-input="${fid}"]`);
-            if (inp) { inp.value = '0'; inp.focus(); }
+            const inp  = el.querySelector(`[data-nav-input="${fid}"]`);
+            const sbtn = el.querySelector(`[data-nav-btn="${fid}"]`);
+            const dat  = el.querySelector(`[data-nav-date="${fid}"]`);
+            const sta  = el.querySelector(`[data-nav-status="${fid}"]`);
+            if (inp) inp.value = mktVal > 0 ? mktVal.toFixed(2) : '0';
+            if (sbtn && inp && dat && sta) submitNav(fid, inp, dat, sta, sbtn);
           });
         });
       };
@@ -2545,6 +2559,7 @@
   document.addEventListener('click', (e) => {
     if (e.target.id === 'lpd-back-btn' || e.target.id === 'acd-back-btn') {
       showTab('fund');
+      loadFundOverview();
       return;
     }
     // LP-fund uploads
@@ -3169,8 +3184,12 @@
       if (p.exact) html += `<div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:6px;">✓ Exact Fidelity data</div>`;
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
-      const tx = Math.min(e.clientX - rect.left + 12, cssW - 280);
-      const ty = Math.max(e.clientY - rect.top - 20, 0);
+      const ttW = tooltip.offsetWidth  || 260;
+      const ttH = tooltip.offsetHeight || 200;
+      const curX = e.clientX - rect.left;
+      const curY = e.clientY - rect.top;
+      const tx = (curX + 12 + ttW > cssW) ? Math.max(0, curX - ttW - 8) : curX + 12;
+      const ty = (curY - 20 + ttH > cssH) ? Math.max(0, curY - ttH - 4) : Math.max(0, curY - 20);
       tooltip.style.left = tx + 'px';
       tooltip.style.top  = ty + 'px';
     };
