@@ -155,7 +155,7 @@
     group.id = 'dga-role-bar';
     group.className = 'dga-role-group';
     group.innerHTML = ''
-      + '<span class="dga-rb-name">' + escapeHtml(me.name || '') + '</span>'
+      + '<span class="dga-rb-name">' + escapeHtml(getInitials(me.name || '')) + '</span>'
       + '<span class="dga-rb-badge ' + (me.role || '') + '">'
       +   (me.role === 'gp' ? '⚡ GP' : '🔒 LP')
       + '</span>'
@@ -172,14 +172,6 @@
     var host = hostCandidates.find(Boolean);
 
     if (host) {
-      // If there are static topbar-link spans we want to hide for LP role,
-      // do it generically: keep only the first link ("Research"/"Performance")
-      // since the others are non-functional placeholders that point at
-      // routes not yet built. Better UX than half-broken nav.
-      var links = host.querySelectorAll('.topbar-link');
-      links.forEach(function (link, i) {
-        if (i > 0) link.style.display = 'none';
-      });
       // Insert just before the status dot (which is the last element)
       var statusDot = host.querySelector('.status-dot');
       if (statusDot) host.insertBefore(group, statusDot);
@@ -190,6 +182,12 @@
       document.body.appendChild(group);
     }
     document.getElementById('dga-logout-btn').addEventListener('click', logout);
+  }
+
+  function getInitials(name) {
+    return name.split(/\s+/).filter(Boolean).map(function (w) {
+      return w[0].toUpperCase();
+    }).join('').slice(0, 2);
   }
 
   function escapeHtml(s) {
