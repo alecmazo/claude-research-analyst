@@ -810,7 +810,15 @@
         </div>
       </div>`).join('');
 
-    $hold.innerHTML = fundCards + acctCards;
+    const sectionHeader = (label, count) => `
+      <div style="margin:18px 0 8px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:1.4px;text-transform:uppercase;">${esc(label)}</span>
+        <span style="font-size:10px;color:var(--mid);background:var(--offwhite);border:1px solid var(--line);padding:2px 8px;border-radius:10px;">${count}</span>
+        <div style="flex:1;height:1px;background:var(--line);"></div>
+      </div>`;
+    const fundsBlock = fundCount ? sectionHeader('LP Funds', fundCount) + fundCards : '';
+    const acctsBlock = acctCount ? sectionHeader('Managed Accounts', acctCount) + acctCards : '';
+    $hold.innerHTML = fundsBlock + acctsBlock;
     if (data.warnings && data.warnings.length) console.warn('[lp-overview] warnings:', data.warnings);
   }
 

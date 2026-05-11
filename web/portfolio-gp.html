@@ -691,6 +691,34 @@
     margin-top: 4px; font-variant-numeric: tabular-nums; }
   .fund-stat-sub { font-size: 9px; color: var(--dim); margin-top: 2px; }
 
+  /* Fund sub-tab toggle (LP Funds | Managed Accounts) */
+  .fund-subtab { position: relative; padding-right: 36px !important; }
+  .fund-subtab.active {
+    background: linear-gradient(180deg, var(--blue-light) 0%, var(--blue) 50%, var(--blue-dark) 100%);
+    color: var(--navy); border: none;
+    box-shadow: 0 2px 8px rgba(91,184,212,0.30);
+  }
+  .fund-subtab-count {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    background: rgba(0,0,0,0.25); color: inherit;
+    font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 8px;
+    min-width: 16px; text-align: center;
+  }
+  .fund-subtab:not(.active) .fund-subtab-count { background: rgba(91,184,212,0.15); }
+
+  /* Detail sections — waterfall, history, balance chart */
+  .fd-section { margin-top: 18px; }
+  .fd-waterfall-table { width: 100%; font-variant-numeric: tabular-nums; }
+  .fd-waterfall-table th { font-size: 9px; font-weight: 800; color: var(--dim);
+    letter-spacing: 1px; padding: 8px 12px 6px; text-align: right;
+    border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .fd-waterfall-table th:first-child { text-align: left; }
+  .fd-waterfall-table td { padding: 8px 12px; font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.03); text-align: right; }
+  .fd-waterfall-table td:first-child { text-align: left; font-weight: 700; color: #e0e8f0; }
+  .fd-balance-canvas-wrap { padding: 14px; background: var(--navy); border-radius: 8px; }
+  .fd-balance-canvas-wrap canvas { width: 100%; height: 220px; display: block; }
+
   /* Settings */
   .settings-form { padding: 14px; }
   .settings-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -1083,10 +1111,15 @@
   <div class="wide-shell">
     <div class="tab-toolbar">
       <h2>Fund Dashboard</h2>
-      <button class="tab-btn secondary" id="fund-refresh-btn">⟳ Refresh</button>
+      <div id="fund-subtabs" style="display:flex;gap:6px;margin-left:16px;">
+        <button class="tab-btn secondary fund-subtab active" data-subtab="funds">LP Funds <span class="fund-subtab-count" id="fund-funds-count">0</span></button>
+        <button class="tab-btn secondary fund-subtab" data-subtab="accts">Managed Accounts <span class="fund-subtab-count" id="fund-accts-count">0</span></button>
+      </div>
+      <button class="tab-btn secondary" id="fund-refresh-btn" style="margin-left:auto;">⟳ Refresh</button>
       <button class="tab-btn secondary" id="fund-seed-btn" style="margin-left:8px;">⚙ Sync Accounts</button>
     </div>
-    <div id="fund-content" class="tab-loading">Loading…</div>
+    <div id="fund-funds-list" class="fund-subtab-content tab-loading">Loading…</div>
+    <div id="fund-accts-list" class="fund-subtab-content tab-loading" style="display:none;">Loading…</div>
     <!-- Hidden seed status -->
     <div id="fund-seed-status" style="display:none;margin-top:8px;font-size:11px;padding:8px 12px;border-radius:6px;"></div>
   </div>
@@ -1104,11 +1137,20 @@
     <!-- Top tile grid (metadata) -->
     <div id="fd-meta" class="tab-loading">Loading…</div>
 
-    <!-- LP roster panel -->
+    <!-- LP roster panel (LP funds only) -->
     <div id="fd-lps" style="margin-top:18px;"></div>
 
     <!-- Positions panel -->
     <div id="fd-positions" style="margin-top:18px;"></div>
+
+    <!-- Waterfall panel (LP funds only — populated from /api/fund/waterfall) -->
+    <div id="fd-waterfall" class="fd-section"></div>
+
+    <!-- Account history table (managed accounts only) -->
+    <div id="fd-history" class="fd-section"></div>
+
+    <!-- Monthly balance chart (managed accounts only) -->
+    <div id="fd-balance" class="fd-section"></div>
 
     <!-- CSV upload widgets -->
     <section class="panel" style="margin-top:18px;">
@@ -1960,16 +2002,21 @@
   }
 
   async function loadFundOverview() {
-    const el = document.getElementById('fund-content');
-    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    const elFunds = document.getElementById('fund-funds-list');
+    const elAccts = document.getElementById('fund-accts-list');
+    elFunds.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    elAccts.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
     try {
       const r = await window.dgaFetch('/api/v2/lp/me/overview');
       if (!r.ok) throw new Error(r.status);
       const d = await r.json();
       const funds = d.funds || [];
       const accts = d.managed_accounts || [];
+      document.getElementById('fund-funds-count').textContent = funds.length;
+      document.getElementById('fund-accts-count').textContent = accts.length;
       if (!funds.length && !accts.length) {
-        el.innerHTML = '<div class="tab-empty">No funds or managed accounts found.</div>';
+        elFunds.innerHTML = '<div class="tab-empty">No LP funds found. Use Settings → Fund Administration → Create to add one.</div>';
+        elAccts.innerHTML = '<div class="tab-empty">No managed accounts found. Use Settings → Fund Administration → Create to add one.</div>';
         return;
       }
 
@@ -2015,36 +2062,52 @@
         f.fund_id, f.fund_name, f.short_name, f.fund_nav, f.fund_nav_as_of, f.lp_count, f.commitment, false
       )).join('');
       const acctHtml = accts.map(a => fundCardHtml(
-        a.fund_id, a.account_name, 'MANAGED · ' + a.short_name, a.nav, a.nav_as_of, null, null, true
+        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true
       )).join('');
 
-      el.innerHTML = fundHtml + acctHtml;
+      elFunds.innerHTML = funds.length ? fundHtml :
+        '<div class="tab-empty">No LP funds yet. Use Settings → Fund Administration → Create to add one.</div>';
+      elAccts.innerHTML = accts.length ? acctHtml :
+        '<div class="tab-empty">No managed accounts yet. Use Settings → Fund Administration → Create to add one.</div>';
 
-      // Click card → open fund detail modal
-      el.querySelectorAll('[data-fund-id]').forEach(card => {
-        card.addEventListener('click', (e) => {
-          // Don't open modal if clicking the NAV form inputs/buttons
-          if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn]')) return;
-          openFundDetail(card.dataset.fundId, card.dataset.fundName);
+      const wireCards = (el) => {
+        el.querySelectorAll('[data-fund-id]').forEach(card => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn]')) return;
+            openFundDetail(card.dataset.fundId, card.dataset.fundName);
+          });
         });
-      });
-
-      // Wire up Save buttons
-      el.querySelectorAll('[data-nav-btn]').forEach(btn => {
-        const fid = btn.dataset.navBtn;
-        btn.addEventListener('click', () => {
-          submitNav(
-            fid,
-            el.querySelector(`[data-nav-input="${fid}"]`),
-            el.querySelector(`[data-nav-date="${fid}"]`),
-            el.querySelector(`[data-nav-status="${fid}"]`),
-            btn
-          );
+        el.querySelectorAll('[data-nav-btn]').forEach(btn => {
+          const fid = btn.dataset.navBtn;
+          btn.addEventListener('click', () => {
+            submitNav(
+              fid,
+              el.querySelector(`[data-nav-input="${fid}"]`),
+              el.querySelector(`[data-nav-date="${fid}"]`),
+              el.querySelector(`[data-nav-status="${fid}"]`),
+              btn
+            );
+          });
         });
-      });
+      };
+      wireCards(elFunds);
+      wireCards(elAccts);
 
-    } catch (e) { el.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>'; }
+    } catch (e) {
+      elFunds.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>';
+      elAccts.innerHTML = '';
+    }
   }
+
+  // Sub-tab toggle (LP Funds | Managed Accounts)
+  document.querySelectorAll('.fund-subtab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.subtab;
+      document.querySelectorAll('.fund-subtab').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('fund-funds-list').style.display = which === 'funds' ? '' : 'none';
+      document.getElementById('fund-accts-list').style.display = which === 'accts' ? '' : 'none';
+    });
+  });
 
   // ── Fund Detail FULL PAGE ──────────────────────────────────────
   // Opens as a separate tab panel (#tab-fund-detail). Has Back button
@@ -2069,8 +2132,14 @@
     const meta = document.getElementById('fd-meta');
     const lps  = document.getElementById('fd-lps');
     const pos  = document.getElementById('fd-positions');
+    const wfl  = document.getElementById('fd-waterfall');
+    const hst  = document.getElementById('fd-history');
+    const bal  = document.getElementById('fd-balance');
     meta.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading fund detail…</div>';
     lps.innerHTML = ''; pos.innerHTML = '';
+    if (wfl) wfl.innerHTML = '';
+    if (hst) hst.innerHTML = '';
+    if (bal) bal.innerHTML = '';
     try {
       const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
       if (!r.ok) {
@@ -2122,9 +2191,212 @@
 
       // Load positions for this fund
       loadFundPositions(fundId);
+
+      // Conditional sections by fund type
+      const isAcct = d.fund_type === 'managed_account';
+      if (isAcct) {
+        loadAccountHistory(fundId);
+        loadAccountBalanceChart(fundId);
+      } else {
+        loadFundWaterfall(fundId);
+      }
     } catch (e) {
       meta.innerHTML = `<div class="tab-error">Could not load fund detail: ${e.message}</div>`;
     }
+  }
+
+  // ── Waterfall (LP funds) ─────────────────────────────────────
+  async function loadFundWaterfall(fundId) {
+    const el = document.getElementById('fd-waterfall');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header><div class="tab-loading"><span class="spin">↻</span> Loading waterfall…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/waterfall?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const wf = await r.json();
+      const rows = wf.rows || wf.snapshots || (Array.isArray(wf) ? wf : []);
+      if (!rows.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+            <div class="tab-empty">No annual NAV snapshots yet. Upload the Annual NAV / Waterfall CSV below to populate year-by-year carry, hurdle, and GP equity.</div>
+          </section>`;
+        return;
+      }
+      const fmtPct = v => v == null ? '—' : (v * 100).toFixed(2) + '%';
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">GP Waterfall &amp; Carry</span>
+            <span class="panel-badge">${rows.length} year${rows.length !== 1 ? 's' : ''}</span>
+          </header>
+          <table class="fd-waterfall-table">
+            <thead><tr>
+              <th>Year</th><th>Jan 1 NAV</th><th>Dec 31 NAV</th><th>Contributions</th>
+              <th>Gross Return</th><th>Hurdle</th><th>Carry</th><th>GP Equity</th><th>Acc. GP %</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => `<tr>
+                <td>${r.year || r.snapshot_year || '—'}</td>
+                <td>${r.jan_nav != null ? fmtUSD(r.jan_nav) : (r.nav_jan_1 != null ? fmtUSD(r.nav_jan_1) : '—')}</td>
+                <td>${r.dec_nav != null ? fmtUSD(r.dec_nav) : (r.nav_dec_31 != null ? fmtUSD(r.nav_dec_31) : '—')}</td>
+                <td>${r.contributions != null ? fmtUSD(r.contributions) : '—'}</td>
+                <td>${r.gross_return_pct != null ? fmtPct(r.gross_return_pct) : (r.gross_ret != null ? fmtPct(r.gross_ret) : '—')}</td>
+                <td>${r.hurdle_pct != null ? fmtPct(r.hurdle_pct) : '—'}</td>
+                <td>${r.carry != null ? fmtUSD(r.carry) : '—'}</td>
+                <td>${r.gp_equity != null ? fmtUSD(r.gp_equity) : '—'}</td>
+                <td>${r.accumulated_gp_pct != null ? fmtPct(r.accumulated_gp_pct) : (r.gp_equity_pct != null ? fmtPct(r.gp_equity_pct) : '—')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
+          <div class="tab-empty">Could not load waterfall (${e.message}). Upload an Annual NAV CSV below to populate.</div>
+        </section>`;
+    }
+  }
+
+  // ── Account history (managed accounts) ───────────────────────
+  async function loadAccountHistory(fundId) {
+    const el = document.getElementById('fd-history');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json ? JSON.parse(cache.result_json) : null;
+      const flows = data?.flows || [];
+      if (!flows.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header>
+            <div class="tab-empty">No YTD cash flows recorded yet. Run a YTD calculation from the mobile app or upload an Account History CSV to populate.</div>
+          </section>`;
+        return;
+      }
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Account History (YTD Cash Flows)</span>
+            <span class="panel-badge">${flows.length} transactions</span>
+          </header>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
+            <tbody>
+              ${flows.map(f => `<tr>
+                <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
+                <td>${f.action || f.type || '—'}</td>
+                <td style="color:var(--blue);font-weight:700;">${f.symbol || '—'}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Account History (YTD Cash Flows)</span></header>
+          <div class="tab-empty">No YTD calculation has been run yet for this account.</div>
+        </section>`;
+    }
+  }
+
+  // ── Monthly balance chart (managed accounts) ─────────────────
+  async function loadAccountBalanceChart(fundId) {
+    const el = document.getElementById('fd-balance');
+    if (!el) return;
+    el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header><div class="tab-loading"><span class="spin">↻</span> Loading…</div></section>';
+    try {
+      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fundId) + '/ytd-cache');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cache = await r.json();
+      const data = cache.result_json ? JSON.parse(cache.result_json) : null;
+      const mc = data?.monthly_chart;
+      if (!mc || !mc.points || !mc.points.length) {
+        el.innerHTML = `
+          <section class="panel">
+            <header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header>
+            <div class="tab-empty">No monthly balance data yet. Upload an Investment Balance CSV during YTD calculation to enable the chart.</div>
+          </section>`;
+        return;
+      }
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Monthly Investment Balance</span>
+            <span class="panel-badge">${mc.points.length} months</span>
+          </header>
+          <div class="fd-balance-canvas-wrap">
+            <canvas id="fd-balance-canvas"></canvas>
+          </div>
+        </section>`;
+      drawFdBalanceChart(mc);
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Monthly Investment Balance</span></header>
+          <div class="tab-empty">No monthly balance data yet.</div>
+        </section>`;
+    }
+  }
+
+  function drawFdBalanceChart(mc) {
+    const canvas = document.getElementById('fd-balance-canvas');
+    if (!canvas) return;
+    const pts = mc.points || [];
+    if (!pts.length) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = rect.width  * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    const padL = 60, padR = 18, padT = 14, padB = 28;
+    const vals = pts.map(p => p.balance ?? p.value ?? 0);
+    const minV = Math.min(...vals) * 0.95, maxV = Math.max(...vals) * 1.05;
+    const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
+    const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(1, maxV - minV));
+    // grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (H - padT - padB) * (i / 4);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      const v = maxV - (maxV - minV) * (i / 4);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('$' + Math.round(v / 1000) + 'k', padL - 6, y + 3);
+    }
+    // x labels
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    pts.forEach((p, i) => {
+      if (pts.length > 12 && i % 2) return;
+      ctx.fillText((p.month || p.label || '').slice(0, 7), xAt(i), H - 10);
+    });
+    // line
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const v = p.balance ?? p.value ?? 0;
+      if (i === 0) ctx.moveTo(xAt(i), yAt(v));
+      else ctx.lineTo(xAt(i), yAt(v));
+    });
+    ctx.stroke();
+    // dots
+    ctx.fillStyle = '#5BB8D4';
+    pts.forEach((p, i) => {
+      const v = p.balance ?? p.value ?? 0;
+      ctx.beginPath(); ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2); ctx.fill();
+    });
   }
 
   async function loadFundPositions(fundId) {
