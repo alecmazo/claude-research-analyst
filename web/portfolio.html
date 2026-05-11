@@ -215,33 +215,48 @@
 
 <script>
   // ── Production login: POST email+password → /api/auth/v2/login ───────────
-  // On success, token is stored in sessionStorage (per-browser-session;
-  // closing the tab clears it, satisfying "enter password every time").
-  // User is then redirected to /gp or /lp based on the role in the response.
+  // Token cached in localStorage so the user stays signed in across browser
+  // sessions (until the 12h token TTL expires or they click LOGOUT). Both
+  // domains see the same login state on the same browser.
+
+  const TOKEN_KEY = 'dga_v2_token';
+  const USER_KEY  = 'dga_v2_user';
 
   const $email   = document.getElementById('login-email');
   const $pw      = document.getElementById('login-password');
   const $btn     = document.getElementById('login-btn');
   const $err     = document.getElementById('login-error');
 
-  // If a valid token already exists in sessionStorage, bypass login
-  // (browser refresh after login should not re-prompt).
+  // Migrate any older sessionStorage token to localStorage so existing
+  // sessions don't get bumped back to the login screen.
+  try {
+    const oldTok = sessionStorage.getItem(TOKEN_KEY);
+    if (oldTok && !localStorage.getItem(TOKEN_KEY)) {
+      localStorage.setItem(TOKEN_KEY, oldTok);
+      const oldUser = sessionStorage.getItem(USER_KEY);
+      if (oldUser) localStorage.setItem(USER_KEY, oldUser);
+    }
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_KEY);
+  } catch (_) {}
+
+  // If a valid token already exists, bypass login.
   (async function autoResume() {
-    const tok = sessionStorage.getItem('dga_v2_token');
+    const tok = localStorage.getItem(TOKEN_KEY);
     if (!tok) return;
     try {
       const r = await fetch('/api/auth/v2/me', {
         headers: { 'x-auth-v2-token': tok },
       });
       if (!r.ok) {
-        sessionStorage.removeItem('dga_v2_token');
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
         return;
       }
       const me = await r.json();
       window.location.href = me.role === 'gp' ? '/gp' : '/lp';
     } catch (e) {
       // Network error — leave login visible
-      sessionStorage.removeItem('dga_v2_token');
     }
   })();
 
@@ -277,9 +292,9 @@
       }
 
       const data = await r.json();
-      sessionStorage.setItem('dga_v2_token', data.token);
+      localStorage.setItem(TOKEN_KEY, data.token);
       // Stash a hint so the next page can render the user's name immediately
-      sessionStorage.setItem('dga_v2_user', JSON.stringify({
+      localStorage.setItem(USER_KEY, JSON.stringify({
         name:                 data.name,
         email:                data.email,
         role:                 data.role,
