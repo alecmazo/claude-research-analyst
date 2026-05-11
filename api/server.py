@@ -1491,15 +1491,28 @@ def lp_me_overview(request: Request):
                 snap = cur.fetchone()
                 # Live market NAV from positions
                 acct_market_nav = _fund_market_nav(cur, a["id"])
-                # YTD data from cache (also grab nav for fallback)
+                # YTD data from cache (also grab nav + result_json for fallback)
                 try:
                     cur.execute("""
-                        SELECT nav, ytd_pct, updated_at FROM managed_account_ytd_cache
+                        SELECT nav, ytd_pct, result_json, updated_at
+                          FROM managed_account_ytd_cache
                          WHERE fund_id = %s
                     """, (a["id"],))
                     ytd_row = cur.fetchone()
-                    acct_ytd_pct = float(ytd_row["ytd_pct"]) if ytd_row else None
-                    acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row and ytd_row.get("updated_at") else None
+                    if ytd_row:
+                        acct_ytd_pct = float(ytd_row["ytd_pct"] or 0)
+                        # Fallback: if stored ytd_pct is 0, extract md_return_pct from result_json
+                        if acct_ytd_pct == 0 and ytd_row.get("result_json"):
+                            try:
+                                _rj = json.loads(ytd_row["result_json"])
+                                _md = _rj.get("md_return_pct")
+                                if _md is not None:
+                                    acct_ytd_pct = float(_md)
+                            except Exception:
+                                pass
+                        acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
+                    else:
+                        acct_ytd_pct = None; acct_ytd_upd = None
                 except Exception:
                     acct_ytd_pct = None; acct_ytd_upd = None; ytd_row = None
                 snap_nav = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
@@ -1635,18 +1648,27 @@ def gp_fund_detail(fund_id: str, request: Request):
             """, (fund_id,))
             snap = cur.fetchone()
 
-            # YTD cache for managed accounts (correct column names: nav, ytd_pct, updated_at)
+            # YTD cache for managed accounts
             ytd_pct_val = None
             if fund["fund_type"] == "managed_account":
                 try:
                     cur.execute("""
-                        SELECT nav, ytd_pct, updated_at
+                        SELECT nav, ytd_pct, result_json, updated_at
                           FROM managed_account_ytd_cache
                          WHERE fund_id = %s
                     """, (fund_id,))
                     ytd_row = cur.fetchone()
-                    if ytd_row and ytd_row.get("ytd_pct") is not None:
-                        ytd_pct_val = float(ytd_row["ytd_pct"])
+                    if ytd_row:
+                        ytd_pct_val = float(ytd_row["ytd_pct"] or 0) or None
+                        # Fallback: read md_return_pct from result_json when ytd_pct=0
+                        if ytd_pct_val is None and ytd_row.get("result_json"):
+                            try:
+                                _rj = json.loads(ytd_row["result_json"])
+                                _md = _rj.get("md_return_pct")
+                                if _md is not None:
+                                    ytd_pct_val = float(_md) or None
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
@@ -2370,7 +2392,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui73-20260511"
+WEB_BUILD_VERSION = "ui74-20260511"
 
 
 @app.get("/api/build")
@@ -4079,8 +4101,19 @@ async def fund_list(request: Request, fund_type: str = None):
                             ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
                             if ytd_nav:
                                 nav = ytd_nav   # override 0 with cached real value
-                            # Derive position count from the attribution table
-                            if ytd_row["result_json"]:
+                            # Fallback: if ytd_pct=0, read md_return_pct from result_json
+                            if not ytd_pct and ytd_row.get("result_json"):
+                                try:
+                                    cached = json.loads(ytd_row["result_json"])
+                                    _md = cached.get("md_return_pct")
+                                    if _md is not None:
+                                        ytd_pct = float(_md) or None
+                                    attr = cached.get("attribution") or []
+                                    if attr:
+                                        position_count = len(attr)
+                                except Exception:
+                                    pass
+                            elif ytd_row.get("result_json"):
                                 try:
                                     cached = json.loads(ytd_row["result_json"])
                                     attr = cached.get("attribution") or []
@@ -5538,7 +5571,8 @@ async def fund_account_ytd_run(
 
     # Persist into managed_account_ytd_cache
     nav     = result.get("end_value") or result.get("end_nav") or 0.0
-    ytd_pct = result.get("ytd_pct")   or result.get("modified_dietz") or 0.0
+    ytd_pct = (result.get("md_return_pct") or result.get("ytd_pct")
+               or result.get("modified_dietz") or 0.0)
     import json as _json
     conn = _fund_conn()
     try:
