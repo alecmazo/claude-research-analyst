@@ -30,6 +30,11 @@ const PASSWORD_KEY  = '@dga_password';             // plain-text password user e
 const TOKEN_KEY     = '@dga_token_cache';          // HMAC token returned by /api/auth
 const FUND_TOKEN_KEY = '@dga_fund_token';          // fund-specific access token
 
+// v2 per-user auth — email + password → signed claims token (role + scope).
+// Runs ALONGSIDE the legacy v1 flow until all screens migrate to v2.
+const V2_TOKEN_KEY = '@dga_v2_token';
+const V2_USER_KEY  = '@dga_v2_user';
+
 // Migrate stale `localhost` URLs that older builds saved to AsyncStorage.
 // On a real iPhone (TestFlight build) localhost is meaningless and every
 // request fails with "Network request failed" — auto-redirect to Railway.
@@ -119,6 +124,98 @@ export async function getStoredPassword() {
 
 export async function clearToken() {
   await AsyncStorage.removeItem(TOKEN_KEY);
+}
+
+// ── v2 Auth (email + password, role-aware) ────────────────────────────────────
+/** Sign in via POST /api/auth/v2/login. Stores the token + user record
+ *  in AsyncStorage and returns the user object. Throws with isAuthError
+ *  on a 401. */
+export async function loginV2(email, password) {
+  const base = await getBaseUrl();
+  const resp = await fetch(`${base}/api/auth/v2/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: String(email || '').trim(),
+      password: String(password || ''),
+    }),
+  });
+  if (resp.status === 401) {
+    const err = new Error('Invalid email or password');
+    err.isAuthError = true;
+    throw err;
+  }
+  if (!resp.ok) {
+    throw new Error(`Login failed (${resp.status})`);
+  }
+  const data = await resp.json();
+  const user = {
+    lp_id:                data.lp_id,
+    name:                 data.name,
+    email:                data.email,
+    role:                 data.role,
+    must_change_password: data.must_change_password,
+    fund_memberships:     data.fund_memberships || {},
+    managed_account_ids:  data.managed_account_ids || [],
+  };
+  await AsyncStorage.multiSet([
+    [V2_TOKEN_KEY, data.token],
+    [V2_USER_KEY,  JSON.stringify(user)],
+  ]);
+  return user;
+}
+
+/** Get the cached v2 user (no network). Returns null if not signed in. */
+export async function getV2User() {
+  try {
+    const raw = await AsyncStorage.getItem(V2_USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Get the cached v2 token. Returns '' if not signed in. */
+export async function getV2Token() {
+  try { return (await AsyncStorage.getItem(V2_TOKEN_KEY)) || ''; }
+  catch { return ''; }
+}
+
+/** Verify the cached v2 token against /me. Refreshes the cached user
+ *  record on success. Returns the user or null. */
+export async function whoamiV2() {
+  const [base, tok] = await Promise.all([getBaseUrl(), getV2Token()]);
+  if (!tok) return null;
+  try {
+    const r = await fetch(`${base}/api/auth/v2/me`, {
+      headers: { 'x-auth-v2-token': tok },
+    });
+    if (!r.ok) {
+      // Token rejected — clear it so the user sees the login screen
+      await AsyncStorage.multiRemove([V2_TOKEN_KEY, V2_USER_KEY]);
+      return null;
+    }
+    const me = await r.json();
+    await AsyncStorage.setItem(V2_USER_KEY, JSON.stringify(me));
+    return me;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign out of v2. Clears the token + cached user record. */
+export async function logoutV2() {
+  await AsyncStorage.multiRemove([V2_TOKEN_KEY, V2_USER_KEY]);
+}
+
+/** Wrapped fetch that auto-attaches the v2 token. Use for any /api/v2/*
+ *  call. Returns the raw Response object. */
+export async function v2Fetch(path, options = {}) {
+  const [base, tok] = await Promise.all([getBaseUrl(), getV2Token()]);
+  const url = `${base}${path}`;
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (tok) headers['x-auth-v2-token'] = tok;
+  return fetch(url, { ...options, headers });
 }
 
 // ── Fund token ────────────────────────────────────────────────────────────────

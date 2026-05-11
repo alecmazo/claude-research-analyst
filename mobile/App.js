@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -15,7 +16,12 @@ import PaperTrackerScreen     from './src/screens/PaperTrackerScreen';
 import IntelligenceScreen     from './src/screens/IntelligenceScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
 import FundScreen             from './src/screens/FundScreen';
+import LoginScreen            from './src/screens/LoginScreen';
+import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
+
+import { whoamiV2, getV2User } from './src/api/client';
+import { colors } from './src/design';
 
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
@@ -30,8 +36,6 @@ function HomeStack() {
   );
 }
 
-// Tracker tab — paper portfolios from Ideas, no Fund account cross-over.
-// PaperTrackerScreen is the root; no links back to Fund accounts.
 function TrackerStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -40,7 +44,6 @@ function TrackerStack() {
   );
 }
 
-// Intelligence (Ideas) stack — includes PaperTracker so it lives under Ideas tab
 function IntelligenceStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -50,7 +53,6 @@ function IntelligenceStack() {
   );
 }
 
-// Fund section: LP Fund management + Managed Portfolio (both password-gated)
 function FundStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -60,41 +62,104 @@ function FundStack() {
   );
 }
 
-// Auto-fetch the latest OTA update on cold launch. expo-updates is
-// configured in app.json with checkAutomatically=ON_LOAD and our EAS Update
-// channel, so this runs in the background and silently swaps in the new
-// JS bundle on the next reload.
+// ── GP navigator: full 6-tab access ─────────────────────────────────────────
+function GPTabs() {
+  return (
+    <Tab.Navigator
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
+    >
+      <Tab.Screen name="Research"     component={HomeStack} />
+      <Tab.Screen name="Intelligence" component={IntelligenceStack} />
+      <Tab.Screen name="Scan"         component={ScanScreen} />
+      <Tab.Screen name="Portfolio"    component={TrackerStack} />
+      <Tab.Screen name="Fund"         component={FundStack} />
+      <Tab.Screen name="Settings"     component={SettingsScreen} />
+    </Tab.Navigator>
+  );
+}
+
+// ── LP navigator: scoped to the LP's own performance + read-only research ──
+function LPTabs({ onLogout }) {
+  return (
+    <Tab.Navigator
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
+    >
+      <Tab.Screen name="Performance">
+        {() => <LPPerformanceScreen onLogout={onLogout} />}
+      </Tab.Screen>
+      <Tab.Screen name="Research" component={HomeStack} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
+    </Tab.Navigator>
+  );
+}
+
+// ── Auto-OTA on cold launch ─────────────────────────────────────────────────
 async function checkForOtaUpdate() {
   try {
-    if (__DEV__) return;   // skip in Expo Go / dev builds
+    if (__DEV__) return;
     const result = await Updates.checkForUpdateAsync();
     if (result.isAvailable) {
       await Updates.fetchUpdateAsync();
-      // Reload immediately so the user sees the fix without restarting.
       await Updates.reloadAsync();
     }
   } catch (e) {
-    // Network glitches, dev client, etc. — fail silently.
     console.log('[OTA] update check skipped:', e?.message || e);
   }
 }
 
 export default function App() {
-  useEffect(() => { checkForOtaUpdate(); }, []);
+  // null = checking, 'login' = show login, otherwise the v2 user object
+  const [authState, setAuthState] = useState(null);
+
+  // Reconcile auth on launch + whenever someone logs in/out
+  const refreshAuth = useCallback(async () => {
+    // First, try the cached user for an instant render…
+    const cached = await getV2User();
+    if (cached) setAuthState(cached);
+
+    // …then verify with the server to make sure the token is still good.
+    const verified = await whoamiV2();
+    setAuthState(verified || 'login');
+  }, []);
+
+  useEffect(() => {
+    checkForOtaUpdate();
+    refreshAuth();
+  }, [refreshAuth]);
+
+  const handleLoggedIn = useCallback((user) => setAuthState(user), []);
+  const handleLogout   = useCallback(()      => setAuthState('login'), []);
+
+  // ── Splash while we read AsyncStorage + verify ────────────────────────────
+  if (authState === null) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' }}>
+        <StatusBar style="light" />
+        <ActivityIndicator color={colors.gold} size="large" />
+      </View>
+    );
+  }
+
+  // ── Not signed in → show login ───────────────────────────────────────────
+  if (authState === 'login') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <LoginScreen onLoggedIn={handleLoggedIn} />
+      </>
+    );
+  }
+
+  // ── Signed in → branch by role ───────────────────────────────────────────
   return (
     <NavigationContainer>
       <StatusBar style="light" />
-      <Tab.Navigator
-        tabBar={(props) => <CustomTabBar {...props} />}
-        screenOptions={{ headerShown: false }}
-      >
-        <Tab.Screen name="Research"     component={HomeStack} />
-        <Tab.Screen name="Intelligence" component={IntelligenceStack} />
-        <Tab.Screen name="Scan"         component={ScanScreen} />
-        <Tab.Screen name="Portfolio"    component={TrackerStack} />
-        <Tab.Screen name="Fund"         component={FundStack} />
-        <Tab.Screen name="Settings"     component={SettingsScreen} />
-      </Tab.Navigator>
+      {authState.role === 'gp'
+        ? <GPTabs />
+        : <LPTabs onLogout={handleLogout} />
+      }
     </NavigationContainer>
   );
 }

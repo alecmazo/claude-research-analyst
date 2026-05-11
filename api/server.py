@@ -1265,31 +1265,47 @@ def lp_me_overview(request: Request):
                           or fund_memberships.get(fname.lower())
                           or None) if role != "gp" else None
 
-                # Find this LP's row(s) within the fund
+                # Find this LP's row(s) within the fund.
+                # The lps table doesn't have commitment_amount directly —
+                # commitments live in the `commitments` table (joined here).
                 if role == "gp":
                     cur.execute("""
-                        SELECT legal_name, commitment_amount, primary_email
-                          FROM lps
-                         WHERE fund_id = %s
-                         ORDER BY legal_name
+                        SELECT l.legal_name, l.primary_email,
+                               COALESCE(c.commitment, 0) AS commitment_amount
+                          FROM lps l
+                          LEFT JOIN (
+                              SELECT lp_id, SUM(commitment_amount) AS commitment
+                                FROM commitments
+                               WHERE superseded_by IS NULL
+                               GROUP BY lp_id
+                          ) c ON c.lp_id = l.id
+                         WHERE l.fund_id = %s
+                         ORDER BY l.legal_name
                     """, (f["id"],))
                 else:
                     cur.execute("""
-                        SELECT legal_name, commitment_amount, primary_email
-                          FROM lps
-                         WHERE fund_id = %s
-                           AND LOWER(TRIM(legal_name)) = LOWER(%s)
+                        SELECT l.legal_name, l.primary_email,
+                               COALESCE(c.commitment, 0) AS commitment_amount
+                          FROM lps l
+                          LEFT JOIN (
+                              SELECT lp_id, SUM(commitment_amount) AS commitment
+                                FROM commitments
+                               WHERE superseded_by IS NULL
+                               GROUP BY lp_id
+                          ) c ON c.lp_id = l.id
+                         WHERE l.fund_id = %s
+                           AND LOWER(TRIM(l.legal_name)) = LOWER(%s)
                     """, (f["id"], alias or ""))
                 lp_rows = cur.fetchall()
 
                 commitment = sum((float(r.get("commitment_amount") or 0) for r in lp_rows), 0.0)
 
-                # Most recent NAV snapshot for this fund (whole-fund level)
+                # Most recent NAV snapshot — schema uses net_nav + as_of_date
                 cur.execute("""
-                    SELECT nav, period_end
+                    SELECT net_nav, as_of_date
                       FROM nav_snapshots
                      WHERE fund_id = %s
-                     ORDER BY period_end DESC
+                     ORDER BY as_of_date DESC
                      LIMIT 1
                 """, (f["id"],))
                 snap = cur.fetchone()
@@ -1301,8 +1317,8 @@ def lp_me_overview(request: Request):
                     "lp_alias":        alias if role != "gp" else None,
                     "lp_count":        len(lp_rows),
                     "commitment":      commitment,
-                    "fund_nav":        float(snap["nav"]) if snap and snap.get("nav") is not None else None,
-                    "fund_nav_as_of":  snap["period_end"].isoformat() if snap and snap.get("period_end") else None,
+                    "fund_nav":        float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None,
+                    "fund_nav_as_of":  snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
                 })
 
             # ── Managed accounts ─────────────────────────────────────
@@ -1330,10 +1346,10 @@ def lp_me_overview(request: Request):
 
             for a in acct_rows:
                 cur.execute("""
-                    SELECT nav, period_end
+                    SELECT net_nav, as_of_date
                       FROM nav_snapshots
                      WHERE fund_id = %s
-                     ORDER BY period_end DESC
+                     ORDER BY as_of_date DESC
                      LIMIT 1
                 """, (a["id"],))
                 snap = cur.fetchone()
@@ -1341,8 +1357,8 @@ def lp_me_overview(request: Request):
                     "fund_id":         str(a["id"]),
                     "account_name":    a["name"],
                     "short_name":      a["short_name"],
-                    "nav":             float(snap["nav"]) if snap and snap.get("nav") is not None else None,
-                    "nav_as_of":       snap["period_end"].isoformat() if snap and snap.get("period_end") else None,
+                    "nav":             float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None,
+                    "nav_as_of":       snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
                 })
 
     except HTTPException:
@@ -1622,7 +1638,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65e-20260510"
+WEB_BUILD_VERSION = "ui65f-20260510"
 
 
 @app.get("/api/build")
