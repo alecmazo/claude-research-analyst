@@ -1083,6 +1083,21 @@
     if (e.key === 'Escape') closeReportModal();
   });
 
+  function downloadViaFetch(url, filename) {
+    window.dgaFetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }).catch(e => alert('Download failed: ' + e.message));
+  }
+
   async function openReport(ticker) {
     if (!ticker) return;
     const modal    = document.getElementById('report-modal');
@@ -1102,6 +1117,9 @@
     gammaBtn.style.display = 'none';
     docxBtn.style.display  = 'none';
     pptxBtn.style.display  = 'none';
+    // Clear stale onclick handlers
+    docxBtn.onclick = null;
+    pptxBtn.onclick = null;
     modal.style.display    = 'block';
     document.body.style.overflow = 'hidden';
     modal.scrollTop = 0;
@@ -1112,8 +1130,20 @@
       const d = await r.json();
       if (d.generated_at) dateEl.textContent = '· ' + fmtDateLP(d.generated_at);
       if (d.gamma_url)  { gammaBtn.href = d.gamma_url; gammaBtn.style.display = ''; }
-      if (d.has_docx)   { docxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/docx'; docxBtn.style.display = ''; }
-      if (d.has_pptx)   { pptxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/pptx'; pptxBtn.style.display = ''; }
+      if (d.has_docx) {
+        docxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/docx',
+          ticker + '_DGA_Report.docx'
+        );
+        docxBtn.style.display = '';
+      }
+      if (d.has_pptx) {
+        pptxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/pptx',
+          ticker + '_DGA_Report.pptx'
+        );
+        pptxBtn.style.display = '';
+      }
       if (!d.markdown) {
         body.innerHTML = '<p style="color:var(--mid);padding:8px 0;">Report exists but has no text. Use the download buttons above.</p>';
       } else {
@@ -1146,10 +1176,10 @@
       <div style="margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
            style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
-        <a id="rm-docx-btn" href="#" target="_blank" rel="noopener"
-           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ DOCX</a>
-        <a id="rm-pptx-btn" href="#" target="_blank" rel="noopener"
-           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ PPTX</a>
+        <button id="rm-docx-btn"
+           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ DOCX</button>
+        <button id="rm-pptx-btn"
+           style="display:none;background:rgba(91,184,212,0.10);color:var(--blue-dark);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
         <button id="rm-close"
           style="background:var(--offwhite);border:1px solid var(--line);color:var(--dark);border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;">✕</button>
       </div>

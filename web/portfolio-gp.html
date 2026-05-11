@@ -1007,8 +1007,11 @@
     <div class="tab-toolbar">
       <h2>Fund Dashboard</h2>
       <button class="tab-btn secondary" id="fund-refresh-btn">⟳ Refresh</button>
+      <button class="tab-btn secondary" id="fund-seed-btn" style="margin-left:8px;">⚙ Sync Accounts</button>
     </div>
     <div id="fund-content" class="tab-loading">Loading…</div>
+    <!-- Hidden seed status -->
+    <div id="fund-seed-status" style="display:none;margin-top:8px;font-size:11px;padding:8px 12px;border-radius:6px;"></div>
   </div>
 </div><!-- #tab-fund -->
 
@@ -1699,6 +1702,36 @@
   // ══════════════════════════════════════════════════════════════
   async function loadFundTab() { loadFundOverview(); }
 
+  // NAV entry inline form — called after loadFundOverview renders cards
+  function navInputStyle() {
+    return 'width:130px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:11px;padding:0 8px;outline:none;';
+  }
+
+  async function submitNav(fundId, inputEl, dateEl, statusEl, btnEl) {
+    const raw = (inputEl.value || '').replace(/[$,\s]/g, '');
+    const nav = parseFloat(raw);
+    if (isNaN(nav) || nav < 0) { statusEl.textContent = 'Enter a valid amount'; statusEl.style.color = 'var(--red)'; return; }
+    const asOf = dateEl.value;
+    if (!asOf) { statusEl.textContent = 'Select a date'; statusEl.style.color = 'var(--red)'; return; }
+    btnEl.disabled = true; btnEl.textContent = '…';
+    statusEl.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/nav', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fund_id: fundId, net_nav: nav, as_of_date: asOf }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.status); }
+      statusEl.textContent = '✓ Saved';
+      statusEl.style.color = 'var(--green)';
+      setTimeout(() => loadFundOverview(), 800);
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = 'var(--red)';
+      btnEl.disabled = false; btnEl.textContent = 'Save';
+    }
+  }
+
   async function loadFundOverview() {
     const el = document.getElementById('fund-content');
     el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
@@ -1712,6 +1745,18 @@
         el.innerHTML = '<div class="tab-empty">No funds or managed accounts found.</div>';
         return;
       }
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const navEntryRow = (fid, currentNav) => `
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:10px;font-weight:700;color:var(--dim);letter-spacing:0.5px;text-transform:uppercase;">Update NAV</span>
+          <input data-nav-input="${fid}" type="text" placeholder="${currentNav != null ? fmtUSD(currentNav) : '$0.00'}" style="${navInputStyle()}">
+          <input data-nav-date="${fid}" type="date" value="${today}" style="${navInputStyle()}width:140px;">
+          <button data-nav-btn="${fid}" class="tab-btn" style="height:28px;padding:0 12px;font-size:10px;">Save</button>
+          <span data-nav-status="${fid}" style="font-size:10px;"></span>
+        </div>`;
+
       const fundHtml = funds.map(f => `
         <div class="fund-card">
           <div class="fund-card-head">
@@ -1722,7 +1767,7 @@
             <div class="fund-stat">
               <div class="fund-stat-label">Fund NAV</div>
               <div class="fund-stat-val">${f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</div>
-              <div class="fund-stat-sub">${f.fund_nav_as_of ? 'as of ' + f.fund_nav_as_of : 'No snapshot'}</div>
+              <div class="fund-stat-sub">${f.fund_nav_as_of ? 'as of ' + f.fund_nav_as_of : 'No snapshot entered yet'}</div>
             </div>
             <div class="fund-stat">
               <div class="fund-stat-label">LP Count</div>
@@ -1734,7 +1779,9 @@
               <div class="fund-stat-val">${f.commitment != null ? fmtUSD(f.commitment) : '—'}</div>
             </div>
           </div>
+          ${navEntryRow(f.fund_id, f.fund_nav)}
         </div>`).join('');
+
       const acctHtml = accts.map(a => `
         <div class="fund-card">
           <div class="fund-card-head">
@@ -1745,14 +1792,67 @@
             <div class="fund-stat">
               <div class="fund-stat-label">Account NAV</div>
               <div class="fund-stat-val">${a.nav != null ? fmtUSD(a.nav) : '—'}</div>
-              <div class="fund-stat-sub">${a.nav_as_of ? 'as of ' + a.nav_as_of : 'No snapshot'}</div>
+              <div class="fund-stat-sub">${a.nav_as_of ? 'as of ' + a.nav_as_of : 'No snapshot entered yet'}</div>
             </div>
           </div>
+          ${navEntryRow(a.fund_id, a.nav)}
         </div>`).join('');
+
       el.innerHTML = fundHtml + acctHtml;
+
+      // Wire up Save buttons
+      el.querySelectorAll('[data-nav-btn]').forEach(btn => {
+        const fid = btn.dataset.navBtn;
+        btn.addEventListener('click', () => {
+          submitNav(
+            fid,
+            el.querySelector(`[data-nav-input="${fid}"]`),
+            el.querySelector(`[data-nav-date="${fid}"]`),
+            el.querySelector(`[data-nav-status="${fid}"]`),
+            btn
+          );
+        });
+      });
+
     } catch (e) { el.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>'; }
   }
   document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
+
+  // ── Sync Accounts: ensure fund / managed-account DB records exist ─
+  const EXPECTED_ACCOUNTS = [
+    { name: 'DGA Capital Fund I, LP',  short_name: 'DGAF-I',  fund_type: 'lp_fund' },
+    { name: 'DGA Capital Fund II, LP', short_name: 'DGAF-II', fund_type: 'lp_fund' },
+    { name: 'ANAT TOD',                short_name: 'ATOD',    fund_type: 'managed_account' },
+    { name: 'EM DEFENSIVE',            short_name: 'EMDEF',   fund_type: 'managed_account' },
+  ];
+
+  document.getElementById('fund-seed-btn')?.addEventListener('click', async () => {
+    const btn    = document.getElementById('fund-seed-btn');
+    const status = document.getElementById('fund-seed-status');
+    btn.disabled = true; btn.textContent = '…';
+    status.style.display = 'block';
+    status.style.background = 'rgba(91,184,212,0.08)';
+    status.style.color = 'var(--blue)';
+    status.textContent = 'Syncing fund & account records…';
+    const results = [];
+    for (const acc of EXPECTED_ACCOUNTS) {
+      try {
+        const r = await window.dgaFetch('/api/v2/gp/fund/ensure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...acc, inception_date: '2020-01-01' }),
+        });
+        const d = await r.json();
+        if (!r.ok) results.push(`❌ ${acc.name}: ${d.detail || r.status}`);
+        else results.push(`${d.created ? '✅ Created' : '✓ Exists'}: ${acc.name}`);
+      } catch (e) {
+        results.push(`❌ ${acc.name}: ${e.message}`);
+      }
+    }
+    status.innerHTML = results.join('<br>');
+    btn.disabled = false; btn.textContent = '⚙ Sync Accounts';
+    setTimeout(() => loadFundOverview(), 500);
+  });
 
   // ══════════════════════════════════════════════════════════════
   // SETTINGS TAB
@@ -1872,6 +1972,21 @@
     if (e.key === 'Escape') closeReportModal();
   });
 
+  function downloadViaFetch(url, filename) {
+    window.dgaFetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }).catch(e => alert('Download failed: ' + e.message));
+  }
+
   async function openReport(ticker) {
     if (!ticker) return;
     const modal    = document.getElementById('report-modal');
@@ -1890,6 +2005,9 @@
     gammaBtn.style.display = 'none';
     docxBtn.style.display  = 'none';
     pptxBtn.style.display  = 'none';
+    // Clear stale onclick handlers
+    docxBtn.onclick = null;
+    pptxBtn.onclick = null;
     modal.style.display    = 'block';
     document.body.style.overflow = 'hidden';
     modal.scrollTop = 0;
@@ -1904,11 +2022,17 @@
         gammaBtn.style.display = '';
       }
       if (d.has_docx) {
-        docxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/docx';
+        docxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/docx',
+          ticker + '_DGA_Report.docx'
+        );
         docxBtn.style.display = '';
       }
       if (d.has_pptx) {
-        pptxBtn.href = '/api/download/' + encodeURIComponent(ticker) + '/pptx';
+        pptxBtn.onclick = () => downloadViaFetch(
+          '/api/download/' + encodeURIComponent(ticker) + '/pptx',
+          ticker + '_DGA_Report.pptx'
+        );
         pptxBtn.style.display = '';
       }
       if (!d.markdown) {
@@ -2145,10 +2269,10 @@
       <div style="margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
            style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
-        <a id="rm-docx-btn"  href="#" target="_blank" rel="noopener"
-           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ DOCX</a>
-        <a id="rm-pptx-btn"  href="#" target="_blank" rel="noopener"
-           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;text-decoration:none;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;">⬇ PPTX</a>
+        <button id="rm-docx-btn"
+           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ DOCX</button>
+        <button id="rm-pptx-btn"
+           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
         <button id="rm-close"
           style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#c0cfe0;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
       </div>

@@ -1426,6 +1426,145 @@ def lp_me_overview(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# v2 GP — NAV snapshot entry (simple manual override for period-end valuation)
+# ---------------------------------------------------------------------------
+
+class NavSnapshotRequest(BaseModel):
+    fund_id:    str
+    net_nav:    float          # total fund / account net asset value
+    as_of_date: str            # ISO date string, e.g. "2026-03-31"
+    period_kind: str = "monthly"   # 'monthly' | 'quarterly' | 'annual'
+
+@app.post("/api/v2/gp/nav")
+def gp_add_nav_snapshot(request: Request, body: NavSnapshotRequest):
+    """GP-only: upsert a NAV snapshot for any fund or managed account.
+
+    Inserts a minimal nav_snapshots row (net_nav, as_of_date). All component
+    fields (cash, securities_mv, etc.) are set to 0 — they can be refined via
+    the full import flow later. Uses ON CONFLICT to overwrite any existing
+    snapshot for the same (fund_id, as_of_date, period_kind).
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+
+    if not _PSYCOPG2_OK:
+        raise HTTPException(503, "psycopg2 not available")
+
+    period = body.period_kind if body.period_kind in ("monthly", "quarterly", "annual") else "monthly"
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Validate fund_id exists
+            cur.execute("SELECT id, name, fund_type FROM funds WHERE id = %s", (body.fund_id,))
+            fund = cur.fetchone()
+            if not fund:
+                raise HTTPException(404, f"Fund {body.fund_id} not found")
+
+            net_nav = float(body.net_nav)
+            cur.execute("""
+                INSERT INTO nav_snapshots
+                    (fund_id, as_of_date, period_kind,
+                     cash, securities_mv, accrued_income, accrued_expense,
+                     accrued_mgmt_fee, accrued_carry,
+                     gross_nav, net_nav, status)
+                VALUES (%s, %s, %s,
+                        0, 0, 0, 0, 0, 0,
+                        %s, %s, 'final')
+                ON CONFLICT (fund_id, as_of_date, period_kind)
+                WHERE restates_id IS NULL
+                DO UPDATE SET
+                    net_nav    = EXCLUDED.net_nav,
+                    gross_nav  = EXCLUDED.gross_nav,
+                    status     = 'final'
+            """, (body.fund_id, body.as_of_date, period, net_nav, net_nav))
+            conn.commit()
+
+        return {
+            "ok":       True,
+            "fund_id":  body.fund_id,
+            "fund_name": fund["name"],
+            "net_nav":  net_nav,
+            "as_of_date": body.as_of_date,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {str(exc)[:200]}")
+
+
+class EnsureFundRequest(BaseModel):
+    name:       str              # full fund/account name
+    short_name: str              # 2-8 char display code
+    fund_type:  str = "managed_account"  # 'lp_fund' | 'managed_account'
+    inception_date: str = ""     # YYYY-MM-DD; defaults to today
+
+@app.post("/api/v2/gp/fund/ensure")
+def gp_ensure_fund(request: Request, body: EnsureFundRequest):
+    """GP-only: create a fund or managed account by name if it doesn't exist.
+
+    Idempotent — if a record with that name already exists it is returned as-is.
+    Use this to seed LP fund & managed-account records that LPs need to see.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+    if not _PSYCOPG2_OK:
+        raise HTTPException(503, "psycopg2 not available")
+
+    ftype = body.fund_type if body.fund_type in ("lp_fund", "managed_account") else "managed_account"
+    inc = (body.inception_date or "").strip() or str(__import__("datetime").date.today())
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Check if a record with this name or short_name already exists (case-insensitive)
+            sn_upper = body.short_name.strip().upper()
+            cur.execute("""
+                SELECT id, name, short_name, fund_type FROM funds
+                 WHERE LOWER(name) = LOWER(%s) OR short_name = %s
+                 LIMIT 1
+            """, (body.name, sn_upper))
+            existing = cur.fetchone()
+            if existing:
+                return {"ok": True, "created": False, "fund_id": str(existing["id"]),
+                        "fund_name": existing["name"], "fund_type": existing["fund_type"]}
+
+            # Determine fiscal year end from inception date
+            try:
+                inc_year = inc.split("-")[0]
+                fye = f"{inc_year}-12-31"
+            except Exception:
+                fye = "2020-12-31"
+
+            # Sensible defaults: SMA structure for managed accounts, 3c1 for LP funds
+            structure = "separately_managed" if ftype == "managed_account" else "3c1"
+
+            cur.execute("""
+                INSERT INTO funds (
+                    name, short_name, fund_type, inception_date, fiscal_year_end,
+                    structure, domicile, base_ccy,
+                    mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                    carry_pct, hurdle_pct, status
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, 'DE', 'USD',
+                    0.0150, 'nav', 'quarterly',
+                    0.20, 0.08, 'open'
+                )
+                RETURNING id
+            """, (body.name.strip(), sn_upper, ftype, inc, fye, structure))
+            new_id = str(cur.fetchone()["id"])
+            conn.commit()
+            return {"ok": True, "created": True, "fund_id": new_id,
+                    "fund_name": body.name, "fund_type": ftype}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {str(exc)[:200]}")
+
+
+# ---------------------------------------------------------------------------
 # v2 Admin — DESTRUCTIVE ops. Always GP-only, always with backup-first
 # safety. Used for one-off cleanup of duplicate / misclassified fund rows.
 # ---------------------------------------------------------------------------
