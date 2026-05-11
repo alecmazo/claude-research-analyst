@@ -104,9 +104,9 @@ LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
         "email":                "anatolymazo@gmail.com",
         "name":                 "Anatoly Mazo",
         "role":                 "lp",
-        # plaintext shared with LP out-of-band
-        "password_hash_hex":    "43849d0fd0354f3bba114c4a56a8bf4a02512c35f4c1965afe3cdf35cb3790ed",
-        "password_salt_hex":    "46f1f0cd975fe9c3235e45380a49e857",
+        # plaintext: "dgacapital"
+        "password_hash_hex":    "4b279b1481df1e23375775d57e2bb7258150a9b586ebcac314a0cf16b90b1184",
+        "password_salt_hex":    "1d9bfbcbf9013f444b60365aeb7c15e0",
         "fund_memberships":     {},
         # Matches the funds.name in the production DB (uppercase, as
         # imported). Use case-insensitive comparison in the data layer
@@ -120,9 +120,9 @@ LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
         "email":                "e.mazo@outlook.com",
         "name":                 "Eugene Mazo",
         "role":                 "lp",
-        # plaintext shared with LP out-of-band
-        "password_hash_hex":    "d372facf6ceb8f707d79ea7328642459bc984f59c011140120ae7635375c6c0a",
-        "password_salt_hex":    "d3a911f82d0247020d4b613bd10f1748",
+        # plaintext: "dgacapital"
+        "password_hash_hex":    "2de3b5c19e7845b00f3512c0a9758a837312c6ec53d9cff74377d673acad0670",
+        "password_salt_hex":    "4a4795b89b150e2dab18a0292442fb2c",
         "fund_memberships":     {
             "DGA Capital Fund I, LP":  "EM",
             "DGA Capital Fund II, LP": "EM",
@@ -136,9 +136,9 @@ LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
         "email":                "edytasliw@gmail.com",
         "name":                 "Edyta Sliwinska",
         "role":                 "lp",
-        # plaintext shared with LP out-of-band — placeholder until fund/account assigned
-        "password_hash_hex":    "cdc935a317c88ad92fc0021b4c3472b47a699c476566036a426ff1fbbc97288e",
-        "password_salt_hex":    "91a772707a32617136cb1d8f6712fe8a",
+        # plaintext: "dgacapital"
+        "password_hash_hex":    "a7cb3b575fb764c2d8f265a9c427f1a97002f10a45411dddadb3ea7be7548af6",
+        "password_salt_hex":    "708474ec6382c4f01b6dcf89b8e4f775",
         "fund_memberships":     {},
         "managed_account_ids":  [],
         "must_change_password": True,
@@ -150,14 +150,27 @@ LP_CREDENTIALS_SEED: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 # Persistence — overlay file lets password changes survive across deploys.
 # The seed above is the "factory default"; overlay overrides per lp_id.
-# Stored in a directory the GP controls (configurable via env), not Dropbox.
+#
+# Default path resolves to $STOCKS_FOLDER/_lp_creds_overlay.json, which
+# lives on the same Railway persistent volume as watchlists, reports, etc.
+# Override with LP_CREDS_OVERLAY_PATH env var if needed.
 # ---------------------------------------------------------------------------
 _LP_CREDS_OVERLAY_ENV = "LP_CREDS_OVERLAY_PATH"
-_DEFAULT_OVERLAY      = "/tmp/dga_lp_creds_overlay.json"   # Railway ephemeral
+
+
+def _default_overlay_path() -> Path:
+    """Resolve the overlay path from env or fall back to the stocks folder."""
+    # Prefer STOCKS_FOLDER (Railway persistent volume) over /tmp
+    stocks = os.environ.get("STOCKS_FOLDER", "")
+    if stocks:
+        return Path(stocks) / "_lp_creds_overlay.json"
+    # Local dev fallback — project root
+    return Path(__file__).parent / "_lp_creds_overlay.json"
 
 
 def _overlay_path() -> Path:
-    return Path(os.environ.get(_LP_CREDS_OVERLAY_ENV, _DEFAULT_OVERLAY))
+    override = os.environ.get(_LP_CREDS_OVERLAY_ENV, "")
+    return Path(override) if override else _default_overlay_path()
 
 
 def _load_overlay() -> dict[str, dict]:
@@ -348,6 +361,47 @@ def change_password(lp_id: str, old_password: str, new_password: str) -> bool:
     }
     _save_overlay(overlay)
     return True
+
+
+def gp_set_password(lp_id: str, new_password: str, must_change: bool = True) -> bool:
+    """GP-only admin reset. Sets a new password without requiring the old one.
+
+    Persists to the overlay so it survives deploys. Sets must_change_password=True
+    by default so the LP is prompted to choose their own password on next login.
+    Returns False if the lp_id doesn't exist or the password is too short.
+    """
+    user = find_user_by_lp_id(lp_id)
+    if not user:
+        return False
+    if len(new_password) < 6:
+        return False
+    new_hash, new_salt = hash_password(new_password)
+    overlay = _load_overlay()
+    overlay[lp_id] = {
+        **overlay.get(lp_id, {}),
+        "password_hash_hex":    new_hash,
+        "password_salt_hex":    new_salt,
+        "must_change_password": must_change,
+    }
+    _save_overlay(overlay)
+    return True
+
+
+def list_users() -> list[dict]:
+    """Return a sanitized list of all users (no password hashes)."""
+    return [
+        {
+            "lp_id":                u["lp_id"],
+            "email":                u["email"],
+            "name":                 u["name"],
+            "role":                 u["role"],
+            "must_change_password": bool(u.get("must_change_password", False)),
+            "fund_memberships":     u.get("fund_memberships", {}),
+            "managed_account_ids":  u.get("managed_account_ids", []),
+            "created_at":           u.get("created_at", ""),
+        }
+        for u in _all_credentials().values()
+    ]
 
 
 # ---------------------------------------------------------------------------

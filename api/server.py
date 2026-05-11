@@ -856,6 +856,62 @@ def auth_v2_change_password(request: Request, body: AuthV2ChangePasswordRequest)
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# GP Admin — LP user management
+# ---------------------------------------------------------------------------
+
+class LPSetPasswordRequest(BaseModel):
+    lp_id:       str
+    new_password: str
+    must_change:  bool = True   # True = LP must choose their own pw on next login
+
+
+@app.get("/api/v2/admin/lp/list")
+def admin_lp_list(request: Request):
+    """Return all LP/GP users (no password hashes). GP-only."""
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(status_code=403, detail="GP role required")
+    return {"users": auth_v2_mod.list_users()}
+
+
+@app.post("/api/v2/admin/lp/set-password")
+def admin_lp_set_password(request: Request, body: LPSetPasswordRequest):
+    """GP-only: set an LP's password without requiring the old one.
+
+    Useful for onboarding new LPs and handling forgotten-password requests.
+    By default sets must_change_password=True so the LP is prompted to
+    choose their own password on first login.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(status_code=403, detail="GP role required")
+
+    lp_id = (body.lp_id or "").strip()
+    if not lp_id:
+        raise HTTPException(status_code=400, detail="lp_id required")
+
+    ok = auth_v2_mod.gp_set_password(
+        lp_id=lp_id,
+        new_password=body.new_password,
+        must_change=body.must_change,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not set password — check lp_id exists and password is ≥ 6 chars",
+        )
+
+    user = auth_v2_mod.find_user_by_lp_id(lp_id)
+    return {
+        "ok":    True,
+        "lp_id": lp_id,
+        "email": user.get("email") if user else None,
+        "name":  user.get("name")  if user else None,
+        "must_change_password": body.must_change,
+    }
+
+
 # ===========================================================================
 # Phase B — GP dashboard data endpoints
 #
@@ -1916,7 +1972,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui65l-20260510"
+WEB_BUILD_VERSION = "ui65m-20260510"
 
 
 @app.get("/api/build")
