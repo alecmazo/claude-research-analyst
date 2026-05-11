@@ -2345,7 +2345,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui70-20260511"
+WEB_BUILD_VERSION = "ui71-20260511"
 
 
 @app.get("/api/build")
@@ -4331,6 +4331,62 @@ async def fund_positions(request: Request, fund_id: str = None):
                 for item in result:
                     if item["market_value"] is not None:
                         item["market_weight_pct"] = round(item["market_value"] / total_mkt * 100, 2)
+
+            # Fallback for managed accounts: if tax_lots empty, serve from YTD cache
+            if not result:
+                cur.execute("SELECT fund_type FROM funds WHERE id = %s", (fid,))
+                frow = cur.fetchone()
+                if frow and frow["fund_type"] == "managed_account":
+                    try:
+                        cur.execute("""
+                            SELECT result_json FROM managed_account_ytd_cache
+                             WHERE fund_id = %s
+                        """, (fid,))
+                        cache_row = cur.fetchone()
+                        if cache_row and cache_row["result_json"]:
+                            import json as _jj
+                            cached = _jj.loads(cache_row["result_json"])
+                            attr = cached.get("attribution") or []
+                            symbols_c = [a["ticker"] for a in attr
+                                         if a.get("ticker") and not a.get("price_missing")
+                                         and float(a.get("end_shares") or 0) > 0]
+                            prices_c  = _fetch_prices(symbols_c) if symbols_c else {}
+                            total_mv_c = 0.0
+                            for a in attr:
+                                tk  = a.get("ticker") or ""
+                                qty = float(a.get("end_shares") or 0)
+                                if qty <= 0:
+                                    continue
+                                avg  = float(a.get("jan1_price") or 0)
+                                ep   = float(a.get("end_price") or 0)
+                                live = prices_c.get(tk) or ep or None
+                                mv   = round(qty * live, 2) if live else None
+                                cb   = round(qty * avg, 2) if avg else 0.0
+                                if mv: total_mv_c += mv
+                                result.append({
+                                    "symbol":          tk,
+                                    "name":            tk,
+                                    "issuer":          None,
+                                    "lot_count":       1,
+                                    "total_qty":       qty,
+                                    "avg_cost":        avg,
+                                    "total_cost":      cb,
+                                    "last_price":      round(live, 4) if live else None,
+                                    "market_value":    mv,
+                                    "unrealized_gain": round(mv - cb, 2) if mv else None,
+                                    "weight_pct":      0,
+                                    "first_acquired":  None,
+                                    "_from_cache":     True,
+                                })
+                            result.sort(key=lambda x: (x["market_value"] or 0), reverse=True)
+                            if total_mv_c > 0:
+                                for item in result:
+                                    if item["market_value"]:
+                                        item["market_weight_pct"] = round(
+                                            item["market_value"] / total_mv_c * 100, 2)
+                    except Exception:
+                        pass  # non-fatal fallback
+
             return result
     finally:
         conn.close()
@@ -5461,7 +5517,10 @@ async def fund_account_ytd_run(
     import json as _json
     conn = _fund_conn()
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Resolve fund ID
+            fid = _resolve_fund_id(cur, fund_id)
+
             cur.execute("""
                 INSERT INTO managed_account_ytd_cache
                        (fund_id, nav, ytd_pct, result_json, updated_at)
@@ -5471,7 +5530,93 @@ async def fund_account_ytd_run(
                        ytd_pct     = EXCLUDED.ytd_pct,
                        result_json = EXCLUDED.result_json,
                        updated_at  = now()
-            """, (fund_id, float(nav), float(ytd_pct), _json.dumps(result)))
+            """, (fid, float(nav), float(ytd_pct), _json.dumps(result)))
+
+            # Also sync positions into tax_lots so the Positions panel is populated.
+            # Ensure CoA exists (managed accounts created via v2 API may not have it).
+            try:
+                _seed_coa_for_fund(cur, fid)
+                positions_parsed = _parse_fidelity_csv(pos_text)
+                if positions_parsed:
+                    # Fetch CoA account IDs
+                    cur.execute("""
+                        SELECT code, id FROM accounts
+                         WHERE fund_id = %s AND code IN ('1020','1030','1100','3000')
+                    """, (fid,))
+                    acct_map  = {r["code"]: str(r["id"]) for r in cur.fetchall()}
+                    sec_acct  = acct_map.get("1100")
+                    mm_acct   = acct_map.get("1030") or acct_map.get("1020")
+                    cap_acct  = acct_map.get("3000")
+
+                    if sec_acct and cap_acct:
+                        # Upsert securities
+                        sec_ids = {}
+                        for p in positions_parsed:
+                            cur.execute("""
+                                INSERT INTO securities (symbol, name, asset_class, is_public)
+                                VALUES (%s, %s, %s, TRUE)
+                                ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name
+                                RETURNING id
+                            """, (p["symbol"], p["name"] or p["symbol"],
+                                  "cash" if p["is_cash"] else "equity"))
+                            sec_ids[p["symbol"]] = str(cur.fetchone()["id"])
+
+                        # Close existing open lots
+                        cur.execute("""
+                            UPDATE tax_lots SET closed_at = NOW()
+                             WHERE fund_id = %s AND closed_at IS NULL
+                        """, (fid,))
+
+                        # Create adjustment transaction
+                        today_iso = datetime.utcnow().date().isoformat()
+                        cur.execute("""
+                            INSERT INTO transactions
+                                (fund_id, effective_date, category, description)
+                            VALUES (%s, %s, 'adjustment', 'Position import from YTD run')
+                            RETURNING id
+                        """, (fid, today_iso))
+                        txn_id = str(cur.fetchone()["id"])
+
+                        # Transaction lines (Dr positions, Cr capital)
+                        total_cost_lots = 0.0
+                        ln = 1
+                        for p in positions_parsed:
+                            cost = float(p["cost_basis"] or 0)
+                            if cost <= 0:
+                                continue
+                            total_cost_lots += cost
+                            acct = mm_acct if p["is_cash"] else sec_acct
+                            if not acct:
+                                continue
+                            cur.execute("""
+                                INSERT INTO transaction_lines
+                                    (transaction_id, line_number, account_id, debit, security_id)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (txn_id, ln, acct, round(cost, 4),
+                                  sec_ids.get(p["symbol"])))
+                            ln += 1
+                        if total_cost_lots > 0:
+                            cur.execute("""
+                                INSERT INTO transaction_lines
+                                    (transaction_id, line_number, account_id, credit)
+                                VALUES (%s, %s, %s, %s)
+                            """, (txn_id, ln, cap_acct, round(total_cost_lots, 4)))
+
+                        # Insert tax lots
+                        for p in positions_parsed:
+                            cur.execute("""
+                                INSERT INTO tax_lots
+                                    (fund_id, security_id, acquired_at,
+                                     quantity, cost_basis_per_unit, open_transaction_id)
+                                VALUES (%s, %s, NOW(), %s, %s, %s)
+                            """, (fid, sec_ids[p["symbol"]],
+                                  float(p["quantity"]),
+                                  float(p["avg_cost"]) if p["avg_cost"] else 0.0,
+                                  txn_id))
+            except Exception as _pos_exc:
+                # Non-fatal: YTD data was already saved; positions sync is best-effort
+                print(f"⚠️  positions sync failed for {fund_id}: {_pos_exc}")
+
         conn.commit()
     finally:
         conn.close()
