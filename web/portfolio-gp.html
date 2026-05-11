@@ -558,11 +558,88 @@
     letter-spacing: 0.5px; margin: 14px 0 6px; }
   .md-body h3 { font-size: 12px; font-weight: 800; color: #d0dcec;
     margin: 12px 0 4px; }
+  .md-body h4 { font-size: 11px; font-weight: 800; color: var(--blue-light);
+    letter-spacing: 0.5px; margin: 10px 0 4px; text-transform: uppercase; }
   .md-body strong { color: #e0e8f0; font-weight: 700; }
+  .md-body em { color: #d0dcec; font-style: italic; }
+  .md-body code {
+    background: rgba(91,184,212,0.08); border: 1px solid rgba(91,184,212,0.15);
+    padding: 1px 6px; border-radius: 3px; font-family: "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--blue-light);
+  }
   .md-body ul { padding-left: 18px; margin: 6px 0; }
   .md-body li { margin-bottom: 3px; }
   .md-body p { margin-bottom: 8px; }
-  .md-body hr { border: none; border-top: 1px solid var(--panel-edge); margin: 12px 0; }
+  .md-body hr { border: none; border-top: 1px solid var(--panel-edge); margin: 14px 0; }
+  /* Markdown tables — professional, readable */
+  .md-body .md-table {
+    width: 100%; border-collapse: collapse; margin: 12px 0;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(91,184,212,0.18); border-radius: 6px;
+    overflow: hidden;
+  }
+  .md-body .md-table thead { background: rgba(91,184,212,0.12); }
+  .md-body .md-table th {
+    padding: 7px 11px; text-align: left;
+    font-weight: 800; color: var(--blue); font-size: 10px;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    border-bottom: 1px solid rgba(91,184,212,0.30);
+    white-space: nowrap;
+  }
+  .md-body .md-table td {
+    padding: 6px 11px; color: #d0dcec;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: top;
+  }
+  .md-body .md-table tbody tr:hover { background: rgba(91,184,212,0.04); }
+  .md-body .md-table tbody tr:last-child td { border-bottom: none; }
+
+  /* Fund Detail page */
+  .fd-tile-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin-top: 4px;
+  }
+  .fd-tile {
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .fd-tile-label {
+    font-size: 9px; font-weight: 800; color: var(--dim);
+    letter-spacing: 1.3px; text-transform: uppercase;
+  }
+  .fd-tile-val {
+    font-size: 20px; font-weight: 800; color: #e0e8f0;
+    margin-top: 4px; font-variant-numeric: tabular-nums;
+  }
+  .fd-tile-sub {
+    font-size: 10px; color: var(--mid); margin-top: 4px;
+  }
+  .fd-upload-card {
+    background: var(--navy-mid); border: 1px solid var(--panel-edge);
+    border-radius: 8px; padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .fd-upload-title {
+    font-size: 12px; font-weight: 800; color: #e0e8f0; letter-spacing: 0.5px;
+  }
+  .fd-upload-hint {
+    font-size: 11px; color: var(--mid); line-height: 1.4;
+  }
+  .fd-upload-file {
+    width: 100%; padding: 6px; font-size: 11px;
+    background: var(--navy); border: 1px dashed rgba(91,184,212,0.30);
+    border-radius: 5px; color: #c0cfe0;
+  }
+  .fd-upload-file::file-selector-button {
+    background: rgba(91,184,212,0.10); color: var(--blue);
+    border: 1px solid rgba(91,184,212,0.25); border-radius: 4px;
+    padding: 3px 9px; margin-right: 8px; cursor: pointer; font-size: 10px;
+    font-weight: 700; letter-spacing: 0.5px;
+  }
+  .fd-upload-status {
+    font-size: 11px; min-height: 16px; line-height: 1.3;
+  }
 
   /* Scan result cards */
   .scan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
@@ -1016,6 +1093,60 @@
 </div><!-- #tab-fund -->
 
 
+<!-- ══ FUND DETAIL — full-page view (one fund / account) ═══════════ -->
+<div id="tab-fund-detail" class="tab-panel">
+  <div class="wide-shell">
+    <div class="tab-toolbar">
+      <button class="tab-btn secondary" id="fd-back-btn">← Back to Funds</button>
+      <h2 id="fd-title" style="margin-left:8px;">…</h2>
+    </div>
+
+    <!-- Top tile grid (metadata) -->
+    <div id="fd-meta" class="tab-loading">Loading…</div>
+
+    <!-- LP roster panel -->
+    <div id="fd-lps" style="margin-top:18px;"></div>
+
+    <!-- Positions panel -->
+    <div id="fd-positions" style="margin-top:18px;"></div>
+
+    <!-- CSV upload widgets -->
+    <section class="panel" style="margin-top:18px;">
+      <header class="panel-head">
+        <span class="panel-title">Data Import</span>
+        <span class="panel-badge">CSV / XLSX</span>
+      </header>
+      <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;">
+        <!-- Positions -->
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">📊 Account Positions</div>
+          <div class="fd-upload-hint">Fidelity Account Positions export (CSV or XLSX). Replaces current open tax-lots.</div>
+          <input id="fd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="fd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
+          <div id="fd-pos-status" class="fd-upload-status"></div>
+        </div>
+        <!-- Cap Table -->
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">👥 Cap Table</div>
+          <div class="fd-upload-hint">LP roster CSV: name, email, commitment_amount (per LP). Replaces existing LPs for this fund.</div>
+          <input id="fd-cap-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="fd-upload-cap-btn" class="tab-btn" style="width:100%;">Upload Cap Table</button>
+          <div id="fd-cap-status" class="fd-upload-status"></div>
+        </div>
+        <!-- Annual NAV -->
+        <div class="fd-upload-card">
+          <div class="fd-upload-title">📈 Annual NAV / Waterfall</div>
+          <div class="fd-upload-hint">Historical year-by-year NAV (Year, Jan 1 NAV, Dec 31 NAV, Contributions, Hurdle, Carry, GP equity).</div>
+          <input id="fd-nav-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
+          <button id="fd-upload-nav-btn" class="tab-btn" style="width:100%;">Upload Annual NAV</button>
+          <div id="fd-nav-status" class="fd-upload-status"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div><!-- #tab-fund-detail -->
+
+
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
@@ -1144,19 +1275,67 @@
   // ── Simple markdown → HTML ───────────────────────────────────
   function renderMd(el, md) {
     if (!md) { el.innerHTML = '<div class="tab-empty">No content.</div>'; return; }
-    let h = md
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+
+    // 1) Escape HTML
+    let text = md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // 2) Parse markdown tables BEFORE other transforms (line-based)
+    //    Match: header row | --- row | one or more body rows
+    const lines = text.split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const next = lines[i+1] || '';
+      const isHdr = /^\s*\|.+\|\s*$/.test(line);
+      const isSep = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(next);
+      if (isHdr && isSep) {
+        const parseRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+        const headers = parseRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|.+\|\s*$/.test(lines[i])) {
+          rows.push(parseRow(lines[i]));
+          i++;
+        }
+        let html = '<table class="md-table"><thead><tr>';
+        for (const h of headers) html += `<th>${h}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const r of rows) {
+          html += '<tr>';
+          for (const c of r) html += `<td>${c}</td>`;
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        out.push(html);
+      } else {
+        out.push(line);
+        i++;
+      }
+    }
+    text = out.join('\n');
+
+    // 3) Apply other markdown transforms
+    let h = text
       .replace(/^---+$/gm,'<hr>')
+      .replace(/^#### (.+)$/gm,'<h4>$1</h4>')
       .replace(/^### (.+)$/gm,'<h3>$1</h3>')
       .replace(/^## (.+)$/gm,'<h2>$1</h2>')
       .replace(/^# (.+)$/gm,'<h2>$1</h2>')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g,'<em>$1</em>')
+      .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
       .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
-      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul>' + s + '</ul>')
-      .replace(/\n{2,}/g,'</p><p>')
-      .replace(/\n/g,'<br>');
-    el.innerHTML = '<div class="md-body"><p>' + h + '</p></div>';
+      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul>' + s + '</ul>');
+
+    // 4) Wrap paragraphs (split on blank lines, skip block elements)
+    const paragraphs = h.split(/\n{2,}/).map(p => {
+      const t = p.trim();
+      if (!t) return '';
+      if (/^<(h\d|ul|ol|table|hr|pre|blockquote|div)/i.test(t)) return t;
+      return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
+    });
+    el.innerHTML = '<div class="md-body">' + paragraphs.join('\n') + '</div>';
   }
 
   // ── Generic job poller ────────────────────────────────────────
@@ -1867,61 +2046,184 @@
     } catch (e) { el.innerHTML = '<div class="tab-error">Could not load fund data: ' + e.message + '</div>'; }
   }
 
-  // ── Fund Detail Modal ──────────────────────────────────────────
-  async function openFundDetail(fundId, fundName) {
-    const modal = document.getElementById('fund-detail-modal');
-    const title = document.getElementById('fdm-title');
-    const body  = document.getElementById('fdm-body');
-    if (!modal) return;
-    title.textContent = fundName || '…';
-    body.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
-    modal.style.display = 'block';
-    document.body.style.overflow = 'hidden';
+  // ── Fund Detail FULL PAGE ──────────────────────────────────────
+  // Opens as a separate tab panel (#tab-fund-detail). Has Back button
+  // and shows: metadata, LP roster, positions, CSV upload widgets.
+  let CURRENT_FUND_ID = null;
+
+  function openFundDetail(fundId, fundName) {
+    CURRENT_FUND_ID = fundId;
+    // Switch to the detail tab
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    const panel = document.getElementById('tab-fund-detail');
+    if (!panel) { console.warn('fund-detail panel missing'); return; }
+    panel.classList.add('active');
+    document.querySelectorAll('.topbar-link[data-tab]').forEach(l => l.classList.remove('active'));
+    document.querySelector('.topbar-link[data-tab="fund"]')?.classList.add('active');
+    window.scrollTo(0, 0);
+    document.getElementById('fd-title').textContent = fundName || '…';
+    loadFundDetailContent(fundId);
+  }
+
+  async function loadFundDetailContent(fundId) {
+    const meta = document.getElementById('fd-meta');
+    const lps  = document.getElementById('fd-lps');
+    const pos  = document.getElementById('fd-positions');
+    meta.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading fund detail…</div>';
+    lps.innerHTML = ''; pos.innerHTML = '';
     try {
       const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/detail');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || 'HTTP ' + r.status);
+      }
       const d = await r.json();
-      title.textContent = d.fund_name;
-      const fmtPct = v => v != null ? (v * 100).toFixed(1) + '%' : '—';
-      const metaRows = [
-        ['Type',       d.fund_type === 'managed_account' ? 'Managed Account' : 'LP Fund'],
-        ['Status',     (d.status || '').toUpperCase()],
-        ['Inception',  d.inception_date || '—'],
-        ['NAV',        d.nav != null ? fmtUSD(d.nav) : '—'],
-        ['As of',      d.nav_as_of || '—'],
-        ['Mgmt Fee',   fmtPct(d.mgmt_fee_pct)],
-        ['Carry',      fmtPct(d.carry_pct)],
-        ['Hurdle',     fmtPct(d.hurdle_pct)],
-      ].map(([k, v]) => `<tr><td style="color:var(--dim);padding:4px 12px 4px 0;white-space:nowrap;font-size:11px;">${k}</td><td style="font-weight:700;font-size:12px;color:#e0e8f0;">${v}</td></tr>`).join('');
+      document.getElementById('fd-title').textContent = d.fund_name + ' (' + d.short_name + ')';
 
-      const lpTable = d.lps && d.lps.length ? `
-        <div style="margin-top:18px;">
-          <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--dim);margin-bottom:8px;text-transform:uppercase;">LP Roster · ${d.lp_count} partners · ${fmtUSD(d.total_committed)} committed</div>
-          <table class="data-table" style="width:100%">
-            <thead><tr><th>Name</th><th>Email</th><th>Commitment</th></tr></thead>
+      const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
+      const tile = (label, value, sub) => `
+        <div class="fd-tile">
+          <div class="fd-tile-label">${label}</div>
+          <div class="fd-tile-val">${value}</div>
+          ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
+        </div>`;
+      meta.innerHTML = `
+        <div class="fd-tile-grid">
+          ${tile('TYPE',       d.fund_type === 'managed_account' ? 'Managed Account' : 'LP Fund', d.short_name)}
+          ${tile('STATUS',     (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
+          ${tile('NAV',        d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'No snapshot')}
+          ${tile('LP COUNT',   d.lp_count, fmtUSD(d.total_committed) + ' committed')}
+          ${tile('MGMT FEE',   fmtPct(d.mgmt_fee_pct), '')}
+          ${tile('CARRY',      fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
+        </div>`;
+
+      lps.innerHTML = d.lps && d.lps.length ? `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">LP Roster</span>
+            <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
+          </header>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th></tr></thead>
             <tbody>
               ${d.lps.map(lp => `
                 <tr>
                   <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
                   <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
-                  <td style="font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
                 </tr>`).join('')}
             </tbody>
           </table>
-        </div>` : `<div class="tab-empty" style="margin-top:18px;">No LPs on record for this fund yet.</div>`;
+        </section>` : `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">LP Roster</span></header>
+          <div class="tab-empty">No LPs on record. Use the "Import Cap Table" upload below to add LPs from a CSV.</div>
+        </section>`;
 
-      body.innerHTML = `<table style="border-collapse:collapse;margin-bottom:4px;">${metaRows}</table>${lpTable}`;
+      // Load positions for this fund
+      loadFundPositions(fundId);
     } catch (e) {
-      body.innerHTML = `<div class="tab-error">Could not load details: ${e.message}</div>`;
+      meta.innerHTML = `<div class="tab-error">Could not load fund detail: ${e.message}</div>`;
     }
   }
-  document.getElementById('fdm-close')?.addEventListener('click', () => {
-    document.getElementById('fund-detail-modal').style.display = 'none';
-    document.body.style.overflow = '';
+
+  async function loadFundPositions(fundId) {
+    const el = document.getElementById('fd-positions');
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading positions…</div>';
+    try {
+      const r = await window.dgaFetch('/api/fund/positions?fund_id=' + encodeURIComponent(fundId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rows = await r.json();   // endpoint returns a bare array
+      const totalMv = rows.reduce((s, p) => s + (p.market_value || 0), 0);
+      const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head">
+            <span class="panel-title">Open Positions</span>
+            <span class="panel-badge">${rows.length} positions · ${totalMv ? fmtUSD(totalMv) : '—'} MV</span>
+          </header>
+          ${rows.length ? `
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
+            <tbody>
+              ${rows.map(p => {
+                const unr = p.unrealized_gain != null ? p.unrealized_gain : null;
+                const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+                return `<tr>
+                  <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>` : `<div class="tab-empty">No positions yet. Upload a Fidelity Account Positions CSV below to populate this fund.</div>`}
+        </section>`;
+    } catch (e) {
+      el.innerHTML = `
+        <section class="panel">
+          <header class="panel-head"><span class="panel-title">Open Positions</span></header>
+          <div class="tab-empty">No position data available (${e.message}). Use the upload widgets below to import positions.</div>
+        </section>`;
+    }
+  }
+
+  // CSV uploaders for the fund detail page
+  async function uploadFundCsv(endpoint, fileInput, statusEl, btnEl, idleLabel) {
+    if (!CURRENT_FUND_ID) { statusEl.textContent = 'No fund selected'; return; }
+    const file = fileInput.files?.[0];
+    if (!file) { statusEl.textContent = 'Choose a file first'; statusEl.style.color = 'var(--red)'; return; }
+    btnEl.disabled = true; btnEl.textContent = 'Uploading…';
+    statusEl.textContent = '';
+    try {
+      const fd = new FormData();
+      fd.append('fund_id', CURRENT_FUND_ID);
+      fd.append('file', file);
+      const r = await window.dgaFetch(endpoint, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✅ ' + (d.message || 'Uploaded ' + (d.imported || '?') + ' rows');
+      fileInput.value = '';
+      setTimeout(() => loadFundDetailContent(CURRENT_FUND_ID), 800);
+    } catch (e) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = '❌ ' + e.message;
+    } finally {
+      btnEl.disabled = false; btnEl.textContent = idleLabel;
+    }
+  }
+
+  // Wire upload buttons (event delegation since these elements live in a tab)
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'fd-back-btn') {
+      showTab('fund');
+      return;
+    }
+    if (e.target.id === 'fd-upload-pos-btn') {
+      uploadFundCsv('/api/fund/import-positions',
+        document.getElementById('fd-pos-file'),
+        document.getElementById('fd-pos-status'),
+        e.target, 'Upload Positions');
+    }
+    if (e.target.id === 'fd-upload-cap-btn') {
+      uploadFundCsv('/api/fund/import-captable',
+        document.getElementById('fd-cap-file'),
+        document.getElementById('fd-cap-status'),
+        e.target, 'Upload Cap Table');
+    }
+    if (e.target.id === 'fd-upload-nav-btn') {
+      uploadFundCsv('/api/fund/import-annual-nav',
+        document.getElementById('fd-nav-file'),
+        document.getElementById('fd-nav-status'),
+        e.target, 'Upload Annual NAV');
+    }
   });
-  document.getElementById('fund-detail-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) { e.currentTarget.style.display = 'none'; document.body.style.overflow = ''; }
-  });
+
   document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
 
   // ── Sync Accounts: ensure fund / managed-account DB records exist ─
@@ -2109,12 +2411,29 @@
     if (m) m.style.display = 'none';
     document.body.style.overflow = '';
   }
-  document.getElementById('rm-close')?.addEventListener('click', closeReportModal);
-  document.getElementById('report-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeReportModal();
+  function closeFundDetailModal() {
+    const m = document.getElementById('fund-detail-modal');
+    if (m) m.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+  // EVENT DELEGATION — modal HTML is below this script in the document,
+  // so direct getElementById calls return null at script time. Listen on
+  // document so we catch clicks no matter when the modal renders.
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'rm-close' || e.target.closest('#rm-close')) {
+      closeReportModal();
+      return;
+    }
+    if (e.target.id === 'fdm-close' || e.target.closest('#fdm-close')) {
+      closeFundDetailModal();
+      return;
+    }
+    // Backdrop clicks
+    if (e.target.id === 'report-modal') closeReportModal();
+    if (e.target.id === 'fund-detail-modal') closeFundDetailModal();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeReportModal();
+    if (e.key === 'Escape') { closeReportModal(); closeFundDetailModal(); }
   });
 
   function downloadViaFetch(url, filename) {
@@ -2424,17 +2743,6 @@
       </div>
     </div>
     <div id="rm-body" class="md-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
-  </div>
-</div>
-
-<!-- ── Fund Detail Modal ──────────────────────────────────────── -->
-<div id="fund-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,10,20,0.88);z-index:200;overflow-y:auto;padding:24px 16px;">
-  <div style="max-width:720px;margin:0 auto;background:var(--panel);border-radius:12px;border:1px solid var(--panel-edge);box-shadow:0 12px 48px rgba(0,0,0,0.65);">
-    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid rgba(255,255,255,0.07);">
-      <span id="fdm-title" style="font-size:16px;font-weight:800;color:#e0e8f0;letter-spacing:0.8px;flex:1;"></span>
-      <button id="fdm-close" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#c0cfe0;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
-    </div>
-    <div id="fdm-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
   </div>
 </div>
 

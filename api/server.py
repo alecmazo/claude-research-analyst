@@ -639,12 +639,23 @@ def _valid_fund_token(token: str) -> bool:
     return hmac.compare_digest(token.strip(), _make_fund_token())
 
 def _require_fund_token(request: Request) -> None:
-    """Raise 403 if x-fund-token header (or fund_token query param) is missing/invalid."""
+    """Allow either a valid fund_token OR a v2 GP token.
+
+    Backward compatible with the old fund portal (which uses x-fund-token),
+    while letting the new GP dashboard call the same admin endpoints with
+    its v2 JWT (x-auth-v2-token). LPs can never reach these endpoints.
+    """
+    # First check: v2 GP token (attached by auth_middleware)
+    claims = getattr(request.state, 'auth_claims', None)
+    if claims and claims.get("role") == "gp":
+        return  # GP is authorized for all fund admin operations
+
+    # Fall back to legacy fund token
     token = (request.headers.get("x-fund-token")
              or request.query_params.get("fund_token")
              or "")
     if not _valid_fund_token(token):
-        raise HTTPException(status_code=403, detail="Fund access requires fund authentication")
+        raise HTTPException(status_code=403, detail="Fund access requires GP authentication or fund token")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):

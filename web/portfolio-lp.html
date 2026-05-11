@@ -450,6 +450,26 @@
     text-align: center;
     line-height: 1.5;
   }
+  /* Markdown tables in LP report modal */
+  .lp-md-table {
+    width: 100%; border-collapse: collapse; margin: 12px 0;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    background: var(--offwhite);
+    border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .lp-md-table thead { background: rgba(91,184,212,0.10); }
+  .lp-md-table th {
+    padding: 7px 11px; text-align: left;
+    font-weight: 800; color: var(--blue-dark); font-size: 10px;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    border-bottom: 1px solid rgba(91,184,212,0.25); white-space: nowrap;
+  }
+  .lp-md-table td {
+    padding: 6px 11px; color: var(--dark);
+    border-bottom: 1px solid var(--line); vertical-align: top;
+  }
+  .lp-md-table tbody tr:hover { background: rgba(91,184,212,0.04); }
+  .lp-md-table tbody tr:last-child td { border-bottom: none; }
 </style>
 </head>
 <body>
@@ -1050,19 +1070,62 @@
   // ══════════════════════════════════════════════════════════════
   function renderMd(el, md) {
     if (!md) { el.innerHTML = '<p style="color:var(--mid);">No content.</p>'; return; }
-    let h = md
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+
+    // 1) Escape HTML
+    let text = md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // 2) Parse markdown tables
+    const lines = text.split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const next = lines[i+1] || '';
+      const isHdr = /^\s*\|.+\|\s*$/.test(line);
+      const isSep = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(next);
+      if (isHdr && isSep) {
+        const parseRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+        const headers = parseRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|.+\|\s*$/.test(lines[i])) {
+          rows.push(parseRow(lines[i])); i++;
+        }
+        let html = '<table class="lp-md-table"><thead><tr>';
+        for (const h of headers) html += `<th>${h}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const r of rows) {
+          html += '<tr>';
+          for (const c of r) html += `<td>${c}</td>`;
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        out.push(html);
+      } else {
+        out.push(line); i++;
+      }
+    }
+    text = out.join('\n');
+
+    let h = text
       .replace(/^---+$/gm,'<hr style="border:none;border-top:1px solid var(--line);margin:14px 0;">')
+      .replace(/^#### (.+)$/gm,'<h4 style="font-size:11px;font-weight:800;color:var(--blue-dark);margin:10px 0 4px;letter-spacing:0.5px;text-transform:uppercase;">$1</h4>')
       .replace(/^### (.+)$/gm,'<h3 style="font-size:13px;font-weight:800;color:var(--ink);margin:12px 0 4px;">$1</h3>')
       .replace(/^## (.+)$/gm,'<h2 style="font-size:14px;font-weight:800;color:var(--blue-dark);margin:16px 0 6px;letter-spacing:0.3px;">$1</h2>')
       .replace(/^# (.+)$/gm,'<h2 style="font-size:15px;font-weight:800;color:var(--blue-dark);margin:16px 0 6px;">$1</h2>')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g,'<em>$1</em>')
+      .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code style="background:rgba(91,184,212,0.10);padding:1px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:11px;color:var(--blue-dark);">$1</code>')
       .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
-      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul style="padding-left:18px;margin:6px 0;">' + s + '</ul>')
-      .replace(/\n{2,}/g,'</p><p style="margin-bottom:8px;">')
-      .replace(/\n/g,'<br>');
-    el.innerHTML = '<p style="margin-bottom:8px;">' + h + '</p>';
+      .replace(/(<li>.*?<\/li>\n?)+/gs, s => '<ul style="padding-left:18px;margin:6px 0;">' + s + '</ul>');
+
+    const paragraphs = h.split(/\n{2,}/).map(p => {
+      const t = p.trim();
+      if (!t) return '';
+      if (/^<(h\d|ul|ol|table|hr|pre|blockquote|div)/i.test(t)) return t;
+      return '<p style="margin-bottom:8px;">' + t.replace(/\n/g, '<br>') + '</p>';
+    });
+    el.innerHTML = paragraphs.join('\n');
   }
 
   function fmtDateLP(iso) {
@@ -1075,9 +1138,14 @@
     if (m) m.style.display = 'none';
     document.body.style.overflow = '';
   }
-  document.getElementById('rm-close')?.addEventListener('click', closeReportModal);
-  document.getElementById('report-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeReportModal();
+  // Event delegation — modal HTML is below this script, so direct
+  // getElementById returns null at script execution time.
+  document.addEventListener('click', (e) => {
+    if (e.target.id === 'rm-close' || e.target.closest('#rm-close')) {
+      closeReportModal();
+      return;
+    }
+    if (e.target.id === 'report-modal') closeReportModal();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeReportModal();
