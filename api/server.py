@@ -2345,7 +2345,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui69-20260511"
+WEB_BUILD_VERSION = "ui70-20260511"
 
 
 @app.get("/api/build")
@@ -5798,14 +5798,22 @@ async def fund_export_excel(request: Request, fund_id: str = None):
         net_flow = float(result.get('net_flow') or 0)
         attribution = result.get('attribution') or []
         monthly_raw = (result.get('monthly_chart') or {}).get('monthly') or []
-        spy_monthly = result.get('spy_monthly') or []
+        # spy_monthly is stored as {ticker, first_close, points: [...]} dict
+        spy_data    = result.get('spy_monthly') or {}
+        spy_points  = (spy_data.get('points') or []) if isinstance(spy_data, dict) else []
         flows       = result.get('flows') or []
         updated_at  = str((ytd_cache or {}).get('updated_at') or '')[:10] or today_str2
 
-        # SPY YTD
-        spy_ytd = 0.0
-        if spy_monthly:
-            spy_ytd = float(spy_monthly[-1].get('ytd_pct') or 0) / 100.0
+        # Build SPY lookup by month integer (1-12)
+        spy_by_month_int = {}
+        for pt in spy_points:
+            try:
+                m_int = int(str(pt.get('month', '')).split('-')[1])
+                spy_by_month_int[m_int] = pt
+            except Exception:
+                pass
+
+        spy_ytd = float(spy_points[-1].get('ytd_pct') or 0) / 100.0 if spy_points else 0.0
         alpha = ytd_pct - spy_ytd
 
         wb2 = openpyxl.Workbook(); wb2.remove(wb2.active)
@@ -5890,30 +5898,36 @@ async def fund_export_excel(request: Request, fund_id: str = None):
         _aw2(s2); s2.column_dimensions['B'].width = 38
         s2.sheet_properties.tabColor = NAVY2
 
-        # ── Sheet 3: Monthly Balance vs SPY ───────────────────────────────────
-        if monthly_raw or spy_monthly:
-            s3 = wb2.create_sheet('Monthly Balance vs SPY')
+        # ── Sheet 3: Monthly Performance ──────────────────────────────────────
+        if monthly_raw:
+            s3 = wb2.create_sheet('Monthly Performance')
             s3.sheet_view.showGridLines = False; s3.freeze_panes = 'A2'
-            _whdr2(s3, 1, ['Month', 'Account End Balance', 'Account (Normalized)',
-                           'SPY (Normalized)', 'Spread'])
-            spy_by_month = {str(pt.get('month', ''))[:7]: pt for pt in spy_monthly}
-            norm_start = float(monthly_raw[0]['end_balance']) if monthly_raw else None
-            spy_start  = None
+            _whdr2(s3, 1, ['Month', 'Start Value', 'End Value', 'Dollar Gain',
+                           'Monthly Return', 'SPY Monthly Return', 'Alpha'])
             for i, mo in enumerate(monthly_raw):
-                mo_key = str(mo.get('month', ''))[:7]
-                spy_pt = spy_by_month.get(mo_key) or {}
-                bal    = float(mo.get('end_balance') or 0)
-                norm_a = (bal / norm_start) if norm_start else None
-                spy_n  = float(spy_pt.get('norm') or 0) or None
-                if spy_n and spy_start is None: spy_start = spy_n
-                spread = ((norm_a or 0) - (spy_n or 0)) if (norm_a and spy_n) else None
+                m_int  = int(mo.get('month') or 0)
+                label  = str(mo.get('label') or m_int)
+                sv     = float(mo.get('start_value') or 0)
+                ev     = float(mo.get('end_value') or 0)
+                dg     = float(mo.get('dollar_gain') or 0)
+                ret_pct = float(mo.get('return_pct') or 0) / 100.0
+                spy_pt  = spy_by_month_int.get(m_int) or {}
+                # compute SPY monthly return from ytd_pct series
+                prev_pt = spy_by_month_int.get(m_int - 1) if m_int > 1 else None
+                spy_ytd_m  = float(spy_pt.get('ytd_pct') or 0)
+                spy_ytd_pr = float(prev_pt.get('ytd_pct') or 0) if prev_pt else 0.0
+                spy_mo_ret = ((spy_ytd_m - spy_ytd_pr) / 100.0) if spy_pt else None
+                alpha_mo   = (ret_pct - spy_mo_ret) if spy_mo_ret is not None else None
                 bg = WHITE2 if i % 2 == 0 else LGRAY2
                 _arow2(s3, i+2,
-                       [mo_key, bal, norm_a, spy_n, spread],
-                       fmts=[None, FMT_USD0, '0.000', '0.000', '+0.000;-0.000'], bg=bg)
-                if spread is not None:
-                    s3.cell(row=i+2, column=5).font = Font(
-                        size=10, color=GREEN2 if spread >= 0 else RED2, name='Calibri')
+                       [label, sv, ev, dg, ret_pct, spy_mo_ret, alpha_mo],
+                       fmts=[None, FMT_USD0, FMT_USD0, FMT_USD0,
+                             FMT_PCT1, FMT_PCT1, FMT_PCT1], bg=bg)
+                rc = s3.cell(row=i+2, column=5)
+                rc.font = Font(size=10, color=GREEN2 if ret_pct >= 0 else RED2, name='Calibri')
+                if alpha_mo is not None:
+                    ac = s3.cell(row=i+2, column=7)
+                    ac.font = Font(size=10, color=GREEN2 if alpha_mo >= 0 else RED2, name='Calibri')
             _aw2(s3)
             s3.sheet_properties.tabColor = NAVY2
 
@@ -5921,30 +5935,30 @@ async def fund_export_excel(request: Request, fund_id: str = None):
         if attribution:
             s4 = wb2.create_sheet('YTD Attribution')
             s4.sheet_view.showGridLines = False; s4.freeze_panes = 'A2'
-            _whdr2(s4, 1, ['Ticker', 'Security Name', 'Contribution ($)',
-                           'Contribution %', 'Shares', 'Avg Cost', 'Current Price',
-                           'P/L ($)', 'P/L %'])
+            _whdr2(s4, 1, ['Ticker', 'End Shares', 'Jan 1 Price', 'End Price',
+                           'Dollar Gain', 'Portfolio Contribution %', 'Stock Return %'])
             for i, a in enumerate(sorted(attribution,
                                          key=lambda x: float(x.get('contribution_pct') or 0),
                                          reverse=True)):
-                contrib_d  = float(a.get('contribution_dollar') or 0)
-                contrib_p  = float(a.get('contribution_pct') or 0) / 100.0
-                pl_d       = float(a.get('gain_loss') or 0)
-                pl_p       = float(a.get('gain_loss_pct') or 0) / 100.0
+                dg      = float(a.get('dollar_gain') or 0)
+                contrib = float(a.get('contribution_pct') or 0) / 100.0
+                tk_ret  = a.get('ticker_return_pct')
+                tk_ret_f = float(tk_ret) / 100.0 if tk_ret is not None else None
                 bg = WHITE2 if i % 2 == 0 else LGRAY2
                 _arow2(s4, i+2,
-                       [a.get('ticker', ''), a.get('name', ''),
-                        contrib_d, contrib_p,
-                        float(a.get('shares') or 0),
-                        float(a.get('avg_cost') or 0),
-                        float(a.get('current_price') or 0),
-                        pl_d, pl_p],
-                       fmts=[None, None, FMT_USD0, FMT_PCT, FMT_NUM,
-                             FMT_USD, FMT_USD, FMT_USD0, FMT_PCT1],
+                       [a.get('ticker', ''),
+                        float(a.get('end_shares') or 0),
+                        float(a.get('jan1_price') or 0),
+                        float(a.get('end_price') or 0),
+                        dg, contrib, tk_ret_f],
+                       fmts=[None, FMT_NUM, FMT_USD, FMT_USD,
+                             FMT_USD0, FMT_PCT, FMT_PCT1],
                        bg=bg)
-                c4 = s4.cell(row=i+2, column=3)
-                c4.font = Font(size=10, color=GREEN2 if contrib_d >= 0 else RED2, name='Calibri')
-            _aw2(s4); s4.column_dimensions['B'].width = 32
+                c4 = s4.cell(row=i+2, column=5)
+                c4.font = Font(size=10, color=GREEN2 if dg >= 0 else RED2, name='Calibri')
+                c4b = s4.cell(row=i+2, column=6)
+                c4b.font = Font(size=10, color=GREEN2 if contrib >= 0 else RED2, name='Calibri')
+            _aw2(s4)
             s4.sheet_properties.tabColor = NAVY2
 
         # ── Sheet 5: Cash Flow History ────────────────────────────────────────
@@ -6363,6 +6377,7 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
 
             lps             = []
             total_committed = 0.0
+            snapshots_pdf   = []
             if not is_acct_pdf:
                 cur.execute("""
                     SELECT l.legal_name, l.entity_type,
@@ -6376,6 +6391,17 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
                 """, (fid,))
                 lps = [dict(r) for r in cur.fetchall()]
                 total_committed = sum(float(lp['commitment']) for lp in lps) or 0.0
+                try:
+                    cur.execute("""
+                        SELECT year, start_nav, end_nav, contributions,
+                               hurdle_amount, gross_profit, carry_earned,
+                               carry_paid, carry_rolled, gp_equity_end
+                          FROM fund_annual_snapshots
+                         WHERE fund_id = %s ORDER BY year ASC
+                    """, (fid,))
+                    snapshots_pdf = [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    snapshots_pdf = []
     finally:
         conn.close()
 
@@ -6435,11 +6461,21 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         net_flow_pdf = float(result_pdf.get('net_flow') or 0)
         attr_pdf     = result_pdf.get('attribution') or []
         monthly_pdf  = (result_pdf.get('monthly_chart') or {}).get('monthly') or []
-        spy_pdf      = result_pdf.get('spy_monthly') or []
+        spy_raw_pdf  = result_pdf.get('spy_monthly') or {}
+        spy_pts_pdf  = (spy_raw_pdf.get('points') or []) if isinstance(spy_raw_pdf, dict) else []
         flows_pdf    = result_pdf.get('flows') or []
         upd_pdf      = str((ytd_cache_pdf or {}).get('updated_at') or '')[:10] or today_pdf
 
-        spy_ytd_pdf  = float(spy_pdf[-1].get('ytd_pct') or 0) / 100.0 if spy_pdf else 0.0
+        # SPY lookup by month int
+        spy_by_m_int_pdf = {}
+        for pt in spy_pts_pdf:
+            try:
+                mi = int(str(pt.get('month', '')).split('-')[1])
+                spy_by_m_int_pdf[mi] = pt
+            except Exception:
+                pass
+
+        spy_ytd_pdf  = float(spy_pts_pdf[-1].get('ytd_pct') or 0) / 100.0 if spy_pts_pdf else 0.0
         alpha_pdf    = ytd_pct_pdf - spy_ytd_pdf
 
         buf_a = io.BytesIO()
@@ -6506,43 +6542,55 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         # YTD Attribution
         if attr_pdf:
             story_a.append(Paragraph('YTD Attribution by Position', _h2))
-            rows_attr = [['Ticker', 'Name', 'Contribution $', 'Contribution %',
-                          'P/L $', 'P/L %']]
+            rows_attr = [['Ticker', 'End Shares', 'Jan 1 Price', 'End Price',
+                          'Dollar Gain', 'Contribution %', 'Stock Return %']]
             for a in sorted(attr_pdf,
                             key=lambda x: float(x.get('contribution_pct') or 0),
                             reverse=True):
+                dg_a = float(a.get('dollar_gain') or 0)
+                cp_a = float(a.get('contribution_pct') or 0)
+                tr_a = a.get('ticker_return_pct')
                 rows_attr.append([
                     a.get('ticker', ''),
-                    (a.get('name', '') or '')[:24],
-                    money(a.get('contribution_dollar')),
-                    f"{float(a.get('contribution_pct') or 0):+.2f}%",
-                    money(a.get('gain_loss')),
-                    f"{float(a.get('gain_loss_pct') or 0):+.2f}%",
+                    f"{float(a.get('end_shares') or 0):,.3f}",
+                    money(a.get('jan1_price')),
+                    money(a.get('end_price')),
+                    money(dg_a),
+                    f"{cp_a:+.2f}%",
+                    f"{float(tr_a):+.2f}%" if tr_a is not None else '—',
                 ])
             story_a.append(_tbl_pdf(rows_attr,
-                                    [0.65*inch, 2.1*inch, 0.95*inch, 0.9*inch,
-                                     0.85*inch, 0.85*inch]))
+                                    [0.65*inch, 0.85*inch, 0.85*inch, 0.85*inch,
+                                     0.85*inch, 0.9*inch, 0.9*inch]))
             story_a.append(Spacer(1, 12))
 
-        # Monthly balance vs SPY
+        # Monthly performance
         if monthly_pdf:
-            story_a.append(Paragraph('Monthly Balance vs SPY', _h2))
-            spy_by_m = {str(pt.get('month', ''))[:7]: pt for pt in spy_pdf}
-            rows_mo = [['Month', 'Account Balance', 'Account (Norm)', 'SPY (Norm)', 'Spread']]
-            norm_s = float(monthly_pdf[0]['end_balance']) if monthly_pdf else None
+            story_a.append(Paragraph('Monthly Performance', _h2))
+            rows_mo = [['Month', 'Start Value', 'End Value', 'Dollar Gain',
+                        'Monthly Return', 'SPY Monthly', 'Alpha']]
             for mo in monthly_pdf:
-                mo_key = str(mo.get('month', ''))[:7]
-                bal    = float(mo.get('end_balance') or 0)
-                norm_a2 = f'{bal/norm_s:.3f}' if norm_s else '—'
-                spy_n2  = spy_by_m.get(mo_key, {}).get('norm')
-                spy_str = f'{float(spy_n2):.3f}' if spy_n2 else '—'
-                if norm_s and spy_n2:
-                    spread_str = f'{bal/norm_s - float(spy_n2):+.3f}'
-                else:
-                    spread_str = '—'
-                rows_mo.append([mo_key, money(bal), norm_a2, spy_str, spread_str])
+                m_int_p  = int(mo.get('month') or 0)
+                lbl_p    = str(mo.get('label') or m_int_p)
+                sv_p     = float(mo.get('start_value') or 0)
+                ev_p     = float(mo.get('end_value') or 0)
+                dg_p     = float(mo.get('dollar_gain') or 0)
+                ret_p    = float(mo.get('return_pct') or 0)
+                spy_pt_p = spy_by_m_int_pdf.get(m_int_p) or {}
+                prev_p   = spy_by_m_int_pdf.get(m_int_p - 1) if m_int_p > 1 else None
+                spy_ytd_p = float(spy_pt_p.get('ytd_pct') or 0)
+                spy_prv_p = float(prev_p.get('ytd_pct') or 0) if prev_p else 0.0
+                spy_mo_p  = spy_ytd_p - spy_prv_p if spy_pt_p else None
+                alpha_p   = (ret_p - spy_mo_p) if spy_mo_p is not None else None
+                rows_mo.append([
+                    lbl_p, money(sv_p), money(ev_p), money(dg_p),
+                    f"{ret_p:+.2f}%",
+                    f"{spy_mo_p:+.2f}%" if spy_mo_p is not None else '—',
+                    f"{alpha_p:+.2f}%" if alpha_p is not None else '—',
+                ])
             story_a.append(_tbl_pdf(rows_mo,
-                                    [1.0*inch, 1.4*inch, 1.1*inch, 1.1*inch, 1.1*inch]))
+                                    [0.55*inch, 1.0*inch, 1.0*inch, 0.9*inch,
+                                     0.85*inch, 0.85*inch, 0.75*inch]))
             story_a.append(Spacer(1, 12))
 
         # Cash flows
@@ -6663,6 +6711,50 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
                 f'{pct:.1f}%',
             ])
         story.append(tbl(rows, [3.5*inch, 1.2*inch, 1.2*inch, 1.1*inch]))
+        story.append(Spacer(1, 12))
+
+    # Annual Waterfall & Carry
+    if snapshots_pdf:
+        story.append(Paragraph('Annual Waterfall & Carry', h2))
+        wf_rows = [['Year', 'Start NAV', 'Contributions', 'Gross Profit',
+                    'Hurdle Amt', 'Carry Earned', 'Carry Paid', 'GP Equity', 'End NAV']]
+        for s in snapshots_pdf:
+            wf_rows.append([
+                str(s.get('year', '')),
+                money(s.get('start_nav')),
+                money(s.get('contributions')),
+                money(s.get('gross_profit')),
+                money(s.get('hurdle_amount')),
+                money(s.get('carry_earned')),
+                money(s.get('carry_paid')),
+                money(s.get('gp_equity_end')),
+                money(s.get('end_nav')),
+            ])
+        story.append(tbl(wf_rows, [0.5*inch, 0.8*inch, 0.85*inch, 0.8*inch,
+                                    0.8*inch, 0.8*inch, 0.75*inch, 0.75*inch, 0.8*inch]))
+        story.append(Spacer(1, 12))
+
+    # Per-LP Allocation After Carry
+    if lps and total_committed and nav > 0:
+        story.append(Paragraph('Per-LP Allocation After Carry', h2))
+        # Use most recent carry_earned to reduce distributable NAV
+        total_carry = float(snapshots_pdf[-1].get('carry_earned') or 0) if snapshots_pdf else 0.0
+        distributable = max(0.0, nav - total_carry)
+        alloc_rows = [['LP Name', 'Commitment', 'Share %', 'Allocated Value', 'Carry Offset']]
+        for lp in lps:
+            comm = float(lp['commitment'])
+            share = comm / total_committed if total_committed else 0.0
+            alloc = distributable * share
+            carry_offset = total_carry * share
+            alloc_rows.append([
+                (lp['legal_name'] or '')[:32],
+                money(comm),
+                f'{share*100:.2f}%',
+                money(alloc),
+                money(carry_offset),
+            ])
+        story.append(tbl(alloc_rows, [2.8*inch, 1.2*inch, 0.8*inch, 1.2*inch, 1.0*inch]))
+        story.append(Spacer(1, 12))
 
     story.append(Spacer(1, 20))
     story.append(Paragraph(

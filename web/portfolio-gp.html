@@ -2060,12 +2060,13 @@
 
       const today = new Date().toISOString().slice(0, 10);
 
-      const navEntryRow = (fid, currentNav) => `
+      const navEntryRow = (fid, currentNav, marketNav) => `
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-size:10px;font-weight:700;color:var(--dim);letter-spacing:0.5px;text-transform:uppercase;">Update NAV</span>
-          <input data-nav-input="${fid}" type="text" placeholder="${currentNav != null ? fmtUSD(currentNav) : '$0.00'}" style="${navInputStyle()}">
+          <input data-nav-input="${fid}" type="text" placeholder="${currentNav != null ? fmtUSD(currentNav) : 'Enter or 0 for auto'}" style="${navInputStyle()}">
           <input data-nav-date="${fid}" type="date" value="${today}" style="${navInputStyle()}width:140px;">
           <button data-nav-btn="${fid}" class="tab-btn" style="height:28px;padding:0 12px;font-size:10px;">Save</button>
+          ${marketNav > 0 ? `<button data-nav-mkt="${fid}" class="tab-btn secondary" style="height:28px;padding:0 10px;font-size:9px;" title="Fill with live market value from positions">↺ ${fmtUSD(marketNav)}</button>` : ''}
           <span data-nav-status="${fid}" style="font-size:10px;"></span>
         </div>`;
 
@@ -2093,7 +2094,7 @@
               <div class="fund-stat-val">${committed != null ? fmtUSD(committed) : '—'}</div>
             </div>` : ''}
           </div>
-          ${navEntryRow(fid, navVal)}
+          ${navEntryRow(fid, navVal, marketNav)}
         </div>`;
 
       const fundHtml = funds.map(f => fundCardHtml(
@@ -2125,6 +2126,15 @@
               el.querySelector(`[data-nav-status="${fid}"]`),
               btn
             );
+          });
+        });
+        // "Use market value" fills input with 0 → backend uses live position NAV
+        el.querySelectorAll('[data-nav-mkt]').forEach(btn => {
+          const fid = btn.dataset.navMkt;
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const inp = el.querySelector(`[data-nav-input="${fid}"]`);
+            if (inp) { inp.value = '0'; inp.focus(); }
           });
         });
       };
@@ -2618,24 +2628,27 @@
     const el = document.getElementById('lpd-lps');
     el.innerHTML = d.lps && d.lps.length ? `
       <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">LP Roster</span>
-          <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
-        </header>
-        <table class="data-table" style="width:100%;">
-          <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th></tr></thead>
-          <tbody>
-            ${d.lps.map(lp => {
-              const share = d.total_committed ? (lp.commitment_amount / d.total_committed * 100) : 0;
-              return `<tr>
-                <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
-                <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${share.toFixed(2)}%</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
+        <details>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">LP Roster</span>
+            <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th></tr></thead>
+            <tbody>
+              ${d.lps.map(lp => {
+                const share = d.total_committed ? (lp.commitment_amount / d.total_committed * 100) : 0;
+                return `<tr>
+                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${share.toFixed(2)}%</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </details>
       </section>` : `
       <section class="panel">
         <header class="panel-head"><span class="panel-title">LP Roster</span></header>
@@ -2664,29 +2677,32 @@
     }
     return `
       <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">Open Positions</span>
-          <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
-        </header>
-        <table class="data-table" style="width:100%;">
-          <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
-          <tbody>
-            ${rows.map(p => {
-              const unr = p.unrealized_gain;
-              const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
-              return `<tr>
-                <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
-                <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
+        <details>
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">Open Positions</span>
+            <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <table class="data-table" style="width:100%;">
+            <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
+            <tbody>
+              ${rows.map(p => {
+                const unr = p.unrealized_gain;
+                const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+                return `<tr>
+                  <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
+                  <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
+                  <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </details>
       </section>`;
   }
 
@@ -2951,19 +2967,15 @@
 
   function renderAcctBalance(data, cachedYtdPct) {
     const elB = document.getElementById('acd-balance');
-    // monthly_chart returns { ok, monthly: [...], begin_value, end_value }
     const mc   = data.monthly_chart;
-    const spy  = data.spy_monthly;
     const pts  = mc && mc.monthly ? mc.monthly : [];
-
-    // Store for benchmark re-draw
     const mdPct = data.md_return_pct != null ? data.md_return_pct : (cachedYtdPct || null);
-    _acctChartData = { mc, spy, mdPct };
+    _acctChartData = { mc, spy: data.spy_monthly, mdPct };
 
     if (!pts.length) {
       elB.innerHTML = `
         <section class="panel">
-          <header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header>
+          <header class="panel-head"><span class="panel-title">Monthly Performance</span></header>
           <div class="tab-empty">Upload a Fidelity "Investment Balance" CSV in the YTD calculator to enable the monthly chart.</div>
         </section>`;
       return;
@@ -2971,118 +2983,230 @@
     elB.innerHTML = `
       <section class="panel">
         <header class="panel-head">
-          <span class="panel-title">Monthly Investment Balance vs Benchmark</span>
+          <span class="panel-title">Monthly Performance</span>
           <span class="panel-badge">${pts.length} months</span>
         </header>
-        <div class="fd-balance-canvas-wrap"><canvas id="acd-balance-canvas"></canvas></div>
-        <div style="display:flex;gap:18px;justify-content:center;padding:8px 0 12px;font-size:11px;" id="acd-chart-legend">
-          <span style="color:#5BB8D4;">● Account balance (normalized)</span>
-          <span style="color:#c9a84c;" id="acd-bench-legend">● ${_acctBenchKey} benchmark (normalized)</span>
+        <div style="position:relative;padding:0 12px 8px;">
+          <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
+          <div id="acd-bar-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+        </div>
+        <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
+          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#cc3333;border-radius:2px;"></span> Portfolio loss</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:24px;height:2px;background:#c9a84c;"></span> SPY monthly</span>
         </div>
       </section>`;
-    drawAcctBalanceChart(mc, spy);
+    // Draw after layout settles
+    requestAnimationFrame(() => drawAcctMonthlyBarChart(pts));
   }
 
-  function drawAcctBalanceChart(mc, spy) {
+  function drawAcctMonthlyBarChart(pts) {
     const canvas = document.getElementById('acd-balance-canvas');
-    if (!canvas) return;
-    // monthly_chart data uses .monthly[], each entry has .end_value and .label
-    const pts = (mc && mc.monthly) ? mc.monthly : [];
-    if (!pts.length) return;
+    const tooltip = document.getElementById('acd-bar-tooltip');
+    if (!canvas || !pts.length) return;
+
     const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width) return;
-    canvas.width  = rect.width  * dpr;
-    canvas.height = rect.height * dpr;
+    const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 700;
+    const cssH = 220;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    const W = rect.width, H = rect.height;
-    const padL = 62, padR = 18, padT = 14, padB = 36;
+    const W = cssW, H = cssH;
+    const padL = 56, padR = 14, padT = 16, padB = 32;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
 
-    // Normalize account: each point starts at 1.0 (first month = 1.0)
-    const acctVals = pts.map(p => p.end_value ?? 0);
-    const acctBase = acctVals[0] || 1;
-    const acctNorm = acctVals.map(v => v / acctBase);
+    // Compute SPY monthly returns from consecutive spy_ytd_pct
+    const spyMonthly = pts.map((p, i) => {
+      const curr = p.spy_ytd_pct;
+      if (curr == null) return null;
+      if (i === 0) return curr;
+      const prev = pts[i - 1].spy_ytd_pct;
+      return prev != null ? curr - prev : curr;
+    });
 
-    // Build SPY norm aligned to account months by month number
-    let benchNorm = [];
-    if (spy && spy.points && spy.points.length) {
-      // spy.points[i].month is "2026-01" format, pts[i].month is 1..12 integer
-      const spyByMonth = {};
-      spy.points.forEach(p => {
-        const m = parseInt((p.month || '').slice(5, 7), 10);
-        spyByMonth[m] = p.norm;
-      });
-      // Normalize SPY to 1.0 at the same starting month as account
-      const firstMo = pts[0].month;
-      const spyStart = spyByMonth[firstMo] || spy.points[0].norm || 1;
-      benchNorm = pts.map(p => {
-        const n = spyByMonth[p.month];
-        return n != null ? n / spyStart : null;
-      });
-    }
+    const returns = pts.map(p => p.return_pct || 0);
+    const allVals = [...returns, ...spyMonthly.filter(v => v != null)];
+    const maxAbs  = Math.max(Math.abs(Math.min(...allVals)), Math.abs(Math.max(...allVals)), 0.5);
+    const yRange  = maxAbs * 1.25;
 
-    const allVals = [...acctNorm, ...benchNorm.filter(v => v != null)];
-    const minV = Math.min(...allVals) * 0.98, maxV = Math.max(...allVals) * 1.02;
-    const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
-    const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(0.0001, maxV - minV));
+    const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
+    const y0  = yAt(0);
 
-    // Grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = padT + (H - padT - padB) * (i / 4);
+    [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
+      const y = yAt(v);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-      const v = maxV - (maxV - minV) * (i / 4);
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.font = '10px -apple-system,sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '9.5px -apple-system,sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(((v - 1) * 100 >= 0 ? '+' : '') + ((v - 1) * 100).toFixed(1) + '%', padL - 6, y + 3);
-    }
-    // X labels — pts[i].label = "Jan", "Feb" etc.
+      ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
+    });
+
+    // Zero line
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
+
+    const n = pts.length;
+    const totalSlot = chartW / n;
+    const barW = Math.max(8, Math.min(totalSlot * 0.55, 52));
+
+    // Bars
+    const barMeta = pts.map((p, i) => {
+      const x = padL + totalSlot * i + totalSlot / 2 - barW / 2;
+      const ret = p.return_pct || 0;
+      const barH = Math.abs(yAt(ret) - y0);
+      const barY = ret >= 0 ? yAt(ret) : y0;
+      return { x, barW, barY, barH, ret, i };
+    });
+
+    barMeta.forEach(({ x, barW, barY, barH, ret }) => {
+      ctx.fillStyle = ret >= 0 ? '#1a7f40' : '#cc3333';
+      ctx.beginPath();
+      const r = 3;
+      if (ret >= 0) {
+        ctx.moveTo(x + r, barY);
+        ctx.lineTo(x + barW - r, barY);
+        ctx.quadraticCurveTo(x + barW, barY, x + barW, barY + r);
+        ctx.lineTo(x + barW, barY + barH);
+        ctx.lineTo(x, barY + barH);
+        ctx.lineTo(x, barY + r);
+        ctx.quadraticCurveTo(x, barY, x + r, barY);
+      } else {
+        ctx.moveTo(x, barY);
+        ctx.lineTo(x + barW, barY);
+        ctx.lineTo(x + barW, barY + barH - r);
+        ctx.quadraticCurveTo(x + barW, barY + barH, x + barW - r, barY + barH);
+        ctx.lineTo(x + r, barY + barH);
+        ctx.quadraticCurveTo(x, barY + barH, x, barY + barH - r);
+        ctx.lineTo(x, barY);
+      }
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    // SPY overlay dots + dashed line
+    ctx.strokeStyle = '#c9a84c';
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    let started = false;
+    spyMonthly.forEach((v, i) => {
+      if (v == null) return;
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      const cy = yAt(v);
+      if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#c9a84c';
+    spyMonthly.forEach((v, i) => {
+      if (v == null) return;
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      ctx.beginPath(); ctx.arc(cx, yAt(v), 3.5, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // X labels
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = '10px -apple-system,sans-serif';
     ctx.textAlign = 'center';
     pts.forEach((p, i) => {
-      if (pts.length > 12 && i % 2) return;
-      ctx.fillText(p.label || String(p.month || ''), xAt(i), H - 18);
+      const cx = padL + totalSlot * i + totalSlot / 2;
+      ctx.fillText(p.label || String(p.month || ''), cx, H - 10);
     });
-    // Account line (cyan)
-    ctx.strokeStyle = '#5BB8D4';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    acctNorm.forEach((v, i) => i === 0 ? ctx.moveTo(xAt(i), yAt(v)) : ctx.lineTo(xAt(i), yAt(v)));
-    ctx.stroke();
-    ctx.fillStyle = '#5BB8D4';
-    acctNorm.forEach((v, i) => { ctx.beginPath(); ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2); ctx.fill(); });
-    // Benchmark line (gold dashed)
-    if (benchNorm.length) {
-      ctx.strokeStyle = '#c9a84c';
-      ctx.setLineDash([5, 4]);
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      let started = false;
-      benchNorm.forEach((v, i) => {
-        if (v == null) return;
-        if (!started) { ctx.moveTo(xAt(i), yAt(v)); started = true; }
-        else ctx.lineTo(xAt(i), yAt(v));
+
+    // Hover tooltip
+    const fmtM = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const fmtC = v => v >= 0 ? '+$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits:0}) : '-$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits:0});
+
+    canvas.onmousemove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      let hit = -1;
+      barMeta.forEach(({ x, barW, i }) => {
+        if (mx >= x - 6 && mx <= x + barW + 6) hit = i;
       });
-      ctx.stroke();
-      ctx.setLineDash([]);
-      // Update legend label
-      const leg = document.getElementById('acd-bench-legend');
-      if (leg) leg.textContent = '● ' + _acctBenchKey + ' benchmark (normalized)';
-    }
+      if (hit < 0) { tooltip.style.display = 'none'; return; }
+      const p = pts[hit];
+      const spyRet = spyMonthly[hit];
+      const movers = (p.movers || []).slice(0, 5);
+      const pd = p.perf_detail;
+      let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label} ${new Date().getFullYear()}</div>`;
+      const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
+      html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
+      html += `<span>Portfolio</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct)}</span></div>`;
+      if (spyRet != null) {
+        html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
+        html += `<span>SPY</span><span style="color:#c9a84c;">${fmtM(spyRet)}</span></div>`;
+        const alpha = p.return_pct - spyRet;
+        html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:8px;">`;
+        html += `<span>Alpha</span><span style="color:${alpha>=0?'#4ade80':'#f87171'};">${fmtM(alpha)}</span></div>`;
+      }
+      if (movers.length) {
+        html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
+        movers.forEach(m => {
+          const mc = m.dollar_gain >= 0 ? '#4ade80' : '#f87171';
+          html += `<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:2px;">`;
+          html += `<span style="color:#5BB8D4;font-weight:700;">${m.ticker}</span><span style="color:${mc};">${fmtC(m.dollar_gain)} (${fmtM(m.contribution_pct)})</span></div>`;
+        });
+      }
+      if (pd) {
+        const netFlow = pd.net_flow;
+        const deps = pd.deposits, with_ = pd.withdrawals;
+        if (netFlow != null || deps != null || with_ != null) {
+          html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
+          if (deps) html += `<div style="display:flex;justify-content:space-between;"><span>Deposits</span><span style="color:#4ade80;">${fmtC(deps)}</span></div>`;
+          if (with_) html += `<div style="display:flex;justify-content:space-between;"><span>Withdrawals</span><span style="color:#f87171;">${fmtC(with_)}</span></div>`;
+          if (netFlow != null) html += `<div style="display:flex;justify-content:space-between;"><span>Net Flow</span><span>${fmtC(netFlow)}</span></div>`;
+          if (pd.advisory_fees) html += `<div style="display:flex;justify-content:space-between;"><span>Advisory Fee</span><span style="color:#f87171;">${fmtC(pd.advisory_fees)}</span></div>`;
+        }
+      }
+      if (p.exact) html += `<div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:6px;">✓ Exact Fidelity data</div>`;
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+      const tx = Math.min(e.clientX - rect.left + 12, cssW - 280);
+      const ty = Math.max(e.clientY - rect.top - 20, 0);
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top  = ty + 'px';
+    };
+    canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+  }
+
+  // Legacy stub — keep fetchBenchAndRedraw working (benchmark selector still updates tiles)
+  function drawAcctBalanceChart(mc, spy) {
+    const pts = (mc && mc.monthly) ? mc.monthly : [];
+    drawAcctMonthlyBarChart(pts);
   }
 
   function renderAcctAttribution(data) {
     const el = document.getElementById('acd-attribution');
     const rows = data.attribution || [];
     if (!rows.length) { el.innerHTML = ''; return; }
-    // contribution_pct and ticker_return_pct are already in % (e.g. 1.5 = 1.5%)
     const fmtP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const sortedRows = [...rows].sort((a, b) =>
       (b.contribution_pct || 0) - (a.contribution_pct || 0));
+    // Max absolute contribution for bar scaling
+    const maxContrib = Math.max(...sortedRows.map(r => Math.abs(r.contribution_pct || 0)), 0.01);
+
+    const contribBar = (val) => {
+      if (val == null) return '';
+      const pct  = Math.min(Math.abs(val) / maxContrib * 100, 100);
+      const col  = val >= 0 ? '#1a7f40' : '#cc3333';
+      const dir  = val >= 0 ? 'left' : 'right';
+      return `
+        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
+          <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${col};min-width:52px;text-align:right;">${fmtP(val)}</span>
+          <div style="width:72px;height:10px;background:rgba(255,255,255,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
+            <div style="width:${pct.toFixed(1)}%;height:100%;background:${col};border-radius:3px;float:${dir};opacity:0.85;"></div>
+          </div>
+        </div>`;
+    };
+
     el.innerHTML = `
       <section class="panel">
         <details>
@@ -3096,7 +3220,7 @@
               <th>Ticker</th><th style="text-align:right;">End Shares</th>
               <th style="text-align:right;">Jan 1 Price</th><th style="text-align:right;">End Price</th>
               <th style="text-align:right;">Dollar Gain</th><th style="text-align:right;">Stock Return</th>
-              <th style="text-align:right;">Portfolio Contribution</th>
+              <th style="text-align:right;min-width:160px;">Portfolio Contribution</th>
             </tr></thead>
             <tbody>
               ${sortedRows.map(r => {
@@ -3110,7 +3234,7 @@
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_price != null ? fmtUSD(r.end_price) : '—'}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;${gain >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(gain)}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;${(contrib||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(contrib)}</td>
+                  <td>${contribBar(contrib)}</td>
                 </tr>`;
               }).join('')}
             </tbody>
