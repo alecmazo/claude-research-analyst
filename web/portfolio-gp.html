@@ -2695,12 +2695,15 @@
   }
 
   // ── All-Time Performance state (per fund load) ─────────────────────────────
-  let _atpData         = null;   // full server response
-  let _atpFundId       = null;
-  let _atpBenchmark    = 'sp500';
-  let _atpPeriod       = 'all';  // 'all' | '5yr' | '3yr'
-  let _atpReturnMode   = 'annual'; // 'annual' | 'cumulative' | 'cagr'
-  let _atpSaving       = false;
+  let _atpData             = null;   // full server response
+  let _atpFundId           = null;
+  let _atpBenchmark        = 'sp500';
+  let _atpPeriod           = 'all';  // 'all' | '5yr' | '3yr'
+  let _atpReturnMode       = 'annual'; // 'annual' | 'cumulative' | 'cagr'
+  let _atpSaving           = false;
+  let _atpBenchmarkFetching = false;
+  // year (number) → return_pct for the currently-selected benchmark
+  let _atpBenchmarkReturns = {};
 
   const _BENCHMARK_OPTIONS = [
     { key: 'sp500',      label: 'S&P 500' },
@@ -2730,8 +2733,12 @@
     // Compute cumulative / CAGR from the filtered start
     let cumPort = 1.0, cumBmark = 1.0;
     const rows = ann.map((a, idx) => {
+      // Use live-fetched benchmark returns if available, fall back to server value
+      const bRet = (_atpBenchmarkReturns[a.year] !== undefined)
+        ? _atpBenchmarkReturns[a.year]
+        : a.benchmark_return_pct;
       cumPort  *= (1 + (a.return_pct || 0) / 100);
-      cumBmark *= (1 + (a.benchmark_return_pct || 0) / 100);
+      cumBmark *= (1 + (bRet || 0) / 100);
       const yrs = idx + 1;
       const cumPortPct  = (cumPort  - 1) * 100;
       const cumBmarkPct = (cumBmark - 1) * 100;
@@ -2741,16 +2748,16 @@
       let retVal, bmarkVal, alphaVal;
       if (_atpReturnMode === 'cumulative') {
         retVal   = cumPortPct;
-        bmarkVal = a.benchmark_return_pct != null ? cumBmarkPct : null;
-        alphaVal = a.benchmark_return_pct != null ? cumPortPct - cumBmarkPct : null;
+        bmarkVal = bRet != null ? cumBmarkPct : null;
+        alphaVal = bRet != null ? cumPortPct - cumBmarkPct : null;
       } else if (_atpReturnMode === 'cagr') {
         retVal   = cagrPortPct;
-        bmarkVal = a.benchmark_return_pct != null ? cagrBmarkPct : null;
-        alphaVal = a.benchmark_return_pct != null ? cagrPortPct - cagrBmarkPct : null;
+        bmarkVal = bRet != null ? cagrBmarkPct : null;
+        alphaVal = bRet != null ? cagrPortPct - cagrBmarkPct : null;
       } else {
         retVal   = a.return_pct;
-        bmarkVal = a.benchmark_return_pct;
-        alphaVal = a.alpha;
+        bmarkVal = bRet;
+        alphaVal = bRet != null ? Math.round((a.return_pct - bRet) * 100) / 100 : null;
       }
       const rc = retVal >= 0 ? 'var(--green)' : 'var(--red)';
       const ac = alphaVal == null ? 'var(--mid)' : alphaVal >= 0 ? 'var(--green)' : 'var(--red)';
@@ -2774,7 +2781,10 @@
       const totalCumBmark = (cumBmark - 1) * 100;
       const totalCagrPort  = (Math.pow(cumPort,  1/n) - 1) * 100;
       const totalCagrBmark = (Math.pow(cumBmark, 1/n) - 1) * 100;
-      const hasBmark = ann.some(a => a.benchmark_return_pct != null);
+      const hasBmark = ann.some(a => {
+        const bRet = (_atpBenchmarkReturns[a.year] !== undefined) ? _atpBenchmarkReturns[a.year] : a.benchmark_return_pct;
+        return bRet != null;
+      });
       const totalAlpha = hasBmark ? totalCumPort - totalCumBmark : null;
       const cagrAlpha  = hasBmark ? totalCagrPort - totalCagrBmark : null;
       const summaryRc = totalCumPort >= 0 ? 'var(--green)' : 'var(--red)';
@@ -2842,9 +2852,37 @@
         _atpRenderTable();
       });
     });
-    // Wire benchmark selector
+    // Wire benchmark selector — fetch live data for the new benchmark then re-render
     const bSel = el.querySelector('#atp-bmark-sel');
-    if (bSel) bSel.addEventListener('change', () => { _atpBenchmark = bSel.value; _atpRenderTable(); });
+    if (bSel) bSel.addEventListener('change', async () => {
+      _atpBenchmark = bSel.value;
+      const msgEl = el.querySelector('#atp-save-msg');
+      if (_atpBenchmarkFetching) return;
+      _atpBenchmarkFetching = true;
+      if (msgEl) { msgEl.style.color = 'var(--mid)'; msgEl.textContent = 'Loading…'; }
+      try {
+        const years = (_atpData?.annual || []).map(a => a.year);
+        if (years.length) {
+          const r = await window.dgaFetch(
+            `/api/benchmark-annual?key=${encodeURIComponent(_atpBenchmark)}&years=${years.join(',')}`
+          );
+          const d = await r.json();
+          if (d.ok && d.returns) {
+            // Convert string keys from JSON back to numbers
+            _atpBenchmarkReturns = {};
+            for (const [k, v] of Object.entries(d.returns)) {
+              _atpBenchmarkReturns[parseInt(k, 10)] = v;
+            }
+          }
+        }
+      } catch(e) {
+        console.warn('[atp] benchmark fetch error:', e);
+      } finally {
+        _atpBenchmarkFetching = false;
+        if (msgEl) msgEl.textContent = '';
+      }
+      _atpRenderTable();
+    });
     // Wire Save button
     const saveBtn = el.querySelector('#atp-save-btn');
     const saveMsg = el.querySelector('#atp-save-msg');
@@ -2883,6 +2921,11 @@
       _atpData      = data;
       _atpBenchmark = data.benchmark_key  || 'sp500';
       _atpPeriod    = data.period         || 'all';
+      // Seed benchmark returns from server response so table renders correctly on first load
+      _atpBenchmarkReturns = {};
+      for (const a of (data.annual || [])) {
+        if (a.benchmark_return_pct != null) _atpBenchmarkReturns[a.year] = a.benchmark_return_pct;
+      }
 
       const monthly = data.monthly;
       const annual  = data.annual;

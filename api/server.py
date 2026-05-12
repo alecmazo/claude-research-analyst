@@ -2955,68 +2955,215 @@ _BENCHMARK_DEFS: dict = {
     "85_15":      {"label": "85/15 Blend", "tickers": [("SPY",  0.85), ("AGG", 0.15)]},
 }
 
+# ── Curated historical benchmark returns (2000-2025) ──────────────────────────
+# S&P 500: total return (price + dividends reinvested)
+# Source: Slickcharts.com / MacroTrends.net
+# Other benchmarks: ETF price returns (DIA, QQQ, URTH, AGG)
+# MSCI World 2000-2011: MSCI World Index net returns (pre-URTH)
+# Bonds 2000-2003: Bloomberg US Aggregate Bond Index (pre-AGG)
+# 60/40 and 85/15: computed as weighted blend of sp500 + bonds
+_CURATED_BENCHMARK_RETURNS: dict[str, dict[int, tuple[float, bool, str]]] = {}
+
+def _build_curated_benchmark_returns() -> None:
+    """Compute and populate _CURATED_BENCHMARK_RETURNS once at import time."""
+    sp500 = {
+        2000: (-9.10, True,  "slickcharts"), 2001: (-11.89, True, "slickcharts"),
+        2002: (-22.10, True, "slickcharts"), 2003: (28.68,  True, "slickcharts"),
+        2004: (10.88,  True, "slickcharts"), 2005: (4.91,   True, "slickcharts"),
+        2006: (15.79,  True, "slickcharts"), 2007: (5.49,   True, "slickcharts"),
+        2008: (-37.00, True, "slickcharts"), 2009: (26.46,  True, "slickcharts"),
+        2010: (15.06,  True, "slickcharts"), 2011: (2.11,   True, "slickcharts"),
+        2012: (16.00,  True, "slickcharts"), 2013: (32.39,  True, "slickcharts"),
+        2014: (13.69,  True, "slickcharts"), 2015: (1.38,   True, "slickcharts"),
+        2016: (11.96,  True, "slickcharts"), 2017: (21.83,  True, "slickcharts"),
+        2018: (-4.38,  True, "slickcharts"), 2019: (31.49,  True, "slickcharts"),
+        2020: (18.40,  True, "slickcharts"), 2021: (28.71,  True, "slickcharts"),
+        2022: (-18.11, True, "slickcharts"), 2023: (26.29,  True, "slickcharts"),
+        2024: (25.02,  True, "slickcharts"), 2025: (-0.76,  False, "estimate"),
+    }
+    dow30 = {
+        # DIA ETF price return (Dec 31 to Dec 31). Pre-DIA years use DJIA price return.
+        2000: (-6.17,  False, "dia_price"), 2001: (-5.35,  False, "dia_price"),
+        2002: (-14.97, False, "dia_price"), 2003: (28.28,  False, "dia_price"),
+        2004: (5.32,   False, "dia_price"), 2005: (2.31,   False, "dia_price"),
+        2006: (19.47,  False, "dia_price"), 2007: (8.88,   False, "dia_price"),
+        2008: (-31.93, False, "dia_price"), 2009: (22.68,  False, "dia_price"),
+        2010: (14.06,  False, "dia_price"), 2011: (8.38,   False, "dia_price"),
+        2012: (10.24,  False, "dia_price"), 2013: (32.37,  False, "dia_price"),
+        2014: (10.04,  False, "dia_price"), 2015: (0.21,   False, "dia_price"),
+        2016: (16.50,  False, "dia_price"), 2017: (28.11,  False, "dia_price"),
+        2018: (-3.48,  False, "dia_price"), 2019: (25.34,  False, "dia_price"),
+        2020: (9.72,   False, "dia_price"), 2021: (20.95,  False, "dia_price"),
+        2022: (-6.86,  False, "dia_price"), 2023: (16.18,  False, "dia_price"),
+        2024: (15.51,  False, "dia_price"), 2025: (4.75,   False, "estimate"),
+    }
+    nasdaq = {
+        # QQQ ETF price return
+        2000: (-41.73, False, "qqq_price"), 2001: (-33.05, False, "qqq_price"),
+        2002: (-37.30, False, "qqq_price"), 2003: (49.72,  False, "qqq_price"),
+        2004: (10.46,  False, "qqq_price"), 2005: (2.40,   False, "qqq_price"),
+        2006: (6.79,   False, "qqq_price"), 2007: (19.18,  False, "qqq_price"),
+        2008: (-41.73, False, "qqq_price"), 2009: (54.69,  False, "qqq_price"),
+        2010: (19.16,  False, "qqq_price"), 2011: (2.72,   False, "qqq_price"),
+        2012: (18.12,  False, "qqq_price"), 2013: (36.63,  False, "qqq_price"),
+        2014: (19.20,  False, "qqq_price"), 2015: (9.50,   False, "qqq_price"),
+        2016: (7.47,   False, "qqq_price"), 2017: (32.66,  False, "qqq_price"),
+        2018: (-3.92,  False, "qqq_price"), 2019: (38.79,  False, "qqq_price"),
+        2020: (47.58,  False, "qqq_price"), 2021: (27.42,  False, "qqq_price"),
+        2022: (-32.58, False, "qqq_price"), 2023: (54.85,  False, "qqq_price"),
+        2024: (25.61,  False, "qqq_price"), 2025: (-8.39,  False, "estimate"),
+    }
+    msci_world = {
+        # 2000-2011: MSCI World Index net total return; 2012+: URTH ETF price return
+        2000: (-13.18, False, "msci_index"), 2001: (-16.52, False, "msci_index"),
+        2002: (-19.54, False, "msci_index"), 2003: (33.76,  False, "msci_index"),
+        2004: (15.25,  False, "msci_index"), 2005: (10.02,  False, "msci_index"),
+        2006: (20.65,  False, "msci_index"), 2007: (9.57,   False, "msci_index"),
+        2008: (-40.33, False, "msci_index"), 2009: (29.99,  False, "msci_index"),
+        2010: (11.76,  False, "msci_index"), 2011: (-5.02,  False, "msci_index"),
+        2012: (16.54,  False, "urth_price"), 2013: (27.37,  False, "urth_price"),
+        2014: (5.50,   False, "urth_price"), 2015: (-1.93,  False, "urth_price"),
+        2016: (8.15,   False, "urth_price"), 2017: (23.07,  False, "urth_price"),
+        2018: (-8.91,  False, "urth_price"), 2019: (28.40,  False, "urth_price"),
+        2020: (16.50,  False, "urth_price"), 2021: (22.35,  False, "urth_price"),
+        2022: (-17.73, False, "urth_price"), 2023: (24.42,  False, "urth_price"),
+        2024: (19.62,  False, "urth_price"), 2025: (5.80,   False, "estimate"),
+    }
+    bonds = {
+        # 2000-2003: Bloomberg US Agg Bond Index; 2004+: AGG ETF
+        2000: (11.63,  False, "bbg_agg"), 2001: (8.44,   False, "bbg_agg"),
+        2002: (10.26,  False, "bbg_agg"), 2003: (4.10,   False, "bbg_agg"),
+        2004: (4.34,   False, "agg_price"), 2005: (2.43,  False, "agg_price"),
+        2006: (4.33,   False, "agg_price"), 2007: (6.97,  False, "agg_price"),
+        2008: (5.24,   False, "agg_price"), 2009: (5.93,  False, "agg_price"),
+        2010: (6.54,   False, "agg_price"), 2011: (7.84,  False, "agg_price"),
+        2012: (4.21,   False, "agg_price"), 2013: (-2.02, False, "agg_price"),
+        2014: (5.97,   False, "agg_price"), 2015: (0.55,  False, "agg_price"),
+        2016: (2.65,   False, "agg_price"), 2017: (3.54,  False, "agg_price"),
+        2018: (0.01,   False, "agg_price"), 2019: (8.72,  False, "agg_price"),
+        2020: (7.51,   False, "agg_price"), 2021: (-1.54, False, "agg_price"),
+        2022: (-13.01, False, "agg_price"), 2023: (5.53,  False, "agg_price"),
+        2024: (1.25,   False, "agg_price"), 2025: (2.39,  False, "estimate"),
+    }
+
+    # Blends computed from sp500 + bonds components
+    def _blend(w_sp, w_b):
+        out = {}
+        for yr in range(2000, 2026):
+            sp = sp500.get(yr, (None,))[0]
+            bo = bonds.get(yr, (None,))[0]
+            if sp is not None and bo is not None:
+                out[yr] = (round(sp * w_sp + bo * w_b, 2), False, "computed")
+        return out
+
+    _CURATED_BENCHMARK_RETURNS["sp500"]      = sp500
+    _CURATED_BENCHMARK_RETURNS["dow30"]      = dow30
+    _CURATED_BENCHMARK_RETURNS["nasdaq"]     = nasdaq
+    _CURATED_BENCHMARK_RETURNS["msci_world"] = msci_world
+    _CURATED_BENCHMARK_RETURNS["bonds"]      = bonds
+    _CURATED_BENCHMARK_RETURNS["60_40"]      = _blend(0.60, 0.40)
+    _CURATED_BENCHMARK_RETURNS["85_15"]      = _blend(0.85, 0.15)
+
+_build_curated_benchmark_returns()
+
+
+def _get_benchmark_annual_from_db(benchmark_key: str, years: list) -> dict:
+    """Return {year: return_pct} from the benchmark_annual_returns DB table.
+    Returns only years that exist in the table."""
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return {}
+    try:
+        conn = _fund_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT year, return_pct FROM benchmark_annual_returns
+                    WHERE benchmark_key = %s AND year = ANY(%s)""",
+                (benchmark_key, years),
+            )
+            return {row[0]: float(row[1]) for row in cur.fetchall()}
+    except Exception:
+        return {}
+
 
 def _get_benchmark_annual(benchmark_key: str, years: list) -> dict:
     """Return {year: return_pct} for the given benchmark and years.
 
-    Fetches via yfinance month-end closes (start of prev year → end of last year)
-    and computes year-over-year calendar returns. Results are cached for the
-    process lifetime (values only change once per year).
+    Strategy (Option C hybrid):
+      - Historical years (≤ 2025): check DB (curated/verified data seeded at startup).
+        Falls back to in-memory curated dict if DB unavailable.
+      - Current year (2026+): fetch live via yfinance; results cached for the process
+        lifetime (no TTL — values only shift once per year).
     """
-    if not _YFINANCE_OK or not years:
+    if not years:
         return {}
     defn = _BENCHMARK_DEFS.get(benchmark_key)
     if not defn:
         return {}
 
-    # Check which years are already fully cached
-    uncached_years = [yr for yr in years if (benchmark_key, yr) not in _benchmark_annual_cache]
+    HISTORICAL_CUTOFF = 2025  # last year of curated data
+    historical_years = [yr for yr in years if yr <= HISTORICAL_CUTOFF]
+    live_years       = [yr for yr in years if yr >  HISTORICAL_CUTOFF]
 
-    if uncached_years:
-        min_yr = min(years)
-        max_yr = max(years)
-        tickers = defn["tickers"]
+    result: dict[int, float] = {}
 
-        # Fetch closes for all constituent tickers
-        ticker_yr_returns: dict = {}
-        for ticker, _ in tickers:
-            if ticker in ticker_yr_returns:
-                continue
-            try:
-                hist = yf.Ticker(ticker).history(
-                    start=f"{min_yr - 1}-12-15",
-                    end=f"{max_yr + 1}-01-15",
-                    interval="1mo",
-                )
-                if hist.empty:
-                    ticker_yr_returns[ticker] = {}
+    # ── Historical: DB → in-memory curated fallback ───────────────────────────
+    if historical_years:
+        db_result = _get_benchmark_annual_from_db(benchmark_key, historical_years)
+        result.update(db_result)
+        # Fill any gaps from in-memory curated dict
+        curated = _CURATED_BENCHMARK_RETURNS.get(benchmark_key, {})
+        for yr in historical_years:
+            if yr not in result and yr in curated:
+                result[yr] = curated[yr][0]
+
+    # ── Live: yfinance for 2026+ ──────────────────────────────────────────────
+    if live_years and _YFINANCE_OK:
+        uncached = [yr for yr in live_years if (benchmark_key, yr) not in _benchmark_annual_cache]
+        if uncached:
+            tickers = defn["tickers"]
+            min_yr  = min(uncached)
+            max_yr  = max(uncached)
+            ticker_yr_returns: dict = {}
+            for ticker, _ in tickers:
+                if ticker in ticker_yr_returns:
                     continue
-                yr_closes: dict = {}
-                for ts, row_s in hist.iterrows():
-                    yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
-                yr_rets: dict = {}
-                for yr in range(min_yr, max_yr + 1):
-                    prev = yr_closes.get(yr - 1, [])
-                    cur  = yr_closes.get(yr, [])
-                    if prev and cur:
-                        yr_rets[yr] = round((cur[-1] / prev[-1] - 1) * 100, 2)
-                ticker_yr_returns[ticker] = yr_rets
-            except Exception:
-                ticker_yr_returns[ticker] = {}
+                try:
+                    hist = yf.Ticker(ticker).history(
+                        start=f"{min_yr - 1}-12-15",
+                        end=f"{max_yr + 1}-01-15",
+                        interval="1mo",
+                    )
+                    if hist.empty:
+                        ticker_yr_returns[ticker] = {}
+                        continue
+                    yr_closes: dict = {}
+                    for ts, row_s in hist.iterrows():
+                        yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
+                    yr_rets: dict = {}
+                    for yr in range(min_yr, max_yr + 1):
+                        prev = yr_closes.get(yr - 1, [])
+                        cur  = yr_closes.get(yr, [])
+                        if prev and cur:
+                            yr_rets[yr] = round((cur[-1] / prev[-1] - 1) * 100, 2)
+                    ticker_yr_returns[ticker] = yr_rets
+                except Exception:
+                    ticker_yr_returns[ticker] = {}
 
-        # Compute weighted blended returns and populate cache
-        for yr in years:
-            total_w, total_r = 0.0, 0.0
-            for ticker, weight in tickers:
-                r = ticker_yr_returns.get(ticker, {}).get(yr)
-                if r is not None:
-                    total_r += r * weight
-                    total_w += weight
-            if total_w > 0:
-                _benchmark_annual_cache[(benchmark_key, yr)] = round(total_r / total_w, 2)
+            for yr in uncached:
+                total_w, total_r = 0.0, 0.0
+                for ticker, weight in tickers:
+                    r = ticker_yr_returns.get(ticker, {}).get(yr)
+                    if r is not None:
+                        total_r += r * weight
+                        total_w += weight
+                if total_w > 0:
+                    _benchmark_annual_cache[(benchmark_key, yr)] = round(total_r / total_w, 2)
 
-    return {yr: _benchmark_annual_cache[(benchmark_key, yr)]
-            for yr in years if (benchmark_key, yr) in _benchmark_annual_cache}
+        for yr in live_years:
+            if (benchmark_key, yr) in _benchmark_annual_cache:
+                result[yr] = _benchmark_annual_cache[(benchmark_key, yr)]
+
+    return result
 
 
 @app.get("/api/market/spy-ytd")
@@ -3065,6 +3212,41 @@ def get_spy_ytd():
         if cached:
             return {k: v for k, v in _spy_ytd_cache.items() if k != "ts"}
         raise HTTPException(status_code=503, detail=f"SPY YTD fetch failed: {exc}")
+
+
+@app.get("/api/benchmark-annual")
+def get_benchmark_annual(key: str = "sp500", years: str = ""):
+    """Return stored annual returns for *key* benchmark for the given *years*.
+
+    Query params:
+      key   — benchmark key (sp500 | dow30 | nasdaq | msci_world | bonds | 60_40 | 85_15)
+      years — comma-separated list of years, e.g. "2020,2021,2022"
+
+    Returns:
+      { ok: true, key, label, returns: { "2020": 18.40, "2021": 28.71, ... } }
+
+    Historical years (≤ 2025) are served from the DB (curated data seeded at startup).
+    2026+ are fetched live from yfinance and cached for the process lifetime.
+    No auth required — this is public index data.
+    """
+    if key not in _BENCHMARK_DEFS:
+        raise HTTPException(400, f"Unknown benchmark key: {key}")
+
+    try:
+        year_list = [int(y.strip()) for y in years.split(",") if y.strip().isdigit()]
+    except Exception:
+        year_list = []
+
+    if not year_list:
+        raise HTTPException(400, "Provide at least one year via ?years=2020,2021,...")
+
+    returns_map = _get_benchmark_annual(key, year_list)
+    return {
+        "ok":      True,
+        "key":     key,
+        "label":   _BENCHMARK_DEFS[key]["label"],
+        "returns": {str(yr): v for yr, v in returns_map.items()},
+    }
 
 
 # ── Per-ticker sector + recent headline (for rebalance table columns) ─────────
@@ -4259,6 +4441,54 @@ def _ensure_fund_display_settings_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_benchmark_annual_returns_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS benchmark_annual_returns (
+                benchmark_key TEXT    NOT NULL,
+                year          INTEGER NOT NULL,
+                return_pct    NUMERIC(8,4) NOT NULL,
+                verified      BOOLEAN NOT NULL DEFAULT false,
+                source        TEXT,
+                updated_at    TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (benchmark_key, year)
+            )
+        """)
+    conn.commit()
+
+
+def _seed_benchmark_historical(conn) -> None:
+    """Upsert curated historical benchmark returns into the DB.
+
+    Rows with verified=true are never overwritten; rows with verified=false
+    may be updated by a live yfinance fetch later.  Running this more than
+    once is safe (ON CONFLICT DO NOTHING for verified rows).
+    """
+    rows = []
+    for bkey, year_data in _CURATED_BENCHMARK_RETURNS.items():
+        for yr, (ret, verified, source) in year_data.items():
+            rows.append((bkey, yr, ret, verified, source))
+
+    if not rows:
+        return
+
+    with conn.cursor() as cur:
+        for bkey, yr, ret, verified, source in rows:
+            cur.execute("""
+                INSERT INTO benchmark_annual_returns
+                    (benchmark_key, year, return_pct, verified, source, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                ON CONFLICT (benchmark_key, year) DO UPDATE
+                    SET return_pct = EXCLUDED.return_pct,
+                        verified   = EXCLUDED.verified,
+                        source     = EXCLUDED.source,
+                        updated_at = now()
+                    WHERE NOT benchmark_annual_returns.verified
+            """, (bkey, yr, ret, verified, source))
+    conn.commit()
+    print(f"[migration] seeded {len(rows)} benchmark return rows")
+
+
 def _load_fund_settings(fid: str) -> dict:
     """Return the GP-configured display settings for a fund (benchmark, period)."""
     try:
@@ -4401,6 +4631,8 @@ def _apply_self_migrations() -> None:
             _ensure_balance_history_table(conn)
             _ensure_lp_creds_table(conn)
             _ensure_fund_display_settings_table(conn)
+            _ensure_benchmark_annual_returns_table(conn)
+            _seed_benchmark_historical(conn)
 
             _MIGRATIONS_APPLIED = True
             print("[migration] self-migrations complete")
