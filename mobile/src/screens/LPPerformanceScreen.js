@@ -2,9 +2,9 @@
  * LPPerformanceScreen — LP-only home tab.
  *
  * Mirrors the web LP dashboard: hero with fund summary, per-fund and
- * per-managed-account cards, all scoped to the authenticated LP via
- * /api/v2/lp/me/overview. GPs never see this screen — they get the
- * full 6-tab GP navigator.
+ * per-managed-account cards with expandable annual performance tables,
+ * all scoped to the authenticated LP via /api/v2/lp/me/overview.
+ * GPs never see this screen — they get the full 6-tab GP navigator.
  */
 import React, { useCallback, useState } from 'react';
 import {
@@ -16,15 +16,160 @@ import { v2Fetch, getV2User, logoutV2 } from '../api/client';
 import AppHeader from '../components/AppHeader';
 import { colors, haptics } from '../design';
 
+/* ── Formatters ───────────────────────────────────────────────────── */
 function fmtUSD(v) {
   if (v == null || isNaN(v)) return '—';
   const n = Number(v);
-  if (Math.abs(n) >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
-  if (Math.abs(n) >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
-  if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
+  if (Math.abs(n) >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (Math.abs(n) >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
   return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
+function fmtPct(v, decimals = 2) {
+  if (v == null) return '—';
+  return (v >= 0 ? '+' : '') + Number(v).toFixed(decimals) + '%';
+}
+function pctColor(v) {
+  if (v == null) return colors.navy;
+  return v >= 0 ? '#1a7f40' : '#cc3333';
+}
 
+/* ── Annual performance table for one fund/account ────────────────── */
+function AnnualPerfTable({ fid }) {
+  const [state, setState] = useState('idle'); // idle | loading | done | error
+  const [annual, setAnnual] = useState([]);
+  const [bLabel, setBLabel] = useState('Benchmark');
+  const [period, setPeriod] = useState('all');
+
+  const load = async () => {
+    setState('loading');
+    try {
+      const r = await v2Fetch(`/api/fund/${encodeURIComponent(fid)}/balance-history`);
+      const d = await r.json();
+      if (!d.ok || !d.annual?.length) { setState('done'); return; }
+      let rows = d.annual || [];
+      if (d.period === '5yr') rows = rows.slice(-5);
+      else if (d.period === '3yr') rows = rows.slice(-3);
+      setAnnual(rows);
+      setBLabel(d.benchmark_label || 'Benchmark');
+      setPeriod(d.period || 'all');
+      setState('done');
+    } catch (e) {
+      setState('error');
+    }
+  };
+
+  if (state === 'idle') {
+    return (
+      <TouchableOpacity onPress={load} style={s.atpBtn}>
+        <Text style={s.atpBtnText}>📊  Annual Performance</Text>
+      </TouchableOpacity>
+    );
+  }
+  if (state === 'loading') {
+    return (
+      <View style={s.atpLoading}>
+        <ActivityIndicator size="small" color={colors.gold} />
+        <Text style={s.atpLoadingText}>Loading performance…</Text>
+      </View>
+    );
+  }
+  if (state === 'error') {
+    return <Text style={s.atpError}>Could not load performance data.</Text>;
+  }
+  if (!annual.length) {
+    return <Text style={s.atpError}>No historical data available yet.</Text>;
+  }
+
+  // Compute cumulative & CAGR for summary row
+  let cumPort = 1, cumBmark = 1;
+  annual.forEach(a => {
+    cumPort  *= (1 + (a.return_pct || 0) / 100);
+    cumBmark *= (1 + (a.benchmark_return_pct || 0) / 100);
+  });
+  const n = annual.length;
+  const totalCumPort   = (cumPort  - 1) * 100;
+  const totalCumBmark  = (cumBmark - 1) * 100;
+  const cagrPort       = (Math.pow(cumPort,  1 / n) - 1) * 100;
+  const cagrBmark      = (Math.pow(cumBmark, 1 / n) - 1) * 100;
+  const totalAlpha     = totalCumPort - totalCumBmark;
+  const totalNet       = annual.reduce((s, a) => s + ((a.deposits || 0) - (a.withdrawals || 0)), 0);
+
+  const periodLabel = period === '3yr' ? '3-Year' : period === '5yr' ? '5-Year' : 'All-Time';
+
+  return (
+    <View style={s.atpWrap}>
+      <View style={s.atpHeader}>
+        <Text style={s.atpTitle}>ANNUAL PERFORMANCE</Text>
+        <Text style={s.atpSubtitle}>{periodLabel} · vs {bLabel}</Text>
+      </View>
+
+      {/* Column headers */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View>
+          <View style={[s.atpRow, s.atpHeadRow]}>
+            <Text style={[s.atpCell, s.atpColYear, s.atpHeadText]}>YEAR</Text>
+            <Text style={[s.atpCell, s.atpColRet,  s.atpHeadText]}>RETURN</Text>
+            <Text style={[s.atpCell, s.atpColBmk,  s.atpHeadText]}>{bLabel.toUpperCase().slice(0, 8)}</Text>
+            <Text style={[s.atpCell, s.atpColAlph, s.atpHeadText]}>ALPHA</Text>
+            <Text style={[s.atpCell, s.atpColFlow, s.atpHeadText]}>NET FLOWS</Text>
+          </View>
+
+          {annual.map((a, i) => {
+            const net    = (a.deposits || 0) - (a.withdrawals || 0);
+            const netStr = net === 0 ? '—' : (net > 0 ? '+' : '') + fmtUSD(Math.abs(net)) + (net < 0 ? ' out' : '');
+            return (
+              <View key={a.year} style={[s.atpRow, i % 2 === 1 && s.atpRowAlt]}>
+                <Text style={[s.atpCell, s.atpColYear, s.atpYearText]}>{a.year}</Text>
+                <Text style={[s.atpCell, s.atpColRet,  { color: pctColor(a.return_pct), fontWeight: '700' }]}>
+                  {fmtPct(a.return_pct)}
+                </Text>
+                <Text style={[s.atpCell, s.atpColBmk,  { color: '#b45309' }]}>
+                  {fmtPct(a.benchmark_return_pct)}
+                </Text>
+                <Text style={[s.atpCell, s.atpColAlph, { color: pctColor(a.alpha), fontWeight: '700' }]}>
+                  {fmtPct(a.alpha)}
+                </Text>
+                <Text style={[s.atpCell, s.atpColFlow, { color: '#888', fontSize: 10 }]}>
+                  {netStr}
+                </Text>
+              </View>
+            );
+          })}
+
+          {/* Summary row */}
+          <View style={[s.atpRow, s.atpSummaryRow]}>
+            <Text style={[s.atpCell, s.atpColYear, s.atpSummaryLabel]}>{n}YR</Text>
+            <View style={[s.atpCell, s.atpColRet]}>
+              <Text style={{ color: pctColor(totalCumPort), fontWeight: '800', fontSize: 10 }}>
+                {fmtPct(totalCumPort, 1)}
+              </Text>
+              <Text style={{ color: pctColor(cagrPort), fontSize: 9 }}>
+                {fmtPct(cagrPort, 1)} CAGR
+              </Text>
+            </View>
+            <View style={[s.atpCell, s.atpColBmk]}>
+              <Text style={{ color: '#b45309', fontWeight: '800', fontSize: 10 }}>
+                {fmtPct(totalCumBmark, 1)}
+              </Text>
+              <Text style={{ color: '#b45309', fontSize: 9 }}>
+                {fmtPct(cagrBmark, 1)} CAGR
+              </Text>
+            </View>
+            <Text style={[s.atpCell, s.atpColAlph, { color: pctColor(totalAlpha), fontWeight: '800', fontSize: 10 }]}>
+              {fmtPct(totalAlpha, 1)}
+            </Text>
+            <Text style={[s.atpCell, s.atpColFlow, { color: '#888', fontSize: 10 }]}>
+              {totalNet === 0 ? '—' : (totalNet > 0 ? '+' : '') + fmtUSD(Math.abs(totalNet)) + (totalNet < 0 ? ' out' : '')}
+            </Text>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+/* ── Main screen ──────────────────────────────────────────────────── */
 export default function LPPerformanceScreen({ onLogout }) {
   const [data, setData]         = useState(null);
   const [me, setMe]             = useState(null);
@@ -64,19 +209,19 @@ export default function LPPerformanceScreen({ onLogout }) {
     onLogout?.();
   };
 
-  const funds = data?.funds || [];
-  const accts = data?.managed_accounts || [];
-  const firstName = (me?.name || '').split(/\s+/)[0] || 'there';
-  const isEmpty = funds.length === 0 && accts.length === 0;
-  const totalFundNav = funds.reduce((s, f) => s + (f.effective_nav || f.fund_nav || 0), 0);
-  const totalAcctNav = accts.reduce((s, a) => s + (a.nav    || 0), 0);
+  const funds   = data?.funds            || [];
+  const accts   = data?.managed_accounts || [];
+  const firstName     = (me?.name || '').split(/\s+/)[0] || 'there';
+  const isEmpty       = funds.length === 0 && accts.length === 0;
+  const totalFundNav  = funds.reduce((s, f) => s + (f.effective_nav || f.fund_nav || 0), 0);
+  const totalAcctNav  = accts.reduce((s, a) => s + (a.nav || 0), 0);
 
   return (
     <View style={styles.container}>
       <AppHeader
         title="Performance"
         right={
-          <TouchableOpacity onPress={handleLogout} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+          <TouchableOpacity onPress={handleLogout} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Text style={styles.logoutText}>LOGOUT</Text>
           </TouchableOpacity>
         }
@@ -156,7 +301,9 @@ export default function LPPerformanceScreen({ onLogout }) {
                 <View style={styles.cardStats}>
                   <View style={styles.cardStat}>
                     <Text style={styles.cardStatLabel}>FUND NAV</Text>
-                    <Text style={styles.cardStatVal}>{f.effective_nav != null ? fmtUSD(f.effective_nav) : (f.fund_nav != null ? fmtUSD(f.fund_nav) : '—')}</Text>
+                    <Text style={styles.cardStatVal}>
+                      {f.effective_nav != null ? fmtUSD(f.effective_nav) : f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}
+                    </Text>
                     <Text style={styles.cardStatSub}>
                       {f.fund_nav > 0 && f.fund_nav_as_of ? `as of ${f.fund_nav_as_of}` : f.effective_nav ? 'Live from positions' : 'No snapshot yet'}
                     </Text>
@@ -168,17 +315,22 @@ export default function LPPerformanceScreen({ onLogout }) {
                   </View>
                 </View>
                 {(f.gp_accrued_carry > 0 || f.lp_nav_after_carry != null) && (
-                  <View style={styles.cardStats}>
-                    <View style={[styles.cardStat, {flex: 1}]}>
+                  <View style={[styles.cardStats, { marginTop: 8 }]}>
+                    <View style={[styles.cardStat, { flex: 1 }]}>
                       <Text style={styles.cardStatLabel}>GP CARRY</Text>
-                      <Text style={[styles.cardStatVal, {color: '#cc3333', fontSize: 13}]}>{f.gp_accrued_carry ? fmtUSD(f.gp_accrued_carry) : '—'}</Text>
+                      <Text style={[styles.cardStatVal, { color: '#cc3333', fontSize: 13 }]}>
+                        {f.gp_accrued_carry ? fmtUSD(f.gp_accrued_carry) : '—'}
+                      </Text>
                     </View>
-                    <View style={[styles.cardStat, {flex: 1}]}>
+                    <View style={[styles.cardStat, { flex: 1 }]}>
                       <Text style={styles.cardStatLabel}>LP DISTRIBUTABLE</Text>
-                      <Text style={[styles.cardStatVal, {color: '#1a7f40', fontSize: 13}]}>{f.lp_nav_after_carry != null ? fmtUSD(f.lp_nav_after_carry) : '—'}</Text>
+                      <Text style={[styles.cardStatVal, { color: '#1a7f40', fontSize: 13 }]}>
+                        {f.lp_nav_after_carry != null ? fmtUSD(f.lp_nav_after_carry) : '—'}
+                      </Text>
                     </View>
                   </View>
                 )}
+                <AnnualPerfTable key={f.fund_id + '-atp'} fid={f.fund_id} />
               </View>
             ))}
 
@@ -200,13 +352,14 @@ export default function LPPerformanceScreen({ onLogout }) {
                   {a.ytd_pct != null && (
                     <View style={styles.cardStat}>
                       <Text style={styles.cardStatLabel}>YTD RETURN</Text>
-                      <Text style={[styles.cardStatVal, {color: a.ytd_pct >= 0 ? '#1a7f40' : '#cc3333'}]}>
-                        {(a.ytd_pct >= 0 ? '+' : '') + a.ytd_pct.toFixed(2) + '%'}
+                      <Text style={[styles.cardStatVal, { color: pctColor(a.ytd_pct) }]}>
+                        {fmtPct(a.ytd_pct)}
                       </Text>
-                      <Text style={styles.cardStatSub}>Mod. Dietz</Text>
+                      <Text style={styles.cardStatSub}>year to date</Text>
                     </View>
                   )}
                 </View>
+                <AnnualPerfTable key={a.fund_id + '-atp'} fid={a.fund_id} />
               </View>
             ))}
 
@@ -221,6 +374,66 @@ export default function LPPerformanceScreen({ onLogout }) {
     </View>
   );
 }
+
+/* ── Styles ───────────────────────────────────────────────────────── */
+const s = StyleSheet.create({
+  atpBtn: {
+    marginTop: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(91,184,212,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(91,184,212,0.28)',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  atpBtnText: {
+    color: colors.navy,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  atpLoading: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  atpLoadingText: { fontSize: 11, color: colors.midGray },
+  atpError:       { marginTop: 10, fontSize: 11, color: '#cc3333', fontStyle: 'italic' },
+
+  atpWrap: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.07)',
+    paddingTop: 10,
+  },
+  atpHeader: { marginBottom: 8 },
+  atpTitle: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.navy,
+    letterSpacing: 1.1,
+  },
+  atpSubtitle: { fontSize: 9, color: colors.midGray, marginTop: 1 },
+
+  atpRow:       { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
+  atpHeadRow:   { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.08)', paddingBottom: 4 },
+  atpRowAlt:    { backgroundColor: 'rgba(0,0,0,0.02)' },
+  atpSummaryRow:{ borderTopWidth: 2, borderTopColor: 'rgba(0,0,0,0.12)', marginTop: 2, paddingTop: 6 },
+
+  atpCell:      { paddingHorizontal: 5, fontSize: 11 },
+  atpColYear:   { width: 42 },
+  atpColRet:    { width: 64, textAlign: 'right' },
+  atpColBmk:    { width: 64, textAlign: 'right' },
+  atpColAlph:   { width: 60, textAlign: 'right' },
+  atpColFlow:   { width: 88, textAlign: 'right' },
+
+  atpHeadText:  { fontSize: 8, fontWeight: '800', color: colors.midGray, letterSpacing: 0.8 },
+  atpYearText:  { fontWeight: '700', color: colors.navy },
+  atpSummaryLabel: { fontWeight: '800', fontSize: 10, color: colors.navy },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.offWhite },
