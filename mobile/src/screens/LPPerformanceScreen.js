@@ -13,7 +13,6 @@ import {
   TouchableOpacity, ActivityIndicator, Dimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { BarChart } from 'react-native-gifted-charts';
 import { v2Fetch, getV2User, logoutV2 } from '../api/client';
 import AppHeader from '../components/AppHeader';
 import { colors, haptics } from '../design';
@@ -38,75 +37,99 @@ function pctColor(v) {
   return v >= 0 ? '#1a7f40' : '#cc3333';
 }
 
-/* ── Bar chart: annual fund return vs benchmark ───────────────────── */
+/* ── Pure-View bar chart (no native deps) ─────────────────────────── */
 function ReturnChart({ annual, bLabel }) {
   if (!annual.length) return null;
 
-  const BAR_W     = 13;
-  const INNER_GAP = 3;   // gap between fund bar and benchmark bar
-  const GROUP_GAP = 16;  // gap between year groups
-  const Y_AXIS_W  = 36;
-  const INIT_SPC  = 10;
-
   const allVals = annual.flatMap(a => [a.return_pct || 0, a.benchmark_return_pct || 0]);
-  const rawMax  = Math.max(...allVals, 5);
-  const rawMin  = Math.min(...allVals, 0);
-  const range   = rawMax - rawMin;
-  const step    = range <= 25 ? 5 : range <= 60 ? 10 : range <= 120 ? 20 : 25;
-  const maxVal  = Math.ceil(rawMax / step) * step || step;
-  const noSect  = Math.round(maxVal / step);
+  const maxPos  = Math.max(...allVals, 5);
+  const maxNeg  = Math.abs(Math.min(...allVals, 0));
 
-  // Build interleaved bar data: [fund0, bmark0, fund1, bmark1, ...]
-  const chartData = [];
-  annual.forEach((a, i) => {
-    const isLast = i === annual.length - 1;
-    const ret    = a.return_pct || 0;
-    const bmk    = a.benchmark_return_pct || 0;
-    chartData.push({
-      value:     ret,
-      label:     String(a.year).slice(2), // '19', '20' …
-      frontColor: ret >= 0 ? '#1a7f40' : '#cc3333',
-      spacing:   INNER_GAP,
-      labelTextStyle: { fontSize: 8, color: '#666' },
-    });
-    chartData.push({
-      value:     bmk,
-      frontColor: '#c87a0d',
-      spacing:   isLast ? INIT_SPC : GROUP_GAP,
-    });
-  });
-
-  // Natural content width; wrap in horizontal ScrollView if it overflows
-  const contentW  = annual.length * (BAR_W * 2 + INNER_GAP + GROUP_GAP) + INIT_SPC;
-  const chartW    = Math.max(SCREEN_W - 56 - Y_AXIS_W, contentW);
+  // Pixel heights for each side
+  const POS_H   = 80;
+  const NEG_H   = maxNeg > 0 ? Math.max(24, Math.round(POS_H * maxNeg / maxPos)) : 0;
+  const posScale = POS_H / maxPos;
+  const negScale = maxNeg > 0 ? NEG_H / maxNeg : 1;
 
   return (
     <View style={s.chartContainer}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingRight: 8 }}
-      >
-        <BarChart
-          data={chartData}
-          barWidth={BAR_W}
-          initialSpacing={INIT_SPC}
-          maxValue={maxVal}
-          noOfSections={noSect}
-          negativeStepValue={step}
-          stepValue={step}
-          yAxisLabelSuffix="%"
-          yAxisTextStyle={{ fontSize: 8, color: '#999' }}
-          xAxisLabelTextStyle={{ fontSize: 8, color: '#666' }}
-          isAnimated
-          animationDuration={450}
-          rulesColor="rgba(0,0,0,0.06)"
-          yAxisColor="rgba(0,0,0,0.12)"
-          xAxisColor="rgba(0,0,0,0.12)"
-          showFractionalValues={false}
-          roundToDigits={0}
-          width={chartW}
-        />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+
+          {/* Y-axis labels */}
+          <View style={{ width: 32, height: POS_H + 1 + NEG_H }}>
+            <Text style={s.yLabel}>{Math.round(maxPos)}%</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={s.yLabel}>0%</Text>
+            {NEG_H > 0 && (
+              <>
+                <View style={{ height: NEG_H }} />
+                <Text style={s.yLabel}>-{Math.round(maxNeg)}%</Text>
+              </>
+            )}
+          </View>
+
+          {/* Bars */}
+          {annual.map((a) => {
+            const fr = a.return_pct || 0;
+            const br = a.benchmark_return_pct || 0;
+            return (
+              <View key={a.year} style={s.barGroup}>
+                {/* Positive area — bars grow upward from bottom */}
+                <View style={[s.posArea, { height: POS_H }]}>
+                  {/* fund bar */}
+                  <View style={{ alignItems: 'center' }}>
+                    {fr > 0 && (
+                      <Text style={[s.barLabel, { color: '#1a7f40' }]}>
+                        {fr.toFixed(0)}
+                      </Text>
+                    )}
+                    <View style={[
+                      s.bar,
+                      { height: fr > 0 ? Math.round(fr * posScale) : 0,
+                        backgroundColor: '#1a7f40' }
+                    ]} />
+                  </View>
+                  {/* benchmark bar */}
+                  <View style={{ alignItems: 'center' }}>
+                    {br > 0 && (
+                      <Text style={[s.barLabel, { color: '#c87a0d' }]}>
+                        {br.toFixed(0)}
+                      </Text>
+                    )}
+                    <View style={[
+                      s.bar,
+                      { height: br > 0 ? Math.round(br * posScale) : 0,
+                        backgroundColor: '#c87a0d' }
+                    ]} />
+                  </View>
+                </View>
+
+                {/* Zero line */}
+                <View style={s.zeroLine} />
+
+                {/* Negative area — bars grow downward from top */}
+                {NEG_H > 0 && (
+                  <View style={[s.negArea, { height: NEG_H }]}>
+                    <View style={[
+                      s.bar,
+                      { height: fr < 0 ? Math.round(Math.abs(fr) * negScale) : 0,
+                        backgroundColor: '#cc3333' }
+                    ]} />
+                    <View style={[
+                      s.bar,
+                      { height: br < 0 ? Math.round(Math.abs(br) * negScale) : 0,
+                        backgroundColor: '#c87a0d', opacity: 0.65 }
+                    ]} />
+                  </View>
+                )}
+
+                {/* Year label */}
+                <Text style={s.xLabel}>{String(a.year).slice(2)}</Text>
+              </View>
+            );
+          })}
+        </View>
       </ScrollView>
 
       {/* Legend */}
@@ -219,7 +242,6 @@ function AnnualPerfTable({ fid }) {
       {view === 'table' && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View>
-            {/* Header row */}
             <View style={[s.atpRow, s.atpHeadRow]}>
               <Text style={[s.atpCell, s.atpColYear, s.atpHeadText]}>YEAR</Text>
               <Text style={[s.atpCell, s.atpColRet,  s.atpHeadText]}>RETURN</Text>
@@ -228,7 +250,6 @@ function AnnualPerfTable({ fid }) {
               <Text style={[s.atpCell, s.atpColFlow, s.atpHeadText]}>NET FLOWS</Text>
             </View>
 
-            {/* Data rows */}
             {annual.map((a, i) => {
               const net    = (a.deposits || 0) - (a.withdrawals || 0);
               const netStr = net === 0 ? '—'
@@ -564,18 +585,11 @@ const s = StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: 'transparent',
   },
-  atpTabActive: {
-    backgroundColor: colors.navy,
-  },
-  atpTabText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: colors.midGray,
-    letterSpacing: 0.7,
-  },
+  atpTabActive:     { backgroundColor: colors.navy },
+  atpTabText:       { fontSize: 9, fontWeight: '800', color: colors.midGray, letterSpacing: 0.7 },
   atpTabTextActive: { color: '#fff' },
 
-  /* Table rows */
+  /* Table */
   atpRow:        { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
   atpHeadRow:    { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.08)', paddingBottom: 4 },
   atpRowAlt:     { backgroundColor: 'rgba(0,0,0,0.02)' },
@@ -588,19 +602,41 @@ const s = StyleSheet.create({
   atpColAlph:  { width: 60, textAlign: 'right' },
   atpColFlow:  { width: 88, textAlign: 'right' },
 
-  atpHeadText:    { fontSize: 8, fontWeight: '800', color: colors.midGray, letterSpacing: 0.8 },
-  atpYearText:    { fontWeight: '700', color: colors.navy },
-  atpSummaryLabel:{ fontWeight: '800', fontSize: 10, color: colors.navy },
+  atpHeadText:     { fontSize: 8, fontWeight: '800', color: colors.midGray, letterSpacing: 0.8 },
+  atpYearText:     { fontWeight: '700', color: colors.navy },
+  atpSummaryLabel: { fontWeight: '800', fontSize: 10, color: colors.navy },
 
-  /* Chart */
-  chartContainer: {
-    marginTop: 4,
-    overflow: 'hidden',
+  /* Chart (pure View — no SVG) */
+  chartContainer: { marginTop: 6, overflow: 'hidden' },
+
+  barGroup: { alignItems: 'center', marginHorizontal: 5 },
+
+  /* Positive bars sit at the bottom of posArea */
+  posArea: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 3,
   },
+  /* Negative bars sit at the top of negArea */
+  negArea: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 3,
+  },
+
+  bar:      { width: 11, minHeight: 0 },
+  barLabel: { fontSize: 7, fontWeight: '700', marginBottom: 1, textAlign: 'center' },
+  zeroLine: { height: 1, width: 26, backgroundColor: 'rgba(0,0,0,0.18)' },
+  xLabel:   { fontSize: 8, color: '#666', marginTop: 4, textAlign: 'center' },
+
+  yLabel: { fontSize: 8, color: '#aaa', textAlign: 'right' },
+
   chartLegend: {
     flexDirection: 'row',
     gap: 14,
-    marginTop: 8,
+    marginTop: 10,
     paddingLeft: 2,
     flexWrap: 'wrap',
   },
@@ -691,7 +727,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)',
   },
-  cardHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  cardHead:  { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   cardTitle: {
     flex: 1,
     fontSize: 14,
