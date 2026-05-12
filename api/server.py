@@ -1199,6 +1199,45 @@ class FundSettingsRequest(BaseModel):
     period:    str = "all"     # "all" | "5yr" | "3yr"
 
 
+class ManualAnnualReturnRequest(BaseModel):
+    year:       int
+    return_pct: Optional[float] = None   # None = delete the override
+
+
+@app.post("/api/v2/gp/fund/{fund_id}/manual-return")
+async def set_manual_annual_return(fund_id: str, body: ManualAnnualReturnRequest, request: Request):
+    """GP-only: set or delete a manual annual return override for one year.
+
+    Body: { year: 2022, return_pct: -13.61 }
+    Omit return_pct (or pass null) to remove an existing override.
+    """
+    _require_fund_token(request)
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor() as cur:
+                if body.return_pct is None:
+                    cur.execute(
+                        "DELETE FROM manual_annual_returns WHERE fund_id = %s AND year = %s",
+                        (fund_id, body.year),
+                    )
+                else:
+                    cur.execute("""
+                        INSERT INTO manual_annual_returns (fund_id, year, return_pct, source, updated_at)
+                        VALUES (%s, %s, %s, 'gp_manual', now())
+                        ON CONFLICT (fund_id, year) DO UPDATE
+                            SET return_pct = EXCLUDED.return_pct,
+                                source     = EXCLUDED.source,
+                                updated_at = now()
+                    """, (fund_id, body.year, body.return_pct))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}")
+    return {"ok": True, "fund_id": fund_id, "year": body.year, "return_pct": body.return_pct}
+
+
 @app.get("/api/fund/{fund_id}/settings")
 async def fund_get_settings(fund_id: str, request: Request):
     """Return GP-configured display settings (benchmark, period). Readable by LP + GP."""
@@ -4516,54 +4555,58 @@ def _ensure_manual_annual_returns_table(conn) -> None:
 
 
 # Hardwired Fidelity-confirmed annual returns for specific accounts.
-# Keyed by (short_name, year) → return_pct.  Seeded at startup into
-# manual_annual_returns; override the Modified Dietz calculation.
-_HARDWIRED_ANNUAL_RETURNS: dict[tuple, float] = {
-    ("EMDEF", 2019): 16.21,
-    ("EMDEF", 2020): -4.58,
-    ("EMDEF", 2021): 24.61,
-    ("EMDEF", 2022): -13.61,
-    ("EMDEF", 2023): 12.99,
-    ("EMDEF", 2024): 14.86,
-    ("EMDEF", 2025): 34.95,
-}
+# Each entry: list of name tokens to match (any of short_name / fund_name
+# containing the token, case-insensitive) + year→return_pct dict.
+_HARDWIRED_ANNUAL_RETURNS: list[dict] = [
+    {
+        "match_tokens": ["EM-DEF", "EMDEF", "EM DEFENSIVE"],
+        "returns": {
+            2019: 16.21, 2020: -4.58, 2021: 24.61, 2022: -13.61,
+            2023: 12.99, 2024: 14.86, 2025: 34.95,
+        },
+    },
+]
 
 
 def _seed_manual_annual_returns(conn) -> None:
     """Upsert hardwired annual returns into manual_annual_returns.
 
-    Looks up each account by short_name, then inserts/replaces the
-    confirmed return values.  Safe to call multiple times.
+    Resolves each account by matching any of its name tokens against both
+    short_name and fund_name (case-insensitive ILIKE).  Safe to re-run.
     """
     if not _HARDWIRED_ANNUAL_RETURNS:
         return
-    short_names = {k[0] for k in _HARDWIRED_ANNUAL_RETURNS}
     with conn.cursor() as cur:
-        for sname in short_names:
-            cur.execute(
-                """SELECT fund_id FROM funds
-                    WHERE short_name = %s AND fund_type = 'managed_account'
-                    LIMIT 1""",
-                (sname,),
-            )
-            row = cur.fetchone()
-            if not row:
-                print(f"[manual_returns] account {sname!r} not found — skipping")
+        for entry in _HARDWIRED_ANNUAL_RETURNS:
+            tokens   = entry["match_tokens"]
+            year_map = entry["returns"]
+            fid = None
+            for token in tokens:
+                cur.execute(
+                    """SELECT fund_id FROM funds
+                        WHERE (short_name ILIKE %s OR fund_name ILIKE %s)
+                          AND fund_type = 'managed_account'
+                        LIMIT 1""",
+                    (f"%{token}%", f"%{token}%"),
+                )
+                row = cur.fetchone()
+                if row:
+                    fid = row[0]
+                    print(f"[manual_returns] matched account {fid} via token {token!r}")
+                    break
+            if not fid:
+                print(f"[manual_returns] no account matched tokens {tokens} — skipping")
                 continue
-            fid = row[0]
-            rows = [(fid, yr, ret, f"hardwired:{sname}")
-                    for (sn, yr), ret in _HARDWIRED_ANNUAL_RETURNS.items()
-                    if sn == sname]
-            for fid_, yr, ret, src in rows:
+            for yr, ret in year_map.items():
                 cur.execute("""
                     INSERT INTO manual_annual_returns (fund_id, year, return_pct, source, updated_at)
-                    VALUES (%s, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, 'hardwired', now())
                     ON CONFLICT (fund_id, year) DO UPDATE
                         SET return_pct = EXCLUDED.return_pct,
                             source     = EXCLUDED.source,
                             updated_at = now()
-                """, (fid_, yr, ret, src))
-            print(f"[manual_returns] seeded {len(rows)} rows for {sname}")
+                """, (fid, yr, ret))
+            print(f"[manual_returns] seeded {len(year_map)} rows for {fid}")
     conn.commit()
 
 

@@ -2765,11 +2765,18 @@
       const ac = alphaVal == null ? 'var(--mid)' : alphaVal >= 0 ? 'var(--green)' : 'var(--red)';
       const net = (a.deposits || 0) - (a.withdrawals || 0);
       const netStr = net === 0 ? '—' : (net>0?'+':'')+fU(Math.abs(net))+(net<0?' out':'');
-      return `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
+      const isManual = a.return_source === 'manual';
+      // Annual return cell: click-to-edit (only in annual mode — cumulative/CAGR are derived)
+      const retCell = _atpReturnMode === 'annual'
+        ? `<span data-edit-ret="${a.year}" title="${isManual ? 'Manual override — click to edit' : 'Click to override'}"
+             style="cursor:pointer;border-bottom:1px dashed ${isManual ? 'var(--blue)' : 'rgba(255,255,255,0.2)'};padding-bottom:1px;">
+             ${fP(retVal)}${isManual ? ' ✎' : ''}</span>`
+        : fP(retVal);
+      return `<tr style="border-top:1px solid rgba(255,255,255,0.05);" data-year="${a.year}">
         <td style="padding:5px 10px;font-weight:700;color:#e0e8f0;">${a.year}</td>
         <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fU(a.beg_balance) : '—'}</td>
         <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fU(a.end_balance) : '—'}</td>
-        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fP(retVal)}</td>
+        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${retCell}</td>
         <td style="padding:5px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${fP(bmarkVal)}</td>
         <td style="padding:5px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fP(alphaVal)}</td>
         <td style="padding:5px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${netStr}</td>
@@ -2887,6 +2894,48 @@
         if (msgEl) msgEl.textContent = '';
       }
       _atpRenderTable();
+    });
+    // Wire click-to-edit annual return overrides
+    el.querySelectorAll('[data-edit-ret]').forEach(span => {
+      span.addEventListener('click', () => {
+        const yr = parseInt(span.dataset.editRet, 10);
+        const annRow = (_atpData?.annual || []).find(a => a.year === yr);
+        const current = annRow?.return_pct ?? '';
+        const td = span.closest('td');
+        td.innerHTML = `
+          <div style="display:flex;align-items:center;gap:4px;">
+            <input id="ret-inp-${yr}" type="number" step="0.01" value="${current}"
+              style="width:70px;background:var(--navy-mid);border:1px solid var(--blue);border-radius:4px;
+                     color:#e0e8f0;font-size:11px;padding:2px 5px;text-align:right;"
+              placeholder="${current}">
+            <button id="ret-save-${yr}" style="font-size:9px;padding:2px 6px;background:var(--blue);
+              border:none;border-radius:3px;color:var(--navy);cursor:pointer;font-weight:700;">✓</button>
+            <button id="ret-del-${yr}" style="font-size:9px;padding:2px 6px;background:rgba(204,51,51,0.2);
+              border:1px solid rgba(204,51,51,0.4);border-radius:3px;color:#cc3333;cursor:pointer;"
+              title="Remove override">✕</button>
+          </div>`;
+        const inp  = td.querySelector(`#ret-inp-${yr}`);
+        const save = td.querySelector(`#ret-save-${yr}`);
+        const del  = td.querySelector(`#ret-del-${yr}`);
+        inp.focus(); inp.select();
+        const doSave = async (returnPct) => {
+          save.disabled = del.disabled = true;
+          try {
+            const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(_atpFundId)}/manual-return`, {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({ year: yr, return_pct: returnPct }),
+            });
+            if (!r.ok) throw new Error((await r.json()).detail || r.status);
+            await loadAllTimePerf(_atpFundId);
+          } catch(e) {
+            alert('Save failed: ' + e.message);
+            save.disabled = del.disabled = false;
+          }
+        };
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSave(parseFloat(inp.value)); });
+        save.addEventListener('click', () => doSave(parseFloat(inp.value)));
+        del.addEventListener('click',  () => doSave(null));
+      });
     });
     // Wire Save button
     const saveBtn = el.querySelector('#atp-save-btn');
