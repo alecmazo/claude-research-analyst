@@ -1196,27 +1196,12 @@
 
     <section class="panel" style="margin-top:18px;">
       <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">YTD:</span>
-        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Positions CSV (required for YTD)">
-          Positions
-          <input id="acd-ytd-pos" type="file" accept=".csv,.txt" style="display:none">
-        </label>
-        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Account Activity CSV (required for YTD)">
-          Activity
-          <input id="acd-ytd-act" type="file" accept=".csv,.txt" style="display:none">
-        </label>
-        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Investment Balance Detail CSV (optional, enables exact monthly chart)">
-          Bal.Detail <span style="opacity:0.5;">(opt)</span>
-          <input id="acd-ytd-mp" type="file" accept=".csv,.txt" style="display:none">
-        </label>
-        <button id="acd-ytd-run-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">⚡ Run YTD</button>
-        <div style="width:1px;height:16px;background:var(--panel-edge);"></div>
-        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">ALL-TIME:</span>
-        <label id="acd-balhist-label" class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Investment Income &amp; Balance Detail CSV">
-          Balance History
+        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">UPLOAD:</span>
+        <label id="acd-balhist-label" class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Investment Income &amp; Balance Detail CSV — updates both All-Time Performance and YTD return">
+          Balance History (CSV)
           <input id="acd-balhist-file" type="file" accept=".csv,.txt" style="display:none">
         </label>
-        <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;"></span>
+        <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;color:var(--mid);font-style:italic;">YTD is computed automatically from this file</span>
       </div>
     </section>
   </div>
@@ -2598,9 +2583,11 @@
       );
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || r.status);
-      stat.textContent = `✓ ${j.months} months loaded (${j.range})`;
+      stat.textContent = `✓ ${j.months} months · ${j.range} · YTD: ${j.ytd_label || '—'}`;
       stat.style.color = 'var(--green)';
+      stat.style.fontStyle = 'normal';
       loadAllTimePerf(CURRENT_FUND_ID);
+      loadAcctYtdSections(CURRENT_FUND_ID);
     } catch(err) {
       stat.textContent = 'Error: ' + err.message;
       stat.style.color = 'var(--red)';
@@ -3104,7 +3091,7 @@
       renderAcctHistory(data);
     } catch (e) {
       if (elP) elP.innerHTML = '';
-      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Investment Balance vs Benchmark</span></header><div class="tab-empty">No YTD calculation run yet. Use the "Run YTD Calculation" form below with 3 Fidelity CSVs.</div></section>`;
+      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Performance</span></header><div class="tab-empty">No data yet. Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below.</div></section>`;
     }
   }
 
@@ -3193,7 +3180,7 @@
       elB.innerHTML = `
         <section class="panel">
           <header class="panel-head"><span class="panel-title">Monthly Performance</span></header>
-          <div class="tab-empty">Upload a Fidelity "Investment Balance" CSV in the YTD calculator to enable the monthly chart.</div>
+          <div class="tab-empty">Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below to populate this chart.</div>
         </section>`;
       return;
     }

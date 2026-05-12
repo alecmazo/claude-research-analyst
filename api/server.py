@@ -5638,6 +5638,22 @@ async def fund_import_balance_history(
     records = _parse_balance_history_csv(text)
     if not records:
         raise HTTPException(400, "No valid monthly rows found in file.")
+    # Derive YTD from current-year non-skip months (chain-linked Modified Dietz)
+    import datetime as _dt
+    cur_year = _dt.date.today().year
+    ytd_months = [r for r in records if r["year"] == cur_year and not r.get("skip")]
+    ytd_chain = 1.0
+    for m in ytd_months:
+        ytd_chain *= (1 + m["return_pct"] / 100)
+    ytd_pct = round((ytd_chain - 1) * 100, 4)
+    nav = records[-1]["end_balance"] if records else 0.0
+    # Build minimal result_json compatible with the managed-account YTD cache reader
+    mc_monthly = [
+        {"label": r["label"], "return_pct": r["return_pct"], "end_balance": r["end_balance"], "skip": r.get("skip", False)}
+        for r in records if r["year"] == cur_year and not r.get("skip")
+    ]
+    result_json = {"md_return_pct": ytd_pct, "monthly_chart": {"monthly": mc_monthly}}
+
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -5648,10 +5664,22 @@ async def fund_import_balance_history(
                 ON CONFLICT (fund_id) DO UPDATE
                   SET data_json = EXCLUDED.data_json, updated_at = now()
             """, (fid, json.dumps(records)))
+            cur.execute("""
+                INSERT INTO managed_account_ytd_cache (fund_id, nav, ytd_pct, result_json, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                  SET nav = EXCLUDED.nav, ytd_pct = EXCLUDED.ytd_pct,
+                      result_json = EXCLUDED.result_json, updated_at = now()
+            """, (fid, nav, ytd_pct, json.dumps(result_json)))
         conn.commit()
     finally:
         conn.close()
-    return {"ok": True, "months": len(records), "range": f"{records[0]['label']} – {records[-1]['label']}"}
+    ytd_sign = "+" if ytd_pct >= 0 else ""
+    return {
+        "ok": True, "months": len(records),
+        "range": f"{records[0]['label']} – {records[-1]['label']}",
+        "ytd_pct": ytd_pct, "ytd_label": f"{ytd_sign}{ytd_pct:.2f}%",
+    }
 
 
 @app.get("/api/fund/{fund_id}/balance-history")
