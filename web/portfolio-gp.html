@@ -2789,6 +2789,9 @@
       const cagrAlpha  = hasBmark ? totalCagrPort - totalCagrBmark : null;
       const summaryRc = totalCumPort >= 0 ? 'var(--green)' : 'var(--red)';
       const summaryAc = totalAlpha == null ? 'var(--mid)' : totalAlpha >= 0 ? 'var(--green)' : 'var(--red)';
+      const totalNet  = ann.reduce((s, a) => s + ((a.deposits || 0) - (a.withdrawals || 0)), 0);
+      const totalNetStr = totalNet === 0 ? '—'
+        : (totalNet > 0 ? '+' : '') + fU(Math.abs(totalNet)) + (totalNet < 0 ? ' out' : '');
       rows.push(`<tr style="border-top:2px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.04);">
         <td style="padding:6px 10px;font-weight:800;color:#e0e8f0;font-size:10px;letter-spacing:0.5px;">${n}YR TOTAL</td>
         <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
@@ -2796,7 +2799,7 @@
         <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryRc};font-variant-numeric:tabular-nums;">${fP(totalCumPort)} cumul. / ${fP(totalCagrPort)} CAGR</td>
         <td style="padding:6px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalCumBmark)+' / '+fP(totalCagrBmark) : '—'}</td>
         <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryAc};font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalAlpha)+' / '+fP(cagrAlpha) : '—'}</td>
-        <td></td>
+        <td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${totalNetStr}</td>
       </tr>`);
     }
 
