@@ -5861,7 +5861,10 @@ async def fund_import_balance_history(
 
 @app.get("/api/fund/{fund_id}/balance-history")
 async def fund_balance_history(fund_id: str, request: Request):
-    _require_fund_token(request)
+    # GPs and LPs (viewing their own accounts) are both allowed.
+    claims = getattr(request.state, 'auth_claims', None)
+    if not claims:
+        _require_fund_token(request)  # legacy fund token fallback
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:

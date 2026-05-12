@@ -1426,7 +1426,9 @@ async function loadLpAllTimePerf(fid, btn) {
     btn.style.display = 'none';
     requestAnimationFrame(() => drawLpAllTimeChart(annual, fid));
   } catch(e) {
-    container.innerHTML = '<div style="color:var(--red);font-size:11px;padding:8px 0;">' + e.message + '</div>';
+    if (container) {
+      container.innerHTML = '<div style="color:var(--red);font-size:11px;padding:8px 0;font-style:italic;">Could not load history: ' + e.message + '</div>';
+    }
     btn.disabled = false;
     btn.innerHTML = '<span style="font-size:13px;">📈</span> All-Time Performance';
   }
