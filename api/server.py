@@ -5647,10 +5647,24 @@ async def fund_import_balance_history(
         ytd_chain *= (1 + m["return_pct"] / 100)
     ytd_pct = round((ytd_chain - 1) * 100, 4)
     nav = records[-1]["end_balance"] if records else 0.0
-    # Build minimal result_json compatible with the managed-account YTD cache reader
+    # Short month names for YTD chart labels (tooltip appends the year)
+    _MN = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+           7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+    # Include ALL current-year months (skip months shown as N/A placeholder in chart)
     mc_monthly = [
-        {"label": r["label"], "return_pct": r["return_pct"], "end_balance": r["end_balance"], "skip": r.get("skip", False)}
-        for r in records if r["year"] == cur_year and not r.get("skip")
+        {
+            "label":       _MN.get(r["month"], r["label"]),
+            "month":       r["month"],
+            "return_pct":  r["return_pct"],
+            "end_balance": r["end_balance"],
+            "skip":        r.get("skip", False),
+            "perf_detail": {
+                "deposits":    r.get("deposits",    0),
+                "withdrawals": r.get("withdrawals", 0),
+                "net_flow":    r.get("deposits", 0) - r.get("withdrawals", 0),
+            },
+        }
+        for r in records if r["year"] == cur_year
     ]
     result_json = {"md_return_pct": ytd_pct, "monthly_chart": {"monthly": mc_monthly}}
 

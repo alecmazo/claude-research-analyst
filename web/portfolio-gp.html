@@ -2557,10 +2557,6 @@
         document.getElementById('lpd-nav-status'),
         e.target, 'Upload Annual NAV');
     }
-    // Managed-account YTD run
-    if (e.target.id === 'acd-ytd-run-btn') {
-      runAccountYtd(e.target);
-    }
     // Exports — LP fund
     if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);
     if (e.target.id === 'lpd-export-pdf-btn')   triggerExport('pdf',   e.target);
@@ -3231,9 +3227,9 @@
       return prev != null ? curr - prev : curr;
     });
 
-    const returns = pts.map(p => p.return_pct || 0);
-    const allVals = [...returns, ...spyMonthly.filter(v => v != null)];
-    const maxAbs  = Math.max(Math.abs(Math.min(...allVals)), Math.abs(Math.max(...allVals)), 0.5);
+    const returns = pts.filter(p => !p.skip).map(p => p.return_pct || 0);
+    const allVals = [...returns, ...spyMonthly.filter((v, i) => v != null && !pts[i]?.skip)];
+    const maxAbs  = Math.max(Math.abs(Math.min(...allVals.length ? allVals : [0])), Math.abs(Math.max(...allVals.length ? allVals : [0])), 0.5);
     const yRange  = maxAbs * 1.25;
 
     const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
@@ -3266,10 +3262,19 @@
       const ret = p.return_pct || 0;
       const barH = Math.abs(yAt(ret) - y0);
       const barY = ret >= 0 ? yAt(ret) : y0;
-      return { x, barW, barY, barH, ret, i };
+      return { x, barW, barY, barH, ret, i, skip: !!p.skip };
     });
 
-    barMeta.forEach(({ x, barW, barY, barH, ret }) => {
+    barMeta.forEach(({ x, barW, barY, barH, ret, skip }) => {
+      if (skip) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#888';
+        ctx.fillRect(x + barW * 0.3, y0 - 3, barW * 0.4, 6);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return;
+      }
       ctx.fillStyle = ret >= 0 ? '#1a7f40' : '#cc3333';
       ctx.beginPath();
       const r = 3;
@@ -3340,37 +3345,42 @@
       const spyRet = spyMonthly[hit];
       const movers = (p.movers || []).slice(0, 5);
       const pd = p.perf_detail;
-      let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label} ${new Date().getFullYear()}</div>`;
-      const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
-      html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
-      html += `<span>Portfolio</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct)}</span></div>`;
-      if (spyRet != null) {
+      const curYear = new Date().getFullYear();
+      let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label} ${curYear}</div>`;
+      if (p.skip) {
+        html += `<div style="color:#f59e0b;font-size:11px;">N/A — Custodial Transfer</div>`;
+        html += `<div style="color:rgba(255,255,255,0.5);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from YTD calculation.</div>`;
+      } else {
+        const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
         html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
-        html += `<span>SPY</span><span style="color:#c9a84c;">${fmtM(spyRet)}</span></div>`;
-        const alpha = p.return_pct - spyRet;
-        html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:8px;">`;
-        html += `<span>Alpha</span><span style="color:${alpha>=0?'#4ade80':'#f87171'};">${fmtM(alpha)}</span></div>`;
-      }
-      if (movers.length) {
-        html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
-        movers.forEach(m => {
-          const mc = m.dollar_gain >= 0 ? '#4ade80' : '#f87171';
-          html += `<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:2px;">`;
-          html += `<span style="color:#5BB8D4;font-weight:700;">${m.ticker}</span><span style="color:${mc};">${fmtC(m.dollar_gain)} (${fmtM(m.contribution_pct)})</span></div>`;
-        });
-      }
-      if (pd) {
-        const netFlow = pd.net_flow;
-        const deps = pd.deposits, with_ = pd.withdrawals;
-        if (netFlow != null || deps != null || with_ != null) {
-          html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
-          if (deps) html += `<div style="display:flex;justify-content:space-between;"><span>Deposits</span><span style="color:#4ade80;">${fmtC(deps)}</span></div>`;
-          if (with_) html += `<div style="display:flex;justify-content:space-between;"><span>Withdrawals</span><span style="color:#f87171;">${fmtC(with_)}</span></div>`;
-          if (netFlow != null) html += `<div style="display:flex;justify-content:space-between;"><span>Net Flow</span><span>${fmtC(netFlow)}</span></div>`;
-          if (pd.advisory_fees) html += `<div style="display:flex;justify-content:space-between;"><span>Advisory Fee</span><span style="color:#f87171;">${fmtC(pd.advisory_fees)}</span></div>`;
+        html += `<span>Portfolio</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct)}</span></div>`;
+        if (spyRet != null) {
+          html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
+          html += `<span>SPY</span><span style="color:#c9a84c;">${fmtM(spyRet)}</span></div>`;
+          const alpha = p.return_pct - spyRet;
+          html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:8px;">`;
+          html += `<span>Alpha</span><span style="color:${alpha>=0?'#4ade80':'#f87171'};">${fmtM(alpha)}</span></div>`;
         }
+        if (movers.length) {
+          html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
+          movers.forEach(m => {
+            const mc = m.dollar_gain >= 0 ? '#4ade80' : '#f87171';
+            html += `<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:2px;">`;
+            html += `<span style="color:#5BB8D4;font-weight:700;">${m.ticker}</span><span style="color:${mc};">${fmtC(m.dollar_gain)} (${fmtM(m.contribution_pct)})</span></div>`;
+          });
+        }
+        if (pd) {
+          const deps = pd.deposits, with_ = pd.withdrawals, netFlow = pd.net_flow;
+          if (deps || with_) {
+            html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
+            if (deps) html += `<div style="display:flex;justify-content:space-between;"><span>Deposits</span><span style="color:#4ade80;">${fmtC(deps)}</span></div>`;
+            if (with_) html += `<div style="display:flex;justify-content:space-between;"><span>Withdrawals</span><span style="color:#f87171;">${fmtC(with_)}</span></div>`;
+            if (netFlow != null) html += `<div style="display:flex;justify-content:space-between;"><span>Net Flow</span><span>${fmtC(netFlow)}</span></div>`;
+            if (pd.advisory_fees) html += `<div style="display:flex;justify-content:space-between;"><span>Advisory Fee</span><span style="color:#f87171;">${fmtC(pd.advisory_fees)}</span></div>`;
+          }
+        }
+        if (p.exact) html += `<div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:6px;">✓ Exact Fidelity data</div>`;
       }
-      if (p.exact) html += `<div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:6px;">✓ Exact Fidelity data</div>`;
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
       const ttW = tooltip.offsetWidth  || 260;
@@ -3476,36 +3486,6 @@
           </table>
         </details>
       </section>`;
-  }
-
-  // ── Managed-Account YTD runner ───────────────────────────────
-  async function runAccountYtd(btn) {
-    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
-    const pos = document.getElementById('acd-ytd-pos').files[0];
-    const act = document.getElementById('acd-ytd-act').files[0];
-    const mp  = document.getElementById('acd-ytd-mp').files[0];
-    const stat = document.getElementById('acd-ytd-status');
-    if (!pos || !act) { stat.textContent = '❌ Positions + Activity CSVs are required.'; stat.style.color = 'var(--red)'; return; }
-    btn.disabled = true; btn.textContent = 'Running…'; stat.textContent = '';
-    try {
-      const fd = new FormData();
-      fd.append('positions_file', pos);
-      fd.append('activity_file', act);
-      if (mp)  fd.append('monthly_perf_file', mp);
-      const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run', {
-        method: 'POST', body: fd,
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
-      stat.style.color = 'var(--green)';
-      stat.textContent = '✅ YTD calculated & saved. Reloading…';
-      setTimeout(() => loadAcctYtdSections(CURRENT_FUND_ID), 400);
-    } catch (e) {
-      stat.style.color = 'var(--red)';
-      stat.textContent = '❌ ' + e.message;
-    } finally {
-      btn.disabled = false; btn.textContent = '⚡ Run YTD & Save';
-    }
   }
 
   document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
