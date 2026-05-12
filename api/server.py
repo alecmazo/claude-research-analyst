@@ -1436,6 +1436,23 @@ def lp_me_overview(request: Request):
 
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # ── Pre-warm price cache for ALL funds/accounts in one shot ──
+            # Without this, _fund_market_nav makes N sequential yfinance HTTP
+            # calls (one per fund). By fetching all symbols up-front we reduce
+            # the cold-start cost to a single _fetch_prices() call.
+            try:
+                cur.execute("""
+                    SELECT DISTINCT s.symbol
+                      FROM tax_lots tl
+                      JOIN securities s ON s.id = tl.security_id
+                     WHERE tl.closed_at IS NULL AND s.symbol IS NOT NULL
+                """)
+                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
+                if all_syms:
+                    _fetch_prices(all_syms)   # populates _price_cache; results discarded
+            except Exception:
+                pass  # non-fatal — per-fund fallback still works
+
             # ── Funds ────────────────────────────────────────────────
             if role == "gp":
                 # GP: list every LP fund and aggregate cap table
