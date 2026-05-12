@@ -2579,7 +2579,7 @@
   }
 
   // Wire upload + back buttons (event delegation)
-  document.addEventListener('click', (e) => {
+  document.addEventListener('click', async (e) => {
     if (e.target.id === 'lpd-back-btn' || e.target.id === 'acd-back-btn') {
       showTab('fund');
       loadFundOverview();
