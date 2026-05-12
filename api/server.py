@@ -26,6 +26,7 @@ import csv
 import io
 import re
 import time
+from itertools import groupby
 import hashlib
 import hmac
 
@@ -273,6 +274,88 @@ def _parse_fidelity_csv(content: str) -> list:
         })
 
     return positions
+
+
+def _parse_balance_history_csv(text: str) -> list:
+    rows = list(csv.reader(io.StringIO(text)))
+    header_idx = None
+    for i, row in enumerate(rows):
+        if row and row[0].strip().lower() == 'monthly':
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
+    def parse_money(s):
+        s2 = str(s or '').replace('$', '').replace(',', '').strip()
+        if s2 in ('', '-', '—', 'None'):
+            return 0.0
+        try:
+            return float(s2)
+        except (ValueError, TypeError):
+            return 0.0
+
+    MONTH_MAP = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    }
+
+    records = []
+    for row in rows[header_idx + 1:]:
+        if not row:
+            continue
+        raw_label = row[0].strip()
+        if not raw_label:
+            continue
+        clean = re.sub(r'\(.*?\)', '', raw_label).strip()
+        if clean.lower() == 'total':
+            break
+        parts = clean.split()
+        if len(parts) < 2:
+            continue
+        mon_str = parts[0].lower()[:3]
+        month = MONTH_MAP.get(mon_str)
+        if month is None:
+            continue
+        try:
+            year = int(parts[1])
+        except (ValueError, IndexError):
+            continue
+
+        def g(idx):
+            return parse_money(row[idx]) if idx < len(row) else 0.0
+
+        beg       = g(1)
+        mkt_chg   = g(2)
+        dividends = g(3)
+        interest  = g(4)
+        deposits  = g(5)
+        withdrawals = g(6)
+        fees      = g(7)
+        end       = g(8)
+
+        net_income = mkt_chg + dividends + interest - fees
+        net_flow   = deposits - withdrawals
+        denom      = beg + 0.5 * net_flow
+        return_pct = (net_income / denom * 100) if denom != 0 else 0.0
+
+        records.append({
+            'year':        year,
+            'month':       month,
+            'label':       clean,
+            'beg_balance': beg,
+            'end_balance': end,
+            'market_change': mkt_chg,
+            'dividends':   dividends,
+            'interest':    interest,
+            'deposits':    deposits,
+            'withdrawals': withdrawals,
+            'fees':        fees,
+            'return_pct':  round(return_pct, 4),
+        })
+
+    records.sort(key=lambda r: (r['year'], r['month']))
+    return records
 
 
 def _parse_captable(content: bytes, filename: str) -> tuple:
@@ -2392,7 +2475,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui74-20260511"
+WEB_BUILD_VERSION = "ui75-20260511"
 
 
 @app.get("/api/build")
@@ -3808,6 +3891,18 @@ def _exec_sql_file(conn, path: Path) -> tuple[int, int]:
     return ok, err
 
 
+def _ensure_balance_history_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS account_balance_history (
+                fund_id    UUID PRIMARY KEY,
+                data_json  TEXT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+    conn.commit()
+
+
 def _bootstrap_fund_schema(conn) -> None:
     """Apply all numbered migration files in order to create/update fund tables."""
     base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
@@ -3891,6 +3986,7 @@ def _apply_self_migrations() -> None:
 
             # Always fix the fund_type column / constraint (idempotent)
             _fix_fund_type_column(conn)
+            _ensure_balance_history_table(conn)
 
             _MIGRATIONS_APPLIED = True
             print("[migration] self-migrations complete")
@@ -5521,6 +5617,86 @@ def get_spy_monthly_data():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/fund/{fund_id}/import-balance-history")
+async def fund_import_balance_history(
+    fund_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+):
+    _require_fund_token(request)
+    raw = await file.read()
+    text = raw.decode('utf-8', errors='replace')
+    records = _parse_balance_history_csv(text)
+    if not records:
+        raise HTTPException(400, "No valid monthly rows found in file.")
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("""
+                INSERT INTO account_balance_history (fund_id, data_json, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                  SET data_json = EXCLUDED.data_json, updated_at = now()
+            """, (fid, json.dumps(records)))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "months": len(records), "range": f"{records[0]['label']} – {records[-1]['label']}"}
+
+
+@app.get("/api/fund/{fund_id}/balance-history")
+async def fund_balance_history(fund_id: str, request: Request):
+    _require_fund_token(request)
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute(
+                "SELECT data_json, updated_at FROM account_balance_history WHERE fund_id = %s",
+                (fid,)
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return {"ok": False, "monthly": [], "quarterly": [], "annual": [], "updated_at": None}
+
+    monthly = json.loads(row["data_json"])
+    updated_at = row["updated_at"].isoformat() if row["updated_at"] else None
+
+    def chain_returns(pts):
+        result = 1.0
+        for p in pts:
+            result *= (1 + p["return_pct"] / 100)
+        return round((result - 1) * 100, 4)
+
+    quarterly = []
+    for (yr, q), grp in groupby(monthly, key=lambda r: (r["year"], (r["month"] - 1) // 3 + 1)):
+        pts = list(grp)
+        quarterly.append({
+            "year": yr, "quarter": q,
+            "label": f"Q{q} {yr}",
+            "beg_balance": pts[0]["beg_balance"],
+            "end_balance": pts[-1]["end_balance"],
+            "return_pct": chain_returns(pts),
+        })
+
+    annual = []
+    for yr, grp in groupby(monthly, key=lambda r: r["year"]):
+        pts = list(grp)
+        annual.append({
+            "year": yr,
+            "label": str(yr),
+            "beg_balance": pts[0]["beg_balance"],
+            "end_balance": pts[-1]["end_balance"],
+            "return_pct": chain_returns(pts),
+        })
+
+    return {"ok": True, "monthly": monthly, "quarterly": quarterly, "annual": annual, "updated_at": updated_at}
+
+
 # Managed-account YTD calc — server-side wrapper that runs the existing
 # unified Modified Dietz + attribution + monthly-balance computation,
 # overlays the SPY benchmark series, and persists everything to the cache.
