@@ -279,9 +279,19 @@ def _parse_fidelity_csv(content: str) -> list:
 def _parse_balance_history_csv(text: str) -> list:
     rows = list(csv.reader(io.StringIO(text)))
     header_idx = None
+    eight_col = False   # True = Fidelity "Balance and Performance Activity" (8-col) format
     for i, row in enumerate(rows):
-        if row and row[0].strip().lower() == 'monthly':
+        if not row:
+            continue
+        h0 = row[0].strip().lower()
+        if h0 == 'monthly':
             header_idx = i
+            break
+        # "Balance and Performance Activity" export uses "Month" and merges
+        # Dividends & Interest into one column → 8 cols instead of 9.
+        if h0 == 'month':
+            header_idx = i
+            eight_col = True
             break
     if header_idx is None:
         return []
@@ -345,14 +355,30 @@ def _parse_balance_history_csv(text: str) -> list:
         def g(idx):
             return parse_money(row[idx]) if idx < len(row) else 0.0
 
-        beg       = g(1)
-        mkt_chg   = g(2)
-        dividends = g(3)
-        interest  = g(4)
-        deposits  = g(5)
-        withdrawals = g(6)
-        fees      = g(7)
-        end       = g(8)
+        if eight_col:
+            # "Balance and Performance Activity" format (8 cols):
+            # Month | Beg Bal | Mkt Chg Minus Fees | Div & Interest | Deposits | Withdrawals | Fees | End Bal
+            # Note: fees are already netted into mkt_chg in this format, so
+            # we add them back so our net_income formula stays consistent.
+            beg         = g(1)
+            mkt_chg_net = g(2)   # already net of fees
+            div_and_int = g(3)   # Dividends & Interest combined
+            deposits    = g(4)
+            withdrawals = g(5)
+            fees        = g(6)
+            end         = g(7)
+            mkt_chg     = mkt_chg_net + fees   # gross market change
+            dividends   = div_and_int
+            interest    = 0.0
+        else:
+            beg       = g(1)
+            mkt_chg   = g(2)
+            dividends = g(3)
+            interest  = g(4)
+            deposits  = g(5)
+            withdrawals = g(6)
+            fees      = g(7)
+            end       = g(8)
 
         net_income = mkt_chg + dividends + interest - fees
         net_flow   = deposits - withdrawals
