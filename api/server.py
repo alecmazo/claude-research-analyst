@@ -6946,7 +6946,7 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
         logo_img_a = _logo_img(0.5*inch)
         if logo_img_a:
             hdr_data = [[logo_img_a, Paragraph(fund['name'], _h1)]]
-            hdr_tbl = Table(hdr_data, colWidths=[0.9*inch, usable - 0.9*inch])
+            hdr_tbl = Table(hdr_data, colWidths=[2.0*inch, usable - 2.0*inch])
             hdr_tbl.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -7125,7 +7125,7 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
     logo_img_lp = _logo_img(0.5*inch)
     if logo_img_lp:
         hdr_data_lp = [[logo_img_lp, Paragraph(fund['name'], h1)]]
-        hdr_tbl_lp = Table(hdr_data_lp, colWidths=[0.9*inch, usable_w - 0.9*inch])
+        hdr_tbl_lp = Table(hdr_data_lp, colWidths=[2.0*inch, usable_w - 2.0*inch])
         hdr_tbl_lp.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('LEFTPADDING', (0,0), (-1,-1), 0),
