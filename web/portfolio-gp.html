@@ -1229,40 +1229,6 @@
   <div class="wide-shell">
     <div class="wide-grid-2">
 
-      <!-- LP User Management -->
-      <section class="panel" style="grid-column:1/-1;">
-        <header class="panel-head">
-          <span class="panel-title">LP User Management</span>
-          <span class="panel-badge" id="lp-count-badge">—</span>
-          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
-        </header>
-
-        <!-- Add new LP form (hidden by default) -->
-        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
-              <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
-              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
-            </div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
-              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="lp-roster" class="tab-loading" style="padding:14px;">Loading…</div>
-      </section>
-
       <!-- Change Own Password -->
       <section class="panel">
         <header class="panel-head">
@@ -1289,6 +1255,37 @@
         <div style="border-top:1px solid var(--panel-edge);padding:12px 14px;">
           <div style="font-size:10px;color:var(--dim);letter-spacing:0.5px;" id="build-info">—</div>
         </div>
+      </section>
+
+      <!-- LP User Management -->
+      <section class="panel" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">LP User Management</span>
+          <span class="panel-badge" id="lp-count-badge">—</span>
+          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
+        </header>
+        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
+              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;">
+              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
+              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
+            </div>
+          </div>
+        </div>
+        <div id="lp-roster" class="tab-loading">Loading…</div>
       </section>
 
       <!-- Create Fund / Managed Account -->
@@ -3717,12 +3714,13 @@
         ].filter(Boolean).join(' · ') || '<span style="color:var(--dim);font-style:italic;">none</span>';
 
         return `
-        <div class="lp-roster-row" data-lp-id="${u.lp_id}">
+        <div class="lp-roster-row" data-lp-id="${u.lp_id}" style="width:100%;">
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--panel-edge);">
-            <div style="flex:1;min-width:0;">
+            <div style="flex:0 0 260px;min-width:0;text-align:left;">
               <div style="font-weight:800;color:#e0e8f0;font-size:13px;">${u.name}</div>
               <div style="color:var(--mid);font-size:11px;margin-top:1px;">${u.email}</div>
             </div>
+            <div style="flex:1;"></div>
             <span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;flex-shrink:0;
               ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(255,255,255,0.06);color:var(--mid)'}">${u.role.toUpperCase()}</span>
             ${u.must_change_password ? '<span style="font-size:9px;font-weight:700;color:var(--amber);flex-shrink:0;">PW RESET</span>' : ''}
