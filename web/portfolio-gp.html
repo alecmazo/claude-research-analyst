@@ -1149,25 +1149,21 @@
     <div id="lpd-lp-allocation" style="margin-top:18px;"></div>
 
     <section class="panel" style="margin-top:18px;">
-      <header class="panel-head">
-        <span class="panel-title">Data Import</span>
-        <span class="panel-badge">Two uploads</span>
-      </header>
-      <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">
-        <div class="fd-upload-card">
-          <div class="fd-upload-title">📊 Portfolio Positions</div>
-          <div class="fd-upload-hint">Fidelity Account Positions export (CSV/XLSX). Replaces open tax-lots.</div>
-          <input id="lpd-pos-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="lpd-upload-pos-btn" class="tab-btn" style="width:100%;">Upload Positions</button>
-          <div id="lpd-pos-status" class="fd-upload-status"></div>
-        </div>
-        <div class="fd-upload-card">
-          <div class="fd-upload-title">📈 Annual NAV / Waterfall (single upload)</div>
-          <div class="fd-upload-hint">One Excel that contains <strong>everything</strong>: year-by-year NAV (Jan 1, Dec 31, contributions, hurdle, carry, GP equity), <strong>LP roster + initial contributions</strong>, <strong>economics</strong>, and <strong>fund established</strong> year. Replaces all four on import.</div>
-          <input id="lpd-nav-file" type="file" accept=".csv,.xlsx,.xls" class="fd-upload-file">
-          <button id="lpd-upload-nav-btn" class="tab-btn" style="width:100%;">Upload Annual NAV</button>
-          <div id="lpd-nav-status" class="fd-upload-status"></div>
-        </div>
+      <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">IMPORT:</span>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Account Positions CSV/XLSX — replaces open tax-lots">
+          Positions
+          <input id="lpd-pos-file" type="file" accept=".csv,.xlsx,.xls" style="display:none">
+        </label>
+        <button id="lpd-upload-pos-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">↑ Upload</button>
+        <span id="lpd-pos-status" style="font-size:10px;margin-left:2px;"></span>
+        <span style="font-size:9px;color:var(--dim);opacity:0.4;margin:0 2px;">|</span>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Annual NAV/Waterfall Excel — imports LP roster, NAV history, economics, and inception year in one shot">
+          Annual NAV
+          <input id="lpd-nav-file" type="file" accept=".csv,.xlsx,.xls" style="display:none">
+        </label>
+        <button id="lpd-upload-nav-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">↑ Upload</button>
+        <span id="lpd-nav-status" style="font-size:10px;margin-left:2px;"></span>
       </div>
     </section>
   </div>
