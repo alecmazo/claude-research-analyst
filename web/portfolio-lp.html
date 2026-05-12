@@ -1244,6 +1244,8 @@
   }
 
   document.addEventListener('click', e => {
+    // Don't intercept <details>/<summary> toggles or clicks inside expanded panels
+    if (e.target.closest('summary') || e.target.closest('[id^="lp-detail-"],[id^="lp-acct-detail-"]')) return;
     const fundCard = e.target.closest('.lp-fund-card');
     const acctCard = e.target.closest('.lp-acct-card');
     if (!fundCard && !acctCard) return;
