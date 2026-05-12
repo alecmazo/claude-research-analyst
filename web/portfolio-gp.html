@@ -1196,12 +1196,21 @@
 
     <section class="panel" style="margin-top:18px;">
       <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">UPLOAD:</span>
-        <label id="acd-balhist-label" class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Investment Income &amp; Balance Detail CSV — updates both All-Time Performance and YTD return">
-          Balance History (CSV)
-          <input id="acd-balhist-file" type="file" accept=".csv,.txt" style="display:none">
+        <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">YTD:</span>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Account Positions CSV (required)">
+          Positions
+          <input id="acd-ytd-pos" type="file" accept=".csv,.txt" style="display:none">
         </label>
-        <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;color:var(--mid);font-style:italic;">YTD is computed automatically from this file</span>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Account Activity CSV (required)">
+          Activity
+          <input id="acd-ytd-act" type="file" accept=".csv,.txt" style="display:none">
+        </label>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 8px;" title="Fidelity Investment Income &amp; Balance Detail CSV — also powers the All-Time Performance chart">
+          Bal.Detail / History <span style="opacity:0.5;">(opt)</span>
+          <input id="acd-ytd-mp" type="file" accept=".csv,.txt" style="display:none">
+        </label>
+        <button id="acd-ytd-run-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">⚡ Run YTD</button>
+        <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;"></span>
       </div>
     </section>
   </div>
@@ -2557,6 +2566,10 @@
         document.getElementById('lpd-nav-status'),
         e.target, 'Upload Annual NAV');
     }
+    // Managed-account YTD run
+    if (e.target.id === 'acd-ytd-run-btn') {
+      runAccountYtd(e.target);
+    }
     // Exports — LP fund
     if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);
     if (e.target.id === 'lpd-export-pdf-btn')   triggerExport('pdf',   e.target);
@@ -2565,30 +2578,46 @@
     if (e.target.id === 'acd-export-pdf-btn')   triggerExport('pdf',   e.target);
   });
 
-  document.getElementById('acd-balhist-file')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // ── Managed-Account YTD runner ────────────────────────────────────────────
+  // Bal.Detail / History (acd-ytd-mp) is the Fidelity "Investment Income &
+  // Balance Detail" CSV. When provided it powers BOTH the YTD monthly chart
+  // (via compute_unified_ytd) AND the All-Time Performance chart (stored in
+  // account_balance_history by the server).
+  async function runAccountYtd(btn) {
+    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
+    const pos  = document.getElementById('acd-ytd-pos').files[0];
+    const act  = document.getElementById('acd-ytd-act').files[0];
+    const mp   = document.getElementById('acd-ytd-mp').files[0];
     const stat = document.getElementById('acd-ytd-status');
-    stat.textContent = 'Uploading…'; stat.style.color = 'var(--blue)';
+    if (!pos || !act) {
+      stat.textContent = '❌ Positions + Activity CSVs are required.';
+      stat.style.color = 'var(--red)'; return;
+    }
+    btn.disabled = true; btn.textContent = 'Running…'; stat.textContent = '';
     try {
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('positions_file', pos);
+      fd.append('activity_file',  act);
+      if (mp) fd.append('monthly_perf_file', mp);
       const r = await window.dgaFetch(
-        '/api/fund/' + encodeURIComponent(CURRENT_FUND_ID) + '/import-balance-history',
+        '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run',
         { method: 'POST', body: fd }
       );
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.detail || r.status);
-      stat.textContent = `✓ ${j.months} months · ${j.range} · YTD: ${j.ytd_label || '—'}`;
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
       stat.style.color = 'var(--green)';
-      stat.style.fontStyle = 'normal';
-      loadAllTimePerf(CURRENT_FUND_ID);
-      loadAcctYtdSections(CURRENT_FUND_ID);
-    } catch(err) {
-      stat.textContent = 'Error: ' + err.message;
+      stat.textContent = '✅ YTD saved' + (mp ? ' · All-Time chart updated' : '') + '. Reloading…';
+      setTimeout(() => {
+        loadAcctYtdSections(CURRENT_FUND_ID);
+        if (mp) loadAllTimePerf(CURRENT_FUND_ID);
+      }, 400);
+    } catch (e) {
       stat.style.color = 'var(--red)';
+      stat.textContent = '❌ ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = '⚡ Run YTD';
     }
-  });
+  }
 
   async function loadAllTimePerf(fid) {
     const el = document.getElementById('acd-alltime');
