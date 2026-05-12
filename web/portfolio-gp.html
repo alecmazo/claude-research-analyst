@@ -3173,7 +3173,7 @@
       renderAcctHistory(data);
     } catch (e) {
       if (elP) elP.innerHTML = '';
-      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Performance</span></header><div class="tab-empty">No data yet. Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below.</div></section>`;
+      elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Performance YTD</span></header><div class="tab-empty">No data yet. Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below.</div></section>`;
     }
   }
 
@@ -3261,7 +3261,7 @@
     if (!pts.length) {
       elB.innerHTML = `
         <section class="panel">
-          <header class="panel-head"><span class="panel-title">Monthly Performance</span></header>
+          <header class="panel-head"><span class="panel-title">Monthly Performance YTD</span></header>
           <div class="tab-empty">Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below to populate this chart.</div>
         </section>`;
       return;
@@ -3269,7 +3269,7 @@
     elB.innerHTML = `
       <section class="panel">
         <header class="panel-head">
-          <span class="panel-title">Monthly Performance</span>
+          <span class="panel-title">Monthly Performance YTD</span>
           <span class="panel-badge">${pts.length} months</span>
         </header>
         <div style="position:relative;padding:0 12px 8px;">

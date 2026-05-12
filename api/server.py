@@ -5658,9 +5658,14 @@ async def fund_import_balance_history(
     records = _parse_balance_history_csv(text)
     if not records:
         raise HTTPException(400, "No valid monthly rows found in file.")
-    # Derive YTD from current-year non-skip months (chain-linked Modified Dietz)
+    # Derive YTD from the LATEST year present in the data, not the wall-clock
+    # year — the CSV's most recent month tells us what "current year" means for
+    # this account. This prevents stale or backdated demo data from showing
+    # zero/missing months and prevents collisions when multiple years share
+    # the same month number.
     import datetime as _dt
-    cur_year = _dt.date.today().year
+    years_in_data = sorted({r["year"] for r in records})
+    cur_year = years_in_data[-1] if years_in_data else _dt.date.today().year
     ytd_months = [r for r in records if r["year"] == cur_year and not r.get("skip")]
     ytd_chain = 1.0
     for m in ytd_months:

@@ -3126,6 +3126,20 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
                 return n
         return None
 
+    def _parse_year_from_label(s: str) -> int | None:
+        # Fidelity formats: "May 2026(As of...)" or "Apr-26" or "Jan 2017"
+        s = _re_mp.sub(r"\(.*?\)", "", s).strip()
+        # 4-digit year anywhere
+        m4 = _re_mp.search(r"\b(19\d{2}|20\d{2})\b", s)
+        if m4:
+            return int(m4.group(1))
+        # 2-digit year after a dash: "Apr-26"
+        m2 = _re_mp.search(r"-(\d{2})\b", s)
+        if m2:
+            yr = int(m2.group(1))
+            return 2000 + yr if yr < 50 else 1900 + yr
+        return None
+
     def _parse_dollar(s: str) -> float:
         s = str(s or "").strip().replace("$", "").replace(",", "").replace(" ", "")
         if s.startswith("(") and s.endswith(")"):
@@ -3163,8 +3177,7 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
             if canonical:
                 col_map[raw_col] = canonical
 
-    year = datetime.now().year
-    months_out: list[dict] = []
+    all_rows: list[dict] = []
 
     for row in reader:
         # Flatten row → canonical
@@ -3172,9 +3185,11 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
         for raw_col, canonical in col_map.items():
             r[canonical] = (row.get(raw_col) or "").strip()
 
-        month_num = _parse_month_label(r.get("month_label", ""))
+        raw_label = r.get("month_label", "")
+        month_num = _parse_month_label(raw_label)
         if month_num is None:
             continue  # skip non-data rows
+        row_year  = _parse_year_from_label(raw_label)
 
         start         = _parse_dollar(r.get("start", ""))
         market_change = _parse_dollar(r.get("market_change", ""))
@@ -3194,9 +3209,9 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
         denom    = start + net_flow
         hpr      = (ending / denom - 1.0) if denom > 0 else 0.0
 
-        months_out.append({
+        all_rows.append({
+            "year":           row_year,
             "month":          month_num,
-            "label":          datetime(year, month_num, 1).strftime("%b"),
             "start":          round(start, 2),
             "market_change":  round(market_change, 2),
             "dividends":      round(dividends, 2),
@@ -3209,8 +3224,19 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
             "hpr":            round(hpr, 6),
         })
 
-    if not months_out:
+    if not all_rows:
         return {"ok": False, "error": "No monthly data rows parsed from performance CSV."}
+
+    # Filter to the most recent year present in the data — without this, multi-year
+    # CSVs (e.g. Fidelity Investment Income & Balance Detail with full history) would
+    # collide on month number and the oldest year would win in downstream dict lookups.
+    years_present = [r["year"] for r in all_rows if r["year"] is not None]
+    year = max(years_present) if years_present else datetime.now().year
+    months_out = [r for r in all_rows if (r["year"] or year) == year]
+    # Strip the year field and add display label
+    for r in months_out:
+        r["label"] = datetime(year, r["month"], 1).strftime("%b")
+        r.pop("year", None)
 
     months_out.sort(key=lambda x: x["month"])
     return {"ok": True, "months": months_out, "year": year}
