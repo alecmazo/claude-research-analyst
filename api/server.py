@@ -883,6 +883,18 @@ async def auth_middleware(request: Request, call_next):
         import auth_v2 as _av2  # local import to avoid module-level cycles
         claims = _av2.verify_token(v2_tok)
         if claims:
+            # Refresh fund/account assignments from live user record so GP
+            # changes take effect immediately without requiring LP re-login.
+            try:
+                fresh = _av2.find_user_by_lp_id(claims.get("lp_id", ""))
+                if fresh:
+                    claims = {
+                        **claims,
+                        "fund_memberships":    fresh.get("fund_memberships", {}),
+                        "managed_account_ids": fresh.get("managed_account_ids", []),
+                    }
+            except Exception:
+                pass
             request.state.auth_claims = claims
             return await call_next(request)
 
@@ -4070,6 +4082,56 @@ def _ensure_balance_history_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_lp_creds_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lp_credentials_kv (
+                lp_id      TEXT PRIMARY KEY,
+                data_json  TEXT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+    conn.commit()
+
+
+def _db_load_lp_overlay() -> dict:
+    """Load LP credential overlay from PostgreSQL."""
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("SELECT lp_id, data_json FROM lp_credentials_kv")
+                rows = cur.fetchall()
+                return {r["lp_id"]: json.loads(r["data_json"]) for r in rows}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+def _db_save_lp_overlay(overlay: dict) -> None:
+    """Upsert LP credential overlay into PostgreSQL."""
+    if not overlay:
+        return
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor() as cur:
+                for lp_id, data in overlay.items():
+                    cur.execute("""
+                        INSERT INTO lp_credentials_kv (lp_id, data_json, updated_at)
+                        VALUES (%s, %s, now())
+                        ON CONFLICT (lp_id) DO UPDATE
+                            SET data_json  = EXCLUDED.data_json,
+                                updated_at = now()
+                    """, (lp_id, json.dumps(data)))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[lp-creds-db] save failed: {e}")
+
+
 def _bootstrap_fund_schema(conn) -> None:
     """Apply all numbered migration files in order to create/update fund tables."""
     base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
@@ -4154,6 +4216,7 @@ def _apply_self_migrations() -> None:
             # Always fix the fund_type column / constraint (idempotent)
             _fix_fund_type_column(conn)
             _ensure_balance_history_table(conn)
+            _ensure_lp_creds_table(conn)
 
             _MIGRATIONS_APPLIED = True
             print("[migration] self-migrations complete")
@@ -4166,6 +4229,15 @@ def _apply_self_migrations() -> None:
 @app.on_event("startup")
 async def _on_startup_run_migrations() -> None:
     _apply_self_migrations()
+    # Wire DB-backed overlay into auth_v2 so LP assignments persist
+    # in PostgreSQL rather than relying on the overlay file alone.
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            import auth_v2 as _av2
+            _av2.register_db_backend(_db_load_lp_overlay, _db_save_lp_overlay)
+            print("[auth_v2] DB backend registered")
+        except Exception as _e:
+            print(f"[auth_v2] DB backend registration failed: {_e}")
 
 def _fund_id(cur) -> str:
     fid = os.environ.get("FUND_ID")
@@ -5891,26 +5963,74 @@ async def fund_balance_history(fund_id: str, request: Request):
             result *= (1 + p["return_pct"] / 100)
         return round((result - 1) * 100, 4)
 
+    # Compute running cash-only balance for each monthly period.
+    # cash_only = what the balance would be with 0% investment return:
+    # starts at initial beg_balance, then each period adds net deposits only.
+    cash_only_running = 0.0
+    for p in monthly:
+        if cash_only_running == 0.0 and p.get("beg_balance"):
+            cash_only_running = float(p["beg_balance"])
+        net = float(p.get("deposits") or 0) - float(p.get("withdrawals") or 0)
+        cash_only_running += net
+        p["cash_only_balance"] = round(cash_only_running, 2)
+
     quarterly = []
     for (yr, q), grp in groupby(monthly, key=lambda r: (r["year"], (r["month"] - 1) // 3 + 1)):
         pts = list(grp)
         quarterly.append({
             "year": yr, "quarter": q,
             "label": f"Q{q} {yr}",
-            "beg_balance": pts[0]["beg_balance"],
-            "end_balance": pts[-1]["end_balance"],
-            "return_pct": chain_returns(pts),
+            "beg_balance":       pts[0]["beg_balance"],
+            "end_balance":       pts[-1]["end_balance"],
+            "cash_only_balance": pts[-1].get("cash_only_balance"),
+            "deposits":          round(sum(float(p.get("deposits") or 0) for p in pts), 2),
+            "withdrawals":       round(sum(float(p.get("withdrawals") or 0) for p in pts), 2),
+            "return_pct":        chain_returns(pts),
         })
+
+    # Fetch SPY annual returns for all years in history
+    spy_annual: dict[int, float] = {}
+    if _YFINANCE_OK and monthly:
+        try:
+            import datetime as _dt
+            years = sorted({p["year"] for p in monthly})
+            min_yr = years[0]
+            spy_hist = yf.Ticker("SPY").history(
+                start=f"{min_yr - 1}-12-15", end=f"{years[-1] + 1}-01-15",
+                interval="1mo",
+            )
+            if not spy_hist.empty:
+                # Group monthly closes by year; compute Jan-Dec return
+                yr_closes: dict[int, list] = {}
+                for ts, row_s in spy_hist.iterrows():
+                    yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
+                # For each target year: compare first close of year vs last close
+                for yr in years:
+                    prev_closes = yr_closes.get(yr - 1, [])
+                    cur_closes  = yr_closes.get(yr, [])
+                    if prev_closes and cur_closes:
+                        spy_annual[yr] = round(
+                            (cur_closes[-1] / prev_closes[-1] - 1) * 100, 2
+                        )
+        except Exception:
+            pass
 
     annual = []
     for yr, grp in groupby(monthly, key=lambda r: r["year"]):
         pts = list(grp)
+        spy_ret = spy_annual.get(yr)
+        port_ret = chain_returns(pts)
         annual.append({
-            "year": yr,
-            "label": str(yr),
-            "beg_balance": pts[0]["beg_balance"],
-            "end_balance": pts[-1]["end_balance"],
-            "return_pct": chain_returns(pts),
+            "year":              yr,
+            "label":             str(yr),
+            "beg_balance":       pts[0]["beg_balance"],
+            "end_balance":       pts[-1]["end_balance"],
+            "cash_only_balance": pts[-1].get("cash_only_balance"),
+            "deposits":          round(sum(float(p.get("deposits") or 0) for p in pts), 2),
+            "withdrawals":       round(sum(float(p.get("withdrawals") or 0) for p in pts), 2),
+            "return_pct":        port_ret,
+            "spy_return_pct":    spy_ret,
+            "alpha":             round(port_ret - spy_ret, 2) if spy_ret is not None else None,
         })
 
     return {"ok": True, "monthly": monthly, "quarterly": quarterly, "annual": annual, "updated_at": updated_at}

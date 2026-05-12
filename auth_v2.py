@@ -173,7 +173,23 @@ def _overlay_path() -> Path:
     return Path(override) if override else _default_overlay_path()
 
 
-def _load_overlay() -> dict[str, dict]:
+# ---------------------------------------------------------------------------
+# Pluggable DB backend — registered by server.py at startup so LP
+# assignments persist in PostgreSQL even if the overlay file path is
+# ephemeral (e.g. non-volume Railway containers).
+# ---------------------------------------------------------------------------
+_OVERLAY_DB_LOAD: Optional[Any] = None   # () -> dict[str, dict]
+_OVERLAY_DB_SAVE: Optional[Any] = None   # (dict) -> None
+
+
+def register_db_backend(load_fn, save_fn) -> None:
+    """Register DB load/save functions. Called once by server.py at startup."""
+    global _OVERLAY_DB_LOAD, _OVERLAY_DB_SAVE
+    _OVERLAY_DB_LOAD = load_fn
+    _OVERLAY_DB_SAVE = save_fn
+
+
+def _load_overlay_from_file() -> dict[str, dict]:
     p = _overlay_path()
     if not p.exists():
         return {}
@@ -183,10 +199,34 @@ def _load_overlay() -> dict[str, dict]:
         return {}
 
 
-def _save_overlay(overlay: dict[str, dict]) -> None:
+def _save_overlay_to_file(overlay: dict[str, dict]) -> None:
     p = _overlay_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(overlay, indent=2, sort_keys=True))
+
+
+def _load_overlay() -> dict[str, dict]:
+    file_data = _load_overlay_from_file()
+    if _OVERLAY_DB_LOAD is not None:
+        try:
+            db_data = _OVERLAY_DB_LOAD()
+            # DB wins — merge file first, then DB on top
+            return {**file_data, **db_data}
+        except Exception:
+            pass
+    return file_data
+
+
+def _save_overlay(overlay: dict[str, dict]) -> None:
+    try:
+        _save_overlay_to_file(overlay)
+    except Exception:
+        pass
+    if _OVERLAY_DB_SAVE is not None:
+        try:
+            _OVERLAY_DB_SAVE(overlay)
+        except Exception:
+            pass
 
 
 def _all_credentials() -> dict[str, dict]:

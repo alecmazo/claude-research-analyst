@@ -1392,12 +1392,18 @@ async function loadLpAllTimePerf(fid, btn) {
 
     const rows = annual.map(a => {
       const ret = a.return_pct || 0;
-      const color = ret >= 0 ? 'var(--green)' : 'var(--red)';
-      return `<tr>
-        <td style="padding:7px 12px;font-weight:700;color:var(--ink);">${a.year}</td>
-        <td style="padding:7px 12px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtUSD(a.beg_balance) : '—'}</td>
-        <td style="padding:7px 12px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtUSD(a.end_balance) : '—'}</td>
-        <td style="padding:7px 12px;text-align:right;font-weight:700;color:${color};font-variant-numeric:tabular-nums;">${fmtPct(ret)}</td>
+      const rc = ret >= 0 ? 'var(--green)' : 'var(--red)';
+      const ac = a.alpha == null ? 'var(--mid)' : a.alpha >= 0 ? 'var(--green)' : 'var(--red)';
+      const netFlows = (a.deposits || 0) - (a.withdrawals || 0);
+      const flowStr = netFlows === 0 ? '—' : (netFlows > 0 ? '+' : '') + fmtUSD(Math.abs(netFlows)) + (netFlows < 0 ? ' out' : '');
+      return `<tr style="border-top:1px solid var(--line);">
+        <td style="padding:6px 10px;font-weight:700;color:var(--ink);">${a.year}</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtUSD(a.beg_balance) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtUSD(a.end_balance) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fmtPct(ret)}</td>
+        <td style="padding:6px 10px;text-align:right;color:#78716c;font-variant-numeric:tabular-nums;">${a.spy_return_pct != null ? fmtPct(a.spy_return_pct) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${a.alpha != null ? fmtPct(a.alpha) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${flowStr}</td>
       </tr>`;
     }).join('');
 
@@ -1411,17 +1417,22 @@ async function loadLpAllTimePerf(fid, btn) {
           <canvas id="lp-alltime-canvas-${fid}" style="width:100%;display:block;"></canvas>
           <div id="lp-alltime-tooltip-${fid}" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
         </div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead>
-            <tr style="background:var(--offwhite);border-top:1px solid var(--line);">
-              <th style="padding:6px 12px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
-              <th style="padding:6px 12px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
-              <th style="padding:6px 12px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
-              <th style="padding:6px 12px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">RETURN</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:var(--offwhite);border-top:1px solid var(--line);">
+                <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#16a34a;letter-spacing:0.8px;">RETURN</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#a16207;letter-spacing:0.8px;">SPY</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#1d4ed8;letter-spacing:0.8px;">ALPHA</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       </div>`;
     btn.style.display = 'none';
     requestAnimationFrame(() => drawLpAllTimeChart(annual, fid));
@@ -1441,14 +1452,15 @@ function drawLpAllTimeChart(pts, fid) {
 
   const dpr  = window.devicePixelRatio || 1;
   const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 480;
-  const cssH = 160;
+  const cssH = 200;
   canvas.style.height = cssH + 'px';
   canvas.width  = cssW * dpr;
   canvas.height = cssH * dpr;
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   const W = cssW, H = cssH;
-  const padL = 52, padR = 14, padT = 16, padB = 26;
+  // padR extended for right-axis dollar labels
+  const padL = 52, padR = 62, padT = 20, padB = 36;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
@@ -1458,7 +1470,15 @@ function drawLpAllTimeChart(pts, fid) {
   const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
   const y0  = yAt(0);
 
-  // Grid lines
+  // Right Y-axis: dollar balances
+  const balances  = pts.map(p => p.end_balance).filter(v => v != null && v > 0);
+  const cashOnlys = pts.map(p => p.cash_only_balance).filter(v => v != null && v > 0);
+  const allDollar = [...balances, ...cashOnlys];
+  const maxDollar = allDollar.length ? Math.max(...allDollar) * 1.12 : 1;
+  const minDollar = allDollar.length ? Math.min(...allDollar) * 0.88 : 0;
+  const yAtUSD = v => padT + chartH * (1 - (v - minDollar) / Math.max(maxDollar - minDollar, 1));
+
+  // Grid lines (left %)
   ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
@@ -1470,6 +1490,17 @@ function drawLpAllTimeChart(pts, fid) {
     ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 4, y + 3.5);
   });
 
+  // Right-axis dollar labels
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.font = '8.5px -apple-system,sans-serif';
+  ctx.textAlign = 'left';
+  for (let i = 0; i <= 3; i++) {
+    const v = minDollar + (maxDollar - minDollar) * (i / 3);
+    const y = yAtUSD(v);
+    const lbl = v >= 1e6 ? '$' + (v/1e6).toFixed(1) + 'M' : v >= 1e3 ? '$' + (v/1e3).toFixed(0) + 'K' : '$' + v.toFixed(0);
+    ctx.fillText(lbl, W - padR + 4, y + 3);
+  }
+
   // Zero line
   ctx.strokeStyle = 'rgba(0,0,0,0.18)';
   ctx.lineWidth = 1.5;
@@ -1477,7 +1508,7 @@ function drawLpAllTimeChart(pts, fid) {
 
   const n = pts.length;
   const totalSlot = chartW / n;
-  const barW = Math.max(18, Math.min(totalSlot * 0.65, 60));
+  const barW = Math.max(14, Math.min(totalSlot * 0.6, 56));
 
   const barMeta = pts.map((p, i) => {
     const x   = padL + totalSlot * i + totalSlot / 2 - barW / 2;
@@ -1506,24 +1537,91 @@ function drawLpAllTimeChart(pts, fid) {
     }
     ctx.closePath(); ctx.fill();
 
-    // Return label above/below bar
+    // Return % label
     ctx.fillStyle = isPos ? '#15803d' : '#b91c1c';
-    ctx.font = `bold ${Math.max(8, Math.min(10, barW / 4))}px -apple-system,sans-serif`;
+    ctx.font = `bold ${Math.max(7, Math.min(10, barW / 4))}px -apple-system,sans-serif`;
     ctx.textAlign = 'center';
     const label = (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%';
     if (isPos) ctx.fillText(label, x + barW / 2, bY - 3);
-    else        ctx.fillText(label, x + barW / 2, bY + bH + 11);
+    else        ctx.fillText(label, x + barW / 2, bY + bH + 10);
   });
 
-  // Year labels
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.font = '9.5px -apple-system,sans-serif';
-  ctx.textAlign = 'center';
-  pts.forEach((p, i) => {
-    ctx.fillText(String(p.year), padL + totalSlot * i + totalSlot / 2, H - 6);
+  // Solid balance line (right axis)
+  const balPts = pts.map((p, i) => ({
+    x: padL + totalSlot * i + totalSlot / 2,
+    y: p.end_balance != null ? yAtUSD(p.end_balance) : null,
+  }));
+  ctx.save();
+  ctx.strokeStyle = '#1d6fa8';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let started = false;
+  balPts.forEach(pt => {
+    if (pt.y == null) return;
+    if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+    else ctx.lineTo(pt.x, pt.y);
   });
+  if (started) ctx.stroke();
+  ctx.fillStyle = '#1d6fa8';
+  balPts.forEach(pt => {
+    if (pt.y == null) return;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+
+  // Dashed cash-only line
+  const cashPts = pts.map((p, i) => ({
+    x: padL + totalSlot * i + totalSlot / 2,
+    y: p.cash_only_balance != null ? yAtUSD(p.cash_only_balance) : null,
+  }));
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let cStarted = false;
+  cashPts.forEach(pt => {
+    if (pt.y == null) return;
+    if (!cStarted) { ctx.moveTo(pt.x, pt.y); cStarted = true; }
+    else ctx.lineTo(pt.x, pt.y);
+  });
+  if (cStarted) ctx.stroke();
+  ctx.restore();
+
+  // Legend
+  ctx.save();
+  ctx.font = '8.5px -apple-system,sans-serif';
+  const lx = padL + 6, ly = padT + 10;
+  ctx.fillStyle = '#1d6fa8'; ctx.fillRect(lx, ly - 4, 14, 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.textAlign = 'left';
+  ctx.fillText('Portfolio', lx + 18, ly);
+  ctx.save(); ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(lx + 68, ly - 3); ctx.lineTo(lx + 82, ly - 3); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillText('If Not Invested', lx + 86, ly);
+  ctx.restore();
+
+  // Year labels — diagonal
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.font = '9px -apple-system,sans-serif';
+  pts.forEach((p, i) => {
+    const cx = padL + totalSlot * i + totalSlot / 2;
+    ctx.save();
+    ctx.translate(cx, H - padB + 6);
+    ctx.rotate(-Math.PI / 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(p.year), 0, 0);
+    ctx.restore();
+  });
+  ctx.restore();
 
   // Tooltip on hover
+  const fmtUSDtt = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
   canvas.onmousemove = (e) => {
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -1533,15 +1631,20 @@ function drawLpAllTimeChart(pts, fid) {
     const p = pts[hit];
     const ret = p.return_pct || 0;
     const retColor = ret >= 0 ? '#4ade80' : '#f87171';
-    const fmtUSD = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
     let html = `<div style="font-weight:800;font-size:12px;color:#5BB8D4;margin-bottom:6px;">${p.year}</div>`;
     html += `<div style="display:flex;justify-content:space-between;gap:16px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${(ret>=0?'+':'')+ret.toFixed(2)+'%'}</span></div>`;
-    if (p.beg_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span>Start</span><span>${fmtUSD(p.beg_balance)}</span></div>`;
-    if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span>End</span><span>${fmtUSD(p.end_balance)}</span></div>`;
+    if (p.spy_return_pct != null) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f59e0b;">SPY</span><span style="color:#f59e0b;">${(p.spy_return_pct>=0?'+':'')+p.spy_return_pct.toFixed(2)+'%'}</span></div>`;
+    if (p.alpha != null) { const ac = p.alpha>=0?'#4ade80':'#f87171'; html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:${ac};">Alpha</span><span style="color:${ac};font-weight:700;">${(p.alpha>=0?'+':'')+p.alpha.toFixed(2)+'%'}</span></div>`; }
+    if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span>End Balance</span><span>${fmtUSDtt(p.end_balance)}</span></div>`;
+    if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:rgba(255,255,255,0.5);">If Not Invested</span><span style="color:rgba(255,255,255,0.5);">${fmtUSDtt(p.cash_only_balance)}</span></div>`;
+    const deps = (p.deposits || 0);
+    const wds  = (p.withdrawals || 0);
+    if (deps) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#4ade80;">Deposits</span><span style="color:#4ade80;">+${fmtUSDtt(deps)}</span></div>`;
+    if (wds)  html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f87171;">Withdrawals</span><span style="color:#f87171;">-${fmtUSDtt(wds)}</span></div>`;
     tooltip.innerHTML = html;
     tooltip.style.display = 'block';
-    const ttW = tooltip.offsetWidth || 180;
-    const ttH = tooltip.offsetHeight || 90;
+    const ttW = tooltip.offsetWidth || 200;
+    const ttH = tooltip.offsetHeight || 100;
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
     tooltip.style.left = ((cx + 12 + ttW > cssW) ? Math.max(0, cx - ttW - 8) : cx + 12) + 'px';

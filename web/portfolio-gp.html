@@ -2709,6 +2709,26 @@
       const annRets = annual.map(a => 1 + a.return_pct / 100);
       const cagr = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/annRets.length)-1)*100 : null;
       const annualRet = cagr != null ? (cagr>=0?'+':'')+cagr.toFixed(1)+'% CAGR' : annual.length + ' yrs';
+
+      // Build annual performance table (collapsed by default)
+      const fmtUSD2 = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+      const fmtPct2 = (v, plus=true) => v == null ? '—' : (plus && v>=0?'+':'')+v.toFixed(2)+'%';
+      const annRows = annual.map(a => {
+        const rc = a.return_pct >= 0 ? 'var(--green)' : 'var(--red)';
+        const ac = a.alpha == null ? 'var(--mid)' : a.alpha >= 0 ? 'var(--green)' : 'var(--red)';
+        const deps = (a.deposits || 0) - (a.withdrawals || 0);
+        const depsStr = deps === 0 ? '—' : (deps>0?'+':'')+fmtUSD2(Math.abs(deps))+(deps<0?' withdrawn':'');
+        return `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:5px 10px;font-weight:700;color:#e0e8f0;">${a.year}</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtUSD2(a.beg_balance) : '—'}</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtUSD2(a.end_balance) : '—'}</td>
+          <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fmtPct2(a.return_pct)}</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.spy_return_pct != null ? fmtPct2(a.spy_return_pct) : '—'}</td>
+          <td style="padding:5px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fmtPct2(a.alpha)}</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${depsStr}</td>
+        </tr>`;
+      }).join('');
+
       el.innerHTML = `
         <section class="panel">
           <details open>
@@ -2724,6 +2744,29 @@
             <div style="padding:14px;position:relative;">
               <canvas id="acd-alltime-canvas" style="width:100%;height:240px;display:block;"></canvas>
               <div id="acd-alltime-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+            </div>
+          </details>
+        </section>
+        <section class="panel">
+          <details>
+            <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+              <span class="panel-title">Annual Performance</span>
+              <span class="panel-badge">${annual.length} year${annual.length!==1?'s':''}</span>
+              <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+            </summary>
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                <thead><tr style="background:rgba(255,255,255,0.04);">
+                  <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--green);letter-spacing:0.8px;">RETURN</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#f59e0b;letter-spacing:0.8px;">SPY</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--blue);letter-spacing:0.8px;">ALPHA</th>
+                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
+                </tr></thead>
+                <tbody>${annRows}</tbody>
+              </table>
             </div>
           </details>
         </section>`;
@@ -2750,14 +2793,15 @@
 
     const dpr  = window.devicePixelRatio || 1;
     const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 700;
-    const cssH = 240;
+    const cssH = 260;
     canvas.style.height = cssH + 'px';
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     const W = cssW, H = cssH;
-    const padL = 56, padR = 14, padT = 16, padB = 32;
+    // padR extended to fit right-axis dollar labels
+    const padL = 56, padR = 68, padT = 20, padB = 40;
     const chartW = W - padL - padR;
     const chartH = H - padT - padB;
 
@@ -2768,6 +2812,15 @@
     const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
     const y0  = yAt(0);
 
+    // Right Y-axis scale: dollar balances
+    const balances = pts.map(p => p.end_balance).filter(v => v != null && v > 0);
+    const cashOnlys = pts.map(p => p.cash_only_balance).filter(v => v != null && v > 0);
+    const allDollar = [...balances, ...cashOnlys];
+    const maxDollar = allDollar.length ? Math.max(...allDollar) * 1.12 : 1;
+    const minDollar = allDollar.length ? Math.min(...allDollar) * 0.88 : 0;
+    const yAtUSD = v => padT + chartH * (1 - (v - minDollar) / Math.max(maxDollar - minDollar, 1));
+
+    // Grid lines (left axis %)
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.lineWidth = 1;
     [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
@@ -2778,6 +2831,18 @@
       ctx.textAlign = 'right';
       ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
     });
+
+    // Right-axis dollar labels
+    const dollarTicks = 4;
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = '9px -apple-system,sans-serif';
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= dollarTicks; i++) {
+      const v = minDollar + (maxDollar - minDollar) * (i / dollarTicks);
+      const y = yAtUSD(v);
+      const label = v >= 1e6 ? '$' + (v/1e6).toFixed(1) + 'M' : v >= 1e3 ? '$' + (v/1e3).toFixed(0) + 'K' : '$' + v.toFixed(0);
+      ctx.fillText(label, W - padR + 4, y + 3.5);
+    }
 
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1.2;
@@ -2797,7 +2862,6 @@
 
     barMeta.forEach(({ x, barW, barY, barH, ret, skip }) => {
       if (skip) {
-        // Draw a subtle hatched placeholder for custodial transfer months
         ctx.save();
         ctx.globalAlpha = 0.25;
         ctx.fillStyle = '#888';
@@ -2830,15 +2894,82 @@
       ctx.fill();
     });
 
+    // Solid balance line (right axis)
+    const balPts = pts.map((p, i) => ({
+      x: padL + totalSlot * i + totalSlot / 2,
+      y: p.end_balance != null ? yAtUSD(p.end_balance) : null,
+    }));
+    ctx.save();
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    balPts.forEach(pt => {
+      if (pt.y == null) return;
+      if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+      else ctx.lineTo(pt.x, pt.y);
+    });
+    if (started) ctx.stroke();
+    // Dots
+    ctx.fillStyle = '#5BB8D4';
+    balPts.forEach(pt => {
+      if (pt.y == null) return;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+
+    // Dashed cash-only line
+    const cashPts = pts.map((p, i) => ({
+      x: padL + totalSlot * i + totalSlot / 2,
+      y: p.cash_only_balance != null ? yAtUSD(p.cash_only_balance) : null,
+    }));
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let cStarted = false;
+    cashPts.forEach(pt => {
+      if (pt.y == null) return;
+      if (!cStarted) { ctx.moveTo(pt.x, pt.y); cStarted = true; }
+      else ctx.lineTo(pt.x, pt.y);
+    });
+    if (cStarted) ctx.stroke();
+    ctx.restore();
+
+    // Legend
+    ctx.save();
+    ctx.font = '9px -apple-system,sans-serif';
+    const lx = padL + 6, ly = padT + 10;
+    ctx.fillStyle = '#5BB8D4'; ctx.fillRect(lx, ly - 5, 16, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.textAlign = 'left';
+    ctx.fillText('Portfolio Balance', lx + 20, ly);
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(lx + 80, ly - 4); ctx.lineTo(lx + 96, ly - 4); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('If Not Invested', lx + 100, ly);
+    ctx.restore();
+
+    // X-axis labels — diagonal to prevent overlap
+    ctx.save();
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '10px -apple-system,sans-serif';
-    ctx.textAlign = 'center';
-    const skipEvery = (view === 'monthly' && n > 24) ? 3 : 1;
+    ctx.font = '9.5px -apple-system,sans-serif';
+    const skipEvery = (view === 'monthly' && n > 24) ? 3 : (view === 'monthly' && n > 12) ? 2 : 1;
     pts.forEach((p, i) => {
       if (i % skipEvery !== 0) return;
       const cx = padL + totalSlot * i + totalSlot / 2;
-      ctx.fillText(p.label || '', cx, H - 10);
+      ctx.save();
+      ctx.translate(cx, H - padB + 8);
+      ctx.rotate(-Math.PI / 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(p.label || '', 0, 0);
+      ctx.restore();
     });
+    ctx.restore();
 
     const fmtM = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const fmtUSDLocal = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
@@ -2858,8 +2989,9 @@
         const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
         html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct || 0)}</span></div>`;
         if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Ending Balance</span><span>${fmtUSDLocal(p.end_balance)}</span></div>`;
+        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:rgba(255,255,255,0.55);">If Not Invested</span><span style="color:rgba(255,255,255,0.55);">${fmtUSDLocal(p.cash_only_balance)}</span></div>`;
         const netDep = (p.deposits || 0) - (p.withdrawals || 0);
-        if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDLocal(netDep)}</span></div>`;
+        if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDLocal(Math.abs(netDep))}</span></div>`;
         if (p.dividends) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Dividends</span><span style="color:#c9a84c;">${fmtUSDLocal(p.dividends)}</span></div>`;
       }
       tooltip.innerHTML = html;
