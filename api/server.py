@@ -57,14 +57,27 @@ _PRICE_CACHE_TTL = 900   # seconds
 
 def _fetch_prices(symbols: list) -> dict:
     """Return {symbol: last_price} for the given list, using a 15-min cache.
-    Falls back to None for any symbol that can't be priced."""
+
+    Uses yf.download() to batch-fetch all uncached symbols in a single HTTP
+    request instead of one Ticker() call per symbol. Falls back to per-ticker
+    fast_info for any symbol the batch download misses (e.g. preferred stocks
+    with non-standard tickers).
+    """
     if not _YFINANCE_OK or not symbols:
         return {}
     now   = time.time()
     out   = {}
-    fetch = []
+    fetch = []   # (original_sym, clean_sym) pairs that need network calls
+
+    MM_FUNDS = ('SPAXX', 'FDRXX', 'SPRXX', 'FZFXX', 'FZDXX')
+
     for sym in symbols:
-        clean = sym.rstrip('*').rstrip('**')
+        clean = sym.rstrip('*')
+        # Money-market: always $1
+        if any(mm in clean for mm in MM_FUNDS):
+            _price_cache[clean] = (1.0, now)
+            out[sym] = 1.0
+            continue
         if clean in _price_cache:
             p, ts = _price_cache[clean]
             if now - ts < _PRICE_CACHE_TTL:
@@ -72,44 +85,75 @@ def _fetch_prices(symbols: list) -> dict:
                 continue
         fetch.append((sym, clean))
 
-    def _ticker_variants(sym: str) -> list:
-        """Return yfinance ticker variants to try in priority order."""
-        variants = [sym]
-        import re as _rev
-        # BRK.B / BRK-B  ↔  BRKB
-        m = _rev.match(r'^([A-Z]{1,4})[\.\-]([A-Z])$', sym)
-        if m:
-            variants.append(m.group(1) + m.group(2))
-        m2 = _rev.match(r'^([A-Z]{2,4})([A-Z])$', sym)
-        if m2 and len(sym) >= 3:
-            root = sym[:-1]
-            last = sym[-1]
-            variants += [root + '.' + last, root + '-' + last]
-        # Preferred stock: BACPRL → BAC-PL, BAC^L
-        m3 = _rev.match(r'^([A-Z]{1,4})PR([A-Z])$', sym)
-        if m3:
-            variants.insert(0, m3.group(1) + '-P' + m3.group(2))
-            variants.append(m3.group(1) + '^' + m3.group(2))
-        return list(dict.fromkeys(variants))  # deduplicate, preserve order
+    if not fetch:
+        return out
 
-    for sym, clean in fetch:
-        # Fidelity money-market funds are always $1 NAV
-        if 'SPAXX' in clean or 'FDRXX' in clean or 'SPRXX' in clean or 'FZFXX' in clean:
-            _price_cache[clean] = (1.0, now)
-            out[sym] = 1.0
-            continue
-        price = None
-        for variant in _ticker_variants(clean):
+    # ── Batch download (one HTTP request for all uncached symbols) ───────────
+    clean_syms = list(dict.fromkeys(c for _, c in fetch))  # deduplicated
+
+    def _normalize(sym: str) -> str:
+        """Map preferred-stock variants to Yahoo format (BAC-PL → BAC-PL)."""
+        import re as _r
+        m = _r.match(r'^([A-Z]{1,4})PR([A-Z])$', sym)
+        if m:
+            return m.group(1) + '-P' + m.group(2)
+        return sym
+
+    yahoo_syms = [_normalize(s) for s in clean_syms]
+    batch_prices: dict[str, float | None] = {}
+
+    try:
+        import pandas as _pd
+        data = yf.download(
+            " ".join(yahoo_syms),
+            period="2d",          # need 2d so market-closed days still have a price
+            auto_adjust=True,
+            progress=False,
+            threads=True,         # yfinance uses threads internally for multi-ticker
+        )
+        if data is not None and not data.empty:
+            close = data["Close"] if "Close" in data.columns else data.get("close")
+            if close is not None and not close.empty:
+                last_row = close.dropna(how="all").iloc[-1] if len(close.dropna(how="all")) else close.iloc[-1]
+                if hasattr(last_row, "items"):
+                    # Multi-ticker: Series indexed by ticker symbol
+                    for tk, price in last_row.items():
+                        tk_str = str(tk)
+                        try:
+                            p = float(price)
+                            if p > 0:
+                                batch_prices[tk_str] = p
+                        except (TypeError, ValueError):
+                            pass
+                else:
+                    # Single-ticker: scalar
+                    try:
+                        p = float(last_row)
+                        if p > 0 and yahoo_syms:
+                            batch_prices[yahoo_syms[0]] = p
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass  # fall through to per-ticker fallback below
+
+    # Map batch results back to original clean symbols
+    for orig_sym, clean in zip(
+        [s for s, _ in fetch], [c for _, c in fetch]
+    ):
+        yahoo = _normalize(clean)
+        price = batch_prices.get(yahoo) or batch_prices.get(clean)
+
+        if price is None:
+            # Fallback: single Ticker call for anything the batch missed
             try:
-                t = yf.Ticker(variant)
+                t = yf.Ticker(yahoo)
                 p = t.fast_info.last_price
                 price = float(p) if p and float(p) > 0 else None
             except Exception:
                 price = None
-            if price:
-                break
+
         _price_cache[clean] = (price, now)
-        out[sym] = price
+        out[orig_sym] = price
 
     return out
 
