@@ -288,10 +288,14 @@ def _parse_balance_history_csv(text: str) -> list:
 
     def parse_money(s):
         s2 = str(s or '').replace('$', '').replace(',', '').strip()
+        negative = s2.startswith('(') and s2.endswith(')')
+        if negative:
+            s2 = s2[1:-1]
         if s2 in ('', '-', '—', 'None'):
             return 0.0
         try:
-            return float(s2)
+            val = float(s2)
+            return -val if negative else val
         except (ValueError, TypeError):
             return 0.0
 
@@ -307,19 +311,35 @@ def _parse_balance_history_csv(text: str) -> list:
         raw_label = row[0].strip()
         if not raw_label:
             continue
+        # Strip any trailing "(As of ...)" annotation
         clean = re.sub(r'\(.*?\)', '', raw_label).strip()
         if clean.lower() == 'total':
             break
-        parts = clean.split()
-        if len(parts) < 2:
-            continue
-        mon_str = parts[0].lower()[:3]
-        month = MONTH_MAP.get(mon_str)
-        if month is None:
-            continue
-        try:
-            year = int(parts[1])
-        except (ValueError, IndexError):
+
+        # Support two label formats:
+        #   "May 2026"  — full month + 4-digit year (first/last rows)
+        #   "Apr-26"    — abbreviated Mon-YY (all interior rows)
+        month = None
+        year = None
+        if ' ' in clean:
+            parts = clean.split()
+            mon_str = parts[0].lower()[:3]
+            month = MONTH_MAP.get(mon_str)
+            try:
+                year = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+        elif '-' in clean:
+            dash = clean.split('-', 1)
+            mon_str = dash[0].lower()[:3]
+            month = MONTH_MAP.get(mon_str)
+            try:
+                yr_short = int(dash[1])
+                year = 2000 + yr_short if yr_short < 50 else 1900 + yr_short
+            except (ValueError, IndexError):
+                pass
+
+        if month is None or year is None:
             continue
 
         def g(idx):
