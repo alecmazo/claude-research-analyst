@@ -4500,6 +4500,101 @@ def _seed_benchmark_historical(conn) -> None:
     print(f"[migration] seeded {len(rows)} benchmark return rows")
 
 
+def _ensure_manual_annual_returns_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS manual_annual_returns (
+                fund_id    UUID    NOT NULL,
+                year       INTEGER NOT NULL,
+                return_pct NUMERIC(8,4) NOT NULL,
+                source     TEXT,
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (fund_id, year)
+            )
+        """)
+    conn.commit()
+
+
+# Hardwired Fidelity-confirmed annual returns for specific accounts.
+# Keyed by (short_name, year) → return_pct.  Seeded at startup into
+# manual_annual_returns; override the Modified Dietz calculation.
+_HARDWIRED_ANNUAL_RETURNS: dict[tuple, float] = {
+    ("EMDEF", 2019): 16.21,
+    ("EMDEF", 2020): -4.58,
+    ("EMDEF", 2021): 24.61,
+    ("EMDEF", 2022): -13.61,
+    ("EMDEF", 2023): 12.99,
+    ("EMDEF", 2024): 14.86,
+    ("EMDEF", 2025): 34.95,
+}
+
+
+def _seed_manual_annual_returns(conn) -> None:
+    """Upsert hardwired annual returns into manual_annual_returns.
+
+    Looks up each account by short_name, then inserts/replaces the
+    confirmed return values.  Safe to call multiple times.
+    """
+    if not _HARDWIRED_ANNUAL_RETURNS:
+        return
+    short_names = {k[0] for k in _HARDWIRED_ANNUAL_RETURNS}
+    with conn.cursor() as cur:
+        for sname in short_names:
+            cur.execute(
+                """SELECT fund_id FROM funds
+                    WHERE short_name = %s AND fund_type = 'managed_account'
+                    LIMIT 1""",
+                (sname,),
+            )
+            row = cur.fetchone()
+            if not row:
+                print(f"[manual_returns] account {sname!r} not found — skipping")
+                continue
+            fid = row[0]
+            rows = [(fid, yr, ret, f"hardwired:{sname}")
+                    for (sn, yr), ret in _HARDWIRED_ANNUAL_RETURNS.items()
+                    if sn == sname]
+            for fid_, yr, ret, src in rows:
+                cur.execute("""
+                    INSERT INTO manual_annual_returns (fund_id, year, return_pct, source, updated_at)
+                    VALUES (%s, %s, %s, %s, now())
+                    ON CONFLICT (fund_id, year) DO UPDATE
+                        SET return_pct = EXCLUDED.return_pct,
+                            source     = EXCLUDED.source,
+                            updated_at = now()
+                """, (fid_, yr, ret, src))
+            print(f"[manual_returns] seeded {len(rows)} rows for {sname}")
+    conn.commit()
+
+
+def _load_manual_annual_returns(fid: str) -> dict[int, float]:
+    """Return {year: return_pct} of manual overrides for *fid*, or {} if none."""
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        # Fall back to in-memory hardwired dict (dev/local mode)
+        try:
+            conn = _fund_conn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT short_name FROM funds WHERE fund_id = %s", (fid,))
+                row = cur.fetchone()
+                if row:
+                    sname = row[0]
+                    return {yr: ret for (sn, yr), ret in _HARDWIRED_ANNUAL_RETURNS.items()
+                            if sn == sname}
+        except Exception:
+            pass
+        return {}
+    try:
+        conn = _fund_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT year, return_pct FROM manual_annual_returns WHERE fund_id = %s",
+                (fid,),
+            )
+            return {row[0]: float(row[1]) for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
 def _load_fund_settings(fid: str) -> dict:
     """Return the GP-configured display settings for a fund (benchmark, period)."""
     try:
@@ -4644,6 +4739,8 @@ def _apply_self_migrations() -> None:
             _ensure_fund_display_settings_table(conn)
             _ensure_benchmark_annual_returns_table(conn)
             _seed_benchmark_historical(conn)
+            _ensure_manual_annual_returns_table(conn)
+            _seed_manual_annual_returns(conn)
 
             _MIGRATIONS_APPLIED = True
             print("[migration] self-migrations complete")
@@ -6425,11 +6522,14 @@ async def fund_balance_history(fund_id: str, request: Request):
     years = sorted({p["year"] for p in monthly}) if monthly else []
     bmark_annual: dict[int, float] = _get_benchmark_annual(benchmark_key, years)
 
+    # Manual overrides take precedence over Modified Dietz calculation
+    manual_returns = _load_manual_annual_returns(fid)
+
     annual = []
     for yr, grp in groupby(monthly, key=lambda r: r["year"]):
         pts = list(grp)
         bmark_ret = bmark_annual.get(yr)
-        port_ret  = chain_returns(pts)
+        port_ret  = manual_returns.get(yr) if yr in manual_returns else chain_returns(pts)
         annual.append({
             "year":                 yr,
             "label":                str(yr),
@@ -6441,6 +6541,7 @@ async def fund_balance_history(fund_id: str, request: Request):
             "return_pct":           port_ret,
             "benchmark_return_pct": bmark_ret,
             "alpha":                round(port_ret - bmark_ret, 2) if bmark_ret is not None else None,
+            "return_source":        "manual" if yr in manual_returns else "computed",
         })
 
     return {
