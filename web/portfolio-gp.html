@@ -1230,12 +1230,37 @@
     <div class="wide-grid-2">
 
       <!-- LP User Management -->
-      <section class="panel">
+      <section class="panel" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">LP User Management</span>
           <span class="panel-badge" id="lp-count-badge">—</span>
+          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
         </header>
-        <div id="lp-roster" class="tab-loading">Loading…</div>
+
+        <!-- Add new LP form (hidden by default) -->
+        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
+              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;">
+              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
+              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="lp-roster" class="tab-loading" style="padding:14px;">Loading…</div>
       </section>
 
       <!-- Change Own Password -->
@@ -3613,59 +3638,209 @@
   // ══════════════════════════════════════════════════════════════
   async function loadSettingsTab() { loadLPRoster(); loadBuildInfo(); }
 
+  // Toggle Add LP form
+  document.getElementById('lp-add-toggle-btn')?.addEventListener('click', () => {
+    const form = document.getElementById('lp-add-form');
+    const btn  = document.getElementById('lp-add-toggle-btn');
+    const open = form.style.display === 'none';
+    form.style.display = open ? 'block' : 'none';
+    btn.textContent = open ? '✕ Cancel' : '+ Add LP';
+  });
+
+  // Create new LP
+  document.getElementById('lp-new-save-btn')?.addEventListener('click', async () => {
+    const name  = document.getElementById('lp-new-name')?.value?.trim();
+    const email = document.getElementById('lp-new-email')?.value?.trim();
+    const pw    = document.getElementById('lp-new-pw')?.value?.trim();
+    const msg   = document.getElementById('lp-new-msg');
+    const btn   = document.getElementById('lp-new-save-btn');
+    if (!name || !email || !pw) { msg.style.color='var(--red)'; msg.textContent='All fields required.'; return; }
+    if (pw.length < 6) { msg.style.color='var(--red)'; msg.textContent='Password must be ≥6 chars.'; return; }
+    btn.disabled = true; btn.textContent = 'Creating…'; msg.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/admin/lp/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password: pw, fund_memberships: {}, managed_account_ids: [] }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = '✅ Created — set their assignments below.';
+      document.getElementById('lp-new-name').value = '';
+      document.getElementById('lp-new-email').value = '';
+      document.getElementById('lp-new-pw').value = '';
+      setTimeout(() => {
+        document.getElementById('lp-add-form').style.display = 'none';
+        document.getElementById('lp-add-toggle-btn').textContent = '+ Add LP';
+        loadLPRoster();
+      }, 1400);
+    } catch (e) {
+      msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message;
+    } finally { btn.disabled = false; btn.textContent = 'Create LP'; }
+  });
+
+  // Cache of all funds/accounts for assignment panels
+  let _lpRosterFundsCache = null;
+
+  async function _getRosterFunds() {
+    if (_lpRosterFundsCache) return _lpRosterFundsCache;
+    const r = await window.dgaFetch('/api/v2/lp/me/overview');
+    const d = await r.json();
+    _lpRosterFundsCache = { funds: d.funds || [], accounts: d.managed_accounts || [] };
+    return _lpRosterFundsCache;
+  }
+
   async function loadLPRoster() {
     const el    = document.getElementById('lp-roster');
     const badge = document.getElementById('lp-count-badge');
+    _lpRosterFundsCache = null; // refresh fund list each time
     try {
-      const r = await window.dgaFetch('/api/v2/admin/lp/list');
-      if (!r.ok) throw new Error(r.status);
-      const d = await r.json();
+      const [uResp, fData] = await Promise.all([
+        window.dgaFetch('/api/v2/admin/lp/list'),
+        _getRosterFunds(),
+      ]);
+      if (!uResp.ok) throw new Error(uResp.status);
+      const d = await uResp.json();
       const users = d.users || [];
+      const funds = fData.funds || [];
+      const accts = fData.accounts || [];
       if (badge) badge.textContent = String(users.length);
-      el.innerHTML = `
-        <table class="data-table" style="width:100%">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Must Change</th><th>Reset</th></tr></thead>
-          <tbody>
-            ${users.map(u => `
-              <tr>
-                <td style="font-weight:700;color:#e0e8f0">${u.name}</td>
-                <td style="color:var(--mid);font-size:11px">${u.email}</td>
-                <td><span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;
-                  ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(255,255,255,0.06);color:var(--mid)'}">${u.role.toUpperCase()}</span></td>
-                <td>${u.must_change_password
-                  ? '<span style="color:var(--amber);font-size:10px;font-weight:700;">YES</span>'
-                  : '<span style="color:var(--dim);font-size:10px;">no</span>'}</td>
-                <td>
-                  ${u.role === 'lp' ? `
-                    <div style="display:flex;gap:5px;align-items:center">
-                      <input type="text" placeholder="new pw" style="width:90px;height:26px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:11px;padding:0 7px;outline:none;" data-lp-reset-input="${u.lp_id}">
-                      <button class="tab-btn" style="height:26px;padding:0 10px;font-size:10px;" data-lp-reset="${u.lp_id}">Set</button>
-                    </div>` : '<span style="color:var(--dimmer);font-size:11px">—</span>'}
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>`;
-      // Wire reset buttons
-      el.querySelectorAll('[data-lp-reset]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const lpId = btn.dataset.lpReset;
-          const inp  = el.querySelector(`[data-lp-reset-input="${lpId}"]`);
-          const pw   = inp?.value?.trim();
-          if (!pw || pw.length < 6) { alert('Password must be at least 6 characters.'); return; }
-          btn.disabled = true; btn.textContent = '…';
-          try {
-            const r = await window.dgaFetch('/api/v2/admin/lp/set-password', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lp_id: lpId, new_password: pw, must_change: true }),
-            });
-            if (!r.ok) throw new Error(r.status);
-            inp.value = '';
-            btn.textContent = '✅';
-            setTimeout(() => { btn.disabled=false; btn.textContent='Set'; loadLPRoster(); }, 1200);
-          } catch { btn.disabled=false; btn.textContent='❌'; setTimeout(()=>btn.textContent='Set',2000); }
+
+      el.innerHTML = users.map(u => {
+        const isLP  = u.role === 'lp';
+        const fKeys = Object.keys(u.fund_memberships || {});
+        const aKeys = u.managed_account_ids || [];
+        const assignSummary = [
+          fKeys.length ? `${fKeys.length} fund${fKeys.length>1?'s':''}` : '',
+          aKeys.length ? `${aKeys.length} acct${aKeys.length>1?'s':''}` : '',
+        ].filter(Boolean).join(' · ') || '<span style="color:var(--dim);font-style:italic;">none</span>';
+
+        return `
+        <div class="lp-roster-row" data-lp-id="${u.lp_id}">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--panel-edge);">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:800;color:#e0e8f0;font-size:13px;">${u.name}</div>
+              <div style="color:var(--mid);font-size:11px;margin-top:1px;">${u.email}</div>
+            </div>
+            <span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;flex-shrink:0;
+              ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(255,255,255,0.06);color:var(--mid)'}">${u.role.toUpperCase()}</span>
+            ${u.must_change_password ? '<span style="font-size:9px;font-weight:700;color:var(--amber);flex-shrink:0;">PW RESET</span>' : ''}
+            <div style="font-size:10px;color:var(--mid);flex-shrink:0;">${assignSummary}</div>
+            ${isLP ? `<button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>` : ''}
+          </div>
+          ${isLP ? `
+          <div id="lp-panel-${u.lp_id}" style="display:none;padding:14px;background:rgba(0,0,0,0.18);border-bottom:1px solid var(--panel-edge);">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:12px;">
+
+              <!-- LP Funds -->
+              <div>
+                <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:8px;">LP FUNDS</div>
+                ${funds.length ? funds.map(f => {
+                  const alias = (u.fund_memberships || {})[f.fund_name] || '';
+                  const checked = f.fund_name in (u.fund_memberships || {}) ? 'checked' : '';
+                  return `
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
+                    <input type="checkbox" ${checked} data-fund-check="${f.fund_name}" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+                    <span style="font-size:11px;color:#d0dae8;flex:1;">${f.fund_name}</span>
+                    <input type="text" value="${alias}" placeholder="alias" data-fund-alias="${f.fund_name}"
+                      style="width:60px;height:22px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:10px;padding:0 6px;outline:none;">
+                  </div>`;
+                }).join('') : '<div style="font-size:11px;color:var(--dim);font-style:italic;">No LP funds created yet.</div>'}
+              </div>
+
+              <!-- Managed Accounts -->
+              <div>
+                <div style="font-size:9px;font-weight:800;color:var(--gold);letter-spacing:1px;margin-bottom:8px;">MANAGED ACCOUNTS</div>
+                ${accts.length ? accts.map(a => {
+                  const aname   = a.account_name || a.fund_name || '';
+                  const checked = (u.managed_account_ids || []).includes(aname) ? 'checked' : '';
+                  return `
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
+                    <input type="checkbox" ${checked} data-acct-check="${aname}" style="accent-color:var(--gold);width:14px;height:14px;cursor:pointer;">
+                    <span style="font-size:11px;color:#d0dae8;">${aname}</span>
+                    <span style="font-size:9px;color:var(--dim);">${a.short_name || ''}</span>
+                  </div>`;
+                }).join('') : '<div style="font-size:11px;color:var(--dim);font-style:italic;">No managed accounts created yet.</div>'}
+              </div>
+            </div>
+
+            <!-- Password reset + Save row -->
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">
+              <input type="text" placeholder="New password (optional)" data-lp-pw-input="${u.lp_id}"
+                style="width:180px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:11px;padding:0 9px;outline:none;">
+              <button class="tab-btn sm" style="font-size:9px;padding:0 12px;" data-lp-save="${u.lp_id}">Save Changes</button>
+              <span data-lp-save-msg="${u.lp_id}" style="font-size:10px;"></span>
+            </div>
+          </div>` : ''}
+        </div>`;
+      }).join('');
+
+      // Wire expand toggles
+      el.querySelectorAll('[data-lp-expand]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const lpId  = btn.dataset.lpExpand;
+          const panel = document.getElementById('lp-panel-' + lpId);
+          const open  = panel.style.display === 'none';
+          panel.style.display = open ? 'block' : 'none';
+          btn.textContent = open ? 'Close ▴' : 'Edit ▾';
         });
       });
+
+      // Wire Save buttons
+      el.querySelectorAll('[data-lp-save]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId  = btn.dataset.lpSave;
+          const panel = document.getElementById('lp-panel-' + lpId);
+          const msg   = el.querySelector(`[data-lp-save-msg="${lpId}"]`);
+
+          // Collect fund memberships
+          const fm = {};
+          panel.querySelectorAll('[data-fund-check]').forEach(cb => {
+            if (cb.checked) {
+              const fname = cb.dataset.fundCheck;
+              const aliasEl = panel.querySelector(`[data-fund-alias="${fname}"]`);
+              fm[fname] = aliasEl ? aliasEl.value.trim() : '';
+            }
+          });
+
+          // Collect managed accounts
+          const ma = [];
+          panel.querySelectorAll('[data-acct-check]').forEach(cb => {
+            if (cb.checked) ma.push(cb.dataset.acctCheck);
+          });
+
+          // Optional password reset
+          const pwInp = el.querySelector(`[data-lp-pw-input="${lpId}"]`);
+          const pw    = pwInp?.value?.trim();
+
+          btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+          try {
+            const assignR = await window.dgaFetch('/api/v2/admin/lp/update-assignments', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lp_id: lpId, fund_memberships: fm, managed_account_ids: ma }),
+            });
+            if (!assignR.ok) throw new Error((await assignR.json()).detail || assignR.status);
+
+            if (pw) {
+              const pwR = await window.dgaFetch('/api/v2/admin/lp/set-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lp_id: lpId, new_password: pw, must_change: true }),
+              });
+              if (!pwR.ok) throw new Error('Password: ' + ((await pwR.json()).detail || pwR.status));
+              if (pwInp) pwInp.value = '';
+            }
+
+            msg.style.color = 'var(--green)'; msg.textContent = '✅ Saved';
+            setTimeout(() => loadLPRoster(), 1200);
+          } catch (e) {
+            msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message;
+          } finally { btn.disabled = false; btn.textContent = 'Save Changes'; }
+        });
+      });
+
     } catch { el.innerHTML = '<div class="tab-error">Could not load user list.</div>'; }
   }
 

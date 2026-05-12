@@ -1085,6 +1085,55 @@ def admin_lp_set_password(request: Request, body: LPSetPasswordRequest):
     }
 
 
+class LPCreateRequest(BaseModel):
+    email:               str
+    name:                str
+    password:            str
+    fund_memberships:    dict  = {}
+    managed_account_ids: list  = []
+
+
+class LPAssignRequest(BaseModel):
+    lp_id:               str
+    fund_memberships:    dict  = {}
+    managed_account_ids: list  = []
+
+
+@app.post("/api/v2/admin/lp/create")
+def admin_lp_create(request: Request, body: LPCreateRequest):
+    """GP-only: create a new LP user account."""
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+    try:
+        lp_id = auth_v2_mod.create_user(
+            email=body.email,
+            name=body.name,
+            password=body.password,
+            fund_memberships=body.fund_memberships,
+            managed_account_ids=body.managed_account_ids,
+        )
+        return {"ok": True, "lp_id": lp_id, "email": body.email, "name": body.name}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/v2/admin/lp/update-assignments")
+def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
+    """GP-only: update which funds and managed accounts an LP can see."""
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+    ok = auth_v2_mod.update_assignments(
+        lp_id=body.lp_id,
+        fund_memberships=body.fund_memberships,
+        managed_account_ids=body.managed_account_ids,
+    )
+    if not ok:
+        raise HTTPException(404, "LP not found")
+    return {"ok": True, "lp_id": body.lp_id}
+
+
 # ===========================================================================
 # Phase B — GP dashboard data endpoints
 #

@@ -404,6 +404,59 @@ def list_users() -> list[dict]:
     ]
 
 
+def create_user(
+    email: str,
+    name: str,
+    password: str,
+    fund_memberships: Optional[dict] = None,
+    managed_account_ids: Optional[list] = None,
+) -> str:
+    """Create a new LP user. Returns the new lp_id. Raises ValueError on conflict."""
+    import datetime as _dt
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Email is required")
+    if find_user_by_email(email):
+        raise ValueError("Email already exists")
+    if len(password) < 6:
+        raise ValueError("Password must be at least 6 characters")
+    lp_id = "lp_" + secrets.token_hex(8)
+    new_hash, new_salt = hash_password(password)
+    overlay = _load_overlay()
+    overlay[lp_id] = {
+        "lp_id":                lp_id,
+        "email":                email,
+        "name":                 (name or "").strip(),
+        "role":                 "lp",
+        "password_hash_hex":    new_hash,
+        "password_salt_hex":    new_salt,
+        "fund_memberships":     fund_memberships or {},
+        "managed_account_ids":  managed_account_ids or [],
+        "must_change_password": True,
+        "created_at":           _dt.date.today().isoformat(),
+    }
+    _save_overlay(overlay)
+    return lp_id
+
+
+def update_assignments(
+    lp_id: str,
+    fund_memberships: dict,
+    managed_account_ids: list,
+) -> bool:
+    """Update fund/account assignments for an existing LP. Persists to overlay."""
+    if not find_user_by_lp_id(lp_id):
+        return False
+    overlay = _load_overlay()
+    overlay[lp_id] = {
+        **overlay.get(lp_id, {}),
+        "fund_memberships":    fund_memberships,
+        "managed_account_ids": managed_account_ids,
+    }
+    _save_overlay(overlay)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Scope checks — used by data endpoints to filter LP-visible records.
 # ---------------------------------------------------------------------------
