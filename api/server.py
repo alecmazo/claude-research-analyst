@@ -2956,9 +2956,10 @@ _BENCHMARK_DEFS: dict = {
 }
 
 # ── Curated historical benchmark returns (2000-2025) ──────────────────────────
-# S&P 500: total return (price + dividends reinvested)
-# Source: Slickcharts.com / MacroTrends.net
-# Other benchmarks: ETF price returns (DIA, QQQ, URTH, AGG)
+# S&P 500: price return (Dec 31 to Dec 31), matching MacroTrends methodology.
+# 2016-2025 values confirmed directly from MacroTrends screenshot.
+# 2000-2015 values consistent with MacroTrends price-return series.
+# Other benchmarks: ETF annual price returns (DIA, QQQ, URTH, AGG)
 # MSCI World 2000-2011: MSCI World Index net returns (pre-URTH)
 # Bonds 2000-2003: Bloomberg US Aggregate Bond Index (pre-AGG)
 # 60/40 and 85/15: computed as weighted blend of sp500 + bonds
@@ -2967,19 +2968,21 @@ _CURATED_BENCHMARK_RETURNS: dict[str, dict[int, tuple[float, bool, str]]] = {}
 def _build_curated_benchmark_returns() -> None:
     """Compute and populate _CURATED_BENCHMARK_RETURNS once at import time."""
     sp500 = {
-        2000: (-9.10, True,  "slickcharts"), 2001: (-11.89, True, "slickcharts"),
-        2002: (-22.10, True, "slickcharts"), 2003: (28.68,  True, "slickcharts"),
-        2004: (10.88,  True, "slickcharts"), 2005: (4.91,   True, "slickcharts"),
-        2006: (15.79,  True, "slickcharts"), 2007: (5.49,   True, "slickcharts"),
-        2008: (-37.00, True, "slickcharts"), 2009: (26.46,  True, "slickcharts"),
-        2010: (15.06,  True, "slickcharts"), 2011: (2.11,   True, "slickcharts"),
-        2012: (16.00,  True, "slickcharts"), 2013: (32.39,  True, "slickcharts"),
-        2014: (13.69,  True, "slickcharts"), 2015: (1.38,   True, "slickcharts"),
-        2016: (11.96,  True, "slickcharts"), 2017: (21.83,  True, "slickcharts"),
-        2018: (-4.38,  True, "slickcharts"), 2019: (31.49,  True, "slickcharts"),
-        2020: (18.40,  True, "slickcharts"), 2021: (28.71,  True, "slickcharts"),
-        2022: (-18.11, True, "slickcharts"), 2023: (26.29,  True, "slickcharts"),
-        2024: (25.02,  True, "slickcharts"), 2025: (-0.76,  False, "estimate"),
+        # 2000-2015: MacroTrends price return (consistent methodology)
+        2000: (-10.14, True, "macrotrends"), 2001: (-13.04, True, "macrotrends"),
+        2002: (-23.37, True, "macrotrends"), 2003: (26.38,  True, "macrotrends"),
+        2004: (8.99,   True, "macrotrends"), 2005: (3.00,   True, "macrotrends"),
+        2006: (13.62,  True, "macrotrends"), 2007: (3.53,   True, "macrotrends"),
+        2008: (-38.49, True, "macrotrends"), 2009: (23.45,  True, "macrotrends"),
+        2010: (12.78,  True, "macrotrends"), 2011: (0.00,   True, "macrotrends"),
+        2012: (13.41,  True, "macrotrends"), 2013: (29.60,  True, "macrotrends"),
+        2014: (11.39,  True, "macrotrends"), 2015: (-0.73,  True, "macrotrends"),
+        # 2016-2025: confirmed from MacroTrends screenshot
+        2016: (9.54,   True, "macrotrends"), 2017: (19.42,  True, "macrotrends"),
+        2018: (-6.24,  True, "macrotrends"), 2019: (28.88,  True, "macrotrends"),
+        2020: (16.26,  True, "macrotrends"), 2021: (26.89,  True, "macrotrends"),
+        2022: (-19.44, True, "macrotrends"), 2023: (24.23,  True, "macrotrends"),
+        2024: (23.31,  True, "macrotrends"), 2025: (16.39,  True, "macrotrends"),
     }
     dow30 = {
         # DIA ETF price return (Dec 31 to Dec 31). Pre-DIA years use DJIA price return.
@@ -3085,14 +3088,62 @@ def _get_benchmark_annual_from_db(benchmark_key: str, years: list) -> dict:
         return {}
 
 
+# YTD cache for the current (in-progress) year — 15-minute TTL so it stays fresh
+# keyed by benchmark_key → (return_pct, fetched_at)
+_ytd_bmark_cache: dict = {}
+_YTD_BMARK_TTL = 900  # seconds
+
+
+def _get_ytd_benchmark_return(benchmark_key: str) -> Optional[float]:
+    """Fetch YTD return for *benchmark_key* for the current calendar year.
+
+    Uses daily closes: first trading day of year → latest available close.
+    Results are cached for 15 minutes. Returns None if yfinance unavailable
+    or the fetch fails.
+    """
+    import datetime as _dt
+    if not _YFINANCE_OK:
+        return None
+    defn = _BENCHMARK_DEFS.get(benchmark_key)
+    if not defn:
+        return None
+
+    now = time.time()
+    cached = _ytd_bmark_cache.get(benchmark_key)
+    if cached and (now - cached[1]) < _YTD_BMARK_TTL:
+        return cached[0]
+
+    year = _dt.date.today().year
+    start_of_year = f"{year}-01-01"
+    total_w, total_r = 0.0, 0.0
+    for ticker, weight in defn["tickers"]:
+        try:
+            hist = yf.Ticker(ticker).history(start=start_of_year, interval="1d")
+            if hist.empty:
+                continue
+            first_close = float(hist["Close"].iloc[0])
+            last_close  = float(hist["Close"].iloc[-1])
+            ytd = (last_close / first_close - 1) * 100
+            total_r += ytd * weight
+            total_w += weight
+        except Exception:
+            continue
+
+    if total_w > 0:
+        result = round(total_r / total_w, 2)
+        _ytd_bmark_cache[benchmark_key] = (result, now)
+        return result
+    return None
+
+
 def _get_benchmark_annual(benchmark_key: str, years: list) -> dict:
     """Return {year: return_pct} for the given benchmark and years.
 
     Strategy (Option C hybrid):
-      - Historical years (≤ 2025): check DB (curated/verified data seeded at startup).
-        Falls back to in-memory curated dict if DB unavailable.
-      - Current year (2026+): fetch live via yfinance; results cached for the process
-        lifetime (no TTL — values only shift once per year).
+      - Historical years (≤ 2025): DB first (curated/verified data seeded at startup),
+        falls back to in-memory curated dict if DB unavailable.
+      - Current year (2026): YTD from daily closes (first trading day → latest),
+        cached for 15 minutes so the column stays fresh without hammering Yahoo.
     """
     if not years:
         return {}
@@ -3100,7 +3151,10 @@ def _get_benchmark_annual(benchmark_key: str, years: list) -> dict:
     if not defn:
         return {}
 
-    HISTORICAL_CUTOFF = 2025  # last year of curated data
+    import datetime as _dt
+    current_year = _dt.date.today().year
+    HISTORICAL_CUTOFF = current_year - 1  # everything before this year is historical
+
     historical_years = [yr for yr in years if yr <= HISTORICAL_CUTOFF]
     live_years       = [yr for yr in years if yr >  HISTORICAL_CUTOFF]
 
@@ -3110,58 +3164,16 @@ def _get_benchmark_annual(benchmark_key: str, years: list) -> dict:
     if historical_years:
         db_result = _get_benchmark_annual_from_db(benchmark_key, historical_years)
         result.update(db_result)
-        # Fill any gaps from in-memory curated dict
         curated = _CURATED_BENCHMARK_RETURNS.get(benchmark_key, {})
         for yr in historical_years:
             if yr not in result and yr in curated:
                 result[yr] = curated[yr][0]
 
-    # ── Live: yfinance for 2026+ ──────────────────────────────────────────────
-    if live_years and _YFINANCE_OK:
-        uncached = [yr for yr in live_years if (benchmark_key, yr) not in _benchmark_annual_cache]
-        if uncached:
-            tickers = defn["tickers"]
-            min_yr  = min(uncached)
-            max_yr  = max(uncached)
-            ticker_yr_returns: dict = {}
-            for ticker, _ in tickers:
-                if ticker in ticker_yr_returns:
-                    continue
-                try:
-                    hist = yf.Ticker(ticker).history(
-                        start=f"{min_yr - 1}-12-15",
-                        end=f"{max_yr + 1}-01-15",
-                        interval="1mo",
-                    )
-                    if hist.empty:
-                        ticker_yr_returns[ticker] = {}
-                        continue
-                    yr_closes: dict = {}
-                    for ts, row_s in hist.iterrows():
-                        yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
-                    yr_rets: dict = {}
-                    for yr in range(min_yr, max_yr + 1):
-                        prev = yr_closes.get(yr - 1, [])
-                        cur  = yr_closes.get(yr, [])
-                        if prev and cur:
-                            yr_rets[yr] = round((cur[-1] / prev[-1] - 1) * 100, 2)
-                    ticker_yr_returns[ticker] = yr_rets
-                except Exception:
-                    ticker_yr_returns[ticker] = {}
-
-            for yr in uncached:
-                total_w, total_r = 0.0, 0.0
-                for ticker, weight in tickers:
-                    r = ticker_yr_returns.get(ticker, {}).get(yr)
-                    if r is not None:
-                        total_r += r * weight
-                        total_w += weight
-                if total_w > 0:
-                    _benchmark_annual_cache[(benchmark_key, yr)] = round(total_r / total_w, 2)
-
-        for yr in live_years:
-            if (benchmark_key, yr) in _benchmark_annual_cache:
-                result[yr] = _benchmark_annual_cache[(benchmark_key, yr)]
+    # ── Live: YTD daily-close calculation for the current year ────────────────
+    for yr in live_years:
+        ytd = _get_ytd_benchmark_return(benchmark_key)
+        if ytd is not None:
+            result[yr] = ytd
 
     return result
 
@@ -4483,7 +4495,6 @@ def _seed_benchmark_historical(conn) -> None:
                         verified   = EXCLUDED.verified,
                         source     = EXCLUDED.source,
                         updated_at = now()
-                    WHERE NOT benchmark_annual_returns.verified
             """, (bkey, yr, ret, verified, source))
     conn.commit()
     print(f"[migration] seeded {len(rows)} benchmark return rows")
