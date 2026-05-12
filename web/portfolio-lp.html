@@ -1377,45 +1377,96 @@ async function loadLpAllTimePerf(fid, btn) {
   btn.disabled = true;
   btn.innerHTML = '<span style="font-size:13px;">⏳</span> Loading…';
   try {
-    const r = await window.dgaFetch('/api/fund/' + encodeURIComponent(fid) + '/balance-history');
-    const d = await r.json();
+    // Fetch history + settings in parallel
+    const [r, sr] = await Promise.all([
+      window.dgaFetch('/api/fund/' + encodeURIComponent(fid) + '/balance-history'),
+      window.dgaFetch('/api/fund/' + encodeURIComponent(fid) + '/settings').catch(() => null),
+    ]);
+    const d  = await r.json();
+    const ds = sr ? await sr.json().catch(() => ({})) : {};
     if (!d.ok || !d.annual || !d.annual.length) {
       container.innerHTML = '<div style="font-size:11px;color:var(--mid);padding:10px 0;font-style:italic;">No balance history on file yet.</div>';
       btn.style.display = 'none';
       return;
     }
-    const annual = d.annual;
 
-    // Build a table + bar chart section
-    const fmtUSD = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
-    const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    // GP-configured period: slice annual array
+    const gpPeriod     = (ds.period || d.period || 'all');
+    const allAnnual    = d.annual;
+    const annual       = gpPeriod === '3yr' ? allAnnual.slice(-3)
+                       : gpPeriod === '5yr' ? allAnnual.slice(-5) : allAnnual;
+    const bLabel       = d.benchmark_label || ds.benchmark_label || 'S&P 500';
+    let   lpReturnMode = 'annual'; // LP can toggle Annual / Cumulative / CAGR
 
-    const rows = annual.map(a => {
-      const ret = a.return_pct || 0;
-      const rc = ret >= 0 ? 'var(--green)' : 'var(--red)';
-      const ac = a.alpha == null ? 'var(--mid)' : a.alpha >= 0 ? 'var(--green)' : 'var(--red)';
-      const netFlows = (a.deposits || 0) - (a.withdrawals || 0);
-      const flowStr = netFlows === 0 ? '—' : (netFlows > 0 ? '+' : '') + fmtUSD(Math.abs(netFlows)) + (netFlows < 0 ? ' out' : '');
-      return `<tr style="border-top:1px solid var(--line);">
-        <td style="padding:6px 10px;font-weight:700;color:var(--ink);">${a.year}</td>
-        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtUSD(a.beg_balance) : '—'}</td>
-        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtUSD(a.end_balance) : '—'}</td>
-        <td style="padding:6px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fmtPct(ret)}</td>
-        <td style="padding:6px 10px;text-align:right;color:#78716c;font-variant-numeric:tabular-nums;">${a.spy_return_pct != null ? fmtPct(a.spy_return_pct) : '—'}</td>
-        <td style="padding:6px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${a.alpha != null ? fmtPct(a.alpha) : '—'}</td>
-        <td style="padding:6px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${flowStr}</td>
-      </tr>`;
-    }).join('');
+    const fmtU = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+    const fmtP = (v, plus=true) => v == null ? '—' : (plus && v>=0?'+':'')+v.toFixed(2)+'%';
 
-    container.innerHTML = `
-      <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white;">
-        <div style="padding:11px 14px;background:var(--offwhite);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:0.8px;">ALL-TIME ANNUAL PERFORMANCE</span>
-          <span style="font-size:10px;color:var(--mid);margin-left:auto;">${annual.length} year${annual.length !== 1 ? 's' : ''}</span>
-        </div>
-        <div style="position:relative;">
-          <canvas id="lp-alltime-canvas-${fid}" style="width:100%;display:block;"></canvas>
-          <div id="lp-alltime-tooltip-${fid}" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+    function buildLpAnnualRows(ann, mode) {
+      let cumPort = 1.0, cumBmark = 1.0;
+      const rows = ann.map((a, idx) => {
+        cumPort  *= (1 + (a.return_pct || 0) / 100);
+        cumBmark *= (1 + (a.benchmark_return_pct || 0) / 100);
+        const yrs = idx + 1;
+        const cumPortPct   = (cumPort  - 1) * 100;
+        const cumBmarkPct  = (cumBmark - 1) * 100;
+        const cagrPortPct  = (Math.pow(cumPort,  1/yrs) - 1) * 100;
+        const cagrBmarkPct = (Math.pow(cumBmark, 1/yrs) - 1) * 100;
+        let retVal, bmarkVal, alphaVal;
+        if (mode === 'cumulative') {
+          retVal = cumPortPct; bmarkVal = a.benchmark_return_pct != null ? cumBmarkPct : null;
+          alphaVal = a.benchmark_return_pct != null ? cumPortPct - cumBmarkPct : null;
+        } else if (mode === 'cagr') {
+          retVal = cagrPortPct; bmarkVal = a.benchmark_return_pct != null ? cagrBmarkPct : null;
+          alphaVal = a.benchmark_return_pct != null ? cagrPortPct - cagrBmarkPct : null;
+        } else {
+          retVal = a.return_pct; bmarkVal = a.benchmark_return_pct; alphaVal = a.alpha;
+        }
+        const rc = retVal >= 0 ? 'var(--green)' : 'var(--red)';
+        const ac = alphaVal == null ? 'var(--mid)' : alphaVal >= 0 ? 'var(--green)' : 'var(--red)';
+        const net = (a.deposits||0) - (a.withdrawals||0);
+        const netStr = net === 0 ? '—' : (net>0?'+':'')+fmtU(Math.abs(net))+(net<0?' out':'');
+        return `<tr style="border-top:1px solid var(--line);">
+          <td style="padding:6px 10px;font-weight:700;color:var(--ink);">${a.year}</td>
+          <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtU(a.beg_balance):'—'}</td>
+          <td style="padding:6px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtU(a.end_balance):'—'}</td>
+          <td style="padding:6px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fmtP(retVal)}</td>
+          <td style="padding:6px 10px;text-align:right;color:#78716c;font-variant-numeric:tabular-nums;">${fmtP(bmarkVal)}</td>
+          <td style="padding:6px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fmtP(alphaVal)}</td>
+          <td style="padding:6px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${netStr}</td>
+        </tr>`;
+      });
+      // Summary row
+      const n = ann.length;
+      if (n > 0) {
+        const totCumPort  = (cumPort -1)*100, totCumBmark = (cumBmark-1)*100;
+        const totCagrPort = (Math.pow(cumPort,1/n)-1)*100, totCagrBmark = (Math.pow(cumBmark,1/n)-1)*100;
+        const hasBmark = ann.some(a => a.benchmark_return_pct != null);
+        const summRc = totCumPort>=0?'var(--green)':'var(--red)';
+        const alpha = hasBmark ? totCumPort - totCumBmark : null;
+        const alphaC = alpha==null?'var(--mid)':alpha>=0?'var(--green)':'var(--red)';
+        rows.push(`<tr style="border-top:2px solid var(--line);background:var(--offwhite);">
+          <td style="padding:5px 10px;font-weight:800;color:var(--ink);font-size:10px;">${n}YR TOTAL</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);">—</td>
+          <td style="padding:5px 10px;text-align:right;color:var(--mid);">—</td>
+          <td style="padding:5px 10px;text-align:right;font-weight:800;color:${summRc};font-size:10px;">${fmtP(totCumPort)} / ${fmtP(totCagrPort)} CAGR</td>
+          <td style="padding:5px 10px;text-align:right;color:#78716c;font-size:10px;">${hasBmark?fmtP(totCumBmark)+' / '+fmtP(totCagrBmark):'—'}</td>
+          <td style="padding:5px 10px;text-align:right;font-weight:800;color:${alphaC};font-size:10px;">${hasBmark?fmtP(alpha)+' / '+fmtP(totCagrPort-totCagrBmark):'—'}</td>
+          <td></td>
+        </tr>`);
+      }
+      return rows.join('');
+    }
+
+    function renderLpTable(mode) {
+      const wrap = document.getElementById('lp-annual-table-' + fid);
+      if (!wrap) return;
+      const modeLabel = { annual: 'Annual Return', cumulative: 'Cumul. Return', cagr: 'CAGR' }[mode] || 'Return';
+      const periodBadge = gpPeriod === '3yr' ? '3-Year' : gpPeriod === '5yr' ? '5-Year' : 'All-Time';
+      wrap.innerHTML = `
+        <div style="padding:8px 12px;background:var(--offwhite);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span style="font-size:9px;font-weight:800;color:var(--mid);">VIEW:</span>
+          ${['annual','cumulative','cagr'].map(m=>`<button data-lp-mode="${m}" style="font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid ${m===mode?'var(--blue-dark)':'var(--line)'};background:${m===mode?'rgba(29,111,168,0.1)':'transparent'};color:${m===mode?'var(--blue-dark)':'var(--mid)'};cursor:pointer;font-weight:${m===mode?'700':'400'};">${m==='annual'?'Annual':m==='cumulative'?'Cumulative':'CAGR'}</button>`).join('')}
+          <span style="margin-left:auto;font-size:9px;color:var(--mid);">${periodBadge} · ${bLabel}</span>
         </div>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -1424,18 +1475,55 @@ async function loadLpAllTimePerf(fid, btn) {
                 <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
                 <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
                 <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
-                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#16a34a;letter-spacing:0.8px;">RETURN</th>
-                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#a16207;letter-spacing:0.8px;">SPY</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#16a34a;letter-spacing:0.8px;">${modeLabel.toUpperCase()}</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#a16207;letter-spacing:0.8px;">${bLabel.toUpperCase()}</th>
                 <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#1d4ed8;letter-spacing:0.8px;">ALPHA</th>
                 <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
               </tr>
             </thead>
-            <tbody>${rows}</tbody>
+            <tbody>${buildLpAnnualRows(annual, mode)}</tbody>
           </table>
-        </div>
+        </div>`;
+      wrap.querySelectorAll('[data-lp-mode]').forEach(b => {
+        b.addEventListener('click', () => { lpReturnMode = b.dataset.lpMode; renderLpTable(lpReturnMode); });
+      });
+    }
+
+    const annRets  = annual.map(a => 1 + (a.return_pct||0)/100);
+    const cagr     = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/annRets.length)-1)*100 : null;
+    const cagrBadge = cagr != null ? (cagr>=0?'+':'')+cagr.toFixed(1)+'% CAGR' : '';
+    const periodBadge = gpPeriod==='3yr'?'3-Year':gpPeriod==='5yr'?'5-Year':'All-Time';
+
+    container.innerHTML = `
+      <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white;">
+        <!-- Chart section — collapsed by default -->
+        <details>
+          <summary style="list-style:none;cursor:pointer;padding:11px 14px;background:var(--offwhite);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:0.8px;">ALL-TIME CHART</span>
+            <span style="font-size:10px;color:var(--mid);">Portfolio vs If Not Invested</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <div style="position:relative;padding:4px 0 0;">
+            <canvas id="lp-alltime-canvas-${fid}" style="width:100%;display:block;"></canvas>
+            <div id="lp-alltime-tooltip-${fid}" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+          </div>
+        </details>
+        <!-- Annual Performance Table — collapsed by default -->
+        <details>
+          <summary style="list-style:none;cursor:pointer;padding:10px 14px;background:var(--offwhite);border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:0.8px;">ANNUAL PERFORMANCE</span>
+            <span style="font-size:10px;color:var(--mid);">${periodBadge} · ${annual.length} yr${annual.length!==1?'s':''} ${cagrBadge?'· '+cagrBadge:''}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+          </summary>
+          <div id="lp-annual-table-${fid}"></div>
+        </details>
       </div>`;
+
     btn.style.display = 'none';
-    requestAnimationFrame(() => drawLpAllTimeChart(annual, fid));
+    // Render table immediately (collapsed — no reflow issue)
+    renderLpTable(lpReturnMode);
+    // Draw chart after container is attached (use setTimeout so details is laid out)
+    setTimeout(() => drawLpAllTimeChart(annual, fid, bLabel), 60);
   } catch(e) {
     if (container) {
       container.innerHTML = '<div style="color:var(--red);font-size:11px;padding:8px 0;font-style:italic;">Could not load history: ' + e.message + '</div>';
@@ -1445,13 +1533,14 @@ async function loadLpAllTimePerf(fid, btn) {
   }
 }
 
-function drawLpAllTimeChart(pts, fid) {
+function drawLpAllTimeChart(pts, fid, bLabel) {
   const canvas  = document.getElementById('lp-alltime-canvas-' + fid);
   const tooltip = document.getElementById('lp-alltime-tooltip-' + fid);
   if (!canvas || !pts || !pts.length) return;
 
   const dpr  = window.devicePixelRatio || 1;
-  const cssW = canvas.offsetWidth || canvas.parentElement.offsetWidth || 480;
+  // Use getBoundingClientRect for accurate width after layout
+  const cssW = Math.round(canvas.getBoundingClientRect().width) || canvas.offsetWidth || canvas.parentElement?.offsetWidth || 480;
   const cssH = 200;
   canvas.style.height = cssH + 'px';
   canvas.width  = cssW * dpr;
@@ -1620,34 +1709,37 @@ function drawLpAllTimeChart(pts, fid) {
   });
   ctx.restore();
 
-  // Tooltip on hover
+  // Tooltip on hover — scale mouse x to drawing coordinates (fixes stretch mismatch)
   const fmtUSDtt = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+  const benchLabel = bLabel || 'Benchmark';
   canvas.onmousemove = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
+    const rect  = canvas.getBoundingClientRect();
+    const scaleX = cssW / (rect.width || cssW);  // map CSS pixels → draw pixels
+    const mx = (e.clientX - rect.left) * scaleX;
     let hit = -1;
-    barMeta.forEach(({ x, barW, i }) => { if (mx >= x - 4 && mx <= x + barW + 4) hit = i; });
+    barMeta.forEach(({ x, barW, i }) => { if (mx >= x - 6 && mx <= x + barW + 6) hit = i; });
     if (hit < 0) { tooltip.style.display = 'none'; return; }
     const p = pts[hit];
     const ret = p.return_pct || 0;
     const retColor = ret >= 0 ? '#4ade80' : '#f87171';
     let html = `<div style="font-weight:800;font-size:12px;color:#5BB8D4;margin-bottom:6px;">${p.year}</div>`;
     html += `<div style="display:flex;justify-content:space-between;gap:16px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${(ret>=0?'+':'')+ret.toFixed(2)+'%'}</span></div>`;
-    if (p.spy_return_pct != null) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f59e0b;">SPY</span><span style="color:#f59e0b;">${(p.spy_return_pct>=0?'+':'')+p.spy_return_pct.toFixed(2)+'%'}</span></div>`;
-    if (p.alpha != null) { const ac = p.alpha>=0?'#4ade80':'#f87171'; html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:${ac};">Alpha</span><span style="color:${ac};font-weight:700;">${(p.alpha>=0?'+':'')+p.alpha.toFixed(2)+'%'}</span></div>`; }
+    const br = p.benchmark_return_pct;
+    if (br != null) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f59e0b;">${benchLabel}</span><span style="color:#f59e0b;">${(br>=0?'+':'')+br.toFixed(2)+'%'}</span></div>`;
+    if (p.alpha != null) { const ac=p.alpha>=0?'#4ade80':'#f87171'; html+=`<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:${ac};">Alpha</span><span style="color:${ac};font-weight:700;">${(p.alpha>=0?'+':'')+p.alpha.toFixed(2)+'%'}</span></div>`; }
     if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span>End Balance</span><span>${fmtUSDtt(p.end_balance)}</span></div>`;
     if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:rgba(255,255,255,0.5);">If Not Invested</span><span style="color:rgba(255,255,255,0.5);">${fmtUSDtt(p.cash_only_balance)}</span></div>`;
-    const deps = (p.deposits || 0);
-    const wds  = (p.withdrawals || 0);
+    const deps = (p.deposits || 0), wds = (p.withdrawals || 0);
     if (deps) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#4ade80;">Deposits</span><span style="color:#4ade80;">+${fmtUSDtt(deps)}</span></div>`;
     if (wds)  html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f87171;">Withdrawals</span><span style="color:#f87171;">-${fmtUSDtt(wds)}</span></div>`;
     tooltip.innerHTML = html;
     tooltip.style.display = 'block';
     const ttW = tooltip.offsetWidth || 200;
     const ttH = tooltip.offsetHeight || 100;
+    // Position tooltip in CSS-pixel space (not draw space)
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    tooltip.style.left = ((cx + 12 + ttW > cssW) ? Math.max(0, cx - ttW - 8) : cx + 12) + 'px';
+    tooltip.style.left = ((cx + 12 + ttW > rect.width) ? Math.max(0, cx - ttW - 8) : cx + 12) + 'px';
     tooltip.style.top  = (Math.max(0, cy - ttH / 2)) + 'px';
   };
   canvas.onmouseleave = () => { tooltip.style.display = 'none'; };

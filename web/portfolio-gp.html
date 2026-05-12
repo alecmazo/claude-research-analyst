@@ -2694,9 +2694,185 @@
     }
   }
 
+  // ── All-Time Performance state (per fund load) ─────────────────────────────
+  let _atpData         = null;   // full server response
+  let _atpFundId       = null;
+  let _atpBenchmark    = 'sp500';
+  let _atpPeriod       = 'all';  // 'all' | '5yr' | '3yr'
+  let _atpReturnMode   = 'annual'; // 'annual' | 'cumulative' | 'cagr'
+  let _atpSaving       = false;
+
+  const _BENCHMARK_OPTIONS = [
+    { key: 'sp500',      label: 'S&P 500' },
+    { key: 'dow30',      label: 'Dow 30' },
+    { key: 'nasdaq',     label: 'Nasdaq' },
+    { key: 'msci_world', label: 'MSCI World' },
+    { key: 'bonds',      label: 'Bond Index' },
+    { key: '60_40',      label: '60/40 Blend' },
+    { key: '85_15',      label: '85/15 Blend' },
+  ];
+
+  function _atpFilteredAnnual() {
+    const ann = (_atpData?.annual || []);
+    if (_atpPeriod === '3yr') return ann.slice(-3);
+    if (_atpPeriod === '5yr') return ann.slice(-5);
+    return ann;
+  }
+
+  function _atpRenderTable() {
+    const el  = document.getElementById('acd-annual-table-wrap');
+    if (!el || !_atpData) return;
+    const ann = _atpFilteredAnnual();
+    const bLabel = _BENCHMARK_OPTIONS.find(o => o.key === _atpBenchmark)?.label || 'Benchmark';
+    const fU = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+    const fP = (v, plus=true) => v == null ? '—' : (plus && v>=0?'+':'')+v.toFixed(2)+'%';
+
+    // Compute cumulative / CAGR from the filtered start
+    let cumPort = 1.0, cumBmark = 1.0;
+    const rows = ann.map((a, idx) => {
+      cumPort  *= (1 + (a.return_pct || 0) / 100);
+      cumBmark *= (1 + (a.benchmark_return_pct || 0) / 100);
+      const yrs = idx + 1;
+      const cumPortPct  = (cumPort  - 1) * 100;
+      const cumBmarkPct = (cumBmark - 1) * 100;
+      const cagrPortPct  = (Math.pow(cumPort,  1/yrs) - 1) * 100;
+      const cagrBmarkPct = (Math.pow(cumBmark, 1/yrs) - 1) * 100;
+
+      let retVal, bmarkVal, alphaVal;
+      if (_atpReturnMode === 'cumulative') {
+        retVal   = cumPortPct;
+        bmarkVal = a.benchmark_return_pct != null ? cumBmarkPct : null;
+        alphaVal = a.benchmark_return_pct != null ? cumPortPct - cumBmarkPct : null;
+      } else if (_atpReturnMode === 'cagr') {
+        retVal   = cagrPortPct;
+        bmarkVal = a.benchmark_return_pct != null ? cagrBmarkPct : null;
+        alphaVal = a.benchmark_return_pct != null ? cagrPortPct - cagrBmarkPct : null;
+      } else {
+        retVal   = a.return_pct;
+        bmarkVal = a.benchmark_return_pct;
+        alphaVal = a.alpha;
+      }
+      const rc = retVal >= 0 ? 'var(--green)' : 'var(--red)';
+      const ac = alphaVal == null ? 'var(--mid)' : alphaVal >= 0 ? 'var(--green)' : 'var(--red)';
+      const net = (a.deposits || 0) - (a.withdrawals || 0);
+      const netStr = net === 0 ? '—' : (net>0?'+':'')+fU(Math.abs(net))+(net<0?' out':'');
+      return `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
+        <td style="padding:5px 10px;font-weight:700;color:#e0e8f0;">${a.year}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fU(a.beg_balance) : '—'}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fU(a.end_balance) : '—'}</td>
+        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fP(retVal)}</td>
+        <td style="padding:5px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${fP(bmarkVal)}</td>
+        <td style="padding:5px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fP(alphaVal)}</td>
+        <td style="padding:5px 10px;text-align:right;color:var(--mid);font-size:10px;font-variant-numeric:tabular-nums;">${netStr}</td>
+      </tr>`;
+    });
+
+    // Summary row
+    const n = ann.length;
+    if (n > 0) {
+      const totalCumPort  = (cumPort  - 1) * 100;
+      const totalCumBmark = (cumBmark - 1) * 100;
+      const totalCagrPort  = (Math.pow(cumPort,  1/n) - 1) * 100;
+      const totalCagrBmark = (Math.pow(cumBmark, 1/n) - 1) * 100;
+      const hasBmark = ann.some(a => a.benchmark_return_pct != null);
+      const totalAlpha = hasBmark ? totalCumPort - totalCumBmark : null;
+      const cagrAlpha  = hasBmark ? totalCagrPort - totalCagrBmark : null;
+      const summaryRc = totalCumPort >= 0 ? 'var(--green)' : 'var(--red)';
+      const summaryAc = totalAlpha == null ? 'var(--mid)' : totalAlpha >= 0 ? 'var(--green)' : 'var(--red)';
+      rows.push(`<tr style="border-top:2px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.04);">
+        <td style="padding:6px 10px;font-weight:800;color:#e0e8f0;font-size:10px;letter-spacing:0.5px;">${n}YR TOTAL</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
+        <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryRc};font-variant-numeric:tabular-nums;">${fP(totalCumPort)} cumul. / ${fP(totalCagrPort)} CAGR</td>
+        <td style="padding:6px 10px;text-align:right;color:#f59e0b;font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalCumBmark)+' / '+fP(totalCagrBmark) : '—'}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryAc};font-variant-numeric:tabular-nums;">${hasBmark ? fP(totalAlpha)+' / '+fP(cagrAlpha) : '—'}</td>
+        <td></td>
+      </tr>`);
+    }
+
+    const retModeLabel = { annual: 'Annual Return', cumulative: 'Cumul. Return', cagr: 'CAGR' }[_atpReturnMode] || 'Return';
+    el.innerHTML = `
+      <div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+        <!-- Period -->
+        <div style="display:flex;gap:2px;align-items:center;">
+          <span style="font-size:9px;color:var(--mid);margin-right:4px;font-weight:700;">PERIOD:</span>
+          ${['all','5yr','3yr'].map(p => `<button data-atp-period="${p}" class="tab-btn sm${_atpPeriod===p?'':' secondary'}" style="font-size:9px;padding:0 7px;">${p==='all'?'All-Time':p==='5yr'?'5-Year':'3-Year'}</button>`).join('')}
+        </div>
+        <!-- Return mode -->
+        <div style="display:flex;gap:2px;align-items:center;">
+          <span style="font-size:9px;color:var(--mid);margin-right:4px;font-weight:700;">RETURN:</span>
+          ${['annual','cumulative','cagr'].map(m => `<button data-atp-mode="${m}" class="tab-btn sm${_atpReturnMode===m?'':' secondary'}" style="font-size:9px;padding:0 7px;">${m==='annual'?'Annual':m==='cumulative'?'Cumulative':'CAGR'}</button>`).join('')}
+        </div>
+        <!-- Benchmark selector -->
+        <div style="display:flex;gap:4px;align-items:center;margin-left:auto;">
+          <span style="font-size:9px;color:var(--mid);font-weight:700;">BENCHMARK:</span>
+          <select id="atp-bmark-sel" style="background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#e0e8f0;font-size:10px;padding:2px 6px;height:24px;cursor:pointer;">
+            ${_BENCHMARK_OPTIONS.map(o => `<option value="${o.key}"${o.key===_atpBenchmark?' selected':''}>${o.label}</option>`).join('')}
+          </select>
+          <button id="atp-save-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;height:24px;" title="Save settings — LP will see this benchmark and period">Save to LP →</button>
+          <span id="atp-save-msg" style="font-size:10px;"></span>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr style="background:rgba(255,255,255,0.04);">
+            <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--green);letter-spacing:0.8px;">${retModeLabel.toUpperCase()}</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#f59e0b;letter-spacing:0.8px;">${bLabel.toUpperCase()}</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--blue);letter-spacing:0.8px;">ALPHA</th>
+            <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>`;
+
+    // Wire period buttons
+    el.querySelectorAll('[data-atp-period]').forEach(b => {
+      b.addEventListener('click', () => {
+        _atpPeriod = b.dataset.atpPeriod;
+        _atpRenderTable();
+      });
+    });
+    // Wire return mode buttons
+    el.querySelectorAll('[data-atp-mode]').forEach(b => {
+      b.addEventListener('click', () => {
+        _atpReturnMode = b.dataset.atpMode;
+        _atpRenderTable();
+      });
+    });
+    // Wire benchmark selector
+    const bSel = el.querySelector('#atp-bmark-sel');
+    if (bSel) bSel.addEventListener('change', () => { _atpBenchmark = bSel.value; _atpRenderTable(); });
+    // Wire Save button
+    const saveBtn = el.querySelector('#atp-save-btn');
+    const saveMsg = el.querySelector('#atp-save-msg');
+    if (saveBtn && _atpFundId) {
+      saveBtn.addEventListener('click', async () => {
+        if (_atpSaving) return;
+        _atpSaving = true;
+        saveBtn.disabled = true; saveBtn.textContent = '…'; if (saveMsg) saveMsg.textContent = '';
+        try {
+          const sr = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(_atpFundId)}/settings`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ benchmark: _atpBenchmark, period: _atpPeriod }),
+          });
+          if (!sr.ok) throw new Error((await sr.json()).detail || sr.status);
+          if (saveMsg) { saveMsg.style.color='var(--green)'; saveMsg.textContent='✅ Saved — LP will see this'; }
+          // Re-fetch data with new benchmark
+          await loadAllTimePerf(_atpFundId);
+        } catch(e) {
+          if (saveMsg) { saveMsg.style.color='var(--red)'; saveMsg.textContent='❌ '+e.message; }
+        } finally { _atpSaving = false; saveBtn.disabled = false; saveBtn.textContent = 'Save to LP →'; }
+      });
+    }
+  }
+
   async function loadAllTimePerf(fid) {
     const el = document.getElementById('acd-alltime');
     if (!el) return;
+    _atpFundId = fid;
     try {
       const r = await window.dgaFetch('/api/fund/' + encodeURIComponent(fid) + '/balance-history');
       const data = await r.json();
@@ -2704,30 +2880,15 @@
         el.innerHTML = `<section class="panel"><div style="padding:14px;font-size:12px;color:var(--mid);">Upload Balance History CSV to see all-time performance.</div></section>`;
         return;
       }
+      _atpData      = data;
+      _atpBenchmark = data.benchmark_key  || 'sp500';
+      _atpPeriod    = data.period         || 'all';
+
       const monthly = data.monthly;
       const annual  = data.annual;
       const annRets = annual.map(a => 1 + a.return_pct / 100);
       const cagr = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/annRets.length)-1)*100 : null;
       const annualRet = cagr != null ? (cagr>=0?'+':'')+cagr.toFixed(1)+'% CAGR' : annual.length + ' yrs';
-
-      // Build annual performance table (collapsed by default)
-      const fmtUSD2 = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
-      const fmtPct2 = (v, plus=true) => v == null ? '—' : (plus && v>=0?'+':'')+v.toFixed(2)+'%';
-      const annRows = annual.map(a => {
-        const rc = a.return_pct >= 0 ? 'var(--green)' : 'var(--red)';
-        const ac = a.alpha == null ? 'var(--mid)' : a.alpha >= 0 ? 'var(--green)' : 'var(--red)';
-        const deps = (a.deposits || 0) - (a.withdrawals || 0);
-        const depsStr = deps === 0 ? '—' : (deps>0?'+':'')+fmtUSD2(Math.abs(deps))+(deps<0?' withdrawn':'');
-        return `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
-          <td style="padding:5px 10px;font-weight:700;color:#e0e8f0;">${a.year}</td>
-          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fmtUSD2(a.beg_balance) : '—'}</td>
-          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fmtUSD2(a.end_balance) : '—'}</td>
-          <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${fmtPct2(a.return_pct)}</td>
-          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.spy_return_pct != null ? fmtPct2(a.spy_return_pct) : '—'}</td>
-          <td style="padding:5px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums;">${fmtPct2(a.alpha)}</td>
-          <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${depsStr}</td>
-        </tr>`;
-      }).join('');
 
       el.innerHTML = `
         <section class="panel">
@@ -2742,7 +2903,7 @@
               </div>
             </summary>
             <div style="padding:14px;position:relative;">
-              <canvas id="acd-alltime-canvas" style="width:100%;height:240px;display:block;"></canvas>
+              <canvas id="acd-alltime-canvas" style="width:100%;height:260px;display:block;"></canvas>
               <div id="acd-alltime-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
             </div>
           </details>
@@ -2751,31 +2912,19 @@
           <details>
             <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
               <span class="panel-title">Annual Performance</span>
-              <span class="panel-badge">${annual.length} year${annual.length!==1?'s':''}</span>
+              <span class="panel-badge">${annual.length} year${annual.length!==1?'s':''} · ${data.benchmark_label||'S&P 500'}</span>
               <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
             </summary>
-            <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;font-size:11px;">
-                <thead><tr style="background:rgba(255,255,255,0.04);">
-                  <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--green);letter-spacing:0.8px;">RETURN</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:#f59e0b;letter-spacing:0.8px;">SPY</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--blue);letter-spacing:0.8px;">ALPHA</th>
-                  <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">NET FLOWS</th>
-                </tr></thead>
-                <tbody>${annRows}</tbody>
-              </table>
-            </div>
+            <div id="acd-annual-table-wrap"></div>
           </details>
         </section>`;
+
       requestAnimationFrame(() => drawAllTimeChart(data.monthly, 'monthly'));
+      _atpRenderTable();
+
       el.querySelectorAll('[data-atp-view]').forEach(btn => {
         btn.addEventListener('click', () => {
-          el.querySelectorAll('[data-atp-view]').forEach(b => {
-            b.classList.toggle('secondary', b !== btn);
-          });
+          el.querySelectorAll('[data-atp-view]').forEach(b => b.classList.toggle('secondary', b !== btn));
           const view = btn.dataset.atpView;
           const pts = view === 'quarterly' ? data.quarterly : view === 'annual' ? data.annual : data.monthly;
           drawAllTimeChart(pts, view);

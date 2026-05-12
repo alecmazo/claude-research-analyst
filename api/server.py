@@ -1191,6 +1191,81 @@ def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
 
 
 # ===========================================================================
+# Fund display settings — GP writes, LP reads
+# ===========================================================================
+
+class FundSettingsRequest(BaseModel):
+    benchmark: str = "sp500"   # key from _BENCHMARK_DEFS
+    period:    str = "all"     # "all" | "5yr" | "3yr"
+
+
+@app.get("/api/fund/{fund_id}/settings")
+async def fund_get_settings(fund_id: str, request: Request):
+    """Return GP-configured display settings (benchmark, period). Readable by LP + GP."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims:
+        _require_fund_token(request)
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                fid = _resolve_fund_id(cur, fund_id)
+                cur.execute(
+                    "SELECT settings_json FROM fund_display_settings WHERE fund_id = %s",
+                    (fid,),
+                )
+                row = cur.fetchone()
+                settings = json.loads(row["settings_json"]) if row else {}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"ok": False, "detail": str(exc), "settings": {}}
+    bkey = settings.get("benchmark", "sp500")
+    return {
+        "ok":              True,
+        "fund_id":         fund_id,
+        "settings":        settings,
+        "benchmark_key":   bkey,
+        "benchmark_label": _BENCHMARK_DEFS.get(bkey, {}).get("label", "S&P 500"),
+        "period":          settings.get("period", "all"),
+    }
+
+
+@app.post("/api/v2/gp/fund/{fund_id}/settings")
+async def fund_save_settings(fund_id: str, request: Request, body: FundSettingsRequest):
+    """GP-only: save display settings (benchmark, period) for a fund."""
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP access required")
+
+    bkey   = body.benchmark if body.benchmark in _BENCHMARK_DEFS else "sp500"
+    period = body.period    if body.period in ("all", "5yr", "3yr") else "all"
+    settings = {"benchmark": bkey, "period": period}
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("""
+                INSERT INTO fund_display_settings (fund_id, settings_json, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                    SET settings_json = EXCLUDED.settings_json,
+                        updated_at    = now()
+            """, (fid, json.dumps(settings)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "ok":              True,
+        "fund_id":         fund_id,
+        "settings":        settings,
+        "benchmark_label": _BENCHMARK_DEFS[bkey]["label"],
+    }
+
+
+# ===========================================================================
 # Phase B — GP dashboard data endpoints
 #
 # These endpoints power the new Terminal Pro view at /gp:
@@ -2865,6 +2940,84 @@ _spy_ytd_cache: dict = {}   # {"ytd_pct": float, "first_close": float,
                              #  "last_close": float, "as_of": str, "ts": float}
 _SPY_YTD_TTL = 900          # seconds — matches _PRICE_CACHE_TTL
 
+# ── Benchmark annual return cache ─────────────────────────────────────────────
+# Keyed by (benchmark_key, year) → float (return %).  Persists for the lifetime
+# of the process (changes once per year; no TTL needed).
+_benchmark_annual_cache: dict = {}
+
+_BENCHMARK_DEFS: dict = {
+    "sp500":      {"label": "S&P 500",     "tickers": [("SPY",  1.00)]},
+    "dow30":      {"label": "Dow 30",      "tickers": [("DIA",  1.00)]},
+    "nasdaq":     {"label": "Nasdaq",      "tickers": [("QQQ",  1.00)]},
+    "msci_world": {"label": "MSCI World",  "tickers": [("URTH", 1.00)]},
+    "bonds":      {"label": "Bond Index",  "tickers": [("AGG",  1.00)]},
+    "60_40":      {"label": "60/40 Blend", "tickers": [("SPY",  0.60), ("AGG", 0.40)]},
+    "85_15":      {"label": "85/15 Blend", "tickers": [("SPY",  0.85), ("AGG", 0.15)]},
+}
+
+
+def _get_benchmark_annual(benchmark_key: str, years: list) -> dict:
+    """Return {year: return_pct} for the given benchmark and years.
+
+    Fetches via yfinance month-end closes (start of prev year → end of last year)
+    and computes year-over-year calendar returns. Results are cached for the
+    process lifetime (values only change once per year).
+    """
+    if not _YFINANCE_OK or not years:
+        return {}
+    defn = _BENCHMARK_DEFS.get(benchmark_key)
+    if not defn:
+        return {}
+
+    # Check which years are already fully cached
+    uncached_years = [yr for yr in years if (benchmark_key, yr) not in _benchmark_annual_cache]
+
+    if uncached_years:
+        min_yr = min(years)
+        max_yr = max(years)
+        tickers = defn["tickers"]
+
+        # Fetch closes for all constituent tickers
+        ticker_yr_returns: dict = {}
+        for ticker, _ in tickers:
+            if ticker in ticker_yr_returns:
+                continue
+            try:
+                hist = yf.Ticker(ticker).history(
+                    start=f"{min_yr - 1}-12-15",
+                    end=f"{max_yr + 1}-01-15",
+                    interval="1mo",
+                )
+                if hist.empty:
+                    ticker_yr_returns[ticker] = {}
+                    continue
+                yr_closes: dict = {}
+                for ts, row_s in hist.iterrows():
+                    yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
+                yr_rets: dict = {}
+                for yr in range(min_yr, max_yr + 1):
+                    prev = yr_closes.get(yr - 1, [])
+                    cur  = yr_closes.get(yr, [])
+                    if prev and cur:
+                        yr_rets[yr] = round((cur[-1] / prev[-1] - 1) * 100, 2)
+                ticker_yr_returns[ticker] = yr_rets
+            except Exception:
+                ticker_yr_returns[ticker] = {}
+
+        # Compute weighted blended returns and populate cache
+        for yr in years:
+            total_w, total_r = 0.0, 0.0
+            for ticker, weight in tickers:
+                r = ticker_yr_returns.get(ticker, {}).get(yr)
+                if r is not None:
+                    total_r += r * weight
+                    total_w += weight
+            if total_w > 0:
+                _benchmark_annual_cache[(benchmark_key, yr)] = round(total_r / total_w, 2)
+
+    return {yr: _benchmark_annual_cache[(benchmark_key, yr)]
+            for yr in years if (benchmark_key, yr) in _benchmark_annual_cache}
+
 
 @app.get("/api/market/spy-ytd")
 def get_spy_ytd():
@@ -4094,6 +4247,36 @@ def _ensure_lp_creds_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_fund_display_settings_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fund_display_settings (
+                fund_id       UUID PRIMARY KEY,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                updated_at    TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+    conn.commit()
+
+
+def _load_fund_settings(fid: str) -> dict:
+    """Return the GP-configured display settings for a fund (benchmark, period)."""
+    try:
+        conn = _fund_conn()
+        try:
+            with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT settings_json FROM fund_display_settings WHERE fund_id = %s",
+                    (fid,),
+                )
+                row = cur.fetchone()
+                return json.loads(row["settings_json"]) if row else {}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
 def _db_load_lp_overlay() -> dict:
     """Load LP credential overlay from PostgreSQL."""
     try:
@@ -4217,6 +4400,7 @@ def _apply_self_migrations() -> None:
             _fix_fund_type_column(conn)
             _ensure_balance_history_table(conn)
             _ensure_lp_creds_table(conn)
+            _ensure_fund_display_settings_table(conn)
 
             _MIGRATIONS_APPLIED = True
             print("[migration] self-migrations complete")
@@ -5988,52 +6172,44 @@ async def fund_balance_history(fund_id: str, request: Request):
             "return_pct":        chain_returns(pts),
         })
 
-    # Fetch SPY annual returns for all years in history
-    spy_annual: dict[int, float] = {}
-    if _YFINANCE_OK and monthly:
-        try:
-            import datetime as _dt
-            years = sorted({p["year"] for p in monthly})
-            min_yr = years[0]
-            spy_hist = yf.Ticker("SPY").history(
-                start=f"{min_yr - 1}-12-15", end=f"{years[-1] + 1}-01-15",
-                interval="1mo",
-            )
-            if not spy_hist.empty:
-                # Group monthly closes by year; compute Jan-Dec return
-                yr_closes: dict[int, list] = {}
-                for ts, row_s in spy_hist.iterrows():
-                    yr_closes.setdefault(ts.year, []).append(float(row_s["Close"]))
-                # For each target year: compare first close of year vs last close
-                for yr in years:
-                    prev_closes = yr_closes.get(yr - 1, [])
-                    cur_closes  = yr_closes.get(yr, [])
-                    if prev_closes and cur_closes:
-                        spy_annual[yr] = round(
-                            (cur_closes[-1] / prev_closes[-1] - 1) * 100, 2
-                        )
-        except Exception:
-            pass
+    # Load fund display settings (benchmark choice set by GP)
+    fund_settings  = _load_fund_settings(fid)
+    benchmark_key  = fund_settings.get("benchmark", "sp500")
+    benchmark_defn = _BENCHMARK_DEFS.get(benchmark_key, _BENCHMARK_DEFS["sp500"])
+    benchmark_label = benchmark_defn["label"]
+
+    # Fetch benchmark annual returns for all years in history
+    years = sorted({p["year"] for p in monthly}) if monthly else []
+    bmark_annual: dict[int, float] = _get_benchmark_annual(benchmark_key, years)
 
     annual = []
     for yr, grp in groupby(monthly, key=lambda r: r["year"]):
         pts = list(grp)
-        spy_ret = spy_annual.get(yr)
-        port_ret = chain_returns(pts)
+        bmark_ret = bmark_annual.get(yr)
+        port_ret  = chain_returns(pts)
         annual.append({
-            "year":              yr,
-            "label":             str(yr),
-            "beg_balance":       pts[0]["beg_balance"],
-            "end_balance":       pts[-1]["end_balance"],
-            "cash_only_balance": pts[-1].get("cash_only_balance"),
-            "deposits":          round(sum(float(p.get("deposits") or 0) for p in pts), 2),
-            "withdrawals":       round(sum(float(p.get("withdrawals") or 0) for p in pts), 2),
-            "return_pct":        port_ret,
-            "spy_return_pct":    spy_ret,
-            "alpha":             round(port_ret - spy_ret, 2) if spy_ret is not None else None,
+            "year":                 yr,
+            "label":                str(yr),
+            "beg_balance":          pts[0]["beg_balance"],
+            "end_balance":          pts[-1]["end_balance"],
+            "cash_only_balance":    pts[-1].get("cash_only_balance"),
+            "deposits":             round(sum(float(p.get("deposits") or 0) for p in pts), 2),
+            "withdrawals":          round(sum(float(p.get("withdrawals") or 0) for p in pts), 2),
+            "return_pct":           port_ret,
+            "benchmark_return_pct": bmark_ret,
+            "alpha":                round(port_ret - bmark_ret, 2) if bmark_ret is not None else None,
         })
 
-    return {"ok": True, "monthly": monthly, "quarterly": quarterly, "annual": annual, "updated_at": updated_at}
+    return {
+        "ok":             True,
+        "monthly":        monthly,
+        "quarterly":      quarterly,
+        "annual":         annual,
+        "benchmark_key":  benchmark_key,
+        "benchmark_label": benchmark_label,
+        "period":         fund_settings.get("period", "all"),
+        "updated_at":     updated_at,
+    }
 
 
 # Managed-account YTD calc — server-side wrapper that runs the existing
