@@ -68,7 +68,7 @@ export default function LPPerformanceScreen({ onLogout }) {
   const accts = data?.managed_accounts || [];
   const firstName = (me?.name || '').split(/\s+/)[0] || 'there';
   const isEmpty = funds.length === 0 && accts.length === 0;
-  const totalFundNav = funds.reduce((s, f) => s + (f.fund_nav || 0), 0);
+  const totalFundNav = funds.reduce((s, f) => s + (f.effective_nav || f.fund_nav || 0), 0);
   const totalAcctNav = accts.reduce((s, a) => s + (a.nav    || 0), 0);
 
   return (
@@ -156,9 +156,9 @@ export default function LPPerformanceScreen({ onLogout }) {
                 <View style={styles.cardStats}>
                   <View style={styles.cardStat}>
                     <Text style={styles.cardStatLabel}>FUND NAV</Text>
-                    <Text style={styles.cardStatVal}>{f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}</Text>
+                    <Text style={styles.cardStatVal}>{f.effective_nav != null ? fmtUSD(f.effective_nav) : (f.fund_nav != null ? fmtUSD(f.fund_nav) : '—')}</Text>
                     <Text style={styles.cardStatSub}>
-                      {f.fund_nav_as_of ? `as of ${f.fund_nav_as_of}` : 'No snapshot yet'}
+                      {f.fund_nav > 0 && f.fund_nav_as_of ? `as of ${f.fund_nav_as_of}` : f.effective_nav ? 'Live from positions' : 'No snapshot yet'}
                     </Text>
                   </View>
                   <View style={styles.cardStat}>
@@ -167,6 +167,18 @@ export default function LPPerformanceScreen({ onLogout }) {
                     <Text style={styles.cardStatSub}>{f.lp_count} LP{f.lp_count !== 1 ? 's' : ''} in fund</Text>
                   </View>
                 </View>
+                {(f.gp_accrued_carry > 0 || f.lp_nav_after_carry != null) && (
+                  <View style={styles.cardStats}>
+                    <View style={[styles.cardStat, {flex: 1}]}>
+                      <Text style={styles.cardStatLabel}>GP CARRY</Text>
+                      <Text style={[styles.cardStatVal, {color: '#cc3333', fontSize: 13}]}>{f.gp_accrued_carry ? fmtUSD(f.gp_accrued_carry) : '—'}</Text>
+                    </View>
+                    <View style={[styles.cardStat, {flex: 1}]}>
+                      <Text style={styles.cardStatLabel}>LP DISTRIBUTABLE</Text>
+                      <Text style={[styles.cardStatVal, {color: '#1a7f40', fontSize: 13}]}>{f.lp_nav_after_carry != null ? fmtUSD(f.lp_nav_after_carry) : '—'}</Text>
+                    </View>
+                  </View>
+                )}
               </View>
             ))}
 
@@ -185,6 +197,15 @@ export default function LPPerformanceScreen({ onLogout }) {
                       {a.nav_as_of ? `as of ${a.nav_as_of}` : 'No snapshot yet'}
                     </Text>
                   </View>
+                  {a.ytd_pct != null && (
+                    <View style={styles.cardStat}>
+                      <Text style={styles.cardStatLabel}>YTD RETURN</Text>
+                      <Text style={[styles.cardStatVal, {color: a.ytd_pct >= 0 ? '#1a7f40' : '#cc3333'}]}>
+                        {(a.ytd_pct >= 0 ? '+' : '') + a.ytd_pct.toFixed(2) + '%'}
+                      </Text>
+                      <Text style={styles.cardStatSub}>Mod. Dietz</Text>
+                    </View>
+                  )}
                 </View>
               </View>
             ))}

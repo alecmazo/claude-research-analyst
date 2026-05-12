@@ -337,21 +337,30 @@ def _parse_balance_history_csv(text: str) -> list:
         net_income = mkt_chg + dividends + interest - fees
         net_flow   = deposits - withdrawals
         denom      = beg + 0.5 * net_flow
-        return_pct = (net_income / denom * 100) if denom != 0 else 0.0
+
+        # Detect custodial transfer months: assets wiped to ~$0 then reinstated
+        # next month. These are account reconstitutions, not real performance.
+        transfer_threshold = 50_000
+        is_transfer_out = (end < 100 and beg > transfer_threshold)
+        is_transfer_in  = (beg < 100 and end > transfer_threshold)
+        skip = is_transfer_out or is_transfer_in
+
+        return_pct = 0.0 if skip else ((net_income / denom * 100) if denom != 0 else 0.0)
 
         records.append({
-            'year':        year,
-            'month':       month,
-            'label':       clean,
-            'beg_balance': beg,
-            'end_balance': end,
+            'year':          year,
+            'month':         month,
+            'label':         clean,
+            'beg_balance':   beg,
+            'end_balance':   end,
             'market_change': mkt_chg,
-            'dividends':   dividends,
-            'interest':    interest,
-            'deposits':    deposits,
-            'withdrawals': withdrawals,
-            'fees':        fees,
-            'return_pct':  round(return_pct, 4),
+            'dividends':     dividends,
+            'interest':      interest,
+            'deposits':      deposits,
+            'withdrawals':   withdrawals,
+            'fees':          fees,
+            'return_pct':    round(return_pct, 4),
+            'skip':          skip,
         })
 
     records.sort(key=lambda r: (r['year'], r['month']))
@@ -2475,7 +2484,7 @@ async def serve_mockup_hybrid():
 # ── Build/version endpoint ────────────────────────────────────────────────────
 # The web client polls this to detect deploys and force a hard reload of
 # stale iOS PWA / Safari caches. Bumped on every UI deploy.
-WEB_BUILD_VERSION = "ui75-20260511"
+WEB_BUILD_VERSION = "ui76-20260511"
 
 
 @app.get("/api/build")
@@ -5669,6 +5678,8 @@ async def fund_balance_history(fund_id: str, request: Request):
     def chain_returns(pts):
         result = 1.0
         for p in pts:
+            if p.get("skip"):
+                continue
             result *= (1 + p["return_pct"] / 100)
         return round((result - 1) * 100, 4)
 
