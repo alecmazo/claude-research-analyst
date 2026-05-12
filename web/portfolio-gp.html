@@ -1212,6 +1212,17 @@
         <button id="acd-ytd-run-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">⚡ Run YTD</button>
         <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;"></span>
       </div>
+      <div style="padding:5px 14px 9px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;border-top:1px solid rgba(255,255,255,0.05);">
+        <span style="font-size:9px;color:var(--dim);font-weight:700;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">MERGE:</span>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 7px;" title="First balance history CSV">
+          File 1<input id="acd-merge-f1" type="file" accept=".csv,.txt" style="display:none">
+        </label>
+        <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 7px;" title="Second balance history CSV">
+          File 2<input id="acd-merge-f2" type="file" accept=".csv,.txt" style="display:none">
+        </label>
+        <button id="acd-merge-btn" class="tab-btn sm secondary" style="font-size:9px;padding:0 8px;">⬇ Merge & Download</button>
+        <span id="acd-merge-status" style="font-size:10px;"></span>
+      </div>
     </section>
   </div>
 </div><!-- #tab-acct-detail -->
@@ -2061,7 +2072,9 @@
         </div>`;
 
       const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct) => `
-        <div class="fund-card" style="cursor:pointer;" data-fund-id="${fid}" data-fund-name="${fname}">
+        <div class="fund-card" style="cursor:pointer;position:relative;" data-fund-id="${fid}" data-fund-name="${fname}">
+          <button data-purge-fund="${fid}" data-purge-name="${esc(fname)}" title="Delete ${isAcct ? 'account' : 'fund'} — cannot be undone"
+            style="position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:50%;background:rgba(204,51,51,0.12);border:1px solid rgba(204,51,51,0.28);color:#cc3333;font-size:12px;line-height:1;cursor:pointer;padding:0;z-index:2;display:flex;align-items:center;justify-content:center;">×</button>
           <div class="fund-card-head">
             <span class="fund-card-name">${fname}</span>
             <span class="fund-card-badge">${badge}</span>
@@ -2111,8 +2124,27 @@
       const wireCards = (el) => {
         el.querySelectorAll('[data-fund-id]').forEach(card => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn]')) return;
+            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn],[data-purge-fund]')) return;
             openFundDetail(card.dataset.fundId, card.dataset.fundName);
+          });
+        });
+        el.querySelectorAll('[data-purge-fund]').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const fid  = btn.dataset.purgeFund;
+            const name = btn.dataset.purgeName;
+            if (!confirm(`Permanently delete "${name}" and ALL its data?\n\nThis cannot be undone.`)) return;
+            btn.textContent = '…'; btn.disabled = true;
+            try {
+              const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(fid)}/purge`, { method: 'DELETE' });
+              const d = await r.json();
+              if (!r.ok) throw new Error(d.detail || 'Delete failed');
+              btn.closest('.fund-card').remove();
+              loadFundOverview();
+            } catch (err) {
+              alert('Delete failed: ' + err.message);
+              btn.textContent = '×'; btn.disabled = false;
+            }
           });
         });
         el.querySelectorAll('[data-nav-btn]').forEach(btn => {
@@ -2569,6 +2601,30 @@
     // Managed-account YTD run
     if (e.target.id === 'acd-ytd-run-btn') {
       runAccountYtd(e.target);
+    }
+    // Merge CSVs & download
+    if (e.target.id === 'acd-merge-btn') {
+      const f1   = document.getElementById('acd-merge-f1').files[0];
+      const f2   = document.getElementById('acd-merge-f2').files[0];
+      const stat = document.getElementById('acd-merge-status');
+      if (!f1 || !f2) { stat.textContent = '❌ Select both files first'; stat.style.color = 'var(--red)'; return; }
+      stat.textContent = 'Merging…'; stat.style.color = 'var(--blue)';
+      try {
+        const fd = new FormData();
+        fd.append('file1', f1);
+        fd.append('file2', f2);
+        const r = await window.dgaFetch('/api/fund/merge-balance-history', { method: 'POST', body: fd });
+        if (!r.ok) throw new Error(await r.text());
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'merged_balance_history.csv';
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        stat.textContent = '✓ Downloaded'; stat.style.color = 'var(--green)';
+      } catch (err) {
+        stat.textContent = '❌ ' + err.message; stat.style.color = 'var(--red)';
+      }
     }
     // Exports — LP fund
     if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);

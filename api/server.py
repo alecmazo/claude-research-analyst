@@ -6062,6 +6062,113 @@ async def fund_admin_delete(request: Request, fund_id: str):
 
 
 # ---------------------------------------------------------------------------
+# GP-auth'd hard purge — no password, no backup, deletes everything
+# ---------------------------------------------------------------------------
+
+@app.delete("/api/v2/gp/fund/{fund_id}/purge")
+async def fund_purge(fund_id: str, request: Request):
+    """Permanently purge a fund + all child rows. GP JWT required. No backup kept."""
+    claims = _claims_or_401(request)
+    if claims.get("role") != "gp":
+        raise HTTPException(403, "GP only")
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("SELECT name, short_name FROM funds WHERE id = %s", (fid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Fund not found")
+            name = row["name"]
+            # Grandchild rows (FK chains)
+            _safe_delete(cur, "DELETE FROM transaction_lines WHERE transaction_id IN (SELECT id FROM transactions WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM capital_call_allocations WHERE capital_call_id IN (SELECT id FROM capital_calls WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM distribution_allocations WHERE distribution_id IN (SELECT id FROM distributions WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM nav_snapshot_lp WHERE snapshot_id IN (SELECT id FROM nav_snapshots WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM carry_allocations WHERE carry_run_id IN (SELECT id FROM carry_runs WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM mgmt_fee_allocations WHERE mgmt_fee_run_id IN (SELECT id FROM mgmt_fee_runs WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM commitments WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)", (fid,))
+            _safe_delete(cur, "DELETE FROM lp_statements WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = %s)", (fid,))
+            # Direct fund_id children
+            for tbl in ("account_balance_history", "managed_account_ytd_cache",
+                        "transactions", "capital_calls", "distributions",
+                        "nav_snapshots", "carry_runs", "mgmt_fee_runs",
+                        "lps", "tax_lots", "accounts", "audit_log",
+                        "annual_lp_balances", "fund_annual_snapshots"):
+                _safe_delete(cur, f"DELETE FROM {tbl} WHERE fund_id = %s", (fid,))  # noqa: S608
+            cur.execute("DELETE FROM funds WHERE id = %s", (fid,))
+        conn.commit()
+        return {"ok": True, "deleted": name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(500, f"Purge failed: {exc}")
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Merge two balance-history CSVs → download combined CSV
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fund/merge-balance-history")
+async def merge_balance_history(
+    request: Request,
+    file1: UploadFile = File(...),
+    file2: UploadFile = File(...),
+):
+    """Parse two Fidelity Investment Income & Balance Detail CSVs and return
+    a merged CSV where overlapping months are summed field-by-field."""
+    _require_fund_token(request)
+    t1 = (await file1.read()).decode("utf-8", errors="replace")
+    t2 = (await file2.read()).decode("utf-8", errors="replace")
+    r1 = _parse_balance_history_csv(t1)
+    r2 = _parse_balance_history_csv(t2)
+    if not r1 and not r2:
+        raise HTTPException(400, "No valid monthly rows found in either file.")
+    map1 = {(r["year"], r["month"]): r for r in r1}
+    map2 = {(r["year"], r["month"]): r for r in r2}
+    SUM_FIELDS = ("beg_balance", "end_balance", "market_change",
+                  "dividends", "interest", "deposits", "withdrawals", "fees")
+    merged = []
+    for key in sorted(set(map1) | set(map2), reverse=True):
+        a, b = map1.get(key), map2.get(key)
+        if a and b:
+            row = {"label": a["label"], "year": a["year"], "month": a["month"]}
+            for f in SUM_FIELDS:
+                row[f] = (a.get(f) or 0.0) + (b.get(f) or 0.0)
+        else:
+            src = a or b
+            row = {f: src.get(f, 0.0) for f in ("label", "year", "month") + SUM_FIELDS}
+        merged.append(row)
+
+    def _fm(v):
+        return f'-${abs(v):,.2f}' if v < 0 else f'${v:,.2f}'
+
+    lines = [
+        "Investment income Export",
+        '"Income For: COMBINED"',
+        f'"Investment income - ({merged[-1]["label"]} - {merged[0]["label"]})"',
+        '"Monthly","Beginning balance","Market change","Dividends","Interest","Deposits","Withdrawals","Net advisory fees","Ending balance"',
+    ]
+    for r in merged:
+        lines.append(",".join([
+            f'"{r["label"]}"', f'"{_fm(r["beg_balance"])}"',
+            f'"{_fm(r["market_change"])}"', f'"{_fm(r["dividends"])}"',
+            f'"{_fm(r["interest"])}"', f'"{_fm(r["deposits"])}"',
+            f'"{_fm(r["withdrawals"])}"', f'"{_fm(r["fees"])}"',
+            f'"{_fm(r["end_balance"])}"',
+        ]))
+    from fastapi.responses import Response as _Resp
+    return _Resp(
+        content="\n".join(lines),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="merged_balance_history.csv"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Fund export — Excel workbook
 # ---------------------------------------------------------------------------
 
