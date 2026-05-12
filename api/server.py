@@ -1915,11 +1915,13 @@ def gp_fund_create(request: Request, body: CreateFundV2Request):
             """, (body.name.strip(), sn, ftype, inc, fye, structure,
                   body.mgmt_fee_pct, body.carry_pct, body.hurdle_pct))
             row = cur.fetchone()
+            fid = str(row["id"])
+            _seed_coa_for_fund(cur, fid)
             conn.commit()
             return {
                 "ok":       True,
                 "created":  bool(row["inserted"]),
-                "fund_id":  str(row["id"]),
+                "fund_id":  fid,
                 "fund_name": body.name,
                 "fund_type": ftype,
             }
@@ -5894,6 +5896,8 @@ async def fund_account_ytd_run(
                 _seed_coa_for_fund(cur, fid)
                 positions_parsed = _parse_fidelity_csv(pos_text)
                 if positions_parsed:
+                    # Ensure COA exists (backfill accounts created before seeding was wired)
+                    _seed_coa_for_fund(cur, fid)
                     # Fetch CoA account IDs
                     cur.execute("""
                         SELECT code, id FROM accounts
