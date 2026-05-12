@@ -2071,9 +2071,10 @@
           <span data-nav-status="${fid}" style="font-size:10px;"></span>
         </div>`;
 
+      const _safeAttr = (s) => String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
       const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct) => `
         <div class="fund-card" style="cursor:pointer;position:relative;" data-fund-id="${fid}" data-fund-name="${fname}">
-          <button data-purge-fund="${fid}" data-purge-name="${esc(fname)}" title="Delete ${isAcct ? 'account' : 'fund'} — cannot be undone"
+          <button data-purge-fund="${fid}" data-purge-name="${_safeAttr(fname)}" title="Delete ${isAcct ? 'account' : 'fund'} — cannot be undone"
             style="position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:50%;background:rgba(204,51,51,0.12);border:1px solid rgba(204,51,51,0.28);color:#cc3333;font-size:12px;line-height:1;cursor:pointer;padding:0;z-index:2;display:flex;align-items:center;justify-content:center;">×</button>
           <div class="fund-card-head">
             <span class="fund-card-name">${fname}</span>
