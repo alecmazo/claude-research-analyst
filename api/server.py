@@ -1781,7 +1781,26 @@ def lp_me_overview(request: Request):
                 # Nothing to load — return early
                 return out
 
-            # ── Bulk price pre-warm (one yfinance call covers everything) ──
+            # ── Bulk YTD cache for managed accounts (fetch FIRST so we can
+            #    extract attribution tickers and warm them in the same yfinance call) ──
+            ytd_cache_by_fid: dict = {}
+            if acct_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, nav, ytd_pct, result_json, updated_at
+                          FROM managed_account_ytd_cache
+                         WHERE fund_id::text = ANY(%s)
+                    """, (acct_fids,))
+                    for r in cur.fetchall():
+                        ytd_cache_by_fid[str(r["fund_id"])] = dict(r)
+                except Exception:
+                    conn.rollback()
+
+            # ── Collect ALL symbols needing live prices in one shot ──
+            # 1. tax_lots symbols (used by LP funds with real positions)
+            # 2. attribution tickers from managed-account YTD result_json
+            #    (so clicking into IND-I's positions panel hits the cache, not yfinance)
+            all_syms_set: set = set()
             try:
                 cur.execute("""
                     SELECT DISTINCT s.symbol
@@ -1790,13 +1809,33 @@ def lp_me_overview(request: Request):
                      WHERE tl.fund_id::text = ANY(%s) AND tl.closed_at IS NULL
                        AND s.symbol IS NOT NULL
                 """, (all_fids,))
-                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
-                if all_syms:
-                    _fetch_prices(all_syms)
+                for r in cur.fetchall():
+                    if r["symbol"]:
+                        all_syms_set.add(r["symbol"])
             except Exception:
                 conn.rollback()
 
-            # ── Bulk NAV from positions (one SQL for all funds/accounts) ──
+            for ytd_row in ytd_cache_by_fid.values():
+                rj_raw = ytd_row.get("result_json")
+                if not rj_raw:
+                    continue
+                try:
+                    _rj = json.loads(rj_raw) if isinstance(rj_raw, str) else rj_raw
+                    for a in (_rj.get("attribution") or []):
+                        tk = a.get("ticker")
+                        if tk and not a.get("price_missing") and float(a.get("end_shares") or 0) > 0:
+                            all_syms_set.add(tk)
+                except Exception:
+                    pass
+
+            # ── Single yfinance batch call for everything ──
+            if all_syms_set:
+                try:
+                    _fetch_prices(list(all_syms_set))
+                except Exception:
+                    pass
+
+            # ── Bulk NAV from positions (uses warmed price cache) ──
             mkt_nav_by_fid = {}
             try:
                 mkt_nav_by_fid = _bulk_fund_market_nav(cur, all_fids)
@@ -1900,19 +1939,7 @@ def lp_me_overview(request: Request):
                             conn.rollback()
                             lp_rows_by_fid[str(f["id"])] = []
 
-            # ── Bulk YTD cache for managed accounts ──
-            ytd_cache_by_fid: dict = {}
-            if acct_fids:
-                try:
-                    cur.execute("""
-                        SELECT fund_id::text, nav, ytd_pct, result_json, updated_at
-                          FROM managed_account_ytd_cache
-                         WHERE fund_id::text = ANY(%s)
-                    """, (acct_fids,))
-                    for r in cur.fetchall():
-                        ytd_cache_by_fid[str(r["fund_id"])] = dict(r)
-                except Exception:
-                    conn.rollback()
+            # (ytd_cache_by_fid was already loaded above before the symbol pre-warm)
 
             # ── Assemble funds ────────────────────────────────────────
             for f in fund_rows:
@@ -5055,7 +5082,23 @@ async def fund_list(request: Request, fund_type: str = None):
             fids     = [str(f["id"]) for f in funds]
             fids_pg  = fids  # list works with ANY(%s) via psycopg2
 
-            # ── 2. Pre-warm price cache for ALL symbols across all funds ──
+            # ── 2a. Bulk YTD cache (loaded EARLY so attribution tickers can
+            #        be included in the price pre-warm — clicking into an
+            #        account then hits the cache instead of yfinance) ──
+            ytd_by_fid: dict = {}
+            try:
+                cur.execute("""
+                    SELECT fund_id::text, nav, ytd_pct, result_json
+                      FROM managed_account_ytd_cache
+                     WHERE fund_id::text = ANY(%s)
+                """, (fids_pg,))
+                for r in cur.fetchall():
+                    ytd_by_fid[str(r["fund_id"])] = dict(r)
+            except Exception:
+                conn.rollback()
+
+            # ── 2b. Collect all symbols needing live prices (one batch) ──
+            all_syms_set: set = set()
             try:
                 cur.execute("""
                     SELECT DISTINCT s.symbol
@@ -5064,11 +5107,30 @@ async def fund_list(request: Request, fund_type: str = None):
                      WHERE tl.fund_id::text = ANY(%s) AND tl.closed_at IS NULL
                        AND s.symbol IS NOT NULL
                 """, (fids_pg,))
-                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
-                if all_syms:
-                    _fetch_prices(all_syms)
+                for r in cur.fetchall():
+                    if r["symbol"]:
+                        all_syms_set.add(r["symbol"])
             except Exception:
                 conn.rollback()
+
+            for ytd_row in ytd_by_fid.values():
+                rj_raw = ytd_row.get("result_json")
+                if not rj_raw:
+                    continue
+                try:
+                    _rj = json.loads(rj_raw) if isinstance(rj_raw, str) else rj_raw
+                    for a in (_rj.get("attribution") or []):
+                        tk = a.get("ticker")
+                        if tk and not a.get("price_missing") and float(a.get("end_shares") or 0) > 0:
+                            all_syms_set.add(tk)
+                except Exception:
+                    pass
+
+            if all_syms_set:
+                try:
+                    _fetch_prices(list(all_syms_set))
+                except Exception:
+                    pass
 
             # ── 3. Bulk NAV (one SQL + cached prices, no N yfinance calls) ──
             nav_by_fid = {}
@@ -5121,18 +5183,7 @@ async def fund_list(request: Request, fund_type: str = None):
             except Exception:
                 conn.rollback()
 
-            # ── 7. Bulk YTD cache for managed accounts ──
-            ytd_by_fid: dict = {}
-            try:
-                cur.execute("""
-                    SELECT fund_id::text, nav, ytd_pct, result_json
-                      FROM managed_account_ytd_cache
-                     WHERE fund_id::text = ANY(%s)
-                """, (fids_pg,))
-                for r in cur.fetchall():
-                    ytd_by_fid[str(r["fund_id"])] = dict(r)
-            except Exception:
-                conn.rollback()
+            # (ytd_by_fid was loaded earlier in step 2a, before price pre-warm)
 
             # ── 8. Assemble result ──
             result = []
