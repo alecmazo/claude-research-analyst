@@ -377,21 +377,18 @@ def _parse_fidelity_csv(content: str) -> list:
 
     # ── Pending Activity detection ─────────────────────────────────────────
     # Some Fidelity exports contain a row where one column reads
-    # "Pending Activity" (sold shares settling).  The cash for that row
-    # lives in column I (index 8).  Add it to the SPAXX position so it
-    # isn't silently dropped.
+    # "Pending Activity" (sold shares settling).  The cash amount is in
+    # the "Current Value" column of that same row.  We use DictReader so
+    # the lookup is by column name (robust to column order changes) and
+    # scan ALL columns for the "pending activity" text so it doesn't
+    # matter whether it's in Symbol, Description, or any other field.
     pending_cash = 0.0
-    raw_rows = list(csv.reader(io.StringIO('\n'.join(lines[header_idx:]))))
-    for raw_row in raw_rows[1:]:   # skip header row
-        if any('pending activity' in (cell or '').lower() for cell in raw_row):
-            if len(raw_row) > 8:
-                try:
-                    val_str = (raw_row[8] or '').replace('$', '').replace(',', '').strip()
-                    val = float(val_str)
-                    if val > 0:
-                        pending_cash += val
-                except (ValueError, TypeError):
-                    pass
+    reader2 = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
+    for row2 in reader2:
+        if any('pending activity' in (v or '').lower() for v in row2.values()):
+            val = parse_dollar(row2.get('Current Value'))
+            if val and val > 0:
+                pending_cash += val
             # don't break — accumulate all pending rows
 
     if pending_cash > 0:
