@@ -3751,7 +3751,10 @@
     const mc   = data.monthly_chart;
     const pts  = mc && mc.monthly ? mc.monthly : [];
     const mdPct = data.md_return_pct != null ? data.md_return_pct : (cachedYtdPct || null);
-    _acctChartData = { mc, spy: data.spy_monthly, mdPct };
+    // MERGE — do not overwrite. renderAcctPerfTiles has already populated
+    // begBalance / totalDeps / totalWdrs / benchYtd; replacing the object here
+    // wipes those fields and breaks _updatePositionsReturnTile (YTD tile stays blank).
+    _acctChartData = { ...(_acctChartData || {}), mc, spy: data.spy_monthly, mdPct };
 
     if (!pts.length) {
       elB.innerHTML = `
