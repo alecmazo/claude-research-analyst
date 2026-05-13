@@ -219,7 +219,7 @@ def _bulk_fund_market_nav(cur, fids: list) -> dict:
                  / NULLIF(SUM(tl.quantity), 0)                                AS avg_cost
           FROM tax_lots tl
           JOIN securities s ON s.id = tl.security_id
-         WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+         WHERE tl.fund_id::text = ANY(%s) AND tl.closed_at IS NULL
          GROUP BY tl.fund_id, s.symbol, s.asset_class
     """, (fids,))
     rows = cur.fetchall()
@@ -1787,21 +1787,21 @@ def lp_me_overview(request: Request):
                     SELECT DISTINCT s.symbol
                       FROM tax_lots tl
                       JOIN securities s ON s.id = tl.security_id
-                     WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+                     WHERE tl.fund_id::text = ANY(%s) AND tl.closed_at IS NULL
                        AND s.symbol IS NOT NULL
                 """, (all_fids,))
                 all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
                 if all_syms:
                     _fetch_prices(all_syms)
             except Exception:
-                pass
+                conn.rollback()
 
             # ── Bulk NAV from positions (one SQL for all funds/accounts) ──
             mkt_nav_by_fid = {}
             try:
                 mkt_nav_by_fid = _bulk_fund_market_nav(cur, all_fids)
             except Exception:
-                pass
+                conn.rollback()
 
             # ── Bulk latest NAV snapshots ──
             nav_snap_by_fid: dict = {}
@@ -1809,13 +1809,13 @@ def lp_me_overview(request: Request):
                 cur.execute("""
                     SELECT DISTINCT ON (fund_id) fund_id::text, net_nav, as_of_date
                       FROM nav_snapshots
-                     WHERE fund_id = ANY(%s)
+                     WHERE fund_id::text = ANY(%s)
                      ORDER BY fund_id, as_of_date DESC
                 """, (all_fids,))
                 for r in cur.fetchall():
                     nav_snap_by_fid[str(r["fund_id"])] = dict(r)
             except Exception:
-                pass
+                conn.rollback()
 
             # ── Bulk total committed capital per fund ──
             total_committed_by_fid: dict = {}
@@ -1826,13 +1826,13 @@ def lp_me_overview(request: Request):
                                COALESCE(SUM(c.commitment_amount), 0) AS total_committed
                           FROM commitments c
                           JOIN lps l ON l.id = c.lp_id
-                         WHERE l.fund_id = ANY(%s) AND c.superseded_by IS NULL
+                         WHERE l.fund_id::text = ANY(%s) AND c.superseded_by IS NULL
                          GROUP BY l.fund_id
                     """, (fund_fids,))
                     for r in cur.fetchall():
                         total_committed_by_fid[str(r["fund_id"])] = float(r["total_committed"])
                 except Exception:
-                    pass
+                    conn.rollback()
 
             # ── Bulk latest annual snapshots (for GP carry calc) ──
             annual_snap_by_fid: dict = {}
@@ -1841,13 +1841,13 @@ def lp_me_overview(request: Request):
                     cur.execute("""
                         SELECT DISTINCT ON (fund_id) fund_id::text, gp_equity_end, end_nav
                           FROM fund_annual_snapshots
-                         WHERE fund_id = ANY(%s)
+                         WHERE fund_id::text = ANY(%s)
                          ORDER BY fund_id, year DESC
                     """, (fund_fids,))
                     for r in cur.fetchall():
                         annual_snap_by_fid[str(r["fund_id"])] = dict(r)
                 except Exception:
-                    pass
+                    conn.rollback()
 
             # ── Bulk LP rows (GP: all funds at once; LP: per fund since alias varies) ──
             lp_rows_by_fid: dict = {}
@@ -1864,14 +1864,14 @@ def lp_me_overview(request: Request):
                                    WHERE superseded_by IS NULL
                                    GROUP BY lp_id
                               ) c ON c.lp_id = l.id
-                             WHERE l.fund_id = ANY(%s)
+                             WHERE l.fund_id::text = ANY(%s)
                              ORDER BY l.fund_id, l.legal_name
                         """, (fund_fids,))
                         for r in cur.fetchall():
                             fid = str(r["fund_id"])
                             lp_rows_by_fid.setdefault(fid, []).append(dict(r))
                     except Exception:
-                        pass
+                        conn.rollback()
                 else:
                     # LP: each fund needs its own alias — run one small query per fund
                     # (typically 1-3 funds, so cost is low)
@@ -1897,6 +1897,7 @@ def lp_me_overview(request: Request):
                             """, (f["id"], alias or ""))
                             lp_rows_by_fid[str(f["id"])] = cur.fetchall()
                         except Exception:
+                            conn.rollback()
                             lp_rows_by_fid[str(f["id"])] = []
 
             # ── Bulk YTD cache for managed accounts ──
@@ -1906,12 +1907,12 @@ def lp_me_overview(request: Request):
                     cur.execute("""
                         SELECT fund_id::text, nav, ytd_pct, result_json, updated_at
                           FROM managed_account_ytd_cache
-                         WHERE fund_id = ANY(%s)
+                         WHERE fund_id::text = ANY(%s)
                     """, (acct_fids,))
                     for r in cur.fetchall():
                         ytd_cache_by_fid[str(r["fund_id"])] = dict(r)
                 except Exception:
-                    pass
+                    conn.rollback()
 
             # ── Assemble funds ────────────────────────────────────────
             for f in fund_rows:
@@ -5060,21 +5061,21 @@ async def fund_list(request: Request, fund_type: str = None):
                     SELECT DISTINCT s.symbol
                       FROM tax_lots tl
                       JOIN securities s ON s.id = tl.security_id
-                     WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+                     WHERE tl.fund_id::text = ANY(%s) AND tl.closed_at IS NULL
                        AND s.symbol IS NOT NULL
                 """, (fids_pg,))
                 all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
                 if all_syms:
                     _fetch_prices(all_syms)
             except Exception:
-                pass
+                conn.rollback()
 
             # ── 3. Bulk NAV (one SQL + cached prices, no N yfinance calls) ──
             nav_by_fid = {}
             try:
                 nav_by_fid = _bulk_fund_market_nav(cur, fids_pg)
             except Exception:
-                pass
+                conn.rollback()
 
             # ── 4. Bulk LP counts ──
             lp_count_by_fid: dict = {fid: 0 for fid in fids}
@@ -5082,7 +5083,7 @@ async def fund_list(request: Request, fund_type: str = None):
                 cur.execute("""
                     SELECT fund_id::text, COUNT(*) AS n
                       FROM lps
-                     WHERE fund_id = ANY(%s) AND status = 'active'
+                     WHERE fund_id::text = ANY(%s) AND status = 'active'
                      GROUP BY fund_id
                 """, (fids_pg,))
                 for r in cur.fetchall():
@@ -5098,7 +5099,7 @@ async def fund_list(request: Request, fund_type: str = None):
                            COALESCE(SUM(c.commitment_amount), 0) AS total
                       FROM commitments c
                       JOIN lps l ON l.id = c.lp_id
-                     WHERE l.fund_id = ANY(%s) AND c.superseded_by IS NULL
+                     WHERE l.fund_id::text = ANY(%s) AND c.superseded_by IS NULL
                      GROUP BY l.fund_id
                 """, (fids_pg,))
                 for r in cur.fetchall():
@@ -5112,7 +5113,7 @@ async def fund_list(request: Request, fund_type: str = None):
                 cur.execute("""
                     SELECT fund_id::text, COUNT(DISTINCT security_id) AS n
                       FROM tax_lots
-                     WHERE fund_id = ANY(%s) AND closed_at IS NULL
+                     WHERE fund_id::text = ANY(%s) AND closed_at IS NULL
                      GROUP BY fund_id
                 """, (fids_pg,))
                 for r in cur.fetchall():
@@ -5126,7 +5127,7 @@ async def fund_list(request: Request, fund_type: str = None):
                 cur.execute("""
                     SELECT fund_id::text, nav, ytd_pct, result_json
                       FROM managed_account_ytd_cache
-                     WHERE fund_id = ANY(%s)
+                     WHERE fund_id::text = ANY(%s)
                 """, (fids_pg,))
                 for r in cur.fetchall():
                     ytd_by_fid[str(r["fund_id"])] = dict(r)
