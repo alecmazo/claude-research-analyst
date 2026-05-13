@@ -1873,7 +1873,9 @@ def lp_me_overview(request: Request):
                     _rj = json.loads(rj_raw) if isinstance(rj_raw, str) else rj_raw
                     for a in (_rj.get("attribution") or []):
                         tk = a.get("ticker")
-                        if tk and not a.get("price_missing") and float(a.get("end_shares") or 0) > 0:
+                        # Include price_missing tickers — variant fallback now
+                        # handles cases like BRKB → BRK-B at fetch time.
+                        if tk and float(a.get("end_shares") or 0) > 0:
                             all_syms_set.add(tk)
                 except Exception:
                     pass
@@ -5171,7 +5173,9 @@ async def fund_list(request: Request, fund_type: str = None):
                     _rj = json.loads(rj_raw) if isinstance(rj_raw, str) else rj_raw
                     for a in (_rj.get("attribution") or []):
                         tk = a.get("ticker")
-                        if tk and not a.get("price_missing") and float(a.get("end_shares") or 0) > 0:
+                        # Include price_missing tickers — variant fallback now
+                        # handles cases like BRKB → BRK-B at fetch time.
+                        if tk and float(a.get("end_shares") or 0) > 0:
                             all_syms_set.add(tk)
                 except Exception:
                     pass
@@ -5597,8 +5601,12 @@ async def fund_positions(request: Request, fund_id: str = None):
                             import json as _jj
                             cached = _jj.loads(cache_row["result_json"])
                             attr = cached.get("attribution") or []
+                            # Fetch live prices for ALL tickers (including those
+                            # previously marked price_missing) — variant fallback
+                            # (BRKB → BRK-B) in _fetch_prices now handles tickers
+                            # that yfinance couldn't resolve at YTD-run time.
                             symbols_c = [a["ticker"] for a in attr
-                                         if a.get("ticker") and not a.get("price_missing")
+                                         if a.get("ticker")
                                          and float(a.get("end_shares") or 0) > 0]
                             prices_c  = _fetch_prices(symbols_c) if symbols_c else {}
                             total_mv_c = 0.0
@@ -5628,6 +5636,36 @@ async def fund_positions(request: Request, fund_id: str = None):
                                     "first_acquired":  None,
                                     "_from_cache":     True,
                                 })
+
+                            # ── Synthetic SPAXX entry ──────────────────────
+                            # If no money-market position survived (end_shares=0
+                            # because all cash was in Pending Activity at run
+                            # time), infer the cash balance as:
+                            #   end_value (cached total) − sum of equity MVs
+                            # and show it as a SPAXX row so cash isn't invisible.
+                            has_mm = any(a.get("is_mm") and float(a.get("end_shares") or 0) > 0
+                                         for a in attr)
+                            if not has_mm:
+                                cached_end_val = float(cached.get("end_value") or 0)
+                                implied_cash   = round(cached_end_val - total_mv_c, 2)
+                                if implied_cash > 0:
+                                    result.append({
+                                        "symbol":          "SPAXX",
+                                        "name":            "Cash / Money Market (est.)",
+                                        "issuer":          None,
+                                        "lot_count":       1,
+                                        "total_qty":       implied_cash,
+                                        "avg_cost":        1.0,
+                                        "total_cost":      implied_cash,
+                                        "last_price":      1.0,
+                                        "market_value":    implied_cash,
+                                        "unrealized_gain": 0.0,
+                                        "weight_pct":      0,
+                                        "first_acquired":  None,
+                                        "_from_cache":     True,
+                                    })
+                                    total_mv_c += implied_cash
+
                             result.sort(key=lambda x: (x["market_value"] or 0), reverse=True)
                             if total_mv_c > 0:
                                 for item in result:
