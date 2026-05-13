@@ -6458,6 +6458,7 @@ async def fund_import_balance_history(
             "label":       _MN.get(r["month"], r["label"]),
             "month":       r["month"],
             "return_pct":  r["return_pct"],
+            "beg_balance": float(r.get("beg_balance") or 0),
             "end_balance": r["end_balance"],
             "skip":        r.get("skip", False),
             "perf_detail": {
@@ -6468,7 +6469,17 @@ async def fund_import_balance_history(
         }
         for r in records if r["year"] == cur_year
     ]
-    result_json = {"md_return_pct": ytd_pct, "monthly_chart": {"monthly": mc_monthly}}
+    # Summary totals for positions-based return calculation on the client
+    ytd_beg_balance      = float(ytd_months[0].get("beg_balance") or 0) if ytd_months else None
+    ytd_total_deposits   = round(sum(float(m.get("deposits")    or 0) for m in ytd_months), 2)
+    ytd_total_withdrawals = round(sum(float(m.get("withdrawals") or 0) for m in ytd_months), 2)
+    result_json = {
+        "md_return_pct":       ytd_pct,
+        "monthly_chart":       {"monthly": mc_monthly},
+        "ytd_beg_balance":     ytd_beg_balance,
+        "ytd_total_deposits":  ytd_total_deposits,
+        "ytd_total_withdrawals": ytd_total_withdrawals,
+    }
 
     conn = _fund_conn()
     try:

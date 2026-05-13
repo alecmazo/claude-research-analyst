@@ -1123,13 +1123,9 @@
         <button class="tab-btn secondary fund-subtab active" data-subtab="funds">LP Funds <span class="fund-subtab-count" id="fund-funds-count">0</span></button>
         <button class="tab-btn secondary fund-subtab" data-subtab="accts">Managed Accounts <span class="fund-subtab-count" id="fund-accts-count">0</span></button>
       </div>
-      <button class="tab-btn secondary" id="fund-refresh-btn" style="margin-left:auto;">⟳ Refresh</button>
-      <button class="tab-btn secondary" id="fund-seed-btn" style="margin-left:8px;">⚙ Sync Accounts</button>
     </div>
     <div id="fund-funds-list" class="fund-subtab-content tab-loading">Loading…</div>
     <div id="fund-accts-list" class="fund-subtab-content tab-loading" style="display:none;">Loading…</div>
-    <!-- Hidden seed status -->
-    <div id="fund-seed-status" style="display:none;margin-top:8px;font-size:11px;padding:8px 12px;border-radius:6px;"></div>
   </div>
 </div><!-- #tab-fund -->
 
@@ -2237,6 +2233,7 @@
       document.querySelector('.topbar-link[data-tab="fund"]')?.classList.add('active');
       window.scrollTo(0, 0);
       if (isAcct) {
+        _acctPositionsMV = null; // reset stale MV from previous account
         document.getElementById('acd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
         renderAcctMeta(d);
         loadAcctPositions(fundId);
@@ -3295,13 +3292,13 @@
         <div class="fd-tile-val">${value}</div>
         ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
       </div>`;
+    const lpFeeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' annual fee' : '';
     document.getElementById('lpd-meta').innerHTML = `
       <div class="fd-tile-grid">
         ${tile('TYPE',     'LP Fund', d.short_name)}
-        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
+        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—') + (lpFeeStr ? ' · ' + lpFeeStr : ''))}
         ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot'))}
         ${tile('LP COUNT', d.lp_count, fmtUSD(d.total_committed) + ' committed')}
-        ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), '')}
         ${tile('CARRY',    fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
       </div>`;
   }
@@ -3506,23 +3503,26 @@
     { key: 'EFA',  label: 'EFA — MSCI EAFE' },
     { key: 'AGG',  label: 'AGG — US Bonds' },
   ];
-  let _acctBenchKey = 'SPY';
-  let _acctChartData = null; // cached {mc, spy} for re-draw on bench change
+  let _acctBenchKey    = 'SPY';
+  let _acctChartData   = null; // cached {mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd}
+  let _acctPositionsMV = null; // live sum(market_value) from positions, set after positions load
 
   function renderAcctMeta(d) {
     const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
-    const tile = (label, value, sub) => `
+    const feeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' annual fee' : '';
+    const statusSub = 'Inception ' + (d.inception_date || '—') + (feeStr ? ' · ' + feeStr : '');
+    const tile = (label, value, sub, extraSub) => `
       <div class="fd-tile">
         <div class="fd-tile-label">${label}</div>
         <div class="fd-tile-val" id="${label === 'NAV' ? 'acd-nav-tile-val' : ''}">${value}</div>
-        ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
+        ${sub     ? `<div class="fd-tile-sub">${sub}</div>`     : ''}
+        ${extraSub ? `<div class="fd-tile-sub">${extraSub}</div>` : ''}
       </div>`;
     document.getElementById('acd-meta').innerHTML = `
       <div class="fd-tile-grid">
-        ${tile('TYPE',     'Managed Account', d.short_name)}
-        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'))}
-        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions')}
-        ${tile('MGMT FEE', fmtPct(d.mgmt_fee_pct), 'Annual advisory')}
+        ${tile('TYPE',   'Managed Account', d.short_name)}
+        ${tile('STATUS', (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'), feeStr)}
+        ${tile('NAV',    d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions')}
       </div>`;
   }
 
@@ -3534,7 +3534,7 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const rows = await r.json();
       el.innerHTML = renderPositionsPanel(rows);
-      // Sum market values from positions and update NAV tile
+      // Sum market values from positions; update NAV tile and investment-return tile
       let totalMV = 0;
       (rows || []).forEach(p => {
         totalMV += parseFloat(p.market_value || 0);
@@ -3542,6 +3542,8 @@
       if (totalMV > 0) {
         const navEl = document.getElementById('acd-nav-tile-val');
         if (navEl) navEl.textContent = fmtUSD(totalMV);
+        _acctPositionsMV = totalMV;
+        _updatePositionsReturnTile();
       }
     } catch (e) {
       el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
@@ -3573,32 +3575,91 @@
     }
   }
 
+  // Compute and display the positions-based (investment) return + alpha.
+  // Called after positions load (to get current MV) or after bench changes.
+  function _updatePositionsReturnTile() {
+    const el = document.getElementById('acd-pos-ret-val');
+    if (!el || !_acctChartData) return;
+    const { begBalance, totalDeps, totalWdrs, benchYtd } = _acctChartData;
+    const mv = _acctPositionsMV;
+    let posRet = null;
+    if (mv != null && begBalance > 0) {
+      // Investment return: (MV + withdrawals − deposits − beginning balance) / beginning balance
+      posRet = (mv + totalWdrs - totalDeps - begBalance) / begBalance * 100;
+      el.textContent = (posRet >= 0 ? '+' : '') + posRet.toFixed(2) + '%';
+      el.style.color = posRet >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+    // Alpha uses investment return vs benchmark
+    if (posRet != null && benchYtd != null) {
+      const alpha = posRet - benchYtd;
+      const av = document.getElementById('acd-alpha-val');
+      if (av) {
+        av.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
+        av.style.color  = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+    }
+  }
+
   function renderAcctPerfTiles(data, cachedYtdPct) {
     const elP = document.getElementById('acd-perf-tiles');
     if (!elP) return;
-    const mc   = data.monthly_chart;
-    const spy  = data.spy_monthly;
-    // md_return_pct is already a % value (e.g. 8.4 means 8.4%)
+    const mc     = data.monthly_chart;
+    const spy    = data.spy_monthly;
     const mdPct  = data.md_return_pct != null ? data.md_return_pct
                  : (cachedYtdPct != null ? cachedYtdPct : null);
     const spyPts = spy && spy.points ? spy.points : [];
     const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
-    const alpha  = (mdPct != null && spyPct != null) ? mdPct - spyPct : null;
     const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
 
-    // Benchmark selector (scrollable)
+    // Extract beginning-of-year balance and YTD flows from monthly data
+    const months    = (mc && mc.monthly) ? mc.monthly : [];
+    const begBalance = data.ytd_beg_balance
+                    ?? (months.length ? (months[0].beg_balance || 0) : 0);
+    const totalDeps  = data.ytd_total_deposits
+                    ?? months.reduce((s, m) => s + (m.perf_detail?.deposits    || 0), 0);
+    const totalWdrs  = data.ytd_total_withdrawals
+                    ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
+
+    // Cache for re-use when positions load or benchmark changes
+    _acctChartData = { mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd: spyPct };
+
     const selOpts = BENCH_OPTIONS.map(o =>
       `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
     ).join('');
 
     elP.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));flex:1;margin:0;">
-          <div class="fd-tile"><div class="fd-tile-label">YTD (MOD. DIETZ)</div><div class="fd-tile-val" style="${cls(mdPct)}">${fmtP(mdPct)}</div></div>
-          <div class="fd-tile" id="acd-bench-tile"><div class="fd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div><div class="fd-tile-val" id="acd-bench-val" style="${cls(spyPct)}">${fmtP(spyPct)}</div></div>
-          <div class="fd-tile"><div class="fd-tile-label">ALPHA</div><div class="fd-tile-val" id="acd-alpha-val" style="${cls(alpha)}">${fmtP(alpha)}</div></div>
+        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));flex:1;margin:0;">
+
+          <!-- Investment return — computed from live positions MV -->
+          <div class="fd-tile">
+            <div class="fd-tile-label">YTD RETURN</div>
+            <div class="fd-tile-val" id="acd-pos-ret-val" style="color:var(--mid);">—</div>
+            <div class="fd-tile-sub">from positions · matches Fidelity</div>
+          </div>
+
+          <!-- Benchmark -->
+          <div class="fd-tile" id="acd-bench-tile">
+            <div class="fd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div>
+            <div class="fd-tile-val" id="acd-bench-val" style="${cls(spyPct)}">${fmtP(spyPct)}</div>
+          </div>
+
+          <!-- Alpha (investment rtn − benchmark) -->
+          <div class="fd-tile">
+            <div class="fd-tile-label">ALPHA</div>
+            <div class="fd-tile-val" id="acd-alpha-val" style="color:var(--mid);">—</div>
+            <div class="fd-tile-sub">vs ${_acctBenchKey}</div>
+          </div>
+
+          <!-- Mod. Dietz — secondary reference -->
+          <div class="fd-tile" style="opacity:0.65;">
+            <div class="fd-tile-label">YTD (MOD. DIETZ)</div>
+            <div class="fd-tile-val" style="font-size:18px;${cls(mdPct)}">${fmtP(mdPct)}</div>
+            <div class="fd-tile-sub">cash-flow weighted</div>
+          </div>
         </div>
+
         <div style="display:flex;flex-direction:column;gap:4px;min-width:170px;">
           <label style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;">BENCHMARK</label>
           <select id="acd-bench-select" style="background:var(--navy-mid);border:1px solid var(--panel-edge);color:white;border-radius:6px;padding:5px 8px;font-size:12px;height:32px;cursor:pointer;">
@@ -3611,6 +3672,9 @@
       _acctBenchKey = e.target.value;
       if (_acctChartData) fetchBenchAndRedraw(_acctChartData.mc, _acctChartData.spy);
     });
+
+    // Populate investment-return tile if positions are already loaded
+    _updatePositionsReturnTile();
   }
 
   async function fetchBenchAndRedraw(mc, baseSpy) {
@@ -3633,17 +3697,11 @@
       bv.textContent = benchYtd != null ? (benchYtd >= 0 ? '+' : '') + benchYtd.toFixed(2) + '%' : '—';
       bv.style.color = benchYtd != null ? (benchYtd >= 0 ? 'var(--green)' : 'var(--red)') : '';
     }
-    // Alpha update
-    const mc2 = mc;
-    const mdPct = _acctChartData?.mdPct;
-    if (mdPct != null && benchYtd != null) {
-      const alpha = mdPct - benchYtd;
-      const av = document.getElementById('acd-alpha-val');
-      if (av) {
-        av.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
-        av.style.color = alpha >= 0 ? 'var(--green)' : 'var(--red)';
-      }
-    }
+    const alSub = document.querySelector('#acd-perf-tiles .fd-tile:nth-child(3) .fd-tile-sub');
+    if (alSub) alSub.textContent = 'vs ' + benchLabel;
+    // Store updated benchYtd and recompute alpha via positions-return
+    if (_acctChartData) _acctChartData.benchYtd = benchYtd;
+    _updatePositionsReturnTile();
     drawAcctBalanceChart(mc, benchData);
   }
 
@@ -3970,43 +4028,7 @@
       </section>`;
   }
 
-  document.getElementById('fund-refresh-btn')?.addEventListener('click', loadFundOverview);
-
-  // ── Sync Accounts: ensure fund / managed-account DB records exist ─
-  const EXPECTED_ACCOUNTS = [
-    { name: 'DGA Capital Fund I, LP',  short_name: 'DGAF-I',  fund_type: 'lp_fund' },
-    { name: 'DGA Capital Fund II, LP', short_name: 'DGAF-II', fund_type: 'lp_fund' },
-    { name: 'ANAT TOD',                short_name: 'ATOD',    fund_type: 'managed_account' },
-    { name: 'EM DEFENSIVE',            short_name: 'EMDEF',   fund_type: 'managed_account' },
-  ];
-
-  document.getElementById('fund-seed-btn')?.addEventListener('click', async () => {
-    const btn    = document.getElementById('fund-seed-btn');
-    const status = document.getElementById('fund-seed-status');
-    btn.disabled = true; btn.textContent = '…';
-    status.style.display = 'block';
-    status.style.background = 'rgba(91,184,212,0.08)';
-    status.style.color = 'var(--blue)';
-    status.textContent = 'Syncing fund & account records…';
-    const results = [];
-    for (const acc of EXPECTED_ACCOUNTS) {
-      try {
-        const r = await window.dgaFetch('/api/v2/gp/fund/ensure', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...acc, inception_date: '2020-01-01' }),
-        });
-        const d = await r.json();
-        if (!r.ok) results.push(`❌ ${acc.name}: ${d.detail || r.status}`);
-        else results.push(`${d.created ? '✅ Created' : '✓ Exists'}: ${acc.name}`);
-      } catch (e) {
-        results.push(`❌ ${acc.name}: ${e.message}`);
-      }
-    }
-    status.innerHTML = results.join('<br>');
-    btn.disabled = false; btn.textContent = '⚙ Sync Accounts';
-    setTimeout(() => loadFundOverview(), 500);
-  });
+  // Fund overview auto-loads on page open — no manual refresh needed.
 
   // ══════════════════════════════════════════════════════════════
   // SETTINGS TAB

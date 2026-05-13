@@ -739,9 +739,10 @@
       $stats.innerHTML = ''; $hold.innerHTML = ''; return;
     }
 
-    const totalFundNav = funds.reduce((s, f) => s + (f.effective_nav || 0), 0);
-    const totalAcctNav = accts.reduce((s, a) => s + (a.nav    || 0), 0);
-    const totalCommit  = funds.reduce((s, f) => s + (f.commitment || 0), 0);
+    const totalFundStakes = funds.reduce((s, f) => s + (f.stake_value || 0), 0);
+    const totalAcctNav    = accts.reduce((s, a) => s + (a.nav    || 0), 0);
+    const totalPortfolio  = totalFundStakes + totalAcctNav;
+    const totalCommit     = funds.reduce((s, f) => s + (f.commitment || 0), 0);
     const fundCount = funds.length, acctCount = accts.length;
     const segments = [];
     if (fundCount) segments.push(`${fundCount} fund${fundCount > 1 ? 's' : ''}`);
@@ -751,19 +752,66 @@
     $title.textContent   = `Welcome back, ${firstName}`;
     $sub.textContent     = `You have ${segments.join(' + ')}. Snapshot data shown below. Latest LP reports are auto-distributed via Dropbox; tax docs (K-1) are sent at year-end.`;
 
-    const tile = (label, value, sub) => `
-      <div style="background:rgba(91,184,212,0.08);border:1px solid rgba(91,184,212,0.20);padding:12px 14px;border-radius:9px;">
-        <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.2px;">${esc(label)}</div>
-        <div style="font-size:20px;font-weight:800;color:white;margin-top:4px;" class="mono">${esc(value)}</div>
-        ${sub ? `<div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:2px;">${esc(sub)}</div>` : ''}
+    // ── Portfolio tree: total → fund stakes + managed acct nav ──
+    const hasTree = (fundCount && totalFundStakes > 0) || acctCount;
+    const branchLine = `
+      <div style="display:flex;align-items:flex-start;gap:0;position:relative;margin-top:2px;">
+        <!-- vertical stem -->
+        <div style="position:absolute;left:50%;top:0;width:1px;height:14px;background:rgba(91,184,212,0.35);"></div>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:10px;position:relative;margin-top:12px;">
+        <!-- horizontal bar across children -->
+        ${(fundCount > 0 && acctCount > 0)
+          ? `<div style="position:absolute;top:0;left:25%;right:25%;height:1px;background:rgba(91,184,212,0.35);"></div>` : ''}
+    `;
+    const childTile = (label, val, sub) => `
+      <div style="flex:1;background:rgba(91,184,212,0.06);border:1px solid rgba(91,184,212,0.18);padding:10px 12px;border-radius:8px;position:relative;">
+        <div style="position:absolute;top:-13px;left:50%;width:1px;height:14px;background:rgba(91,184,212,0.35);"></div>
+        <div style="font-size:8px;font-weight:800;color:var(--blue);letter-spacing:1.1px;margin-bottom:3px;">${label}</div>
+        <div style="font-size:17px;font-weight:800;color:white;" class="mono">${val}</div>
+        ${sub ? `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-top:2px;">${sub}</div>` : ''}
       </div>`;
-    const tiles = [];
-    if (fundCount) tiles.push(tile('FUND NAV (TOTAL)', totalFundNav ? fmtUSD(totalFundNav) : '—',
-                                   totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : ''));
-    if (acctCount) tiles.push(tile('MANAGED ACCT NAV', totalAcctNav ? fmtUSD(totalAcctNav) : '—',
-                                   `${acctCount} account${acctCount > 1 ? 's' : ''}`));
-    tiles.push(tile('YOUR ROLE', me.role === 'gp' ? 'General Partner' : 'Limited Partner', esc(me.email)));
-    $stats.innerHTML = tiles.join('');
+
+    let treeHTML = '';
+    if (hasTree) {
+      const children = [];
+      if (fundCount && totalFundStakes > 0)
+        children.push(childTile('FUND STAKES (TOTAL)',
+          fmtUSD(totalFundStakes),
+          totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : `${fundCount} fund${fundCount > 1 ? 's' : ''}`));
+      if (acctCount)
+        children.push(childTile('MANAGED ACCT NAV',
+          totalAcctNav ? fmtUSD(totalAcctNav) : '—',
+          `${acctCount} managed account${acctCount > 1 ? 's' : ''}`));
+
+      treeHTML = `
+        <!-- Total portfolio number -->
+        <div style="text-align:center;margin-bottom:4px;">
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.3px;margin-bottom:4px;">YOUR TOTAL PORTFOLIO</div>
+          <div style="font-size:32px;font-weight:900;color:white;letter-spacing:-0.5px;" class="mono">${totalPortfolio > 0 ? fmtUSD(totalPortfolio) : '—'}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:3px;">equity stakes net of carry${acctCount ? ' + managed accounts' : ''}</div>
+        </div>
+        <!-- Connector stem -->
+        <div style="display:flex;justify-content:center;padding:6px 0 0;">
+          <div style="width:1px;height:16px;background:rgba(91,184,212,0.35);"></div>
+        </div>
+        <!-- Horizontal crossbar (only when both branches exist) -->
+        ${children.length > 1 ? `
+        <div style="position:relative;height:1px;margin:0 25%;">
+          <div style="position:absolute;left:0;right:0;top:0;height:1px;background:rgba(91,184,212,0.35);"></div>
+        </div>` : ''}
+        <!-- Branch tiles -->
+        <div style="display:flex;gap:10px;align-items:flex-start;margin-top:0;">
+          ${children.join('')}
+        </div>
+        <!-- Role -->
+        <div style="margin-top:10px;font-size:10px;color:rgba(255,255,255,0.45);text-align:right;letter-spacing:0.5px;">
+          ${me.role === 'gp' ? 'General Partner' : 'Limited Partner'} · ${esc(me.email)}
+        </div>`;
+    } else {
+      treeHTML = `<div style="font-size:11px;color:rgba(255,255,255,0.5);">${esc(me.email)}</div>`;
+    }
+    $stats.innerHTML = treeHTML;
 
     const fundCards = funds.map(f => {
       const stakeVal   = f.stake_value;
