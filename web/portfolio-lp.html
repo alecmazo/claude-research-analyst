@@ -1562,7 +1562,7 @@ async function loadLpAllTimePerf(fid, btn) {
             <span style="font-size:9px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">OVERLAY:</span>
             <button id="lp-bmark-toggle-${fid}"
               style="font-size:9px;padding:2px 9px;border-radius:4px;border:1px solid #a16207;background:rgba(161,98,7,0.12);color:#92400e;cursor:pointer;font-weight:700;transition:opacity 0.15s,background 0.15s;">
-              ● ${esc(bLabel)}
+              ● ${String(bLabel||'').replace(/[<>"'&]/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','&':'&amp;'}[c]))}
             </button>
           </div>` : ''}
           <div style="position:relative;padding:4px 0 0;">
