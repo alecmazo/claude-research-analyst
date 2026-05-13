@@ -5279,9 +5279,14 @@ async def save_account_ytd_cache(fund_id: str, body: YtdCacheSaveRequest, reques
 
 @app.get("/api/fund/account/{fund_id}/ytd-cache")
 async def get_account_ytd_cache(fund_id: str, request: Request):
-    """Return the persisted YTD result for a managed account.
+    """Return the persisted YTD result for a managed account, augmented with
+    the real beginning-of-year balance and YTD cash flows pulled directly
+    from account_balance_history.data_json — the source-of-truth uploaded
+    by the user. This guarantees `ytd_beg_balance` / `ytd_total_deposits` /
+    `ytd_total_withdrawals` are populated even when the cached result_json
+    predates those fields.
 
-    Returns 404 if no result has been saved yet.
+    Returns 404 if no YTD result has been saved yet.
     """
     _require_fund_token(request)
     conn = _fund_conn()
@@ -5293,13 +5298,56 @@ async def get_account_ytd_cache(fund_id: str, request: Request):
                  WHERE fund_id = %s
             """, (fund_id,))
             row = cur.fetchone()
-        if not row:
-            raise HTTPException(404, "No YTD cache for this account")
+            if not row:
+                raise HTTPException(404, "No YTD cache for this account")
+
+            # ── Pull raw monthly records from the uploaded CSV ──
+            # These ALWAYS contain beg_balance/deposits/withdrawals per month,
+            # regardless of when the YTD result_json was last generated.
+            cur.execute("""
+                SELECT data_json
+                  FROM account_balance_history
+                 WHERE fund_id = %s
+            """, (fund_id,))
+            hist = cur.fetchone()
+
+        # Parse the cached result_json (it's stored as a JSON string)
+        rj_raw = row["result_json"]
+        rj = None
+        if rj_raw:
+            try:
+                rj = json.loads(rj_raw) if isinstance(rj_raw, str) else rj_raw
+            except Exception:
+                rj = None
+        if rj is None:
+            rj = {}
+
+        # Compute the real BoY balance + YTD flows from the raw history
+        if hist and hist.get("data_json"):
+            try:
+                import datetime as _dt
+                _records = hist["data_json"]
+                if isinstance(_records, str):
+                    _records = json.loads(_records)
+                cur_year = _dt.date.today().year
+                ytd_recs = sorted(
+                    [r for r in _records if r.get("year") == cur_year and not r.get("skip")],
+                    key=lambda r: (r.get("year", 0), r.get("month", 0)),
+                )
+                if ytd_recs:
+                    beg = float(ytd_recs[0].get("beg_balance") or 0)
+                    if beg > 0:
+                        rj["ytd_beg_balance"] = beg
+                    rj["ytd_total_deposits"]    = round(sum(float(r.get("deposits")    or 0) for r in ytd_recs), 2)
+                    rj["ytd_total_withdrawals"] = round(sum(float(r.get("withdrawals") or 0) for r in ytd_recs), 2)
+            except Exception:
+                pass  # non-fatal — return whatever result_json already had
+
         return {
             "fund_id":     str(row["fund_id"]),
             "nav":         float(row["nav"] or 0),
             "ytd_pct":     float(row["ytd_pct"] or 0),
-            "result_json": row["result_json"],
+            "result_json": json.dumps(rj),  # re-serialize with augmented fields
             "updated_at":  str(row["updated_at"]),
         }
     except HTTPException:
