@@ -2066,6 +2066,33 @@ def lp_me_overview(request: Request):
                                     ytd_total_wdrs  = round(sum(float(m.get("perf_detail",{}).get("withdrawals",0)) for m in _mc), 2)
                         except Exception:
                             pass
+                    # Last resort: read real beginning-of-year balance from
+                    # account_balance_history (same source the ytd-cache GET
+                    # endpoint uses) so the LP view can show the positions-based
+                    # return instead of Modified Dietz.
+                    if ytd_beg_balance is None:
+                        try:
+                            cur.execute("""
+                                SELECT data_json FROM account_balance_history
+                                 WHERE fund_id = %s
+                            """, (fid,))
+                            _bh = cur.fetchone()
+                            if _bh and _bh.get("data_json"):
+                                import json as _jj2
+                                _recs = _jj2.loads(_bh["data_json"]) if isinstance(_bh["data_json"], str) else _bh["data_json"]
+                                _cur_year = datetime.utcnow().year
+                                _ytd_recs = sorted(
+                                    [r for r in (_recs or []) if r.get("year") == _cur_year and not r.get("skip")],
+                                    key=lambda r: r.get("month", 0)
+                                )
+                                if _ytd_recs:
+                                    _beg = float(_ytd_recs[0].get("beg_balance") or 0)
+                                    if _beg > 0:
+                                        ytd_beg_balance = _beg
+                                    ytd_total_deps = round(sum(float(r.get("deposits") or 0) for r in _ytd_recs), 2)
+                                    ytd_total_wdrs = round(sum(float(r.get("withdrawals") or 0) for r in _ytd_recs), 2)
+                        except Exception:
+                            pass
                     acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
 
                 snap_nav           = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None

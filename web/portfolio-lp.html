@@ -1244,14 +1244,27 @@
   }
 
   function buildAcctDetail(a) {
-    const ytd    = a.ytd_pct;
+    // Use positions-based investment return when we have live MV + YTD flows,
+    // same formula as the GP view "YTD RETURN · from positions · matches Fidelity"
+    const currentMV  = a.market_nav || a.nav;
+    const beg        = a.ytd_beg_balance;
+    const deps       = a.ytd_total_deposits  ?? 0;
+    const wdrs       = a.ytd_total_withdrawals ?? 0;
+    let ytd, ytdSrc;
+    if (currentMV != null && beg > 0) {
+      ytd    = (currentMV + wdrs - deps - beg) / beg * 100;
+      ytdSrc = a.market_nav ? 'from positions · matches Fidelity' : (a.ytd_as_of ? `as of ${a.ytd_as_of}` : 'from positions');
+    } else {
+      ytd    = a.ytd_pct;
+      ytdSrc = a.ytd_as_of || '';
+    }
     const ytdStr = ytd != null ? (ytd >= 0 ? '+' : '') + ytd.toFixed(2) + '%' : '—';
     const ytdC   = ytd != null ? (ytd >= 0 ? 'var(--green)' : 'var(--red)') : 'inherit';
     const rows = [
       ['Account Value',    a.nav        ? fmtUSD(a.nav)                                     : '—'],
-      ['YTD Return',       ytd != null  ? `<span style="color:${ytdC};font-weight:700;">${ytdStr}</span>` : '—'],
+      ['YTD Return',       ytd != null  ? `<span style="color:${ytdC};font-weight:700;">${ytdStr}</span>${ytdSrc ? `<span style="font-size:10px;color:var(--mid);margin-left:6px;">${esc(ytdSrc)}</span>` : ''}` : '—'],
       ['Value as of',      a.nav_as_of  || (a.market_nav ? 'Live (positions)' : '—')],
-      ['YTD updated',      a.ytd_as_of  || '—'],
+      ['YTD updated',      a.market_nav ? new Date().toISOString().slice(0,10) : (a.ytd_as_of || '—')],
     ];
     return `
       <div style="font-size:11px;font-weight:800;color:var(--blue-dark);letter-spacing:1px;margin-bottom:10px;">ACCOUNT SUMMARY</div>
