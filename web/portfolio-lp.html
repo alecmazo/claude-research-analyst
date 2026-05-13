@@ -1635,27 +1635,21 @@ function drawLpAllTimeChart(pts, fid, bLabel, showBench = true) {
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
-  const returns = pts.map(p => p.return_pct || 0);
-  const maxAbs  = Math.max(Math.abs(Math.min(...returns)), Math.abs(Math.max(...returns)), 1);
+  const returns     = pts.map(p => p.return_pct || 0);
+  // Benchmark: each year's benchmark_return_pct plotted on the LEFT % axis
+  const hasBench    = showBench && pts.some(p => p.benchmark_return_pct != null);
+  const benchRets   = hasBench ? pts.map(p => p.benchmark_return_pct ?? 0) : [];
+  // Include benchmark returns in the y-axis domain so bars never clip the line
+  const allPctVals  = [...returns, ...benchRets];
+  const maxAbs  = Math.max(Math.abs(Math.min(...allPctVals)), Math.abs(Math.max(...allPctVals)), 1);
   const yRange  = maxAbs * 1.3;
   const yAt = v => padT + chartH * (1 - (v + yRange) / (2 * yRange));
   const y0  = yAt(0);
 
-  // Pre-compute benchmark dollar values (compound from first beg_balance)
-  const hasBench = showBench && pts.some(p => p.benchmark_return_pct != null);
-  let benchDollars = [];
-  if (hasBench) {
-    let bv = pts[0].beg_balance || 0;
-    benchDollars = pts.map(p => {
-      bv *= (1 + (p.benchmark_return_pct || 0) / 100);
-      return bv;
-    });
-  }
-
-  // Right Y-axis: dollar balances — include benchmark so axis scales correctly
+  // Right Y-axis: dollar balances only
   const balances  = pts.map(p => p.end_balance).filter(v => v != null && v > 0);
   const cashOnlys = pts.map(p => p.cash_only_balance).filter(v => v != null && v > 0);
-  const allDollar = [...balances, ...cashOnlys, ...(hasBench ? benchDollars.filter(v => v > 0) : [])];
+  const allDollar = [...balances, ...cashOnlys];
   const maxDollar = allDollar.length ? Math.max(...allDollar) * 1.12 : 1;
   const minDollar = allDollar.length ? Math.min(...allDollar) * 0.88 : 0;
   const yAtUSD = v => padT + chartH * (1 - (v - minDollar) / Math.max(maxDollar - minDollar, 1));
@@ -1772,11 +1766,11 @@ function drawLpAllTimeChart(pts, fid, bLabel, showBench = true) {
   if (cStarted) ctx.stroke();
   ctx.restore();
 
-  // Benchmark line (brown) — compounded dollar value on right axis
-  if (hasBench && benchDollars.length) {
-    const benchPts = benchDollars.map((bv, i) => ({
+  // Benchmark line (brown) — annual % return on LEFT axis, anchored to same zero line as bars
+  if (hasBench && benchRets.length) {
+    const benchPts = benchRets.map((br, i) => ({
       x: padL + totalSlot * i + totalSlot / 2,
-      y: bv > 0 ? yAtUSD(bv) : null,
+      y: yAt(br),
     }));
     ctx.save();
     ctx.strokeStyle = '#a16207';
@@ -1861,7 +1855,7 @@ function drawLpAllTimeChart(pts, fid, bLabel, showBench = true) {
     if (br != null) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#f59e0b;">${benchLabel}</span><span style="color:#f59e0b;">${(br>=0?'+':'')+br.toFixed(2)+'%'}</span></div>`;
     if (p.alpha != null) { const ac=p.alpha>=0?'#4ade80':'#f87171'; html+=`<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:${ac};">Alpha</span><span style="color:${ac};font-weight:700;">${(p.alpha>=0?'+':'')+p.alpha.toFixed(2)+'%'}</span></div>`; }
     if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span>End Balance</span><span>${fmtUSDtt(p.end_balance)}</span></div>`;
-    if (hasBench && benchDollars[hit] > 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#d97706;">${benchLabel} Value</span><span style="color:#d97706;">${fmtUSDtt(benchDollars[hit])}</span></div>`;
+    if (hasBench && benchRets[hit] != null) { const bra=benchRets[hit]; html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#d97706;">${benchLabel}</span><span style="color:#d97706;">${(bra>=0?'+':'')+bra.toFixed(2)+'%'}</span></div>`; }
     if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:rgba(255,255,255,0.5);">If Not Invested</span><span style="color:rgba(255,255,255,0.5);">${fmtUSDtt(p.cash_only_balance)}</span></div>`;
     const deps = (p.deposits || 0), wds = (p.withdrawals || 0);
     if (deps) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:3px;"><span style="color:#4ade80;">Deposits</span><span style="color:#4ade80;">+${fmtUSDtt(deps)}</span></div>`;
