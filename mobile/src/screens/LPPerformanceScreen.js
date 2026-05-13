@@ -37,19 +37,62 @@ function pctColor(v) {
   return v >= 0 ? '#1a7f40' : '#cc3333';
 }
 
-/* ── Pure-View bar chart (no native deps) ─────────────────────────── */
+/* ── Pure-View bar + line chart (no native deps) ──────────────────── */
+//
+// Line overlay math:
+//   Each bar-group slot = marginHorizontal(5) + content(26) + marginHorizontal(5) = 36px
+//   Y-axis column = 32px
+//   Center of group i  →  x = 32 + 5 + 13 + i*36 = 50 + i*36
+//   Benchmark dot y    →  POS_H − round(br*posScale)  for br≥0
+//                          POS_H + 1 + round(|br|*negScale) for br<0
+//   Segment: length=√(dx²+dy²), angle=atan2(dy,dx), View centered at midpoint
+//
+const LINE_COLOR   = '#5bb8d4';   // steel-blue line — distinct from amber bars
+const Y_AXIS_W     = 32;
+const GROUP_SLOT   = 36;          // 5 margin + 26 content + 5 margin
+const GROUP_CENTER = 18;          // 5 margin + 13 (half of 26 content)
+
 function ReturnChart({ annual, bLabel }) {
+  const [showLine, setShowLine] = useState(true);
+
   if (!annual.length) return null;
 
-  const allVals = annual.flatMap(a => [a.return_pct || 0, a.benchmark_return_pct || 0]);
-  const maxPos  = Math.max(...allVals, 5);
-  const maxNeg  = Math.abs(Math.min(...allVals, 0));
-
-  // Pixel heights for each side
-  const POS_H   = 80;
-  const NEG_H   = maxNeg > 0 ? Math.max(24, Math.round(POS_H * maxNeg / maxPos)) : 0;
+  const allVals  = annual.flatMap(a => [a.return_pct || 0, a.benchmark_return_pct || 0]);
+  const maxPos   = Math.max(...allVals, 5);
+  const maxNeg   = Math.abs(Math.min(...allVals, 0));
+  const POS_H    = 80;
+  const NEG_H    = maxNeg > 0 ? Math.max(24, Math.round(POS_H * maxNeg / maxPos)) : 0;
   const posScale = POS_H / maxPos;
   const negScale = maxNeg > 0 ? NEG_H / maxNeg : 1;
+  const CHART_H  = POS_H + 1 + NEG_H;
+
+  // Pixel coords for benchmark line points
+  const pts = annual.map((a, i) => {
+    const br = a.benchmark_return_pct || 0;
+    return {
+      x: Y_AXIS_W + GROUP_CENTER + i * GROUP_SLOT,
+      y: br >= 0
+        ? POS_H - Math.round(br * posScale)
+        : POS_H + 1 + Math.round(Math.abs(br) * negScale),
+      br,
+    };
+  });
+
+  // Diagonal line segments between consecutive points
+  const segs = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p1 = pts[i], p2 = pts[i + 1];
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    segs.push({
+      cx:  (p1.x + p2.x) / 2,
+      cy:  (p1.y + p2.y) / 2,
+      len: Math.sqrt(dx * dx + dy * dy),
+      angle: Math.atan2(dy, dx) * 180 / Math.PI,
+    });
+  }
+
+  const totalW = Y_AXIS_W + annual.length * GROUP_SLOT;
+  const bmkBarOpacity = showLine ? 0.30 : 1; // dim bars when line is visible
 
   return (
     <View style={s.chartContainer}>
@@ -57,7 +100,7 @@ function ReturnChart({ annual, bLabel }) {
         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
 
           {/* Y-axis labels */}
-          <View style={{ width: 32, height: POS_H + 1 + NEG_H }}>
+          <View style={{ width: Y_AXIS_W, height: CHART_H }}>
             <Text style={s.yLabel}>{Math.round(maxPos)}%</Text>
             <View style={{ flex: 1 }} />
             <Text style={s.yLabel}>0%</Text>
@@ -84,24 +127,22 @@ function ReturnChart({ annual, bLabel }) {
                         {fr.toFixed(0)}
                       </Text>
                     )}
-                    <View style={[
-                      s.bar,
-                      { height: fr > 0 ? Math.round(fr * posScale) : 0,
-                        backgroundColor: '#1a7f40' }
-                    ]} />
+                    <View style={[s.bar, {
+                      height: fr > 0 ? Math.round(fr * posScale) : 0,
+                      backgroundColor: '#1a7f40',
+                    }]} />
                   </View>
-                  {/* benchmark bar */}
-                  <View style={{ alignItems: 'center' }}>
-                    {br > 0 && (
+                  {/* benchmark bar (dims when line is visible) */}
+                  <View style={{ alignItems: 'center', opacity: bmkBarOpacity }}>
+                    {br > 0 && !showLine && (
                       <Text style={[s.barLabel, { color: '#c87a0d' }]}>
                         {br.toFixed(0)}
                       </Text>
                     )}
-                    <View style={[
-                      s.bar,
-                      { height: br > 0 ? Math.round(br * posScale) : 0,
-                        backgroundColor: '#c87a0d' }
-                    ]} />
+                    <View style={[s.bar, {
+                      height: br > 0 ? Math.round(br * posScale) : 0,
+                      backgroundColor: '#c87a0d',
+                    }]} />
                   </View>
                 </View>
 
@@ -111,16 +152,15 @@ function ReturnChart({ annual, bLabel }) {
                 {/* Negative area — bars grow downward from top */}
                 {NEG_H > 0 && (
                   <View style={[s.negArea, { height: NEG_H }]}>
-                    <View style={[
-                      s.bar,
-                      { height: fr < 0 ? Math.round(Math.abs(fr) * negScale) : 0,
-                        backgroundColor: '#cc3333' }
-                    ]} />
-                    <View style={[
-                      s.bar,
-                      { height: br < 0 ? Math.round(Math.abs(br) * negScale) : 0,
-                        backgroundColor: '#c87a0d', opacity: 0.65 }
-                    ]} />
+                    <View style={[s.bar, {
+                      height: fr < 0 ? Math.round(Math.abs(fr) * negScale) : 0,
+                      backgroundColor: '#cc3333',
+                    }]} />
+                    <View style={[s.bar, {
+                      height: br < 0 ? Math.round(Math.abs(br) * negScale) : 0,
+                      backgroundColor: '#c87a0d',
+                      opacity: bmkBarOpacity * 0.65,
+                    }]} />
                   </View>
                 )}
 
@@ -129,10 +169,55 @@ function ReturnChart({ annual, bLabel }) {
               </View>
             );
           })}
+
+          {/* ── Benchmark line overlay (absolute, non-interactive) ── */}
+          {showLine && pts.length > 0 && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: 0, top: 0,
+                width: totalW, height: CHART_H,
+              }}
+            >
+              {/* Line segments */}
+              {segs.map((seg, i) => (
+                <View
+                  key={'seg' + i}
+                  style={{
+                    position: 'absolute',
+                    left:  seg.cx - seg.len / 2,
+                    top:   seg.cy - 1,
+                    width: seg.len,
+                    height: 2.5,
+                    backgroundColor: LINE_COLOR,
+                    transform: [{ rotate: seg.angle + 'deg' }],
+                    opacity: 0.92,
+                  }}
+                />
+              ))}
+              {/* Dots at each data point */}
+              {pts.map((p, i) => (
+                <View
+                  key={'dot' + i}
+                  style={{
+                    position: 'absolute',
+                    left: p.x - 4,
+                    top:  p.y - 4,
+                    width: 8, height: 8,
+                    borderRadius: 4,
+                    backgroundColor: LINE_COLOR,
+                    borderWidth: 1.5,
+                    borderColor: '#fff',
+                  }}
+                />
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
 
-      {/* Legend */}
+      {/* Legend + line toggle */}
       <View style={s.chartLegend}>
         <View style={s.legendItem}>
           <View style={[s.legendDot, { backgroundColor: '#1a7f40' }]} />
@@ -146,6 +231,22 @@ function ReturnChart({ annual, bLabel }) {
           <View style={[s.legendDot, { backgroundColor: '#c87a0d' }]} />
           <Text style={s.legendText}>{bLabel}</Text>
         </View>
+
+        {/* Toggleable line pill */}
+        <TouchableOpacity
+          onPress={() => { haptics.onToggle(); setShowLine(v => !v); }}
+          style={[s.legendLinePill, showLine && s.legendLinePillOn]}
+          activeOpacity={0.7}
+        >
+          {/* Mini line + dot icon */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            <View style={{ width: 10, height: 2, backgroundColor: showLine ? LINE_COLOR : '#aaa', borderRadius: 1 }} />
+            <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: showLine ? LINE_COLOR : '#aaa' }} />
+          </View>
+          <Text style={[s.legendText, { color: showLine ? LINE_COLOR : '#aaa', marginLeft: 4 }]}>
+            {bLabel} line
+          </Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -643,6 +744,21 @@ const s = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot:  { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 9, color: colors.midGray, fontWeight: '600' },
+
+  legendLinePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: 'transparent',
+  },
+  legendLinePillOn: {
+    borderColor: 'rgba(91,184,212,0.45)',
+    backgroundColor: 'rgba(91,184,212,0.10)',
+  },
 });
 
 const styles = StyleSheet.create({
