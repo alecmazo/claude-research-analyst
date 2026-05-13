@@ -55,6 +55,9 @@ except ImportError:
 _price_cache: dict = {}  # { symbol: (price, fetched_at) }
 _PRICE_CACHE_TTL = 900   # seconds
 
+# Cache for information_schema column checks (avoid slow system-table hits per request)
+_col_exists_cache: dict = {}   # { "table.column": bool }
+
 def _fetch_prices(symbols: list) -> dict:
     """Return {symbol: last_price} for the given list, using a 15-min cache.
 
@@ -195,6 +198,49 @@ def _fund_market_nav(cur, fid: str) -> float:
         price    = prices.get(sym)
         total   += qty * (price if price is not None else avg_cost)
     return round(total, 2)
+
+
+def _bulk_fund_market_nav(cur, fids: list) -> dict:
+    """Return {fund_id_str: nav_float} for all fund IDs in one SQL query.
+
+    Prices are assumed to be already warmed in _price_cache via a preceding
+    _fetch_prices() call.  Falls back to cost-basis per position when a live
+    price is unavailable.  Much faster than calling _fund_market_nav() in a loop.
+    """
+    if not fids:
+        return {}
+
+    cur.execute("""
+        SELECT tl.fund_id,
+               s.symbol,
+               s.asset_class,
+               SUM(tl.quantity)                                               AS total_qty,
+               SUM(tl.quantity * tl.cost_basis_per_unit)
+                 / NULLIF(SUM(tl.quantity), 0)                                AS avg_cost
+          FROM tax_lots tl
+          JOIN securities s ON s.id = tl.security_id
+         WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+         GROUP BY tl.fund_id, s.symbol, s.asset_class
+    """, (fids,))
+    rows = cur.fetchall()
+
+    # Collect all symbols so we can do ONE price fetch for the whole batch
+    all_syms = list({r["symbol"] for r in rows if r["symbol"]})
+    prices   = _fetch_prices(all_syms)
+
+    totals: dict = {}
+    for r in rows:
+        fid      = str(r["fund_id"])
+        qty      = float(r["total_qty"] or 0)
+        avg_cost = float(r["avg_cost"]  or 0)
+        sym      = r["symbol"]
+        price    = prices.get(sym)
+        totals[fid] = round(totals.get(fid, 0.0) + qty * (price if price is not None else avg_cost), 2)
+
+    # Funds with no positions → 0.0
+    for fid in fids:
+        totals.setdefault(str(fid), 0.0)
+    return totals
 
 
 # ── Embedded chart-of-accounts rows  (replaces reading the seed .sql file) ───
@@ -1681,26 +1727,9 @@ def lp_me_overview(request: Request):
 
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            # ── Pre-warm price cache for ALL funds/accounts in one shot ──
-            # Without this, _fund_market_nav makes N sequential yfinance HTTP
-            # calls (one per fund). By fetching all symbols up-front we reduce
-            # the cold-start cost to a single _fetch_prices() call.
-            try:
-                cur.execute("""
-                    SELECT DISTINCT s.symbol
-                      FROM tax_lots tl
-                      JOIN securities s ON s.id = tl.security_id
-                     WHERE tl.closed_at IS NULL AND s.symbol IS NOT NULL
-                """)
-                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
-                if all_syms:
-                    _fetch_prices(all_syms)   # populates _price_cache; results discarded
-            except Exception:
-                pass  # non-fatal — per-fund fallback still works
 
             # ── Funds ────────────────────────────────────────────────
             if role == "gp":
-                # GP: list every LP fund and aggregate cap table
                 cur.execute("""
                     SELECT id, name, short_name, fund_type
                       FROM funds
@@ -1709,8 +1738,6 @@ def lp_me_overview(request: Request):
                 """)
                 fund_rows = cur.fetchall()
             else:
-                # LP: only funds whose .name is in their memberships dict
-                # (case-insensitive match)
                 names_lower = [n.lower() for n in fund_memberships.keys()]
                 if names_lower:
                     cur.execute("""
@@ -1722,114 +1749,6 @@ def lp_me_overview(request: Request):
                     fund_rows = cur.fetchall()
                 else:
                     fund_rows = []
-
-            for f in fund_rows:
-                fname  = f["name"]
-                alias  = (fund_memberships.get(fname)
-                          or fund_memberships.get(fname.upper())
-                          or fund_memberships.get(fname.lower())
-                          or None) if role != "gp" else None
-
-                # Find this LP's row(s) within the fund.
-                # The lps table doesn't have commitment_amount directly —
-                # commitments live in the `commitments` table (joined here).
-                if role == "gp":
-                    cur.execute("""
-                        SELECT l.legal_name, l.primary_email,
-                               COALESCE(c.commitment, 0) AS commitment_amount
-                          FROM lps l
-                          LEFT JOIN (
-                              SELECT lp_id, SUM(commitment_amount) AS commitment
-                                FROM commitments
-                               WHERE superseded_by IS NULL
-                               GROUP BY lp_id
-                          ) c ON c.lp_id = l.id
-                         WHERE l.fund_id = %s
-                         ORDER BY l.legal_name
-                    """, (f["id"],))
-                else:
-                    cur.execute("""
-                        SELECT l.legal_name, l.primary_email,
-                               COALESCE(c.commitment, 0) AS commitment_amount
-                          FROM lps l
-                          LEFT JOIN (
-                              SELECT lp_id, SUM(commitment_amount) AS commitment
-                                FROM commitments
-                               WHERE superseded_by IS NULL
-                               GROUP BY lp_id
-                          ) c ON c.lp_id = l.id
-                         WHERE l.fund_id = %s
-                           AND LOWER(TRIM(l.legal_name)) = LOWER(%s)
-                    """, (f["id"], alias or ""))
-                lp_rows = cur.fetchall()
-
-                commitment = sum((float(r.get("commitment_amount") or 0) for r in lp_rows), 0.0)
-
-                # Most recent NAV snapshot — schema uses net_nav + as_of_date
-                cur.execute("""
-                    SELECT net_nav, as_of_date
-                      FROM nav_snapshots
-                     WHERE fund_id = %s
-                     ORDER BY as_of_date DESC
-                     LIMIT 1
-                """, (f["id"],))
-                snap = cur.fetchone()
-
-                # Total committed across all LPs for stake-value calculation
-                cur.execute("""
-                    SELECT COALESCE(SUM(c.commitment_amount), 0) AS total_committed
-                      FROM commitments c
-                      JOIN lps l ON l.id = c.lp_id
-                     WHERE l.fund_id = %s AND c.superseded_by IS NULL
-                """, (f["id"],))
-                tc_row = cur.fetchone()
-                total_committed_fund = float((tc_row or {}).get("total_committed") or 0)
-
-                # Live market NAV from positions (fallback when no nav_snapshot)
-                market_nav_fund = _fund_market_nav(cur, f["id"])
-
-                fund_nav_val = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
-                effective_nav = fund_nav_val or (market_nav_fund if market_nav_fund > 0 else None)
-
-                # GP carry: (last gp_equity_end / last end_nav) * current effective_nav
-                gp_accrued_carry = 0.0
-                try:
-                    cur.execute("""
-                        SELECT gp_equity_end, end_nav
-                          FROM fund_annual_snapshots
-                         WHERE fund_id = %s
-                         ORDER BY year DESC LIMIT 1
-                    """, (f["id"],))
-                    last_wf = cur.fetchone()
-                    if last_wf and effective_nav:
-                        last_gp_eq   = float(last_wf["gp_equity_end"] or 0)
-                        last_end_nav = float(last_wf["end_nav"] or 0)
-                        if last_end_nav > 0:
-                            gp_accrued_carry = (last_gp_eq / last_end_nav) * effective_nav
-                except Exception:
-                    pass
-
-                lp_nav_after_carry = max(0.0, (effective_nav or 0) - gp_accrued_carry)
-                stake_value = None
-                if lp_nav_after_carry > 0 and total_committed_fund > 0 and commitment > 0:
-                    stake_value = round(commitment / total_committed_fund * lp_nav_after_carry, 2)
-
-                out["funds"].append({
-                    "fund_id":           str(f["id"]),
-                    "fund_name":         fname,
-                    "short_name":        f["short_name"],
-                    "lp_alias":          alias if role != "gp" else None,
-                    "lp_count":          len(lp_rows),
-                    "commitment":        commitment,
-                    "total_committed":   total_committed_fund,
-                    "fund_nav":          fund_nav_val,
-                    "market_nav":        market_nav_fund if market_nav_fund > 0 else None,
-                    "effective_nav":     effective_nav,
-                    "gp_accrued_carry":  round(gp_accrued_carry, 2) if gp_accrued_carry else None,
-                    "lp_nav_after_carry": round(lp_nav_after_carry, 2) if lp_nav_after_carry else None,
-                    "stake_value":       stake_value,
-                    "fund_nav_as_of":    snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
-                })
 
             # ── Managed accounts ─────────────────────────────────────
             if role == "gp":
@@ -1854,71 +1773,241 @@ def lp_me_overview(request: Request):
                 else:
                     acct_rows = []
 
-            for a in acct_rows:
+            fund_fids = [str(f["id"]) for f in fund_rows]
+            acct_fids = [str(a["id"]) for a in acct_rows]
+            all_fids  = fund_fids + acct_fids
+
+            if not all_fids:
+                # Nothing to load — return early
+                return out
+
+            # ── Bulk price pre-warm (one yfinance call covers everything) ──
+            try:
                 cur.execute("""
-                    SELECT net_nav, as_of_date
+                    SELECT DISTINCT s.symbol
+                      FROM tax_lots tl
+                      JOIN securities s ON s.id = tl.security_id
+                     WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+                       AND s.symbol IS NOT NULL
+                """, (all_fids,))
+                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
+                if all_syms:
+                    _fetch_prices(all_syms)
+            except Exception:
+                pass
+
+            # ── Bulk NAV from positions (one SQL for all funds/accounts) ──
+            mkt_nav_by_fid = {}
+            try:
+                mkt_nav_by_fid = _bulk_fund_market_nav(cur, all_fids)
+            except Exception:
+                pass
+
+            # ── Bulk latest NAV snapshots ──
+            nav_snap_by_fid: dict = {}
+            try:
+                cur.execute("""
+                    SELECT DISTINCT ON (fund_id) fund_id::text, net_nav, as_of_date
                       FROM nav_snapshots
-                     WHERE fund_id = %s
-                     ORDER BY as_of_date DESC
-                     LIMIT 1
-                """, (a["id"],))
-                snap = cur.fetchone()
-                # Live market NAV from positions
-                acct_market_nav = _fund_market_nav(cur, a["id"])
-                # YTD data from cache (also grab nav + result_json for fallback)
+                     WHERE fund_id = ANY(%s)
+                     ORDER BY fund_id, as_of_date DESC
+                """, (all_fids,))
+                for r in cur.fetchall():
+                    nav_snap_by_fid[str(r["fund_id"])] = dict(r)
+            except Exception:
+                pass
+
+            # ── Bulk total committed capital per fund ──
+            total_committed_by_fid: dict = {}
+            if fund_fids:
                 try:
                     cur.execute("""
-                        SELECT nav, ytd_pct, result_json, updated_at
-                          FROM managed_account_ytd_cache
-                         WHERE fund_id = %s
-                    """, (a["id"],))
-                    ytd_row = cur.fetchone()
-                    if ytd_row:
-                        acct_ytd_pct = float(ytd_row["ytd_pct"] or 0)
-                        # Extract flow data from result_json for live investment-return calc
-                        ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
-                        if ytd_row.get("result_json"):
-                            try:
-                                _rj = json.loads(ytd_row["result_json"])
-                                _md = _rj.get("md_return_pct")
-                                if acct_ytd_pct == 0 and _md is not None:
-                                    acct_ytd_pct = float(_md)
-                                ytd_beg_balance = _rj.get("ytd_beg_balance")
-                                ytd_total_deps  = _rj.get("ytd_total_deposits")
-                                ytd_total_wdrs  = _rj.get("ytd_total_withdrawals")
-                                # Fallback: derive from monthly chart if summary fields absent
-                                if ytd_beg_balance is None:
-                                    _mc = (_rj.get("monthly_chart") or {}).get("monthly") or []
-                                    if _mc:
-                                        ytd_beg_balance = float(_mc[0].get("beg_balance") or 0) or None
-                                        ytd_total_deps  = round(sum(float(m.get("perf_detail",{}).get("deposits",0)) for m in _mc), 2)
-                                        ytd_total_wdrs  = round(sum(float(m.get("perf_detail",{}).get("withdrawals",0)) for m in _mc), 2)
-                            except Exception:
-                                pass
-                        acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
-                    else:
-                        acct_ytd_pct = None; acct_ytd_upd = None
-                        ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
+                        SELECT l.fund_id::text,
+                               COALESCE(SUM(c.commitment_amount), 0) AS total_committed
+                          FROM commitments c
+                          JOIN lps l ON l.id = c.lp_id
+                         WHERE l.fund_id = ANY(%s) AND c.superseded_by IS NULL
+                         GROUP BY l.fund_id
+                    """, (fund_fids,))
+                    for r in cur.fetchall():
+                        total_committed_by_fid[str(r["fund_id"])] = float(r["total_committed"])
                 except Exception:
-                    acct_ytd_pct = None; acct_ytd_upd = None; ytd_row = None
-                    ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
-                snap_nav = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
+                    pass
+
+            # ── Bulk latest annual snapshots (for GP carry calc) ──
+            annual_snap_by_fid: dict = {}
+            if fund_fids:
+                try:
+                    cur.execute("""
+                        SELECT DISTINCT ON (fund_id) fund_id::text, gp_equity_end, end_nav
+                          FROM fund_annual_snapshots
+                         WHERE fund_id = ANY(%s)
+                         ORDER BY fund_id, year DESC
+                    """, (fund_fids,))
+                    for r in cur.fetchall():
+                        annual_snap_by_fid[str(r["fund_id"])] = dict(r)
+                except Exception:
+                    pass
+
+            # ── Bulk LP rows (GP: all funds at once; LP: per fund since alias varies) ──
+            lp_rows_by_fid: dict = {}
+            if fund_fids:
+                if role == "gp":
+                    try:
+                        cur.execute("""
+                            SELECT l.fund_id::text, l.legal_name, l.primary_email,
+                                   COALESCE(c.commitment, 0) AS commitment_amount
+                              FROM lps l
+                              LEFT JOIN (
+                                  SELECT lp_id, SUM(commitment_amount) AS commitment
+                                    FROM commitments
+                                   WHERE superseded_by IS NULL
+                                   GROUP BY lp_id
+                              ) c ON c.lp_id = l.id
+                             WHERE l.fund_id = ANY(%s)
+                             ORDER BY l.fund_id, l.legal_name
+                        """, (fund_fids,))
+                        for r in cur.fetchall():
+                            fid = str(r["fund_id"])
+                            lp_rows_by_fid.setdefault(fid, []).append(dict(r))
+                    except Exception:
+                        pass
+                else:
+                    # LP: each fund needs its own alias — run one small query per fund
+                    # (typically 1-3 funds, so cost is low)
+                    for f in fund_rows:
+                        fname = f["name"]
+                        alias = (fund_memberships.get(fname)
+                                 or fund_memberships.get(fname.upper())
+                                 or fund_memberships.get(fname.lower())
+                                 or None)
+                        try:
+                            cur.execute("""
+                                SELECT l.legal_name, l.primary_email,
+                                       COALESCE(c.commitment, 0) AS commitment_amount
+                                  FROM lps l
+                                  LEFT JOIN (
+                                      SELECT lp_id, SUM(commitment_amount) AS commitment
+                                        FROM commitments
+                                       WHERE superseded_by IS NULL
+                                       GROUP BY lp_id
+                                  ) c ON c.lp_id = l.id
+                                 WHERE l.fund_id = %s
+                                   AND LOWER(TRIM(l.legal_name)) = LOWER(%s)
+                            """, (f["id"], alias or ""))
+                            lp_rows_by_fid[str(f["id"])] = cur.fetchall()
+                        except Exception:
+                            lp_rows_by_fid[str(f["id"])] = []
+
+            # ── Bulk YTD cache for managed accounts ──
+            ytd_cache_by_fid: dict = {}
+            if acct_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, nav, ytd_pct, result_json, updated_at
+                          FROM managed_account_ytd_cache
+                         WHERE fund_id = ANY(%s)
+                    """, (acct_fids,))
+                    for r in cur.fetchall():
+                        ytd_cache_by_fid[str(r["fund_id"])] = dict(r)
+                except Exception:
+                    pass
+
+            # ── Assemble funds ────────────────────────────────────────
+            for f in fund_rows:
+                fid   = str(f["id"])
+                fname = f["name"]
+                alias = (fund_memberships.get(fname)
+                         or fund_memberships.get(fname.upper())
+                         or fund_memberships.get(fname.lower())
+                         or None) if role != "gp" else None
+
+                lp_rows            = lp_rows_by_fid.get(fid, [])
+                commitment         = sum((float(r.get("commitment_amount") or 0) for r in lp_rows), 0.0)
+                snap               = nav_snap_by_fid.get(fid)
+                total_committed_fund = total_committed_by_fid.get(fid, 0.0)
+                market_nav_fund    = mkt_nav_by_fid.get(fid, 0.0)
+                fund_nav_val       = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
+                effective_nav      = fund_nav_val or (market_nav_fund if market_nav_fund > 0 else None)
+
+                gp_accrued_carry = 0.0
+                last_wf = annual_snap_by_fid.get(fid)
+                if last_wf and effective_nav:
+                    last_gp_eq   = float(last_wf["gp_equity_end"] or 0)
+                    last_end_nav = float(last_wf["end_nav"] or 0)
+                    if last_end_nav > 0:
+                        gp_accrued_carry = (last_gp_eq / last_end_nav) * effective_nav
+
+                lp_nav_after_carry = max(0.0, (effective_nav or 0) - gp_accrued_carry)
+                stake_value = None
+                if lp_nav_after_carry > 0 and total_committed_fund > 0 and commitment > 0:
+                    stake_value = round(commitment / total_committed_fund * lp_nav_after_carry, 2)
+
+                out["funds"].append({
+                    "fund_id":            fid,
+                    "fund_name":          fname,
+                    "short_name":         f["short_name"],
+                    "lp_alias":           alias if role != "gp" else None,
+                    "lp_count":           len(lp_rows),
+                    "commitment":         commitment,
+                    "total_committed":    total_committed_fund,
+                    "fund_nav":           fund_nav_val,
+                    "market_nav":         market_nav_fund if market_nav_fund > 0 else None,
+                    "effective_nav":      effective_nav,
+                    "gp_accrued_carry":   round(gp_accrued_carry, 2) if gp_accrued_carry else None,
+                    "lp_nav_after_carry": round(lp_nav_after_carry, 2) if lp_nav_after_carry else None,
+                    "stake_value":        stake_value,
+                    "fund_nav_as_of":     snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                })
+
+            # ── Assemble managed accounts ─────────────────────────────
+            for a in acct_rows:
+                fid             = str(a["id"])
+                snap            = nav_snap_by_fid.get(fid)
+                acct_market_nav = mkt_nav_by_fid.get(fid, 0.0)
+                ytd_row         = ytd_cache_by_fid.get(fid)
+
+                acct_ytd_pct = None; acct_ytd_upd = None
+                ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
+
+                if ytd_row:
+                    acct_ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
+                    if ytd_row.get("result_json"):
+                        try:
+                            _rj = json.loads(ytd_row["result_json"])
+                            _md = _rj.get("md_return_pct")
+                            if not acct_ytd_pct and _md is not None:
+                                acct_ytd_pct = float(_md) or None
+                            ytd_beg_balance = _rj.get("ytd_beg_balance")
+                            ytd_total_deps  = _rj.get("ytd_total_deposits")
+                            ytd_total_wdrs  = _rj.get("ytd_total_withdrawals")
+                            if ytd_beg_balance is None:
+                                _mc = (_rj.get("monthly_chart") or {}).get("monthly") or []
+                                if _mc:
+                                    ytd_beg_balance = float(_mc[0].get("beg_balance") or 0) or None
+                                    ytd_total_deps  = round(sum(float(m.get("perf_detail",{}).get("deposits",0)) for m in _mc), 2)
+                                    ytd_total_wdrs  = round(sum(float(m.get("perf_detail",{}).get("withdrawals",0)) for m in _mc), 2)
+                        except Exception:
+                            pass
+                    acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
+
+                snap_nav           = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
                 effective_acct_nav = snap_nav or (acct_market_nav if acct_market_nav > 0 else None)
-                # Fall back to YTD-cache NAV (populated by fund_account_ytd_run)
                 if effective_acct_nav is None and ytd_row and float(ytd_row.get("nav") or 0) > 0:
                     effective_acct_nav = float(ytd_row["nav"])
+
                 out["managed_accounts"].append({
-                    "fund_id":              str(a["id"]),
-                    "account_name":         a["name"],
-                    "short_name":           a["short_name"],
-                    "nav":                  effective_acct_nav,
-                    "market_nav":           acct_market_nav if acct_market_nav > 0 else None,
-                    "nav_as_of":            snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
-                    "ytd_pct":              acct_ytd_pct,
-                    "ytd_as_of":            acct_ytd_upd,
-                    "ytd_beg_balance":      ytd_beg_balance,
-                    "ytd_total_deposits":   ytd_total_deps,
-                    "ytd_total_withdrawals":ytd_total_wdrs,
+                    "fund_id":               fid,
+                    "account_name":          a["name"],
+                    "short_name":            a["short_name"],
+                    "nav":                   effective_acct_nav,
+                    "market_nav":            acct_market_nav if acct_market_nav > 0 else None,
+                    "nav_as_of":             snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    "ytd_pct":               acct_ytd_pct,
+                    "ytd_as_of":             acct_ytd_upd,
+                    "ytd_beg_balance":       ytd_beg_balance,
+                    "ytd_total_deposits":    ytd_total_deps,
+                    "ytd_total_withdrawals": ytd_total_wdrs,
                 })
 
     except HTTPException:
@@ -4907,19 +4996,27 @@ async def fund_list(request: Request, fund_type: str = None):
 
     Defensive: if the fund_type column doesn't exist (migration didn't run),
     we still return funds — treating every row as 'lp_fund' implicitly.
+
+    Performance: all per-fund stats (lp_count, commitments, positions, nav,
+    ytd_cache) are fetched in bulk queries then assembled in Python — no
+    N-sequential-query loops.
     """
     _require_fund_token(request)
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            # First, check if fund_type column exists (scoped to public schema)
-            cur.execute("""
-                SELECT 1 FROM information_schema.columns
-                 WHERE table_schema = 'public'
-                   AND table_name   = 'funds'
-                   AND column_name  = 'fund_type'
-            """)
-            has_fund_type = cur.fetchone() is not None
+            # ── 1. Check for fund_type column (cached to avoid slow system-table hit) ──
+            cache_key = "funds.fund_type"
+            has_fund_type = _col_exists_cache.get(cache_key)
+            if has_fund_type is None:
+                cur.execute("""
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = 'public'
+                       AND table_name   = 'funds'
+                       AND column_name  = 'fund_type'
+                """)
+                has_fund_type = cur.fetchone() is not None
+                _col_exists_cache[cache_key] = has_fund_type
 
             if has_fund_type and fund_type in ('lp_fund', 'managed_account'):
                 cur.execute("""
@@ -4938,8 +5035,6 @@ async def fund_list(request: Request, fund_type: str = None):
                 """)
             else:
                 # Column doesn't exist — run migration now and return all funds
-                # (we cannot filter by type without the column; managed_account
-                #  filter gets an empty list since the column is absent).
                 try:
                     _apply_self_migrations()
                 except Exception:
@@ -4953,94 +5048,123 @@ async def fund_list(request: Request, fund_type: str = None):
                      ORDER BY inception_date ASC
                 """)
             funds = [dict(r) for r in cur.fetchall()]
+            if not funds:
+                return []
 
+            fids     = [str(f["id"]) for f in funds]
+            fids_pg  = fids  # list works with ANY(%s) via psycopg2
+
+            # ── 2. Pre-warm price cache for ALL symbols across all funds ──
+            try:
+                cur.execute("""
+                    SELECT DISTINCT s.symbol
+                      FROM tax_lots tl
+                      JOIN securities s ON s.id = tl.security_id
+                     WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+                       AND s.symbol IS NOT NULL
+                """, (fids_pg,))
+                all_syms = [r["symbol"] for r in cur.fetchall() if r["symbol"]]
+                if all_syms:
+                    _fetch_prices(all_syms)
+            except Exception:
+                pass
+
+            # ── 3. Bulk NAV (one SQL + cached prices, no N yfinance calls) ──
+            nav_by_fid = {}
+            try:
+                nav_by_fid = _bulk_fund_market_nav(cur, fids_pg)
+            except Exception:
+                pass
+
+            # ── 4. Bulk LP counts ──
+            lp_count_by_fid: dict = {fid: 0 for fid in fids}
+            try:
+                cur.execute("""
+                    SELECT fund_id::text, COUNT(*) AS n
+                      FROM lps
+                     WHERE fund_id = ANY(%s) AND status = 'active'
+                     GROUP BY fund_id
+                """, (fids_pg,))
+                for r in cur.fetchall():
+                    lp_count_by_fid[str(r["fund_id"])] = int(r["n"])
+            except Exception:
+                conn.rollback()
+
+            # ── 5. Bulk committed capital ──
+            contrib_by_fid: dict = {fid: 0.0 for fid in fids}
+            try:
+                cur.execute("""
+                    SELECT l.fund_id::text,
+                           COALESCE(SUM(c.commitment_amount), 0) AS total
+                      FROM commitments c
+                      JOIN lps l ON l.id = c.lp_id
+                     WHERE l.fund_id = ANY(%s) AND c.superseded_by IS NULL
+                     GROUP BY l.fund_id
+                """, (fids_pg,))
+                for r in cur.fetchall():
+                    contrib_by_fid[str(r["fund_id"])] = float(r["total"])
+            except Exception:
+                conn.rollback()
+
+            # ── 6. Bulk position counts ──
+            pos_count_by_fid: dict = {fid: 0 for fid in fids}
+            try:
+                cur.execute("""
+                    SELECT fund_id::text, COUNT(DISTINCT security_id) AS n
+                      FROM tax_lots
+                     WHERE fund_id = ANY(%s) AND closed_at IS NULL
+                     GROUP BY fund_id
+                """, (fids_pg,))
+                for r in cur.fetchall():
+                    pos_count_by_fid[str(r["fund_id"])] = int(r["n"])
+            except Exception:
+                conn.rollback()
+
+            # ── 7. Bulk YTD cache for managed accounts ──
+            ytd_by_fid: dict = {}
+            try:
+                cur.execute("""
+                    SELECT fund_id::text, nav, ytd_pct, result_json
+                      FROM managed_account_ytd_cache
+                     WHERE fund_id = ANY(%s)
+                """, (fids_pg,))
+                for r in cur.fetchall():
+                    ytd_by_fid[str(r["fund_id"])] = dict(r)
+            except Exception:
+                conn.rollback()
+
+            # ── 8. Assemble result ──
             result = []
             for f in funds:
-                fid = str(f["id"])
+                fid           = str(f["id"])
+                nav           = nav_by_fid.get(fid, 0.0)
+                lp_count      = lp_count_by_fid.get(fid, 0)
+                contributions = contrib_by_fid.get(fid, 0.0)
+                position_count = pos_count_by_fid.get(fid, 0)
+                ytd_pct       = None
 
-                # NAV — wrapped so one bad fund doesn't kill the whole list
-                try:
-                    nav = _fund_market_nav(cur, fid)
-                except Exception:
-                    nav = 0.0
-
-                # LP count — graceful fallback if lps table missing / error
-                lp_count = 0
-                try:
-                    cur.execute(
-                        "SELECT COUNT(*) AS n FROM lps WHERE fund_id=%s AND status='active'",
-                        (fid,))
-                    lp_count = cur.fetchone()["n"]
-                except Exception:
-                    conn.rollback()
-
-                # Total committed capital — graceful fallback
-                contributions = 0.0
-                try:
-                    cur.execute("""
-                        SELECT COALESCE(SUM(c.commitment_amount), 0) AS total
-                          FROM commitments c JOIN lps l ON l.id = c.lp_id
-                         WHERE l.fund_id = %s AND c.superseded_by IS NULL
-                    """, (fid,))
-                    contributions = float(cur.fetchone()["total"])
-                except Exception:
-                    conn.rollback()
-
-                # Position count — graceful fallback
-                position_count = 0
-                try:
-                    cur.execute("""
-                        SELECT COUNT(DISTINCT security_id) AS n
-                          FROM tax_lots WHERE fund_id=%s AND closed_at IS NULL
-                    """, (fid,))
-                    position_count = cur.fetchone()["n"]
-                except Exception:
-                    conn.rollback()
-
-                gain = nav - contributions
-                gain_pct = (gain / contributions * 100) if contributions else 0.0
-
-                # For managed accounts, pull cached YTD result from DB.
-                # Also extract attribution count so the list card shows
-                # the real number of holdings (tax_lots is always empty
-                # for managed accounts — their positions live in result_json).
-                ytd_pct  = None
-                ytd_nav  = None
                 if f.get("fund_type") == "managed_account":
-                    try:
-                        cur.execute("""
-                            SELECT nav, ytd_pct, result_json, updated_at
-                              FROM managed_account_ytd_cache
-                             WHERE fund_id = %s
-                        """, (fid,))
-                        ytd_row = cur.fetchone()
-                        if ytd_row:
-                            ytd_nav = float(ytd_row["nav"] or 0) or None
-                            ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
-                            if ytd_nav:
-                                nav = ytd_nav   # override 0 with cached real value
-                            # Fallback: if ytd_pct=0, read md_return_pct from result_json
-                            if not ytd_pct and ytd_row.get("result_json"):
-                                try:
-                                    cached = json.loads(ytd_row["result_json"])
+                    ytd_row = ytd_by_fid.get(fid)
+                    if ytd_row:
+                        ytd_nav = float(ytd_row["nav"] or 0) or None
+                        ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
+                        if ytd_nav:
+                            nav = ytd_nav
+                        if ytd_row.get("result_json"):
+                            try:
+                                cached = json.loads(ytd_row["result_json"])
+                                if not ytd_pct:
                                     _md = cached.get("md_return_pct")
                                     if _md is not None:
                                         ytd_pct = float(_md) or None
-                                    attr = cached.get("attribution") or []
-                                    if attr:
-                                        position_count = len(attr)
-                                except Exception:
-                                    pass
-                            elif ytd_row.get("result_json"):
-                                try:
-                                    cached = json.loads(ytd_row["result_json"])
-                                    attr = cached.get("attribution") or []
-                                    if attr:
-                                        position_count = len(attr)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        conn.rollback()
+                                attr = cached.get("attribution") or []
+                                if attr:
+                                    position_count = len(attr)
+                            except Exception:
+                                pass
+
+                gain     = nav - contributions
+                gain_pct = (gain / contributions * 100) if contributions else 0.0
 
                 result.append({
                     "id":             fid,
