@@ -3583,12 +3583,22 @@
     const { begBalance, totalDeps, totalWdrs, benchYtd } = _acctChartData;
     const mv = _acctPositionsMV;
     let posRet = null;
+    console.group('[DGA] _updatePositionsReturnTile');
+    console.log('  begBalance  :', begBalance?.toLocaleString() ?? 'null');
+    console.log('  totalDeps   :', totalDeps?.toLocaleString() ?? 'null');
+    console.log('  totalWdrs   :', totalWdrs?.toLocaleString() ?? 'null');
+    console.log('  positions MV:', mv?.toLocaleString() ?? 'null (positions not loaded yet)');
     if (mv != null && begBalance > 0) {
       // Investment return: (MV + withdrawals − deposits − beginning balance) / beginning balance
       posRet = (mv + totalWdrs - totalDeps - begBalance) / begBalance * 100;
+      console.log('  posRet      :', posRet.toFixed(4) + '%');
+      console.log('  formula     : (' + [mv, '+', totalWdrs, '-', totalDeps, '-', begBalance].join(' ') + ') /', begBalance, '× 100');
       el.textContent = (posRet >= 0 ? '+' : '') + posRet.toFixed(2) + '%';
       el.style.color = posRet >= 0 ? 'var(--green)' : 'var(--red)';
+    } else {
+      console.warn('  ⚠ Cannot compute: mv=', mv, ' begBalance=', begBalance);
     }
+    console.groupEnd();
     // Alpha uses investment return vs benchmark
     if (posRet != null && benchYtd != null) {
       const alpha = posRet - benchYtd;
@@ -3612,14 +3622,45 @@
     const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
 
-    // Extract beginning-of-year balance and YTD flows from monthly data
+    // Extract beginning-of-year balance and YTD flows from monthly data.
+    // Three-tier fallback for begBalance:
+    //   1. Server-side ytd_beg_balance (present in new cache entries)
+    //   2. months[0].beg_balance       (added to mc_monthly in the same server update)
+    //   3. Modified-Dietz algebra:     BMV = (EMV - CF·(1+0.5·R)) / (1+R)
+    //      Inverts Jan's Mod. Dietz equation to recover the Jan 1 starting balance
+    //      from the data that was always present: end_balance, return_pct, perf_detail.
     const months    = (mc && mc.monthly) ? mc.monthly : [];
-    const begBalance = data.ytd_beg_balance
-                    ?? (months.length ? (months[0].beg_balance || 0) : 0);
     const totalDeps  = data.ytd_total_deposits
                     ?? months.reduce((s, m) => s + (m.perf_detail?.deposits    || 0), 0);
     const totalWdrs  = data.ytd_total_withdrawals
                     ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
+
+    let begBalance = data.ytd_beg_balance ?? 0;
+    if (!begBalance && months.length) begBalance = months[0].beg_balance || 0;
+    if (!begBalance && months.length) {
+      // Modified Dietz inversion on January (first non-skip month)
+      const m0  = months.find(m => !m.skip) || months[0];
+      const R   = (m0.return_pct || 0) / 100;        // Jan Mod. Dietz return as decimal
+      const EMV = m0.end_balance || 0;                 // Jan ending balance
+      const CF  = (m0.perf_detail?.deposits    || 0)
+                - (m0.perf_detail?.withdrawals || 0);  // net inflow (positive = money in)
+      const denom = 1 + R;
+      if (EMV > 0 && Math.abs(denom) > 0.0001) {
+        begBalance = (EMV - CF * (1 + 0.5 * R)) / denom;
+      }
+      console.group('[DGA] YTD begBalance — Modified Dietz inversion');
+      console.log('  Source month :', m0.label || m0.month);
+      console.log('  R (return)   :', (R * 100).toFixed(4) + '%');
+      console.log('  EMV (end bal):', EMV.toLocaleString());
+      console.log('  CF (net flow):', CF.toLocaleString(), '  (deps −', (m0.perf_detail?.deposits||0).toLocaleString(), '  wdrs −', (m0.perf_detail?.withdrawals||0).toLocaleString(), ')');
+      console.log('  BMV derived  :', begBalance.toFixed(2));
+      console.log('  Verify R     :', begBalance > 0
+        ? (((EMV - begBalance - CF) / (begBalance + 0.5 * CF)) * 100).toFixed(4) + '% ← should equal R above'
+        : 'n/a');
+      console.groupEnd();
+    } else {
+      console.log('[DGA] YTD begBalance source:', data.ytd_beg_balance != null ? 'server field' : (months[0]?.beg_balance ? 'mc_monthly[0]' : 'n/a'), '→', begBalance);
+    }
 
     // Cache for re-use when positions load or benchmark changes
     _acctChartData = { mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd: spyPct };
