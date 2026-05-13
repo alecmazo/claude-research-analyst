@@ -1875,34 +1875,50 @@ def lp_me_overview(request: Request):
                     ytd_row = cur.fetchone()
                     if ytd_row:
                         acct_ytd_pct = float(ytd_row["ytd_pct"] or 0)
-                        # Fallback: if stored ytd_pct is 0, extract md_return_pct from result_json
-                        if acct_ytd_pct == 0 and ytd_row.get("result_json"):
+                        # Extract flow data from result_json for live investment-return calc
+                        ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
+                        if ytd_row.get("result_json"):
                             try:
                                 _rj = json.loads(ytd_row["result_json"])
                                 _md = _rj.get("md_return_pct")
-                                if _md is not None:
+                                if acct_ytd_pct == 0 and _md is not None:
                                     acct_ytd_pct = float(_md)
+                                ytd_beg_balance = _rj.get("ytd_beg_balance")
+                                ytd_total_deps  = _rj.get("ytd_total_deposits")
+                                ytd_total_wdrs  = _rj.get("ytd_total_withdrawals")
+                                # Fallback: derive from monthly chart if summary fields absent
+                                if ytd_beg_balance is None:
+                                    _mc = (_rj.get("monthly_chart") or {}).get("monthly") or []
+                                    if _mc:
+                                        ytd_beg_balance = float(_mc[0].get("beg_balance") or 0) or None
+                                        ytd_total_deps  = round(sum(float(m.get("perf_detail",{}).get("deposits",0)) for m in _mc), 2)
+                                        ytd_total_wdrs  = round(sum(float(m.get("perf_detail",{}).get("withdrawals",0)) for m in _mc), 2)
                             except Exception:
                                 pass
                         acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
                     else:
                         acct_ytd_pct = None; acct_ytd_upd = None
+                        ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
                 except Exception:
                     acct_ytd_pct = None; acct_ytd_upd = None; ytd_row = None
+                    ytd_beg_balance = None; ytd_total_deps = None; ytd_total_wdrs = None
                 snap_nav = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
                 effective_acct_nav = snap_nav or (acct_market_nav if acct_market_nav > 0 else None)
                 # Fall back to YTD-cache NAV (populated by fund_account_ytd_run)
                 if effective_acct_nav is None and ytd_row and float(ytd_row.get("nav") or 0) > 0:
                     effective_acct_nav = float(ytd_row["nav"])
                 out["managed_accounts"].append({
-                    "fund_id":         str(a["id"]),
-                    "account_name":    a["name"],
-                    "short_name":      a["short_name"],
-                    "nav":             effective_acct_nav,
-                    "market_nav":      acct_market_nav if acct_market_nav > 0 else None,
-                    "nav_as_of":       snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
-                    "ytd_pct":         acct_ytd_pct,
-                    "ytd_as_of":       acct_ytd_upd,
+                    "fund_id":              str(a["id"]),
+                    "account_name":         a["name"],
+                    "short_name":           a["short_name"],
+                    "nav":                  effective_acct_nav,
+                    "market_nav":           acct_market_nav if acct_market_nav > 0 else None,
+                    "nav_as_of":            snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    "ytd_pct":              acct_ytd_pct,
+                    "ytd_as_of":            acct_ytd_upd,
+                    "ytd_beg_balance":      ytd_beg_balance,
+                    "ytd_total_deposits":   ytd_total_deps,
+                    "ytd_total_withdrawals":ytd_total_wdrs,
                 })
 
     except HTTPException:
