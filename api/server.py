@@ -147,13 +147,25 @@ def _fetch_prices(symbols: list) -> dict:
         price = batch_prices.get(yahoo) or batch_prices.get(clean)
 
         if price is None:
-            # Fallback: single Ticker call for anything the batch missed
-            try:
-                t = yf.Ticker(yahoo)
-                p = t.fast_info.last_price
-                price = float(p) if p and float(p) > 0 else None
-            except Exception:
-                price = None
+            # Fallback: single Ticker call for anything the batch missed.
+            # Also try alternate ticker formats (e.g. BRKB → BRK-B, BRK.B)
+            # when the original symbol fails.
+            import re as _re2
+            variants = [yahoo]
+            _m2 = _re2.match(r'^([A-Z]{2,4})([A-Z])$', clean)
+            if _m2:
+                _pfx, _sfx = _m2.group(1), _m2.group(2)
+                variants += [_pfx + '-' + _sfx, _pfx + '.' + _sfx]
+
+            for _variant in variants:
+                try:
+                    t = yf.Ticker(_variant)
+                    p = t.fast_info.last_price
+                    price = float(p) if p and float(p) > 0 else None
+                    if price:
+                        break
+                except Exception:
+                    price = None
 
         _price_cache[clean] = (price, now)
         out[orig_sym] = price
@@ -362,6 +374,44 @@ def _parse_fidelity_csv(content: str) -> list:
             'lot_type':   (row.get('Type') or 'Cash').strip(),
             'is_cash':    False,
         })
+
+    # ── Pending Activity detection ─────────────────────────────────────────
+    # Some Fidelity exports contain a row where one column reads
+    # "Pending Activity" (sold shares settling).  The cash for that row
+    # lives in column I (index 8).  Add it to the SPAXX position so it
+    # isn't silently dropped.
+    pending_cash = 0.0
+    raw_rows = list(csv.reader(io.StringIO('\n'.join(lines[header_idx:]))))
+    for raw_row in raw_rows[1:]:   # skip header row
+        if any('pending activity' in (cell or '').lower() for cell in raw_row):
+            if len(raw_row) > 8:
+                try:
+                    val_str = (raw_row[8] or '').replace('$', '').replace(',', '').strip()
+                    val = float(val_str)
+                    if val > 0:
+                        pending_cash += val
+                except (ValueError, TypeError):
+                    pass
+            # don't break — accumulate all pending rows
+
+    if pending_cash > 0:
+        spaxx_entry = next(
+            (p for p in positions if 'SPAXX' in (p['symbol'] or '').upper()), None
+        )
+        if spaxx_entry:
+            spaxx_entry['quantity']   = float(spaxx_entry['quantity'])   + pending_cash
+            spaxx_entry['cost_basis'] = float(spaxx_entry['cost_basis']) + pending_cash
+        else:
+            positions.append({
+                'symbol':     'SPAXX',
+                'name':       'Fidelity Government Money Market (Pending)',
+                'quantity':   pending_cash,
+                'avg_cost':   1.0,
+                'cost_basis': pending_cash,
+                'last_price': 1.0,
+                'lot_type':   'Cash',
+                'is_cash':    True,
+            })
 
     return positions
 
