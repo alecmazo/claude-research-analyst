@@ -1905,6 +1905,33 @@ def lp_me_overview(request: Request):
             except Exception:
                 conn.rollback()
 
+            # ── Bulk account_balance_history for managed accounts ──
+            # Pre-fetch in one query so the assembly loop has zero extra DB calls.
+            acct_bal_hist_by_fid: dict = {}
+            if acct_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, data_json
+                          FROM account_balance_history
+                         WHERE fund_id::text = ANY(%s)
+                    """, (acct_fids,))
+                    _cur_year = datetime.utcnow().year
+                    for row in cur.fetchall():
+                        _raw  = row["data_json"]
+                        _recs = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                        _ytd  = sorted(
+                            [r for r in _recs if r.get("year") == _cur_year and not r.get("skip")],
+                            key=lambda r: r.get("month", 0)
+                        )
+                        if _ytd:
+                            acct_bal_hist_by_fid[str(row["fund_id"])] = {
+                                "beg":  float(_ytd[0].get("beg_balance") or 0),
+                                "deps": round(sum(float(r.get("deposits") or 0) for r in _ytd), 2),
+                                "wdrs": round(sum(float(r.get("withdrawals") or 0) for r in _ytd), 2),
+                            }
+                except Exception:
+                    conn.rollback()
+
             # ── Bulk total committed capital per fund ──
             total_committed_by_fid: dict = {}
             if fund_fids:
@@ -2066,33 +2093,13 @@ def lp_me_overview(request: Request):
                                     ytd_total_wdrs  = round(sum(float(m.get("perf_detail",{}).get("withdrawals",0)) for m in _mc), 2)
                         except Exception:
                             pass
-                    # Last resort: read real beginning-of-year balance from
-                    # account_balance_history (same source the ytd-cache GET
-                    # endpoint uses) so the LP view can show the positions-based
-                    # return instead of Modified Dietz.
+                    # Last resort: pre-fetched bulk balance history (no extra query)
                     if ytd_beg_balance is None:
-                        try:
-                            cur.execute("""
-                                SELECT data_json FROM account_balance_history
-                                 WHERE fund_id = %s
-                            """, (fid,))
-                            _bh = cur.fetchone()
-                            if _bh and _bh.get("data_json"):
-                                import json as _jj2
-                                _recs = _jj2.loads(_bh["data_json"]) if isinstance(_bh["data_json"], str) else _bh["data_json"]
-                                _cur_year = datetime.utcnow().year
-                                _ytd_recs = sorted(
-                                    [r for r in (_recs or []) if r.get("year") == _cur_year and not r.get("skip")],
-                                    key=lambda r: r.get("month", 0)
-                                )
-                                if _ytd_recs:
-                                    _beg = float(_ytd_recs[0].get("beg_balance") or 0)
-                                    if _beg > 0:
-                                        ytd_beg_balance = _beg
-                                    ytd_total_deps = round(sum(float(r.get("deposits") or 0) for r in _ytd_recs), 2)
-                                    ytd_total_wdrs = round(sum(float(r.get("withdrawals") or 0) for r in _ytd_recs), 2)
-                        except Exception:
-                            pass
+                        _bh = acct_bal_hist_by_fid.get(fid)
+                        if _bh:
+                            ytd_beg_balance = _bh["beg"] or None
+                            ytd_total_deps  = _bh["deps"]
+                            ytd_total_wdrs  = _bh["wdrs"]
                     acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
 
                 snap_nav           = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
@@ -5263,6 +5270,35 @@ async def fund_list(request: Request, fund_type: str = None):
 
             # (ytd_by_fid was loaded earlier in step 2a, before price pre-warm)
 
+            # ── 7b. Bulk account_balance_history for managed accounts ──
+            # ONE query for all managed-account fund IDs so we can compute
+            # the positions-based YTD return without any per-fund DB round-trips.
+            acct_fids = [str(f["id"]) for f in funds if f.get("fund_type") == "managed_account"]
+            bal_hist_by_fid: dict = {}
+            if acct_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, data_json
+                          FROM account_balance_history
+                         WHERE fund_id::text = ANY(%s)
+                    """, (acct_fids,))
+                    _cur_yr = datetime.utcnow().year
+                    for row in cur.fetchall():
+                        _raw = row["data_json"]
+                        _recs = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                        _ytd_r = sorted(
+                            [r for r in _recs if r.get("year") == _cur_yr and not r.get("skip")],
+                            key=lambda r: r.get("month", 0)
+                        )
+                        if _ytd_r:
+                            bal_hist_by_fid[str(row["fund_id"])] = {
+                                "beg":  float(_ytd_r[0].get("beg_balance") or 0),
+                                "deps": round(sum(float(r.get("deposits") or 0) for r in _ytd_r), 2),
+                                "wdrs": round(sum(float(r.get("withdrawals") or 0) for r in _ytd_r), 2),
+                            }
+                except Exception:
+                    conn.rollback()
+
             # ── 8. Assemble result ──
             result = []
             for f in funds:
@@ -5272,12 +5308,12 @@ async def fund_list(request: Request, fund_type: str = None):
                 contributions = contrib_by_fid.get(fid, 0.0)
                 position_count = pos_count_by_fid.get(fid, 0)
                 ytd_pct       = None
-
                 market_nav_val = nav_by_fid.get(fid, 0.0) or 0.0
-                ytd_pos_pct    = None   # positions-based return (matches Fidelity)
+                ytd_pos_pct   = None   # positions-based return (matches Fidelity)
 
                 if f.get("fund_type") == "managed_account":
                     ytd_row = ytd_by_fid.get(fid)
+                    _beg = _deps = _wdrs = 0.0
                     if ytd_row:
                         ytd_nav = float(ytd_row["nav"] or 0) or None
                         ytd_pct = float(ytd_row["ytd_pct"] or 0) or None
@@ -5293,13 +5329,11 @@ async def fund_list(request: Request, fund_type: str = None):
                                 attr = cached.get("attribution") or []
                                 if attr:
                                     position_count = len(attr)
-
-                                # Compute positions-based YTD return
-                                # (same formula as GP detail view "matches Fidelity")
-                                _beg = float(cached.get("ytd_beg_balance") or 0)
+                                # Try result_json fields first
+                                _beg  = float(cached.get("ytd_beg_balance") or 0)
                                 _deps = float(cached.get("ytd_total_deposits") or 0)
                                 _wdrs = float(cached.get("ytd_total_withdrawals") or 0)
-                                # Fallback: read beg_balance from mc_monthly
+                                # Fallback: mc_monthly
                                 if not _beg:
                                     _mc = (cached.get("monthly_chart") or {}).get("monthly") or []
                                     if _mc:
@@ -5307,25 +5341,13 @@ async def fund_list(request: Request, fund_type: str = None):
                                         _deps = round(sum(float(m.get("perf_detail", {}).get("deposits", 0)) for m in _mc), 2)
                                         _wdrs = round(sum(float(m.get("perf_detail", {}).get("withdrawals", 0)) for m in _mc), 2)
                             except Exception:
-                                _beg = _deps = _wdrs = 0
+                                pass
 
-                    # Last resort: account_balance_history
-                    if not locals().get('_beg'):
-                        _beg = _deps = _wdrs = 0
-                        try:
-                            cur.execute("SELECT data_json FROM account_balance_history WHERE fund_id = %s", (fid,))
-                            _bh = cur.fetchone()
-                            if _bh and _bh.get("data_json"):
-                                _recs = json.loads(_bh["data_json"]) if isinstance(_bh["data_json"], str) else _bh["data_json"]
-                                _cur_yr = datetime.utcnow().year
-                                _ytd_r  = sorted([r for r in (_recs or []) if r.get("year") == _cur_yr and not r.get("skip")],
-                                                  key=lambda r: r.get("month", 0))
-                                if _ytd_r:
-                                    _beg  = float(_ytd_r[0].get("beg_balance") or 0)
-                                    _deps = round(sum(float(r.get("deposits") or 0) for r in _ytd_r), 2)
-                                    _wdrs = round(sum(float(r.get("withdrawals") or 0) for r in _ytd_r), 2)
-                        except Exception:
-                            conn.rollback()
+                    # Last resort: pre-fetched bulk balance history (no extra query)
+                    if not _beg:
+                        bh = bal_hist_by_fid.get(fid)
+                        if bh:
+                            _beg, _deps, _wdrs = bh["beg"], bh["deps"], bh["wdrs"]
 
                     if market_nav_val > 0 and _beg > 0:
                         ytd_pos_pct = round((market_nav_val + _wdrs - _deps - _beg) / _beg * 100, 4)
