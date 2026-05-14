@@ -2134,7 +2134,7 @@
         const usePos = a.ytd_pos_pct != null;
         return fundCardHtml(
           a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav,
-          usePos ? a.ytd_pos_pct : a.ytd_pct,   // positions-based preferred
+          usePos ? a.ytd_pos_pct : null,  // positions-based only — blank beats Mod Dietz
           usePos
         );
       }).join('');

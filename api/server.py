@@ -5349,8 +5349,13 @@ async def fund_list(request: Request, fund_type: str = None):
                         if bh:
                             _beg, _deps, _wdrs = bh["beg"], bh["deps"], bh["wdrs"]
 
-                    if market_nav_val > 0 and _beg > 0:
-                        ytd_pos_pct = round((market_nav_val + _wdrs - _deps - _beg) / _beg * 100, 4)
+                    # Mirror what the detail view does: use live tax_lots nav when
+                    # available, fall back to cached nav from the YTD cache.
+                    # (Detail view: currentMV = a.market_nav || a.nav)
+                    _ytd_cached_nav = float((ytd_row or {}).get("nav") or 0)
+                    _effective_nav  = market_nav_val if market_nav_val > 0 else _ytd_cached_nav
+                    if _effective_nav > 0 and _beg > 0:
+                        ytd_pos_pct = round((_effective_nav + _wdrs - _deps - _beg) / _beg * 100, 4)
 
                 gain     = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
