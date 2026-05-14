@@ -5273,6 +5273,9 @@ async def fund_list(request: Request, fund_type: str = None):
                 position_count = pos_count_by_fid.get(fid, 0)
                 ytd_pct       = None
 
+                market_nav_val = nav_by_fid.get(fid, 0.0) or 0.0
+                ytd_pos_pct    = None   # positions-based return (matches Fidelity)
+
                 if f.get("fund_type") == "managed_account":
                     ytd_row = ytd_by_fid.get(fid)
                     if ytd_row:
@@ -5290,8 +5293,42 @@ async def fund_list(request: Request, fund_type: str = None):
                                 attr = cached.get("attribution") or []
                                 if attr:
                                     position_count = len(attr)
+
+                                # Compute positions-based YTD return
+                                # (same formula as GP detail view "matches Fidelity")
+                                _beg = float(cached.get("ytd_beg_balance") or 0)
+                                _deps = float(cached.get("ytd_total_deposits") or 0)
+                                _wdrs = float(cached.get("ytd_total_withdrawals") or 0)
+                                # Fallback: read beg_balance from mc_monthly
+                                if not _beg:
+                                    _mc = (cached.get("monthly_chart") or {}).get("monthly") or []
+                                    if _mc:
+                                        _beg  = float(_mc[0].get("beg_balance") or 0)
+                                        _deps = round(sum(float(m.get("perf_detail", {}).get("deposits", 0)) for m in _mc), 2)
+                                        _wdrs = round(sum(float(m.get("perf_detail", {}).get("withdrawals", 0)) for m in _mc), 2)
                             except Exception:
-                                pass
+                                _beg = _deps = _wdrs = 0
+
+                    # Last resort: account_balance_history
+                    if not locals().get('_beg'):
+                        _beg = _deps = _wdrs = 0
+                        try:
+                            cur.execute("SELECT data_json FROM account_balance_history WHERE fund_id = %s", (fid,))
+                            _bh = cur.fetchone()
+                            if _bh and _bh.get("data_json"):
+                                _recs = json.loads(_bh["data_json"]) if isinstance(_bh["data_json"], str) else _bh["data_json"]
+                                _cur_yr = datetime.utcnow().year
+                                _ytd_r  = sorted([r for r in (_recs or []) if r.get("year") == _cur_yr and not r.get("skip")],
+                                                  key=lambda r: r.get("month", 0))
+                                if _ytd_r:
+                                    _beg  = float(_ytd_r[0].get("beg_balance") or 0)
+                                    _deps = round(sum(float(r.get("deposits") or 0) for r in _ytd_r), 2)
+                                    _wdrs = round(sum(float(r.get("withdrawals") or 0) for r in _ytd_r), 2)
+                        except Exception:
+                            conn.rollback()
+
+                    if market_nav_val > 0 and _beg > 0:
+                        ytd_pos_pct = round((market_nav_val + _wdrs - _deps - _beg) / _beg * 100, 4)
 
                 gain     = nav - contributions
                 gain_pct = (gain / contributions * 100) if contributions else 0.0
@@ -5313,6 +5350,8 @@ async def fund_list(request: Request, fund_type: str = None):
                     "lp_count":       lp_count,
                     "position_count": position_count,
                     "ytd_pct":        round(ytd_pct, 4) if ytd_pct is not None else None,
+                    "ytd_pos_pct":    ytd_pos_pct,          # positions-based, matches Fidelity
+                    "market_nav":     round(market_nav_val, 2) if market_nav_val > 0 else None,
                 })
             return result
     finally:

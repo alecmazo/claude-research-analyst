@@ -2080,10 +2080,11 @@
       const today = new Date().toISOString().slice(0, 10);
 
       const _safeAttr = (s) => String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct) => {
+      const fundCardHtml = (fid, fname, badge, navVal, navAsOf, lpCount, committed, isAcct, marketNav, ytdPct, isPosBased) => {
         const navStr   = navVal != null ? fmtUSD(navVal) : '—';
         const navSub   = navAsOf ? 'as of ' + navAsOf : (marketNav > 0 ? 'live market' : 'no snapshot');
         const ytdColor = ytdPct != null ? (ytdPct >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--mid)';
+        const ytdSub   = isPosBased ? 'YTD · positions' : 'YTD';
         return `
         <div class="fund-row" data-fund-id="${fid}" data-fund-name="${fname}">
           <div class="fund-row-main">
@@ -2098,7 +2099,7 @@
             ${isAcct && ytdPct != null ? `
             <div class="fund-row-stat" style="min-width:60px;">
               <div class="fund-row-stat-val" style="color:${ytdColor};">${ytdPct >= 0 ? '+' : ''}${ytdPct.toFixed(2)}%</div>
-              <div class="fund-row-stat-sub">YTD</div>
+              <div class="fund-row-stat-sub">${ytdSub}</div>
             </div>` : ''}
             ${!isAcct ? `
             <div class="fund-row-stat" style="min-width:40px;">
@@ -2129,9 +2130,14 @@
         (f.fund_nav > 0 ? f.fund_nav_as_of : null),
         f.lp_count, f.commitment, false, f.market_nav, null
       )).join('');
-      const acctHtml = accts.map(a => fundCardHtml(
-        a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav, a.ytd_pct
-      )).join('');
+      const acctHtml = accts.map(a => {
+        const usePos = a.ytd_pos_pct != null;
+        return fundCardHtml(
+          a.fund_id, a.account_name, a.short_name, a.nav, a.nav_as_of, null, null, true, a.market_nav,
+          usePos ? a.ytd_pos_pct : a.ytd_pct,   // positions-based preferred
+          usePos
+        );
+      }).join('');
 
       elFunds.innerHTML = funds.length ? fundHtml :
         '<div class="tab-empty">No LP funds yet. Use Settings → Fund Administration → Create to add one.</div>';
