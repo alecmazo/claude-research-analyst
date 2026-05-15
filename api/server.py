@@ -86,6 +86,56 @@ def _invalidate_user_cache(user_id: str | None = None):
         if len(k) >= 2 and k[1] == user_id:
             _user_resp_cache.pop(k, None)
 
+# ── Ticker alias / ignore dictionary ─────────────────────────────────────────
+# Hard-coded fallbacks that survive deploys. The kv_store layer on top allows
+# runtime edits; these are the boot-time defaults.
+#
+# _TICKER_ALIASES : {fidelity_symbol → yahoo_symbol}   (e.g. BRKB → BRK-B)
+# _TICKER_IGNORE  : {symbol → reason_string}            (e.g. EM50 → "portfolio name")
+#   Ignored symbols are skipped by _fetch_prices and treated as cost-basis only.
+#
+# Bond detection rule (no entry needed in the dict):
+#   Any symbol whose first character is a digit after stripping leading '$'
+#   is a CUSIP/bond identifier (e.g. 36966TKX9, $36966TKX9).
+#   These are priced at cost basis — never sent to Yahoo Finance.
+
+_TICKER_ALIASES: dict[str, str] = {
+    # Berkshire Hathaway class B
+    "BRKB":  "BRK-B",
+    # Add more as needed — key = as-imported, value = Yahoo symbol
+}
+
+_TICKER_IGNORE: dict[str, str] = {
+    # Portfolio / sleeve names that appear as ticker-column values in Fidelity exports
+    "EM50":  "portfolio_name",
+    "$EM50": "portfolio_name",
+    # Bonds: handled by _is_bond_cusip() at fetch time; listed here only as docs
+}
+
+
+def _is_bond_cusip(sym: str) -> bool:
+    """Return True if sym looks like a CUSIP/bond identifier rather than an equity.
+
+    Rule: after stripping a leading '$', if the first character is a digit the
+    symbol is a fixed-income CUSIP (e.g. 36966TKX9, $912810RR7).  These are
+    priced at cost basis — Yahoo Finance won't have them.
+    """
+    clean = sym.lstrip("$").rstrip("*")
+    return bool(clean) and clean[0].isdigit()
+
+
+def _ticker_should_ignore(sym: str) -> bool:
+    """Return True if this symbol should be completely skipped (no pricing, no display)."""
+    clean = sym.rstrip("*")
+    return clean.upper() in _TICKER_IGNORE or clean.lstrip("$").upper() in _TICKER_IGNORE
+
+
+def _resolve_ticker_alias(sym: str) -> str:
+    """Return the Yahoo-compatible symbol for sym, applying alias map first."""
+    clean = sym.rstrip("*")
+    return _TICKER_ALIASES.get(clean.upper(), _TICKER_ALIASES.get(clean, clean))
+
+
 def _fetch_prices(symbols: list) -> dict:
     """Return {symbol: last_price} for the given list, using a 15-min cache.
 
@@ -93,44 +143,87 @@ def _fetch_prices(symbols: list) -> dict:
     request instead of one Ticker() call per symbol. Falls back to per-ticker
     fast_info for any symbol the batch download misses (e.g. preferred stocks
     with non-standard tickers).
+
+    Special handling:
+      • Money-market funds (SPAXX etc.) → always $1.00
+      • Ignored tickers (EM50 etc.)     → skipped (None returned)
+      • Bond CUSIPs (start with digit)  → skipped (caller uses cost basis)
+      • Ticker aliases (BRKB → BRK-B)   → remapped before Yahoo call
     """
     if not _YFINANCE_OK or not symbols:
         return {}
     now   = time.time()
     out   = {}
-    fetch = []   # (original_sym, clean_sym) pairs that need network calls
+    # Each entry: (original_sym, clean_sym, yahoo_sym)
+    fetch: list[tuple[str, str, str]] = []
 
     MM_FUNDS = ('SPAXX', 'FDRXX', 'SPRXX', 'FZFXX', 'FZDXX')
 
     for sym in symbols:
         clean = sym.rstrip('*')
-        # Money-market: always $1
-        if any(mm in clean for mm in MM_FUNDS):
+
+        # ── Completely skip ignored symbols (portfolio names, etc.) ───────────
+        if _ticker_should_ignore(clean):
+            # Return None so callers fall back to cost basis; do NOT cache —
+            # so the ignore rule can be updated at runtime without a restart.
+            out[sym] = None
+            continue
+
+        # ── Bond CUSIPs — first char is a digit after stripping '$' ──────────
+        if _is_bond_cusip(clean):
+            # No Yahoo call; caller uses cost basis. Cache as None with a long
+            # TTL so we never emit a "possibly delisted" warning for bonds.
+            _price_cache[clean] = (None, now)
+            out[sym] = None
+            continue
+
+        # ── Money-market: always $1 ───────────────────────────────────────────
+        if any(mm in clean.upper() for mm in MM_FUNDS):
             _price_cache[clean] = (1.0, now)
             out[sym] = 1.0
             continue
+
+        # ── Apply alias map before cache lookup ───────────────────────────────
+        yahoo_sym = _resolve_ticker_alias(clean)   # e.g. BRKB → BRK-B
+
+        # Cache lookup uses the original clean sym as key (consistent with write)
         if clean in _price_cache:
             p, ts = _price_cache[clean]
             if now - ts < _PRICE_CACHE_TTL:
                 out[sym] = p
                 continue
-        fetch.append((sym, clean))
+
+        fetch.append((sym, clean, yahoo_sym))
 
     if not fetch:
         return out
 
     # ── Batch download (one HTTP request for all uncached symbols) ───────────
-    clean_syms = list(dict.fromkeys(c for _, c in fetch))  # deduplicated
+    # Deduplicate by yahoo_sym (the symbol we'll actually query).
+    seen_yahoo: set[str] = set()
+    yahoo_to_clean: dict[str, str] = {}  # yahoo_sym → clean_sym
+    query_list: list[str] = []
+    for _, clean, yahoo in fetch:
+        if yahoo not in seen_yahoo:
+            seen_yahoo.add(yahoo)
+            yahoo_to_clean[yahoo] = clean
+            query_list.append(yahoo)
 
-    def _normalize(sym: str) -> str:
-        """Map preferred-stock variants to Yahoo format (BAC-PL → BAC-PL)."""
+    def _normalize_preferred(sym: str) -> str:
+        """Map preferred-stock variants to Yahoo format (BACPRL → BAC-PL)."""
         import re as _r
         m = _r.match(r'^([A-Z]{1,4})PR([A-Z])$', sym)
         if m:
             return m.group(1) + '-P' + m.group(2)
         return sym
 
-    yahoo_syms = [_normalize(s) for s in clean_syms]
+    # Apply preferred-stock normalization on top of alias resolution.
+    final_query: list[str] = [_normalize_preferred(s) for s in query_list]
+    # Track mapping from final query sym back to clean sym.
+    final_to_clean: dict[str, str] = {
+        fq: yahoo_to_clean[q]
+        for fq, q in zip(final_query, query_list)
+    }
 
     def _yf_batch(query_syms: list) -> dict:
         """One yf.download call for a list of symbols. Returns
@@ -185,36 +278,34 @@ def _fetch_prices(symbols: list) -> dict:
                 pass
         return prices
 
-    # ── Pass 1: batch with normalized symbols ────────────────────────────────
-    batch_prices: dict = _yf_batch(yahoo_syms)
+    # ── Pass 1: batch with alias-resolved + preferred-normalized symbols ──────
+    batch_prices: dict = _yf_batch(final_query)
 
-    # ── Pass 2: BATCH retry with class-share variants for anything still
-    # missing (e.g. BRKB → BRK-B). One additional HTTP request — never
-    # per-ticker loops, so total time is bounded to ~2 batch downloads.
+    # ── Pass 2: BATCH retry with class-share dash-variants for anything still
+    # missing (e.g. if BRKB didn't resolve via alias — fallback regex).
+    # One additional HTTP request — never per-ticker loops.
     import re as _re_var
-    variant_map: dict = {}   # {variant_sym: original_clean}
-    for clean in clean_syms:
-        yahoo = _normalize(clean)
-        if batch_prices.get(yahoo) or batch_prices.get(clean):
+    variant_map: dict = {}   # {variant_sym: final_query_sym}
+    for fq in final_query:
+        if batch_prices.get(fq):
             continue
-        m = _re_var.match(r'^([A-Z]{2,4})([A-Z])$', clean)
+        m = _re_var.match(r'^([A-Z]{2,4})([A-Z])$', fq)
         if not m:
             continue
         variant = f"{m.group(1)}-{m.group(2)}"
-        variant_map[variant] = clean
+        variant_map[variant] = fq
     if variant_map:
         variant_prices = _yf_batch(list(variant_map.keys()))
         for variant, p in variant_prices.items():
-            orig_clean = variant_map.get(variant)
-            if orig_clean and p:
-                batch_prices[orig_clean] = p
+            orig_fq = variant_map.get(variant)
+            if orig_fq and p:
+                batch_prices[orig_fq] = p
 
-    # ── Map results back to caller-supplied symbols ──────────────────────────
-    for orig_sym, clean in fetch:
-        yahoo = _normalize(clean)
-        price = batch_prices.get(clean) or batch_prices.get(yahoo)
-        # Cache the result (even None) so subsequent calls within TTL don't
-        # re-hit yfinance for the same dead ticker.
+    # ── Map results back to caller-supplied symbols ───────────────────────────
+    for orig_sym, clean, yahoo in fetch:
+        final = _normalize_preferred(yahoo)
+        price = batch_prices.get(final) or batch_prices.get(yahoo)
+        # Cache under the clean sym so next call within TTL is instant.
         _price_cache[clean] = (price, now)
         out[orig_sym] = price
 
@@ -6369,14 +6460,64 @@ async def fund_positions(request: Request, fund_id: str = None):
 _CASH_TICKERS = {"SPAXX", "FDRXX", "FDLXX", "FZFXX", "FZDXX", "SPRXX", "VMFXX"}
 
 def _is_cash_ticker(sym: str) -> bool:
-    """Return True if this ticker represents cash / money-market (exclude from rebalance)."""
+    """Return True if this ticker is cash/money-market, a bond CUSIP, or ignored.
+    All of these should be excluded from equity rebalance calculations.
+    """
     clean = sym.rstrip("*").upper()
     if clean in _CASH_TICKERS:
         return True
-    # Tickers that start with a digit or are all non-alpha chars are not equities
-    if clean and clean[0].isdigit():
+    # Bond CUSIPs (start with digit) and ignored tickers (portfolio names etc.)
+    if _is_bond_cusip(clean) or _ticker_should_ignore(clean):
         return True
     return False
+
+
+# ── Runtime ticker alias/ignore management ────────────────────────────────────
+
+@app.get("/api/v2/admin/ticker-map")
+async def get_ticker_map(request: Request):
+    """Return current alias + ignore dictionaries. GP-only."""
+    _require_fund_token(request)
+    return {
+        "aliases": _TICKER_ALIASES,
+        "ignore":  _TICKER_IGNORE,
+        "bonds_auto_detected": "Any ticker whose first character (after stripping $) is a digit",
+    }
+
+
+class TickerAliasRequest(BaseModel):
+    source: str   # e.g. "BRKB"
+    target: str   # e.g. "BRK-B"
+
+class TickerIgnoreRequest(BaseModel):
+    ticker: str   # e.g. "EM50"
+    reason: str = "user_added"
+
+@app.post("/api/v2/admin/ticker-map/alias")
+async def add_ticker_alias(body: TickerAliasRequest, request: Request):
+    """Add a runtime alias (e.g. BRKB → BRK-B). Persists for the life of the process."""
+    _require_fund_token(request)
+    src = body.source.strip().upper()
+    tgt = body.target.strip().upper()
+    if not src or not tgt:
+        raise HTTPException(status_code=422, detail="source and target required")
+    _TICKER_ALIASES[src] = tgt
+    # Also flush the price cache for this symbol so it re-resolves immediately.
+    _price_cache.pop(src, None)
+    print(f"[ticker-map] alias added: {src} → {tgt}")
+    return {"ok": True, "alias": {src: tgt}}
+
+@app.post("/api/v2/admin/ticker-map/ignore")
+async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
+    """Add a ticker to the ignore list (portfolio names, phantom rows, etc.)."""
+    _require_fund_token(request)
+    sym = body.ticker.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=422, detail="ticker required")
+    _TICKER_IGNORE[sym] = body.reason
+    _price_cache.pop(sym, None)
+    print(f"[ticker-map] ignore added: {sym} ({body.reason})")
+    return {"ok": True, "ignored": sym, "reason": body.reason}
 
 
 def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
