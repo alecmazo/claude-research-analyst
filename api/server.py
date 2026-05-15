@@ -5145,7 +5145,7 @@ def _seed_manual_annual_returns(conn) -> None:
     """Upsert hardwired annual returns into manual_annual_returns.
 
     Resolves each account by matching any of its name tokens against both
-    short_name and fund_name (case-insensitive ILIKE).  Safe to re-run.
+    short_name and name (case-insensitive ILIKE).  Safe to re-run.
     """
     if not _HARDWIRED_ANNUAL_RETURNS:
         return
@@ -5155,9 +5155,10 @@ def _seed_manual_annual_returns(conn) -> None:
             year_map = entry["returns"]
             fid = None
             for token in tokens:
+                # funds PK is `id` and the company name column is `name`
                 cur.execute(
-                    """SELECT fund_id FROM funds
-                        WHERE (short_name ILIKE %s OR fund_name ILIKE %s)
+                    """SELECT id FROM funds
+                        WHERE (short_name ILIKE %s OR name ILIKE %s)
                           AND fund_type = 'managed_account'
                         LIMIT 1""",
                     (f"%{token}%", f"%{token}%"),
@@ -5319,51 +5320,75 @@ def _apply_self_migrations() -> None:
 
     Idempotent — safe to call multiple times; exits immediately after the
     first successful run (guarded by _MIGRATIONS_APPLIED).
+
+    Each step is wrapped in its own try/except + rollback so that one
+    failing step cannot poison the shared transaction or prevent the
+    flag from being set — otherwise every single subsequent request
+    re-runs the entire migration sequence (huge per-request cost).
     """
     global _MIGRATIONS_APPLIED
     if _MIGRATIONS_APPLIED or not _PSYCOPG2_OK:
         return
     if not os.environ.get("DATABASE_URL"):
         return
+
+    def _step(name: str, fn):
+        try:
+            fn()
+        except Exception as ex:
+            print(f"[migration] step {name!r} failed (non-fatal): {ex!s:.200}")
+            try: conn.rollback()
+            except Exception: pass
+
     try:
         conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    except Exception as e:
+        print(f"[migration] could not connect: {e}")
+        return
+    try:
+        # Check whether the funds table already exists
+        funds_exists = False
         try:
-            # Check whether the funds table already exists
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT 1 FROM information_schema.tables
                      WHERE table_schema = 'public' AND table_name = 'funds'
                 """)
                 funds_exists = cur.fetchone() is not None
+        except Exception as ex:
+            print(f"[migration] funds-table probe failed: {ex!s:.200}")
+            try: conn.rollback()
+            except Exception: pass
 
-            if not funds_exists:
-                print("[migration] funds table missing — bootstrapping schema from SQL files")
-                _bootstrap_fund_schema(conn)
-            else:
-                print("[migration] funds table exists — running incremental migrations")
-                # Run incremental migrations (each is idempotent via IF NOT EXISTS)
-                base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
-                for fname in ("0002_annual_snapshots.sql", "0004_ytd_cache.sql"):
-                    p = base / fname
-                    if p.exists():
-                        _exec_sql_file(conn, p)
+        if not funds_exists:
+            print("[migration] funds table missing — bootstrapping schema from SQL files")
+            _step("bootstrap", lambda: _bootstrap_fund_schema(conn))
+        else:
+            print("[migration] funds table exists — running incremental migrations")
+            base = Path(__file__).parent.parent / "apps" / "fund" / "db" / "migrations"
+            for fname in ("0002_annual_snapshots.sql", "0004_ytd_cache.sql"):
+                p = base / fname
+                if p.exists():
+                    _step(fname, lambda p=p: _exec_sql_file(conn, p))
 
-            # Always fix the fund_type column / constraint (idempotent)
-            _fix_fund_type_column(conn)
-            _ensure_balance_history_table(conn)
-            _ensure_lp_creds_table(conn)
-            _ensure_fund_display_settings_table(conn)
-            _ensure_benchmark_annual_returns_table(conn)
-            _seed_benchmark_historical(conn)
-            _ensure_manual_annual_returns_table(conn)
-            _seed_manual_annual_returns(conn)
+        _step("fix_fund_type_column",       lambda: _fix_fund_type_column(conn))
+        _step("balance_history_table",      lambda: _ensure_balance_history_table(conn))
+        _step("lp_creds_table",             lambda: _ensure_lp_creds_table(conn))
+        _step("fund_display_settings",      lambda: _ensure_fund_display_settings_table(conn))
+        _step("benchmark_annual_returns",   lambda: _ensure_benchmark_annual_returns_table(conn))
+        _step("seed_benchmark_historical",  lambda: _seed_benchmark_historical(conn))
+        _step("manual_annual_returns",      lambda: _ensure_manual_annual_returns_table(conn))
+        _step("seed_manual_annual_returns", lambda: _seed_manual_annual_returns(conn))
 
-            _MIGRATIONS_APPLIED = True
-            print("[migration] self-migrations complete")
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"[migration] could not connect: {e}")
+        # Mark the migration as applied EVEN IF some optional seed step
+        # failed — those failures are logged once and ignored. This
+        # prevents the per-request re-run that was making every page
+        # load redundantly re-execute the whole migration sequence.
+        _MIGRATIONS_APPLIED = True
+        print("[migration] self-migrations complete (flag set)")
+    finally:
+        try: conn.close()
+        except Exception: pass
 
 
 @app.on_event("startup")
