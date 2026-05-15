@@ -6568,19 +6568,24 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
     smtp_error   = None
 
     # Try Resend first (Railway compatible — no outbound SMTP needed)
-    resend_key = os.environ.get("RESEND_API_KEY", "")
-    resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
+    resend_key      = os.environ.get("RESEND_API_KEY", "")
+    resend_from     = os.environ.get("RESEND_FROM", "") or "DGA Capital <onboarding@resend.dev>"
+    # RESEND_ACCOUNT_EMAIL: the email address you signed up to Resend with.
+    # Resend test-mode (no verified domain) only allows sending to this address.
+    # Set this in Railway env vars to make email work without domain verification.
+    resend_acct_email = os.environ.get("RESEND_ACCOUNT_EMAIL", "").strip()
+
     if resend_key:
         import urllib.request as _urlreq, urllib.error as _urlerr
 
-        def _try_resend(from_addr: str, reply_to: str | None = None) -> dict | None:
-            """Attempt one Resend send. Returns result dict on success, None on failure."""
+        def _try_resend(from_addr: str, actual_to: str, reply_to: str | None = None) -> dict:
+            """Attempt one Resend send. Returns result dict."""
             try:
                 body_dict: dict = {
-                    "from": from_addr,
-                    "to": [to_addr],
+                    "from":    from_addr,
+                    "to":      [actual_to],
                     "subject": subject,
-                    "html": html_body,
+                    "html":    html_body,
                 }
                 if reply_to:
                     body_dict["reply_to"] = reply_to
@@ -6592,8 +6597,9 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
                     method="POST",
                 )
                 with _urlreq.urlopen(req, timeout=15):
-                    return {"ok": True, "transport": "resend", "sent_to": to_addr,
-                            "from": from_addr}
+                    note = "" if actual_to == to_addr else f" (forwarded to account email {actual_to})"
+                    return {"ok": True, "transport": "resend", "sent_to": actual_to,
+                            "from": from_addr, "note": note}
             except _urlerr.HTTPError as _he:
                 body_txt = _he.read().decode("utf-8", errors="replace")
                 return {"ok": False, "code": _he.code, "body": body_txt}
@@ -6601,22 +6607,31 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
                 return {"ok": False, "code": None, "body": str(_e)}
 
         try:
-            # First attempt: configured from address
-            r1 = _try_resend(resend_from)
-            if r1 and r1.get("ok"):
+            # Attempt 1: send directly to the intended recipient
+            r1 = _try_resend(resend_from, to_addr)
+            if r1.get("ok"):
                 return r1
 
-            # If 403 (domain not verified / permission denied), fall back to
-            # Resend's built-in onboarding sender which requires no domain setup.
-            if r1 and r1.get("code") == 403:
-                r2 = _try_resend("DGA Capital <onboarding@resend.dev>", reply_to=resend_from)
-                if r2 and r2.get("ok"):
-                    return r2
-                resend_error = (
-                    f"Resend HTTP 403 (domain not verified): {r1.get('body','')[:120]}. "
-                    f"Fallback also failed: {r2.get('body','')[:80] if r2 else 'n/a'}. "
-                    "Fix: verify your sending domain at resend.com/domains and set RESEND_FROM."
-                )
+            if r1.get("code") == 403:
+                # 403/1010 = domain not verified. Resend only allows sending to the
+                # account-owner's email in test mode.
+                # Attempt 2: if RESEND_ACCOUNT_EMAIL is set, send there instead.
+                if resend_acct_email:
+                    r2 = _try_resend(resend_from, resend_acct_email, reply_to=to_addr)
+                    if r2.get("ok"):
+                        return r2
+                    resend_error = (
+                        f"Resend 403 — domain not verified. Tried RESEND_ACCOUNT_EMAIL "
+                        f"({resend_acct_email}) but still got: {r2.get('body','')[:120]}. "
+                        "Verify dgacapital.com at resend.com/domains."
+                    )
+                else:
+                    resend_error = (
+                        f"Resend HTTP 403 — domain not verified (error code: 1010). "
+                        "Quick fix: set RESEND_ACCOUNT_EMAIL in Railway env vars to the email "
+                        "you used to sign up at resend.com — emails will be delivered there. "
+                        "Permanent fix: verify your sending domain at resend.com/domains."
+                    )
             else:
                 resend_error = f"Resend HTTP {r1.get('code','?')}: {r1.get('body','')[:200]}"
         except Exception as _e:
@@ -6663,16 +6678,18 @@ async def email_diag(request: Request):
     result: dict = {}
 
     # 1. Environment variables (masked)
-    resend_key  = os.environ.get("RESEND_API_KEY", "")
-    resend_from = os.environ.get("RESEND_FROM", "")
-    gmail_user  = os.environ.get("GMAIL_USER", "")
-    gmail_pwd   = os.environ.get("GMAIL_APP_PASSWORD", "")
+    resend_key        = os.environ.get("RESEND_API_KEY", "")
+    resend_from       = os.environ.get("RESEND_FROM", "")
+    resend_acct_email = os.environ.get("RESEND_ACCOUNT_EMAIL", "")
+    gmail_user        = os.environ.get("GMAIL_USER", "")
+    gmail_pwd         = os.environ.get("GMAIL_APP_PASSWORD", "")
 
     result["env"] = {
-        "RESEND_API_KEY":      f"set ({resend_key[:6]}...)" if resend_key else "NOT SET",
-        "RESEND_FROM":         resend_from or "NOT SET (will default to reports@dgacapital.com)",
-        "GMAIL_USER":          gmail_user or "NOT SET",
-        "GMAIL_APP_PASSWORD":  "set" if gmail_pwd else "NOT SET",
+        "RESEND_API_KEY":       f"set ({resend_key[:6]}...)" if resend_key else "NOT SET",
+        "RESEND_FROM":          resend_from or "NOT SET (defaults to onboarding@resend.dev)",
+        "RESEND_ACCOUNT_EMAIL": resend_acct_email or "NOT SET — set this to your Resend signup email for test-mode sending",
+        "GMAIL_USER":           gmail_user or "NOT SET",
+        "GMAIL_APP_PASSWORD":   "set" if gmail_pwd else "NOT SET",
     }
 
     # 2. Resend: check account + domains
@@ -6703,8 +6720,9 @@ async def email_diag(request: Request):
         else:
             result["resend_domains_summary"] = "Could not retrieve domain list"
 
-        # 3. Resend: send a tiny test to the GP's own email
-        gp_email = claims.get("email", "") if claims else ""
+        # 3. Resend: send a tiny test — prefer RESEND_ACCOUNT_EMAIL (bypasses test-mode restriction),
+        #    fall back to the GP's JWT email.
+        gp_email = resend_acct_email or (claims.get("email", "") if claims else "")
         if gp_email:
             test_payload = json.dumps({
                 "from": "DGA Capital <onboarding@resend.dev>",

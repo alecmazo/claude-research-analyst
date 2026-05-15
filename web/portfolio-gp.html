@@ -970,8 +970,9 @@
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
       </header>
+      <div style="overflow-y:auto;max-height:520px;">
       <table class="rep-table">
-        <thead>
+        <thead style="position:sticky;top:0;background:#fafbfc;z-index:1;">
           <tr>
             <th>Ticker</th>
             <th class="rep-num">Price</th>
@@ -1063,6 +1064,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </section>
   </section>
 
@@ -1728,14 +1730,14 @@
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
 
-    // Live-quote fetch for each (parallel) — best-effort, soft-fail per ticker
-    Promise.all(reports.slice(0, 20).map(async (r) => {
+    // Live-quote fetch for all reports in parallel — best-effort, soft-fail per ticker
+    Promise.all(reports.map(async (r) => {
       try {
         const q = await window.dgaFetch(`/api/quote/${encodeURIComponent(r.ticker)}`);
         return q.ok ? await q.json() : null;
       } catch { return null; }
     })).then(quotes => {
-      tbody.innerHTML = reports.slice(0, 20).map((rep, i) => {
+      tbody.innerHTML = reports.map((rep, i) => {
         const q = quotes[i] || {};
         const price = q.price != null ? Number(q.price) : null;
         const pct = q.pct_change != null ? Number(q.pct_change) :
