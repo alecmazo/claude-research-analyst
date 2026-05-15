@@ -4100,9 +4100,12 @@
               '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
-            '<span style="display:flex;align-items:center;gap:8px;flex-direction:column;align-items:flex-end;" onclick="event.stopPropagation();">' +
-              '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
-              '<div id="acd-rebalance-email-status" style="font-size:9px;min-height:12px;text-align:right;max-width:240px;line-height:1.3;"></div>' +
+            '<span style="display:flex;align-items:center;gap:6px;flex-direction:column;align-items:flex-end;" onclick="event.stopPropagation();">' +
+              '<span style="display:flex;gap:6px;">' +
+                '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
+                '<button class="tab-btn sm" id="acd-email-diag-btn" style="font-size:10px;padding:0 8px;background:var(--navy-mid);color:#475569;border:1px solid var(--panel-edge);" title="Diagnose email transport">🔍</button>' +
+              '</span>' +
+              '<div id="acd-rebalance-email-status" style="font-size:9px;min-height:12px;text-align:right;max-width:320px;line-height:1.4;"></div>' +
             '</span>' +
           '</summary>' +
           '<div style="padding:12px 14px 6px;">' +
@@ -4142,9 +4145,14 @@
 
     // Wire email button
     const emailBtn    = document.getElementById('acd-rebalance-email-btn');
+    const emailDiagBtn = document.getElementById('acd-email-diag-btn');
     const emailStatus = document.getElementById('acd-rebalance-email-status');
-    function _setEmailStatus(msg, color) {
-      if (emailStatus) { emailStatus.textContent = msg; emailStatus.style.color = color || 'var(--dim)'; }
+    function _setEmailStatus(msg, color, isHtml) {
+      if (emailStatus) {
+        if (isHtml) emailStatus.innerHTML = msg;
+        else emailStatus.textContent = msg;
+        emailStatus.style.color = color || 'var(--dim)';
+      }
     }
     if (emailBtn) {
       emailBtn.addEventListener('click', async function() {
@@ -4168,6 +4176,42 @@
           emailBtn.disabled = false;
           emailBtn.textContent = '📧 Email GP';
           _setEmailStatus('❌ ' + e.message, 'var(--red)');
+        }
+      });
+    }
+
+    // Wire diagnose button — hits /api/v2/gp/email-diag and shows readable summary
+    if (emailDiagBtn) {
+      emailDiagBtn.addEventListener('click', async function() {
+        emailDiagBtn.disabled = true; emailDiagBtn.textContent = '⏳';
+        _setEmailStatus('Running diagnostics…', 'var(--dim)');
+        try {
+          const rd = await window.dgaFetch('/api/v2/gp/email-diag');
+          const dd = await rd.json();
+          // Format concise readable output
+          const env = dd.env || {};
+          const ts  = dd.resend_test_send || {};
+          const domains = (dd.resend_domains_summary || []);
+          const domainStr = Array.isArray(domains)
+            ? (domains.length ? domains.map(d => d.name + ':' + d.status).join(', ') : 'none')
+            : String(domains);
+          const testStr = ts.ok === true
+            ? '✅ test send OK → ' + ts.to
+            : ts.ok === false
+              ? '❌ test send failed (status ' + ts.http_status + '): ' + JSON.stringify(ts.body || ts.error || '').slice(0, 120)
+              : ts.skipped || 'no test';
+          _setEmailStatus(
+            '<b>Resend key:</b> ' + (env.RESEND_API_KEY||'?') + '<br>' +
+            '<b>From:</b> ' + (env.RESEND_FROM||'?') + '<br>' +
+            '<b>Domains:</b> ' + domainStr + '<br>' +
+            '<b>Test send:</b> ' + testStr,
+            '#334155', true
+          );
+          console.log('[email-diag]', dd);
+        } catch(e) {
+          _setEmailStatus('Diag error: ' + e.message, 'var(--red)');
+        } finally {
+          emailDiagBtn.disabled = false; emailDiagBtn.textContent = '🔍';
         }
       });
     }

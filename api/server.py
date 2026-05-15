@@ -6650,6 +6650,98 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
     return {"ok": False, "error": " | ".join(parts) or "No email transport configured"}
 
 
+@app.get("/api/v2/gp/email-diag")
+async def email_diag(request: Request):
+    """Diagnose email transport — checks Resend API key, verified domains, and SMTP config.
+    Returns a full diagnostic report so we know exactly what to fix."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims or claims.get("role") != "gp":
+        _require_fund_token(request)
+
+    import urllib.request as _urlreq, urllib.error as _urlerr
+
+    result: dict = {}
+
+    # 1. Environment variables (masked)
+    resend_key  = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "")
+    gmail_user  = os.environ.get("GMAIL_USER", "")
+    gmail_pwd   = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+    result["env"] = {
+        "RESEND_API_KEY":      f"set ({resend_key[:6]}...)" if resend_key else "NOT SET",
+        "RESEND_FROM":         resend_from or "NOT SET (will default to reports@dgacapital.com)",
+        "GMAIL_USER":          gmail_user or "NOT SET",
+        "GMAIL_APP_PASSWORD":  "set" if gmail_pwd else "NOT SET",
+    }
+
+    # 2. Resend: check account + domains
+    if resend_key:
+        def _resend_get(path: str):
+            try:
+                req = _urlreq.Request(
+                    f"https://api.resend.com{path}",
+                    headers={"Authorization": f"Bearer {resend_key}"},
+                    method="GET",
+                )
+                with _urlreq.urlopen(req, timeout=10) as r:
+                    return json.loads(r.read())
+            except _urlerr.HTTPError as e:
+                return {"_error": f"HTTP {e.code}: {e.read().decode('utf-8','replace')[:300]}"}
+            except Exception as e:
+                return {"_error": str(e)}
+
+        domains_resp = _resend_get("/domains")
+        result["resend_domains"] = domains_resp
+
+        # Summarise verified vs unverified
+        if isinstance(domains_resp.get("data"), list):
+            result["resend_domains_summary"] = [
+                {"name": d.get("name"), "status": d.get("status"), "region": d.get("region")}
+                for d in domains_resp["data"]
+            ]
+        else:
+            result["resend_domains_summary"] = "Could not retrieve domain list"
+
+        # 3. Resend: send a tiny test to the GP's own email
+        gp_email = claims.get("email", "") if claims else ""
+        if gp_email:
+            test_payload = json.dumps({
+                "from": "DGA Capital <onboarding@resend.dev>",
+                "to":   [gp_email],
+                "subject": "[DGA diag] Email transport test",
+                "html": "<p>Email transport is working.</p>",
+            }).encode()
+            try:
+                req = _urlreq.Request(
+                    "https://api.resend.com/emails",
+                    data=test_payload,
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with _urlreq.urlopen(req, timeout=15) as r:
+                    body = json.loads(r.read())
+                result["resend_test_send"] = {"ok": True, "to": gp_email, "response": body}
+            except _urlerr.HTTPError as e:
+                body = e.read().decode("utf-8", "replace")
+                result["resend_test_send"] = {"ok": False, "to": gp_email,
+                                              "http_status": e.code, "body": body}
+            except Exception as e:
+                result["resend_test_send"] = {"ok": False, "error": str(e)}
+        else:
+            result["resend_test_send"] = {"skipped": "no GP email in auth claims"}
+    else:
+        result["resend"] = "RESEND_API_KEY not set — cannot test"
+
+    result["recommendation"] = (
+        "1. Go to https://resend.com/domains and add + verify dgacapital.com (or any domain you own). "
+        "2. Set RESEND_FROM in Railway env vars to e.g. 'DGA Capital <noreply@dgacapital.com>'. "
+        "3. If resend_test_send above shows ok:true, the API key works but only for the account owner's email — domain verification unlocks sending to any address."
+    )
+
+    return result
+
+
 @app.get("/api/v2/gp/fund/{fund_id}/rebalance")
 async def get_account_rebalance(fund_id: str, request: Request):
     """Return the persisted rebalance result for a managed account."""
