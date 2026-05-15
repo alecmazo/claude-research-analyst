@@ -26,6 +26,7 @@ import csv
 import io
 import re
 import time
+import math
 from itertools import groupby
 import hashlib
 import hmac
@@ -1022,6 +1023,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import claude_analyst as analyst
 
 app = FastAPI(title="DGA Research Analyst API", version="1.0.0")
+
+# ── NaN / Inf sanitizer ───────────────────────────────────────────────────────
+# Python's json module raises ValueError on NaN/Inf floats.  Any endpoint
+# that touches financial data (prices, ratios, returns) can produce NaN when
+# a stock has no data.  Sanitize recursively before every JSON response.
+def _sanitize_nan(obj):
+    """Recursively replace NaN/Inf floats with None so JSON serialization never crashes."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+class _SafeJSONResponse(JSONResponse):
+    """JSONResponse subclass that sanitizes NaN/Inf before serializing."""
+    def render(self, content) -> bytes:
+        return json.dumps(
+            _sanitize_nan(content),
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+# Swap FastAPI's default response class so ALL endpoints benefit automatically
+app.router.default_response_class = _SafeJSONResponse
 
 app.add_middleware(
     CORSMiddleware,
