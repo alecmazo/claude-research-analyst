@@ -4495,6 +4495,37 @@ def get_scan_status(job_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Single-ticker scan endpoint
+# ---------------------------------------------------------------------------
+
+class _TickerScanReq(BaseModel):
+    ticker: str
+
+@app.post("/api/scan/ticker")
+def start_ticker_scan(body: _TickerScanReq, background_tasks: BackgroundTasks):
+    """Kick off a live-search scan for a single ticker.  Returns a scan job."""
+    ticker = (body.ticker or "").strip().upper().replace("$", "")
+    if not ticker:
+        raise HTTPException(status_code=422, detail="ticker is required")
+
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _sjobs_lock:
+        _sjobs[job_id] = {
+            "job_id":      job_id,
+            "status":      "queued",
+            "created_at":  now,
+            "tickers":     [ticker],
+            "tickers_done": [],
+            "results":     {},
+            "scanned_at":  None,
+            "error":       None,
+        }
+    background_tasks.add_task(_run_scan, job_id, [ticker])
+    return _sjobs[job_id]
+
+
+# ---------------------------------------------------------------------------
 # Intelligence — macro → sector → company idea generation
 # ---------------------------------------------------------------------------
 
@@ -6533,12 +6564,15 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
     msg["To"] = to_addr
     msg.attach(MIMEText(html_body, "html"))
 
+    resend_error = None
+    smtp_error   = None
+
     # Try Resend first (Railway compatible)
     resend_key = os.environ.get("RESEND_API_KEY", "")
     resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
     if resend_key:
         try:
-            import urllib.request as _urlreq
+            import urllib.request as _urlreq, urllib.error as _urlerr
             payload = json.dumps({
                 "from": resend_from,
                 "to": [to_addr],
@@ -6551,10 +6585,18 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
                 headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
                 method="POST",
             )
-            with _urlreq.urlopen(req, timeout=15) as resp:
-                return {"ok": True, "transport": "resend", "sent_to": to_addr}
+            try:
+                with _urlreq.urlopen(req, timeout=15) as resp:
+                    return {"ok": True, "transport": "resend", "sent_to": to_addr}
+            except _urlerr.HTTPError as _he:
+                body = _he.read().decode("utf-8", errors="replace")
+                resend_error = f"Resend HTTP {_he.code}: {body[:200]}"
+            except Exception as _e:
+                resend_error = f"Resend error: {_e}"
         except Exception as _e:
-            pass  # fall through to SMTP
+            resend_error = f"Resend setup error: {_e}"
+    else:
+        resend_error = "RESEND_API_KEY not set"
 
     # Gmail SMTP fallback
     user = os.environ.get("GMAIL_USER", "")
@@ -6567,9 +6609,14 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
                 s.send_message(msg)
             return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr}
         except Exception as _e:
-            return {"ok": False, "error": f"Gmail SMTP failed: {_e}"}
+            smtp_error = f"Gmail SMTP failed: {_e}"
+    else:
+        smtp_error = "GMAIL_USER or GMAIL_APP_PASSWORD not set"
 
-    return {"ok": False, "error": "No email transport configured (set RESEND_API_KEY or GMAIL_USER + GMAIL_APP_PASSWORD)"}
+    parts = []
+    if resend_error: parts.append(f"Resend: {resend_error}")
+    if smtp_error:   parts.append(f"SMTP: {smtp_error}")
+    return {"ok": False, "error": " | ".join(parts) or "No email transport configured"}
 
 
 @app.get("/api/v2/gp/fund/{fund_id}/rebalance")
@@ -6709,16 +6756,31 @@ async def run_account_rebalance(fund_id: str, request: Request):
                 else:
                     action = "HOLD"
 
+                # Shares calculation
+                _price = pm.get("price") or 0
+                if not _price and pm.get("qty", 0) > 0:
+                    _price = pm.get("cost", 0) / pm["qty"]  # fallback to avg cost
+                _current_qty  = pm.get("qty", 0)
+                _current_mv   = pm.get("mv", 0)
+                _suggested_mv = sug_frac * total_equity_mv
+                _delta_mv     = _suggested_mv - _current_mv
+                _shares_delta = round(_delta_mv / _price, 2) if _price > 0 else None
+                _new_qty      = round(_current_qty + _shares_delta, 2) if _shares_delta is not None else None
+
                 result_rows.append({
-                    "ticker":       sym,
-                    "name":         sym,  # no name in tax_lots directly
-                    "current_pct":  round(cur_pct, 2),
+                    "ticker":        sym,
+                    "name":          sym,  # no name in tax_lots directly
+                    "current_pct":   round(cur_pct, 2),
                     "suggested_pct": round(sug_pct, 2),
-                    "rating":       rating,
-                    "upside_pct":   round(float(upside_pct), 2),
-                    "score":        round(score, 4),
-                    "sector":       sec,
-                    "action":       action,
+                    "rating":        rating,
+                    "upside_pct":    round(float(upside_pct), 2),
+                    "score":         round(score, 4),
+                    "sector":        sec,
+                    "action":        action,
+                    "current_qty":   round(_current_qty, 4),
+                    "price":         round(_price, 4) if _price else None,
+                    "shares_delta":  _shares_delta,
+                    "new_qty":       _new_qty,
                 })
 
             # EV = weighted-average upside across equity positions
@@ -6779,6 +6841,13 @@ async def email_account_rebalance(fund_id: str, request: Request):
         diff_color = "#22c55e" if diff > 0.5 else ("#ef4444" if diff < -0.5 else "#8899aa")
         upside = row.get("upside_pct") or 0
         upside_sign = "+" if upside >= 0 else ""
+        sd = row.get("shares_delta")
+        if sd is not None and abs(sd) >= 0.01:
+            shares_str = f"+{sd:.2f}" if sd > 0 else f"{sd:.2f}"
+            shares_color = "#22c55e" if sd > 0 else "#ef4444"
+        else:
+            shares_str = "—"
+            shares_color = "#6688aa"
         rows_html += (
             f"<tr style='border-bottom:1px solid #2a3a4a;'>"
             f"<td style='padding:6px 10px;font-weight:bold;color:#5bb8d4;'>{row.get('ticker','')}</td>"
@@ -6788,6 +6857,7 @@ async def email_account_rebalance(fund_id: str, request: Request):
             f"<td style='padding:6px 10px;text-align:right;'>{(row.get('suggested_pct') or 0):.1f}%</td>"
             f"<td style='padding:6px 10px;text-align:right;color:{diff_color};'>{diff_str}</td>"
             f"<td style='padding:6px 10px;text-align:right;'>{row.get('action','—')}</td>"
+            f"<td style='padding:6px 10px;text-align:right;font-weight:bold;color:{shares_color};'>{shares_str}</td>"
             f"</tr>"
         )
 
@@ -6829,6 +6899,7 @@ async def email_account_rebalance(fund_id: str, request: Request):
           <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">SUGGESTED %</th>
           <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">CHANGE</th>
           <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">ACTION</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">SHARES</th>
         </tr>
       </thead>
       <tbody>

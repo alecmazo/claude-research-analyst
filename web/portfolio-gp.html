@@ -4,34 +4,35 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="theme-color" content="#0A1628">
+<meta name="theme-color" content="#FFFFFF">
 <title>DGA Capital — GP Terminal</title>
 <script>window.PAGE_ROLE = 'gp';</script>
 <script src="/app/auth-guard.js"></script>
 <style>
   :root {
-    --navy: #0A1628;
-    --navy-light: #132040;
-    --navy-mid: #0e1d35;
-    --panel: #0c1a30;
-    --panel-edge: rgba(91,184,212,0.12);
-    --blue: #5BB8D4;
-    --blue-light: #84CCE3;
-    --blue-dark: #3E9AB8;
-    --white: #FFFFFF;
-    --offwhite: #F5F7FA;
-    --mid: #6a8aaa;
-    --dim: #4a6080;
-    --dimmer: #2a4060;
-    --green: #22C55E;
-    --red: #EF4444;
-    --amber: #F59E0B;
+    --navy:       #0A1628;    /* brand dark — button text, badges */
+    --navy-light: #1e293b;    /* dark body text */
+    --navy-mid:   #f1f5f9;    /* secondary / input backgrounds */
+    --panel:      #FFFFFF;    /* card / panel background */
+    --panel-bg:   #FFFFFF;
+    --panel-edge: #e2e8f0;    /* border colour */
+    --blue:       #5BB8D4;    /* DGA brand blue */
+    --blue-light: #84CCE3;    /* gradient highlight */
+    --blue-dark:  #3E9AB8;    /* gradient low */
+    --white:      #FFFFFF;
+    --offwhite:   #F8FAFC;
+    --mid:        #64748b;    /* secondary text */
+    --dim:        #94a3b8;    /* dim text */
+    --dimmer:     #cbd5e1;    /* very dim */
+    --green:      #16a34a;    /* darker for white bg contrast */
+    --red:        #dc2626;
+    --amber:      #d97706;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
-    background: var(--navy);
-    color: #c0cfe0;
+    background: #f0f4f8;
+    color: #334155;
     font-size: 13px;
     line-height: 1.4;
     min-height: 100vh;
@@ -41,11 +42,11 @@
 
   /* ── TOP NAV BAR ─────────────────────────────────────────────── */
   .topbar {
-    background: var(--navy);
+    background: #fff;
     padding: 10px 18px;
     display: flex; align-items: center; gap: 16px;
     border-bottom: 1px solid var(--panel-edge);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    box-shadow: 0 1px 6px rgba(0,0,0,0.08);
     position: sticky; top: 0; z-index: 30;
   }
   .brand {
@@ -60,7 +61,7 @@
     padding: 4px 9px;
     object-fit: contain;
     display: block;
-    box-shadow: 0 0 0 1.5px var(--blue), 0 2px 6px rgba(0,0,0,0.3);
+    box-shadow: 0 0 0 1.5px var(--blue), 0 1px 4px rgba(0,0,0,0.12);
   }
 
   /* Universal search */
@@ -75,7 +76,7 @@
     background: var(--navy-mid);
     border: 1px solid var(--panel-edge);
     border-radius: 8px;
-    color: white;
+    color: #1e293b;
     padding: 0 14px 0 36px;
     font-size: 13px;
     outline: none;
@@ -92,8 +93,8 @@
   }
   .search-kbd {
     position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-    background: rgba(255,255,255,0.06);
-    color: var(--dim); font-size: 10px; padding: 2px 6px; border-radius: 4px;
+    background: rgba(0,0,0,0.06);
+    color: var(--mid); font-size: 10px; padding: 2px 6px; border-radius: 4px;
     font-family: "SF Mono", monospace; letter-spacing: 0.5px;
   }
   .topbar-right {
@@ -101,7 +102,7 @@
     display: flex; align-items: center; gap: 14px;
   }
   .topbar-link {
-    color: var(--mid); font-size: 11px; font-weight: 700;
+    color: #475569; font-size: 11px; font-weight: 700;
     letter-spacing: 1.2px; text-transform: uppercase;
     cursor: pointer;
   }
@@ -114,7 +115,7 @@
 
   /* ── INDEX RIBBON ────────────────────────────────────────────── */
   .ribbon-wrap {
-    background: var(--navy-mid);
+    background: #fff;
     border-bottom: 1px solid var(--panel-edge);
     position: sticky; top: 58px; z-index: 25;
     overflow: hidden;
@@ -130,7 +131,7 @@
   .idx {
     flex-shrink: 0;
     padding: 8px 16px;
-    border-right: 1px solid rgba(255,255,255,0.04);
+    border-right: 1px solid var(--panel-edge);
     min-width: 140px;
     cursor: pointer;
     transition: background 0.15s;
@@ -146,7 +147,7 @@
     margin-top: 2px;
   }
   .idx-px {
-    font-size: 14px; font-weight: 800; color: #e0e8f0;
+    font-size: 14px; font-weight: 800; color: #1e293b;
     font-variant-numeric: tabular-nums;
   }
   .idx-chg {
@@ -181,12 +182,13 @@
     border-radius: 10px;
     overflow: hidden;
     margin-bottom: 14px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
   .panel-head {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 14px 8px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    background: #fafbfc;
   }
   .panel-title {
     font-size: 10px; font-weight: 800;
@@ -195,7 +197,7 @@
   }
   .panel-badge {
     font-size: 9px; font-weight: 700;
-    color: var(--dim); background: rgba(255,255,255,0.04);
+    color: var(--mid); background: rgba(0,0,0,0.05);
     padding: 2px 7px; border-radius: 10px;
     letter-spacing: 0.5px;
   }
@@ -231,15 +233,42 @@
   /* Hover tint on any collapsible summary */
   section.panel > details > summary:hover .panel-title { color: var(--blue-light); }
 
+  /* ── Dashboard drag-and-drop ─────────────────────────────────── */
+  section.panel[data-wid] > .panel-head,
+  section.panel[data-wid] > details > summary.panel-head {
+    cursor: grab;
+  }
+  section.panel[data-wid] > .panel-head:active,
+  section.panel[data-wid] > details > summary.panel-head:active {
+    cursor: grabbing;
+  }
+  section.panel[data-wid].dash-dragging {
+    opacity: 0.25;
+    pointer-events: none;
+  }
+  .dash-placeholder {
+    border: 2px dashed var(--blue);
+    border-radius: 8px;
+    background: rgba(96,165,250,0.04);
+    transition: height 0.12s;
+    flex-shrink: 0;
+  }
+  .col-left.dash-over,
+  .col-center.dash-over,
+  aside.col-right.dash-over {
+    outline: 1px dashed rgba(96,165,250,0.18);
+    border-radius: 8px;
+  }
+
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
     display: flex; flex-direction: column;
     gap: 6px; padding: 0 14px;
   }
   .quick-btn {
-    background: var(--navy-mid);
+    background: #fff;
     border: 1px solid var(--panel-edge);
-    color: #c0cfe0;
+    color: #334155;
     padding: 10px 12px;
     border-radius: 7px;
     font-size: 12px; font-weight: 700;
@@ -270,14 +299,14 @@
     grid-template-columns: 1fr auto;
     column-gap: 8px;
     padding: 8px 14px;
-    border-top: 1px solid rgba(255,255,255,0.04);
+    border-top: 1px solid var(--panel-edge);
     cursor: pointer;
     transition: background .15s;
   }
-  .wl-row:hover { background: rgba(91,184,212,0.04); }
+  .wl-row:hover { background: rgba(91,184,212,0.06); }
   .wl-tk {
     font-size: 12px; font-weight: 800;
-    color: #e0e8f0;
+    color: #0f172a;
     letter-spacing: 0.6px;
   }
   .wl-name {
@@ -288,7 +317,7 @@
   .wl-right { text-align: right; }
   .wl-px {
     font-size: 12px; font-weight: 700;
-    color: #c0cfe0;
+    color: #1e293b;
     font-variant-numeric: tabular-nums;
   }
   .wl-chg {
@@ -303,13 +332,13 @@
   .wl-add {
     display: flex; gap: 6px;
     padding: 8px 14px;
-    border-top: 1px solid rgba(255,255,255,0.05);
+    border-top: 1px solid var(--panel-edge);
   }
   .wl-add-input {
     flex: 1;
     background: var(--navy-mid);
     border: 1px solid var(--panel-edge);
-    color: white; font-size: 12px;
+    color: #1e293b; font-size: 12px;
     padding: 6px 10px; border-radius: 5px;
     outline: none; text-transform: uppercase;
     letter-spacing: 1.5px; font-weight: 700;
@@ -324,12 +353,12 @@
 
   /* ── CENTER COLUMN: Research workspace ──────────────────────── */
   .hero-card {
-    background: linear-gradient(135deg, var(--navy-mid) 0%, var(--panel) 100%);
+    background: linear-gradient(135deg, #e8f4f8 0%, #fff 100%);
     padding: 10px 14px;
-    border: 1px solid rgba(91,184,212,0.18);
+    border: 1px solid rgba(91,184,212,0.30);
     border-radius: 10px;
     margin-bottom: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
   .hero-label {
     font-size: 9px; font-weight: 800;
@@ -343,11 +372,11 @@
   .hero-input {
     flex: 1;
     height: 34px;
-    background: var(--navy);
+    background: #fff;
     border: 1px solid var(--panel-edge);
     border-radius: 6px;
     padding: 0 12px;
-    color: white;
+    color: #1e293b;
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 1.5px;
@@ -392,8 +421,8 @@
   .rep-table th {
     text-align: left; padding: 8px 14px 6px;
     font-size: 9px; font-weight: 800;
-    color: var(--dim); letter-spacing: 1.2px; text-transform: uppercase;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    color: var(--mid); letter-spacing: 1.2px; text-transform: uppercase;
+    border-bottom: 1px solid rgba(0,0,0,0.07);
     transition: color .12s;
   }
   .rep-table th[style*="cursor:pointer"]:hover,
@@ -402,19 +431,19 @@
   .data-table th[style*="cursor:pointer"]:hover { color: var(--blue); }
   .rep-table td {
     padding: 9px 14px;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(0,0,0,0.04);
     font-size: 12px;
   }
   .rep-table tbody tr { cursor: pointer; transition: background .12s; }
-  .rep-table tbody tr:hover td { background: rgba(91,184,212,0.04); }
-  .rep-tk { font-weight: 800; color: #e0e8f0; letter-spacing: 1px; }
+  .rep-table tbody tr:hover td { background: rgba(91,184,212,0.06); }
+  .rep-tk { font-weight: 800; color: #0f172a; letter-spacing: 1px; }
   .rep-pill {
     display: inline-block;
     font-size: 8px; font-weight: 800;
     padding: 1px 4px; border-radius: 3px;
     margin-left: 5px; vertical-align: middle;
   }
-  .rep-pill-doc { background: var(--navy); color: var(--white); border: 1px solid var(--panel-edge); }
+  .rep-pill-doc { background: var(--navy-mid); color: var(--navy); border: 1px solid var(--panel-edge); }
   .rep-pill-ppt { background: var(--blue); color: var(--navy); }
   .rep-date { color: var(--dim); font-size: 10px; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
@@ -425,38 +454,38 @@
     grid-template-columns: auto 1fr auto;
     column-gap: 10px; align-items: center;
     padding: 8px 14px;
-    border-top: 1px solid rgba(255,255,255,0.04);
+    border-top: 1px solid var(--panel-edge);
     cursor: pointer;
     transition: background .15s;
   }
-  .tr-row:hover { background: rgba(91,184,212,0.04); }
+  .tr-row:hover { background: rgba(91,184,212,0.06); }
   .tr-rank {
-    font-size: 11px; color: var(--dimmer);
+    font-size: 11px; color: var(--dim);
     font-weight: 800; min-width: 16px;
     font-variant-numeric: tabular-nums;
   }
   .tr-main { min-width: 0; }
-  .tr-tk { font-size: 12px; font-weight: 800; color: #e0e8f0; letter-spacing: 0.6px; }
-  .tr-meta { font-size: 10px; color: var(--dim); margin-top: 1px; }
+  .tr-tk { font-size: 12px; font-weight: 800; color: #0f172a; letter-spacing: 0.6px; }
+  .tr-meta { font-size: 10px; color: var(--mid); margin-top: 1px; }
   .tr-right { text-align: right; }
-  .tr-px { font-size: 12px; font-weight: 700; color: #c0cfe0; font-variant-numeric: tabular-nums; }
+  .tr-px { font-size: 12px; font-weight: 700; color: #334155; font-variant-numeric: tabular-nums; }
   .tr-chg { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 1px; }
 
   /* News */
   .news-row {
     padding: 11px 14px;
-    border-top: 1px solid rgba(255,255,255,0.04);
+    border-top: 1px solid var(--panel-edge);
     cursor: pointer;
     transition: background .15s;
   }
-  .news-row:hover { background: rgba(91,184,212,0.04); }
+  .news-row:hover { background: rgba(91,184,212,0.06); }
   .news-row:first-of-type { border-top: none; }
   .news-title {
     font-size: 12px; font-weight: 600;
-    color: #d8e0e8; line-height: 1.4;
+    color: #1e293b; line-height: 1.4;
   }
   .news-meta {
-    font-size: 10px; color: var(--dim);
+    font-size: 10px; color: var(--mid);
     margin-top: 4px;
     display: flex; align-items: center; gap: 8px;
   }
@@ -468,9 +497,9 @@
     padding: 1px 5px; border-radius: 3px;
     letter-spacing: 0.5px;
   }
-  .news-impact.high { background: rgba(239,68,68,0.18); color: #fca5a5; }
-  .news-impact.mid  { background: rgba(245,158,11,0.18); color: #fcd34d; }
-  .news-impact.low  { background: rgba(34,197,94,0.18); color: #86efac; }
+  .news-impact.high { background: rgba(220,38,38,0.10); color: #dc2626; }
+  .news-impact.mid  { background: rgba(217,119,6,0.10);  color: #d97706; }
+  .news-impact.low  { background: rgba(22,163,74,0.10);  color: #16a34a; }
 
   /* Section label outside panels */
   .section-label {
@@ -492,17 +521,17 @@
     text-align: center;
     letter-spacing: 0.5px;
   }
-  .mockup-banner strong { color: white; }
+  .mockup-banner strong { color: #1e293b; }
 
   /* ── Search results dropdown ─────────────────────────────── */
   #search-results {
     display: none;
     position: absolute;
     top: 44px; left: 0; right: 0;
-    background: var(--panel);
+    background: #fff;
     border: 1px solid var(--panel-edge);
     border-radius: 8px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.50);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
     overflow: hidden;
     z-index: 50;
     max-height: 400px; overflow-y: auto;
@@ -510,15 +539,15 @@
   #search-results.open { display: block; }
   .sr-item {
     padding: 10px 14px;
-    border-top: 1px solid rgba(255,255,255,0.04);
+    border-top: 1px solid var(--panel-edge);
     cursor: pointer;
     display: flex; align-items: center; gap: 10px;
     transition: background .12s;
   }
   .sr-item:first-child { border-top: none; }
-  .sr-item:hover, .sr-item.hl { background: rgba(91,184,212,0.10); }
+  .sr-item:hover, .sr-item.hl { background: rgba(91,184,212,0.08); }
   .sr-tk {
-    font-size: 13px; font-weight: 800; color: #e0e8f0;
+    font-size: 13px; font-weight: 800; color: #0f172a;
     letter-spacing: 0.8px; min-width: 60px;
   }
   .sr-name { font-size: 12px; color: var(--mid); flex: 1; }
@@ -537,7 +566,7 @@
     padding: 0;
   }
   .wl-row:hover .wl-remove { display: inline-flex; align-items: center; justify-content: center; }
-  .wl-remove:hover { background: rgba(239,68,68,0.40); color: white; }
+  .wl-remove:hover { background: rgba(220,38,38,0.18); color: #7f1d1d; }
 
   /* ── TAB PANELS ──────────────────────────────────────────────── */
   .tab-panel { display: none; }
@@ -558,7 +587,7 @@
     flex-wrap: wrap;
   }
   .tab-toolbar h2 {
-    font-size: 13px; font-weight: 800; color: #e0e8f0;
+    font-size: 13px; font-weight: 800; color: #1e293b;
     letter-spacing: 0.4px; flex: 1;
   }
   .tab-btn {
@@ -573,9 +602,10 @@
   .tab-btn:hover { filter: brightness(1.08); }
   .tab-btn:disabled { opacity: 0.5; cursor: default; filter: none; }
   .tab-btn.secondary {
-    background: var(--navy-mid); color: var(--blue);
+    background: #f1f5f9; color: var(--blue);
     border: 1px solid var(--panel-edge); box-shadow: none;
   }
+  .tab-btn.secondary:hover { filter: none; background: rgba(91,184,212,0.10); }
   .tab-btn.sm {
     height: 22px; padding: 0 9px; font-size: 9px; letter-spacing: 0.6px;
     border-radius: 4px; box-shadow: 0 1px 4px rgba(91,184,212,0.20);
@@ -585,20 +615,20 @@
   /* Markdown render area */
   .md-body {
     padding: 12px 14px; font-size: 12px; line-height: 1.65;
-    color: #c0cfe0; max-height: 600px; overflow-y: auto;
+    color: #334155; max-height: 600px; overflow-y: auto;
   }
   .md-body h2 { font-size: 13px; font-weight: 800; color: var(--blue);
     letter-spacing: 0.5px; margin: 14px 0 6px; }
-  .md-body h3 { font-size: 12px; font-weight: 800; color: #d0dcec;
+  .md-body h3 { font-size: 12px; font-weight: 800; color: #1e293b;
     margin: 12px 0 4px; }
-  .md-body h4 { font-size: 11px; font-weight: 800; color: var(--blue-light);
+  .md-body h4 { font-size: 11px; font-weight: 800; color: #2d7d96;
     letter-spacing: 0.5px; margin: 10px 0 4px; text-transform: uppercase; }
-  .md-body strong { color: #e0e8f0; font-weight: 700; }
-  .md-body em { color: #d0dcec; font-style: italic; }
+  .md-body strong { color: #0f172a; font-weight: 700; }
+  .md-body em { color: #334155; font-style: italic; }
   .md-body code {
-    background: rgba(91,184,212,0.08); border: 1px solid rgba(91,184,212,0.15);
+    background: rgba(91,184,212,0.08); border: 1px solid rgba(91,184,212,0.20);
     padding: 1px 6px; border-radius: 3px; font-family: "SF Mono", Menlo, monospace;
-    font-size: 11px; color: var(--blue-light);
+    font-size: 11px; color: #2d7d96;
   }
   .md-body ul { padding-left: 18px; margin: 6px 0; }
   .md-body li { margin-bottom: 3px; }
@@ -608,21 +638,21 @@
   .md-body .md-table {
     width: 100%; border-collapse: collapse; margin: 12px 0;
     font-size: 11px; font-variant-numeric: tabular-nums;
-    background: rgba(255,255,255,0.02);
-    border: 1px solid rgba(91,184,212,0.18); border-radius: 6px;
+    background: #fff;
+    border: 1px solid rgba(91,184,212,0.25); border-radius: 6px;
     overflow: hidden;
   }
-  .md-body .md-table thead { background: rgba(91,184,212,0.12); }
+  .md-body .md-table thead { background: rgba(91,184,212,0.08); }
   .md-body .md-table th {
     padding: 7px 11px; text-align: left;
-    font-weight: 800; color: var(--blue); font-size: 10px;
+    font-weight: 800; color: #2d7d96; font-size: 10px;
     letter-spacing: 0.5px; text-transform: uppercase;
-    border-bottom: 1px solid rgba(91,184,212,0.30);
+    border-bottom: 1px solid rgba(91,184,212,0.20);
     white-space: nowrap;
   }
   .md-body .md-table td {
-    padding: 6px 11px; color: #d0dcec;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
+    padding: 6px 11px; color: #334155;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
     vertical-align: top;
   }
   .md-body .md-table tbody tr:hover { background: rgba(91,184,212,0.04); }
@@ -634,38 +664,39 @@
     gap: 12px; margin-top: 4px;
   }
   .fd-tile {
-    background: var(--panel); border: 1px solid var(--panel-edge);
+    background: #fff; border: 1px solid var(--panel-edge);
     border-radius: 10px; padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
   .fd-tile-label {
-    font-size: 9px; font-weight: 800; color: var(--dim);
+    font-size: 9px; font-weight: 800; color: var(--mid);
     letter-spacing: 1.3px; text-transform: uppercase;
   }
   .fd-tile-val {
-    font-size: 20px; font-weight: 800; color: #e0e8f0;
+    font-size: 20px; font-weight: 800; color: #0f172a;
     margin-top: 4px; font-variant-numeric: tabular-nums;
   }
   .fd-tile-sub {
     font-size: 10px; color: var(--mid); margin-top: 4px;
   }
   .fd-upload-card {
-    background: var(--navy-mid); border: 1px solid var(--panel-edge);
+    background: #f8fafc; border: 1px solid var(--panel-edge);
     border-radius: 8px; padding: 14px;
     display: flex; flex-direction: column; gap: 8px;
   }
   .fd-upload-title {
-    font-size: 12px; font-weight: 800; color: #e0e8f0; letter-spacing: 0.5px;
+    font-size: 12px; font-weight: 800; color: #1e293b; letter-spacing: 0.5px;
   }
   .fd-upload-hint {
     font-size: 11px; color: var(--mid); line-height: 1.4;
   }
   .fd-upload-file {
     width: 100%; padding: 6px; font-size: 11px;
-    background: var(--navy); border: 1px dashed rgba(91,184,212,0.30);
-    border-radius: 5px; color: #c0cfe0;
+    background: #fff; border: 1px dashed rgba(91,184,212,0.40);
+    border-radius: 5px; color: #334155;
   }
   .fd-upload-file::file-selector-button {
-    background: rgba(91,184,212,0.10); color: var(--blue);
+    background: rgba(91,184,212,0.10); color: #2d7d96;
     border: 1px solid rgba(91,184,212,0.25); border-radius: 4px;
     padding: 3px 9px; margin-right: 8px; cursor: pointer; font-size: 10px;
     font-weight: 700; letter-spacing: 0.5px;
@@ -676,57 +707,60 @@
 
   /* Scan result cards */
   .scan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-  .scan-card { background: var(--panel); border: 1px solid var(--panel-edge);
+  .scan-card { background: #fff; border: 1px solid var(--panel-edge);
     border-radius: 10px; overflow: hidden; }
   .scan-card-head {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 14px 8px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid var(--panel-edge);
+    background: #fafbfc;
   }
-  .scan-tk { font-size: 14px; font-weight: 800; color: #e0e8f0; letter-spacing: 0.8px; }
-  .scan-px { font-size: 12px; font-weight: 700; color: #c0cfe0; font-variant-numeric: tabular-nums; }
+  .scan-tk { font-size: 14px; font-weight: 800; color: #0f172a; letter-spacing: 0.8px; }
+  .scan-px { font-size: 12px; font-weight: 700; color: #334155; font-variant-numeric: tabular-nums; }
   .scan-chg { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .scan-sent {
     margin-left: auto; font-size: 9px; font-weight: 800; letter-spacing: 1px;
     padding: 3px 8px; border-radius: 4px;
   }
-  .scan-sent.BULLISH  { background: rgba(34,197,94,0.18);  color: #86efac; }
-  .scan-sent.BEARISH  { background: rgba(239,68,68,0.18);  color: #fca5a5; }
-  .scan-sent.NEUTRAL  { background: rgba(91,184,212,0.15); color: var(--blue); }
-  .scan-sent.UNKNOWN  { background: rgba(255,255,255,0.05); color: var(--dim); }
-  .scan-card-body { padding: 10px 14px; font-size: 11px; line-height: 1.6; color: #a0b4c8; max-height: 160px; overflow-y: auto; }
-  .scan-card-body strong { color: #d0dcec; }
+  .scan-sent.BULLISH  { background: rgba(22,163,74,0.10);   color: #16a34a; }
+  .scan-sent.BEARISH  { background: rgba(220,38,38,0.10);   color: #dc2626; }
+  .scan-sent.NEUTRAL  { background: rgba(91,184,212,0.12);  color: #2d7d96; }
+  .scan-sent.UNKNOWN  { background: rgba(0,0,0,0.04);       color: var(--mid); }
+  .scan-card-body { padding: 10px 14px; font-size: 11px; line-height: 1.6; color: #475569; max-height: 160px; overflow-y: auto; }
+  .scan-card-body strong { color: #1e293b; }
 
   /* Tracker / Fund table rows */
   .data-table { width: 100%; border-collapse: collapse; }
-  .data-table th { font-size: 9px; font-weight: 800; color: var(--dim);
+  .data-table th { font-size: 9px; font-weight: 800; color: var(--mid);
     letter-spacing: 1.2px; text-transform: uppercase;
-    padding: 8px 14px 6px; border-bottom: 1px solid rgba(255,255,255,0.06); text-align: left; }
-  .data-table td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.03);
+    padding: 8px 14px 6px; border-bottom: 1px solid rgba(0,0,0,0.07); text-align: left; }
+  .data-table td { padding: 9px 14px; border-bottom: 1px solid rgba(0,0,0,0.04);
     font-size: 12px; }
   .data-table tbody tr { cursor: default; transition: background .12s; }
-  .data-table tbody tr:hover td { background: rgba(91,184,212,0.04); }
+  .data-table tbody tr:hover td { background: rgba(91,184,212,0.06); }
 
   /* Fund rows (compact list) */
-  .fund-row { background: var(--panel); border: 1px solid var(--panel-edge);
-    border-radius: 8px; margin-bottom: 5px; overflow: hidden; }
+  .fund-row { background: #fff; border: 1px solid var(--panel-edge);
+    border-radius: 8px; margin-bottom: 5px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
   .fund-row-main { display: flex; align-items: center; gap: 12px;
     padding: 8px 12px; cursor: pointer; transition: background .12s; }
-  .fund-row-main:hover { background: rgba(91,184,212,0.04); }
+  .fund-row-main:hover { background: rgba(91,184,212,0.06); }
   .fund-row-name { flex: 1; min-width: 0; }
-  .fund-row-name span { font-size: 12px; font-weight: 800; color: #e0e8f0;
+  .fund-row-name span { font-size: 12px; font-weight: 800; color: #0f172a;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-  .fund-row-badge { font-size: 8px; font-weight: 800; color: var(--blue);
-    background: var(--navy); padding: 2px 7px; border-radius: 6px;
-    letter-spacing: 0.4px; white-space: nowrap; flex-shrink: 0; }
+  .fund-row-badge { font-size: 8px; font-weight: 800; color: #2d7d96;
+    background: rgba(91,184,212,0.10); padding: 2px 7px; border-radius: 6px;
+    letter-spacing: 0.4px; white-space: nowrap; flex-shrink: 0;
+    border: 1px solid rgba(91,184,212,0.20); }
   .fund-row-stat { text-align: right; flex-shrink: 0; min-width: 80px; }
-  .fund-row-stat-val { font-size: 12px; font-weight: 700; color: #e0e8f0;
+  .fund-row-stat-val { font-size: 12px; font-weight: 700; color: #1e293b;
     font-variant-numeric: tabular-nums; }
   .fund-row-stat-sub { font-size: 9px; color: var(--dim); margin-top: 1px; }
   .fund-row-nav { padding: 5px 12px 7px;
-    border-top: 1px solid rgba(255,255,255,0.05);
+    border-top: 1px solid var(--panel-edge);
     display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
-    background: rgba(0,0,0,0.12); }
+    background: #f8fafc; }
 
   /* Fund sub-tab toggle (LP Funds | Managed Accounts) */
   .fund-subtab { position: relative; padding-right: 36px !important; }
@@ -741,19 +775,19 @@
     font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 8px;
     min-width: 16px; text-align: center;
   }
-  .fund-subtab:not(.active) .fund-subtab-count { background: rgba(91,184,212,0.15); }
+  .fund-subtab:not(.active) .fund-subtab-count { background: rgba(91,184,212,0.12); }
 
   /* Detail sections — waterfall, history, balance chart */
   .fd-section { margin-top: 18px; }
   .fd-waterfall-table { width: 100%; font-variant-numeric: tabular-nums; }
-  .fd-waterfall-table th { font-size: 9px; font-weight: 800; color: var(--dim);
+  .fd-waterfall-table th { font-size: 9px; font-weight: 800; color: var(--mid);
     letter-spacing: 1px; padding: 8px 12px 6px; text-align: right;
-    border-bottom: 1px solid rgba(255,255,255,0.06); }
+    border-bottom: 1px solid rgba(0,0,0,0.07); }
   .fd-waterfall-table th:first-child { text-align: left; }
   .fd-waterfall-table td { padding: 8px 12px; font-size: 11px;
-    border-bottom: 1px solid rgba(255,255,255,0.03); text-align: right; }
-  .fd-waterfall-table td:first-child { text-align: left; font-weight: 700; color: #e0e8f0; }
-  .fd-balance-canvas-wrap { padding: 14px; background: var(--navy); border-radius: 8px; }
+    border-bottom: 1px solid rgba(0,0,0,0.04); text-align: right; }
+  .fd-waterfall-table td:first-child { text-align: left; font-weight: 700; color: #1e293b; }
+  .fd-balance-canvas-wrap { padding: 14px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--panel-edge); }
   .fd-balance-canvas-wrap canvas { width: 100%; height: 220px; display: block; }
 
   /* Settings */
@@ -763,8 +797,8 @@
     width: 110px; flex-shrink: 0; }
   .settings-input {
     flex: 1; min-width: 180px; height: 32px;
-    background: var(--navy-mid); border: 1px solid var(--panel-edge);
-    border-radius: 6px; color: white; font-size: 12px; padding: 0 10px;
+    background: #f8fafc; border: 1px solid var(--panel-edge);
+    border-radius: 6px; color: #1e293b; font-size: 12px; padding: 0 10px;
     outline: none;
   }
   .settings-input:focus { border-color: var(--blue); }
@@ -781,6 +815,61 @@
 
   /* Hero result hint */
   #hero-hint { font-size: 10px; color: var(--dim); margin-top: 6px; min-height: 14px; }
+
+  /* ── LIGHT THEME RESIDUALS ──────────────────────────────────── */
+
+  /* Watchlist remove button — adjusted for light bg */
+  .wl-remove {
+    background: rgba(220,38,38,0.10); color: #dc2626;
+  }
+  .wl-remove:hover { background: rgba(220,38,38,0.22); color: #7f1d1d; }
+
+  /* Mockup banner */
+  .mockup-banner {
+    background: rgba(91,184,212,0.08);
+    border: 1px dashed rgba(91,184,212,0.35);
+    color: #2d7d96;
+  }
+  .mockup-banner strong { color: #1e293b; }
+
+  /* Collapsible panel hover on light bg */
+  section.panel > details > summary:hover .panel-title { color: #3E9AB8; }
+
+  /* Panel-head background for details > summary inside panel */
+  section.panel > details > summary.panel-head {
+    background: #fafbfc;
+  }
+
+  /* Tab loading/empty states */
+  .tab-loading { color: var(--mid); }
+  .tab-empty   { color: var(--dim); }
+
+  /* Drag placeholder updated for light bg */
+  .dash-placeholder {
+    background: rgba(91,184,212,0.06);
+  }
+
+  /* Index ribbon change colours (up/dn on white) */
+  .up { color: #16a34a; }
+  .dn { color: #dc2626; }
+  .nc { color: var(--mid); }
+
+  /* Balance chart canvas wrap (set light bg on canvas parent) */
+  .fd-balance-canvas-wrap { background: #f8fafc; }
+
+  /* Section label */
+  .section-label { color: var(--mid); }
+
+  /* ac-chevron on light panels */
+  .ac-chevron { color: var(--mid); }
+
+  /* inline select elements inside compact stats table */
+  #acd-bench-select,
+  select.acd-select {
+    background: #f8fafc !important;
+    color: #1e293b !important;
+    border-color: var(--panel-edge) !important;
+  }
 </style>
 </head>
 <body>
@@ -801,7 +890,6 @@
   <nav class="topbar-right">
     <span class="topbar-link active" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
-    <span class="topbar-link" data-tab="scan">Scan</span>
     <span class="topbar-link" data-tab="tracker">Tracker</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
@@ -827,7 +915,7 @@
   <!-- ─── LEFT COLUMN ───────────────────────────────────────── -->
   <aside class="col-left">
     <!-- Quick actions -->
-    <section class="panel">
+    <section class="panel" data-wid="quick-actions">
       <header class="panel-head">
         <span class="panel-title">Quick Actions</span>
       </header>
@@ -836,24 +924,12 @@
           <button class="quick-btn primary" data-action="brief">
             <span class="qb-icon">⚡</span> Run Daily Brief
           </button>
-          <button class="quick-btn" data-action="rebalance">
-            <span class="qb-icon">📊</span> Run Rebalance
-          </button>
-          <button class="quick-btn" data-action="download">
-            <span class="qb-icon">📥</span> Download Portfolio
-          </button>
-          <button class="quick-btn" data-action="intelligence">
-            <span class="qb-icon">💡</span> Run Intelligence
-          </button>
-          <button class="quick-btn" data-action="tracker">
-            <span class="qb-icon">📈</span> Open My Portfolio
-          </button>
         </div>
       </div>
     </section>
 
     <!-- Watchlist -->
-    <section class="panel">
+    <section class="panel" data-wid="watchlist">
       <header class="panel-head">
         <span class="panel-title">Watchlist</span>
         <span class="panel-badge" id="wl-count">0</span>
@@ -880,7 +956,7 @@
         <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
       </div>
       <div id="hero-hint"></div>
-      <div style="margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;gap:14px;">
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;">
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
           <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
           <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
@@ -889,44 +965,8 @@
       </div>
     </div>
 
-    <!-- Two-up: last portfolio + market scan -->
-    <div class="grid-2">
-      <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">Last Portfolio Run</span>
-          <span class="panel-badge" id="portfolio-run-badge">—</span>
-          <span class="panel-action" id="portfolio-run-view" style="display:none">VIEW →</span>
-        </header>
-        <div class="panel-body" style="padding:14px;" id="portfolio-run-body">
-          <div style="font-size:12px; color:var(--dim);">Loading…</div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">Market Scan</span>
-          <span class="panel-badge" id="mini-scan-badge">—</span>
-          <button id="mini-scan-btn"
-            style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ SCAN NOW</button>
-        </header>
-        <div class="panel-body" style="padding:10px 14px 12px;">
-          <!-- Live ticker chips (mirror watchlist — click × to remove) -->
-          <div id="mini-scan-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:22px;margin-bottom:8px;"></div>
-          <!-- Add-ticker input -->
-          <div style="display:flex;gap:5px;">
-            <input id="mini-scan-input"
-              style="flex:1;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:white;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
-              placeholder="Add ticker…" autocomplete="off">
-            <button id="mini-scan-add-btn"
-              style="width:28px;height:28px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:16px;cursor:pointer;line-height:1;">+</button>
-          </div>
-          <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
-        </div>
-      </section>
-    </div>
-
     <!-- Saved Reports -->
-    <section class="panel">
+    <section class="panel" data-wid="saved-reports">
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
@@ -947,12 +987,12 @@
               <div class="rep-date">May 9</div>
             </td>
             <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">$7.86</div>
+              <div style="color:#0f172a; font-weight:700;">$7.86</div>
               <div class="dn" style="font-size:10px;">−1.75%</div>
             </td>
             <td class="rep-num">
               <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">$15</div>
+              <div style="color:#0f172a; font-weight:700;">$15</div>
               <div class="up" style="font-size:10px;">+90.8%</div>
             </td>
           </tr>
@@ -963,12 +1003,12 @@
               <div class="rep-date">May 9</div>
             </td>
             <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">$12.55</div>
+              <div style="color:#0f172a; font-weight:700;">$12.55</div>
               <div class="up" style="font-size:10px;">+6.18%</div>
             </td>
             <td class="rep-num">
               <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">$22</div>
+              <div style="color:#0f172a; font-weight:700;">$22</div>
               <div class="up" style="font-size:10px;">+75.3%</div>
             </td>
           </tr>
@@ -980,12 +1020,12 @@
               <div class="rep-date">May 9</div>
             </td>
             <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">$8.51</div>
+              <div style="color:#0f172a; font-weight:700;">$8.51</div>
               <div class="up" style="font-size:10px;">+10.95%</div>
             </td>
             <td class="rep-num">
               <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">$15</div>
+              <div style="color:#0f172a; font-weight:700;">$15</div>
               <div class="up" style="font-size:10px;">+76.3%</div>
             </td>
           </tr>
@@ -996,12 +1036,12 @@
               <div class="rep-date">May 9</div>
             </td>
             <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">$14.84</div>
+              <div style="color:#0f172a; font-weight:700;">$14.84</div>
               <div class="dn" style="font-size:10px;">−1.07%</div>
             </td>
             <td class="rep-num">
               <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">$25</div>
+              <div style="color:#0f172a; font-weight:700;">$25</div>
               <div class="up" style="font-size:10px;">+68.5%</div>
             </td>
           </tr>
@@ -1013,12 +1053,12 @@
               <div class="rep-date">May 8</div>
             </td>
             <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">$1,247.80</div>
+              <div style="color:#0f172a; font-weight:700;">$1,247.80</div>
               <div class="up" style="font-size:10px;">+2.41%</div>
             </td>
             <td class="rep-num">
               <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">$1,650</div>
+              <div style="color:#0f172a; font-weight:700;">$1,650</div>
               <div class="up" style="font-size:10px;">+32.2%</div>
             </td>
           </tr>
@@ -1030,8 +1070,31 @@
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
   <aside class="col-right">
 
+    <!-- Market Scan -->
+    <section class="panel" data-wid="market-scan">
+      <header class="panel-head">
+        <span class="panel-title">Market Scan</span>
+        <span class="panel-badge" id="mini-scan-badge">—</span>
+        <button id="mini-scan-btn"
+          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ SCAN NOW</button>
+      </header>
+      <div class="panel-body" style="padding:10px 14px 12px;">
+        <!-- Live ticker chips (mirror watchlist — click × to remove) -->
+        <div id="mini-scan-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:22px;margin-bottom:8px;"></div>
+        <!-- Add-ticker input -->
+        <div style="display:flex;gap:5px;">
+          <input id="mini-scan-input"
+            style="flex:1;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
+            placeholder="Add ticker…" autocomplete="off">
+          <button id="mini-scan-add-btn"
+            style="width:28px;height:28px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:16px;cursor:pointer;line-height:1;">+</button>
+        </div>
+        <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
+      </div>
+    </section>
+
     <!-- Trending tickers — live watchlist quotes -->
-    <section class="panel">
+    <section class="panel" data-wid="watchlist-live">
       <header class="panel-head">
         <span class="panel-title">Watchlist · Live</span>
         <span class="panel-badge" id="trending-count">LIVE</span>
@@ -1043,7 +1106,7 @@
     </section>
 
     <!-- Market Pulse — live scan results, auto-refreshes every 15 min -->
-    <section class="panel">
+    <section class="panel" data-wid="market-pulse">
       <header class="panel-head">
         <span class="panel-title">Market Pulse</span>
         <span class="panel-badge">SCAN</span>
@@ -1051,6 +1114,25 @@
       </header>
       <div class="panel-body" style="padding:0" id="gp-pulse-rows">
         <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Ticker Scan — on-demand single-ticker news scan -->
+    <section class="panel" data-wid="ticker-scan">
+      <header class="panel-head">
+        <span class="panel-title">Ticker Scan</span>
+        <span class="panel-badge" id="tscan-badge" style="display:none;"></span>
+      </header>
+      <div class="panel-body" style="padding:10px 14px 12px;">
+        <div style="display:flex;gap:5px;margin-bottom:8px;">
+          <input id="tscan-input"
+            style="flex:1;height:30px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
+            placeholder="Enter ticker…" autocomplete="off">
+          <button id="tscan-btn"
+            style="height:30px;padding:0 12px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:11px;cursor:pointer;letter-spacing:0.5px;">⚡ SCAN</button>
+        </div>
+        <div id="tscan-status" style="font-size:10px;color:var(--dim);min-height:12px;margin-bottom:4px;"></div>
+        <div id="tscan-result"></div>
       </div>
     </section>
 
@@ -1085,7 +1167,7 @@
           <header class="panel-head">
             <span class="panel-title">Market Intelligence</span>
             <span class="panel-badge tab-meta" id="intel-meta">—</span>
-            <select id="intel-sector" style="background:var(--navy-mid);color:#c0cfe0;border:1px solid var(--panel-edge);border-radius:5px;padding:4px 8px;font-size:11px;margin-left:auto;">
+            <select id="intel-sector" style="background:var(--navy-mid);color:#334155;border:1px solid var(--panel-edge);border-radius:5px;padding:4px 8px;font-size:11px;margin-left:auto;">
               <option>Tech</option><option>Energy</option><option>Healthcare</option>
               <option>Financials</option><option>Consumer</option><option>Industrials</option>
               <option>Materials</option><option>Real Estate</option><option>Best Mix</option>
@@ -1102,18 +1184,6 @@
 
 
 <!-- ══ SCAN TAB ════════════════════════════════════════════════ -->
-<div id="tab-scan" class="tab-panel">
-  <div class="wide-shell">
-    <div class="tab-toolbar">
-      <h2>Market Scan</h2>
-      <span class="tab-meta" id="scan-meta">—</span>
-      <button id="run-scan-btn" class="tab-btn">⚡ Scan Now</button>
-    </div>
-    <div id="scan-content" class="tab-loading">Loading…</div>
-  </div>
-</div><!-- #tab-scan -->
-
-
 <!-- ══ TRACKER TAB ═════════════════════════════════════════════ -->
 <div id="tab-tracker" class="tab-panel">
   <div class="wide-shell">
@@ -1211,7 +1281,7 @@
     </div>
 
     <div id="acd-meta" class="tab-loading">Loading…</div>
-    <div id="acd-perf-tiles"  style="margin-top:14px;"></div>
+    <div id="acd-perf-tiles"  style="display:none;"></div>
     <div id="acd-balance"     style="margin-top:18px;"></div>
     <div id="acd-positions"   style="margin-top:18px;"></div>
     <div id="acd-rebalance-wrap"  style="margin-top:14px;"></div>
@@ -1238,7 +1308,7 @@
         <button id="acd-ytd-run-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;">⚡ Run YTD</button>
         <span id="acd-ytd-status" style="font-size:10px;margin-left:4px;"></span>
       </div>
-      <div style="padding:5px 14px 9px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;border-top:1px solid rgba(255,255,255,0.05);">
+      <div style="padding:5px 14px 9px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--panel-edge);">
         <span style="font-size:9px;color:var(--dim);font-weight:700;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap;">MERGE:</span>
         <label class="tab-btn sm secondary" style="cursor:pointer;font-size:9px;padding:0 7px;" title="First balance history CSV">
           File 1<input id="acd-merge-f1" type="file" accept=".csv,.txt" style="display:none">
@@ -1486,7 +1556,6 @@
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
     ideas:    () => loadIdeasTab(),
-    scan:     () => loadScanTab(),
     tracker:  () => loadTrackerTab(),
     fund:     () => loadFundTab(),
     settings: () => loadSettingsTab(),
@@ -1680,12 +1749,12 @@
             '<div class="rep-date">' + dateStr + '</div>' +
           '</td>' +
           '<td class="rep-num">' +
-            '<div style="color:#e0e8f0; font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + '</div>' +
+            '<div style="color:#0f172a; font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + '</div>' +
             '<div class="' + cssClass(pct) + '" style="font-size:10px;">' + fmtPct(pct) + '</div>' +
           '</td>' +
           '<td class="rep-num" data-sort-val="' + sortVal + '">' +
             '<div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>' +
-            '<div style="color:#e0e8f0; font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>' +
+            '<div style="color:#0f172a; font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>' +
             '<div class="' + cssClass(upside) + '" style="font-size:10px;">' + fmtPct(upside) + '</div>' +
           '</td>' +
           '</tr>'
@@ -1696,6 +1765,9 @@
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
         tr.addEventListener('click', () => openReport(tr.getAttribute('data-ticker')));
       });
+
+      // Wire per-row scan buttons
+      _wireRepScanButtons();
 
       // Apply current sort direction immediately after render
       _sortTableByCol(tbody, 2, _repSortDir);
@@ -1790,7 +1862,7 @@
               Portfolio Review${holds ? ' · ' + holds + ' holdings' : ''}
             </div>
             <div style="display:flex;gap:14px;font-size:11px;flex-wrap:wrap;">
-              ${nav  ? `<div><span style="color:var(--dim)">NAV</span> <strong style="color:#e0e8f0" class="mono">${fmtUSD(nav)}</strong></div>` : ''}
+              ${nav  ? `<div><span style="color:var(--dim)">NAV</span> <strong style="color:#0f172a" class="mono">${fmtUSD(nav)}</strong></div>` : ''}
               ${ytd  != null ? `<div><span style="color:var(--dim)">YTD</span> <strong class="${cssClass(ytd)} mono">${fmtPct(ytd)}</strong></div>` : ''}
               ${twrr != null ? `<div><span style="color:var(--dim)">TWRR</span> <strong class="${cssClass(twrr)} mono">${fmtPct(twrr)}</strong></div>` : ''}
             </div>`;
@@ -1930,91 +2002,132 @@
   document.getElementById('run-intel-btn')?.addEventListener('click', triggerIntel);
 
   // ══════════════════════════════════════════════════════════════
-  // SCAN TAB
+  // SHARED SCAN UTILITIES  (used by Saved-Reports inline scan + Ticker Scan widget)
   // ══════════════════════════════════════════════════════════════
-  async function loadScanTab() { loadScan(); }
 
-  async function loadScan() {
-    const el   = document.getElementById('scan-content');
-    const meta = document.getElementById('scan-meta');
-    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
-    try {
-      const r = await window.dgaFetch('/api/scan/latest');
-      const d = await r.json();
-      if (!d.exists || !d.results || !Object.keys(d.results).length) {
-        el.innerHTML = '<div class="tab-empty">No scan yet. Click ⚡ Scan Now to run one against your watchlist.</div>';
-        return;
-      }
-      if (meta) meta.textContent = fmtDate(d.scanned_at) + ' · ' + Object.keys(d.results).length + ' tickers';
-      renderScanResults(el, d.results);
-    } catch { el.innerHTML = '<div class="tab-error">Failed to load scan.</div>'; }
+  // Render a single scan result object {sentiment, markdown, price, pct_change} into `el`
+  function _renderOneScanResult(el, ticker, res) {
+    const sent = (res.sentiment || 'UNKNOWN').toUpperCase();
+    const md   = res.markdown || '';
+    let mdHtml = md
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\n/g,'<br>');
+    el.innerHTML =
+      '<div class="scan-card" style="margin-top:6px;">' +
+        '<div class="scan-card-head">' +
+          '<div>' +
+            '<div class="scan-tk">' + ticker + '</div>' +
+            '<div class="scan-px">' + (res.price != null ? '$' + fmtPx(res.price) : '—') +
+              '<span class="scan-chg ' + cssClass(res.pct_change) + '">' + fmtPct(res.pct_change) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<span class="scan-sent ' + sent + '">' + sent + '</span>' +
+        '</div>' +
+        '<div class="scan-card-body">' + (mdHtml || '<span style="color:var(--dim)">No data</span>') + '</div>' +
+      '</div>';
   }
 
-  function renderScanResults(el, results) {
-    const cards = Object.entries(results).map(([tk, res]) => {
-      const sent = (res.sentiment || 'UNKNOWN').toUpperCase();
-      const mdShort = (res.markdown || '').slice(0, 400) + ((res.markdown||'').length > 400 ? '…' : '');
-      let mdHtml = mdShort
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-        .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-        .replace(/\n/g,'<br>');
-      return `
-        <div class="scan-card">
-          <div class="scan-card-head">
-            <div>
-              <div class="scan-tk">${tk}</div>
-              <div class="scan-px">${res.price != null ? '$' + fmtPx(res.price) : '—'}
-                <span class="scan-chg ${cssClass(res.pct_change)}">${fmtPct(res.pct_change)}</span>
-              </div>
-            </div>
-            <span class="scan-sent ${sent}">${sent}</span>
-          </div>
-          <div class="scan-card-body">${mdHtml || '<span style="color:var(--dim)">No data</span>'}</div>
-        </div>`;
-    }).join('');
-    el.innerHTML = '<div class="scan-grid">' + cards + '</div>';
-    // Click card → open GF
-    el.querySelectorAll('.scan-card').forEach(c => {
-      c.style.cursor = 'pointer';
-      c.addEventListener('click', () => {
-        const tk = c.querySelector('.scan-tk')?.textContent;
-        if (tk) openGuruFocus(tk);
+  // Poll a scan job and call onResult(ticker, res) as each ticker completes, onDone() when finished
+  function _pollScanJob(jobId, onResult, onDone, onFail) {
+    const iv = setInterval(async () => {
+      try {
+        const rp = await window.dgaFetch('/api/scan/' + jobId);
+        const jp = await rp.json();
+        if (jp.results) {
+          Object.entries(jp.results).forEach(([tk, r]) => onResult(tk, r));
+        }
+        if (jp.status === 'done' || jp.status === 'failed') {
+          clearInterval(iv);
+          if (jp.status === 'done') onDone(jp);
+          else { if (onFail) onFail(jp.error || 'Scan failed'); }
+        }
+      } catch(e) { clearInterval(iv); if (onFail) onFail(String(e)); }
+    }, 3500);
+    return iv;
+  }
+
+  // ── Per-row scan buttons in Saved Reports ────────────────────────
+  // Called after renderReports() re-builds the tbody
+  function _wireRepScanButtons() {
+    const tbody = document.getElementById('reports-tbody');
+    if (!tbody) return;
+    tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+      // Don't double-wire
+      if (tr.dataset.scanWired) return;
+      tr.dataset.scanWired = '1';
+
+      const ticker = tr.getAttribute('data-ticker');
+      // Inject ⚡ scan btn into first cell (after the existing content)
+      const firstTd = tr.children[0];
+      if (!firstTd) return;
+      const btn = document.createElement('button');
+      btn.textContent = '⚡';
+      btn.title = 'Scan latest news for ' + ticker;
+      btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:11px;padding:0 0 0 4px;opacity:0.6;vertical-align:middle;';
+      firstTd.appendChild(btn);
+
+      // Expandable result row (hidden until scan runs)
+      const resultRow = document.createElement('tr');
+      resultRow.style.display = 'none';
+      const resultTd = document.createElement('td');
+      resultTd.setAttribute('colspan', '3');
+      resultTd.style.cssText = 'padding:0 8px 8px;';
+      resultRow.appendChild(resultTd);
+      tr.insertAdjacentElement('afterend', resultRow);
+
+      let scanning = false;
+      let scanOpen = false;
+
+      btn.addEventListener('click', async function(e) {
+        e.stopPropagation();  // don't open the report modal
+        if (scanning) return;
+
+        // Toggle: if already open and not scanning, close it
+        if (scanOpen && resultRow.style.display !== 'none') {
+          resultRow.style.display = 'none';
+          scanOpen = false;
+          btn.textContent = '⚡';
+          btn.style.opacity = '0.6';
+          return;
+        }
+
+        scanning = true;
+        btn.textContent = '⏳';
+        btn.style.opacity = '1';
+        resultRow.style.display = '';
+        resultTd.innerHTML = '<div style="font-size:11px;color:var(--dim);padding:6px 0;">Scanning ' + ticker + '…</div>';
+
+        try {
+          const r = await window.dgaFetch('/api/scan/ticker', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ticker}),
+          });
+          if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+          const job = await r.json();
+
+          _pollScanJob(job.job_id,
+            function(tk, res) { _renderOneScanResult(resultTd, tk, res); },
+            function(jp) {
+              scanning = false; scanOpen = true;
+              btn.textContent = '✕';  // click again to close
+              btn.style.opacity = '1';
+            },
+            function(err) {
+              scanning = false;
+              resultTd.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0;">❌ ' + err + '</div>';
+              btn.textContent = '⚡'; btn.style.opacity = '0.6';
+            }
+          );
+        } catch(err) {
+          scanning = false;
+          resultTd.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0;">❌ ' + err.message + '</div>';
+          btn.textContent = '⚡'; btn.style.opacity = '0.6';
+        }
       });
     });
   }
-
-  const $scanBtn = document.getElementById('run-scan-btn');
-  $scanBtn?.addEventListener('click', async () => {
-    if ($scanBtn.disabled) return;
-    $scanBtn.disabled = true; $scanBtn.textContent = '⏳ Scanning…';
-    try {
-      const r = await window.dgaFetch('/api/scan', { method: 'POST' });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
-      const job = await r.json();
-      // Update in-progress as tickers complete
-      const pollScan = setInterval(async () => {
-        try {
-          const rp = await window.dgaFetch('/api/scan/' + job.job_id);
-          const jp = await rp.json();
-          const done = jp.tickers_done?.length || 0;
-          const total = jp.tickers?.length || done;
-          $scanBtn.textContent = `⏳ ${done}/${total}…`;
-          if (jp.results && Object.keys(jp.results).length)
-            renderScanResults(document.getElementById('scan-content'), jp.results);
-          if (jp.status === 'done' || jp.status === 'failed') {
-            clearInterval(pollScan);
-            $scanBtn.disabled = false;
-            $scanBtn.textContent = '⚡ Scan Now';
-            document.getElementById('scan-meta').textContent =
-              fmtDate(jp.scanned_at) + ' · ' + Object.keys(jp.results||{}).length + ' tickers';
-          }
-        } catch { clearInterval(pollScan); $scanBtn.disabled=false; $scanBtn.textContent='⚡ Scan Now'; }
-      }, 4000);
-    } catch (e) {
-      $scanBtn.disabled = false; $scanBtn.textContent = '⚡ Scan Now';
-      alert('Scan error: ' + e.message);
-    }
-  });
 
   // ══════════════════════════════════════════════════════════════
   // TRACKER TAB
@@ -2071,7 +2184,7 @@
           <tbody>
             ${items.map(p => `
               <tr>
-                <td style="font-weight:700;color:#e0e8f0">${p.name || '—'}</td>
+                <td style="font-weight:700;color:#0f172a">${p.name || '—'}</td>
                 <td class="tabular ${cssClass(p.total_return_pct)}">${fmtPct(p.total_return_pct)}</td>
                 <td class="tabular ${cssClass(p.vs_spy_pct)}">${fmtPct(p.vs_spy_pct)}</td>
                 <td>${fmtDate(p.created_at)}</td>
@@ -2088,7 +2201,7 @@
 
   // NAV entry inline form — called after loadFundOverview renders cards
   function navInputStyle() {
-    return 'width:130px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:11px;padding:0 8px;outline:none;';
+    return 'width:130px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;';
   }
 
   async function submitNav(fundId, inputEl, dateEl, statusEl, btnEl) {
@@ -2367,7 +2480,7 @@
             <tbody>
               ${d.lps.map(lp => `
                 <tr>
-                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
+                  <td style="font-weight:700;color:#0f172a;">${lp.legal_name || '—'}</td>
                   <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
                 </tr>`).join('')}
@@ -2552,19 +2665,19 @@
     const xAt = i => padL + (W - padL - padR) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
     const yAt = v => padT + (H - padT - padB) * (1 - (v - minV) / Math.max(1, maxV - minV));
     // grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = padT + (H - padT - padB) * (i / 4);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       const v = maxV - (maxV - minV) * (i / 4);
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillStyle = '#64748b';
       ctx.font = '10px -apple-system,sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText('$' + Math.round(v / 1000) + 'k', padL - 6, y + 3);
     }
     // x labels
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle = '#475569';
     ctx.font = '10px -apple-system,sans-serif';
     ctx.textAlign = 'center';
     pts.forEach((p, i) => {
@@ -2830,11 +2943,11 @@
       // Annual return cell: click-to-edit (only in annual mode — cumulative/CAGR are derived)
       const retCell = _atpReturnMode === 'annual'
         ? `<span data-edit-ret="${a.year}" title="${isManual ? 'Manual override — click to edit' : 'Click to override'}"
-             style="cursor:pointer;border-bottom:1px dashed ${isManual ? 'var(--blue)' : 'rgba(255,255,255,0.2)'};padding-bottom:1px;">
+             style="cursor:pointer;border-bottom:1px dashed ${isManual ? 'var(--blue)' : 'rgba(0,0,0,0.15)'};padding-bottom:1px;">
              ${fP(retVal)}${isManual ? ' ✎' : ''}</span>`
         : fP(retVal);
-      return `<tr style="border-top:1px solid rgba(255,255,255,0.05);" data-year="${a.year}">
-        <td style="padding:5px 10px;font-weight:700;color:#e0e8f0;">${a.year}</td>
+      return `<tr style="border-top:1px solid var(--panel-edge);" data-year="${a.year}">
+        <td style="padding:5px 10px;font-weight:700;color:#0f172a;">${a.year}</td>
         <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.beg_balance ? fU(a.beg_balance) : '—'}</td>
         <td style="padding:5px 10px;text-align:right;color:var(--mid);font-variant-numeric:tabular-nums;">${a.end_balance ? fU(a.end_balance) : '—'}</td>
         <td style="padding:5px 10px;text-align:right;font-weight:700;color:${rc};font-variant-numeric:tabular-nums;">${retCell}</td>
@@ -2862,8 +2975,8 @@
       const totalNet  = ann.reduce((s, a) => s + ((a.deposits || 0) - (a.withdrawals || 0)), 0);
       const totalNetStr = totalNet === 0 ? '—'
         : (totalNet > 0 ? '+' : '') + fU(Math.abs(totalNet)) + (totalNet < 0 ? ' out' : '');
-      rows.push(`<tr style="border-top:2px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.04);">
-        <td style="padding:6px 10px;font-weight:800;color:#e0e8f0;font-size:10px;letter-spacing:0.5px;">${n}YR TOTAL</td>
+      rows.push(`<tr style="border-top:2px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+        <td style="padding:6px 10px;font-weight:800;color:#0f172a;font-size:10px;letter-spacing:0.5px;">${n}YR TOTAL</td>
         <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
         <td style="padding:6px 10px;text-align:right;color:var(--mid);">—</td>
         <td style="padding:6px 10px;text-align:right;font-weight:800;color:${summaryRc};font-variant-numeric:tabular-nums;">${fP(totalCumPort)} cumul. / ${fP(totalCagrPort)} CAGR</td>
@@ -2875,7 +2988,7 @@
 
     const retModeLabel = { annual: 'Annual Return', cumulative: 'Cumul. Return', cagr: 'CAGR' }[_atpReturnMode] || 'Return';
     el.innerHTML = `
-      <div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--panel-edge);display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
         <!-- Period -->
         <div style="display:flex;gap:2px;align-items:center;">
           <span style="font-size:9px;color:var(--mid);margin-right:4px;font-weight:700;">PERIOD:</span>
@@ -2889,7 +3002,7 @@
         <!-- Benchmark selector -->
         <div style="display:flex;gap:4px;align-items:center;margin-left:auto;">
           <span style="font-size:9px;color:var(--mid);font-weight:700;">BENCHMARK:</span>
-          <select id="atp-bmark-sel" style="background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#e0e8f0;font-size:10px;padding:2px 6px;height:24px;cursor:pointer;">
+          <select id="atp-bmark-sel" style="background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:10px;padding:2px 6px;height:24px;cursor:pointer;">
             ${_BENCHMARK_OPTIONS.map(o => `<option value="${o.key}"${o.key===_atpBenchmark?' selected':''}>${o.label}</option>`).join('')}
           </select>
           <button id="atp-save-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;height:24px;" title="Save settings — LP will see this benchmark and period">Save to LP →</button>
@@ -2898,7 +3011,7 @@
       </div>
       <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
-          <thead><tr style="background:rgba(255,255,255,0.04);">
+          <thead><tr style="background:rgba(0,0,0,0.03);">
             <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">YEAR</th>
             <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">BEG. VALUE</th>
             <th style="padding:6px 10px;text-align:right;font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;">END VALUE</th>
@@ -2967,7 +3080,7 @@
           <div style="display:flex;align-items:center;gap:4px;">
             <input id="ret-inp-${yr}" type="number" step="0.01" value="${current}"
               style="width:70px;background:var(--navy-mid);border:1px solid var(--blue);border-radius:4px;
-                     color:#e0e8f0;font-size:11px;padding:2px 5px;text-align:right;"
+                     color:#0f172a;font-size:11px;padding:2px 5px;text-align:right;"
               placeholder="${current}">
             <button id="ret-save-${yr}" style="font-size:9px;padding:2px 6px;background:var(--blue);
               border:none;border-radius:3px;color:var(--navy);cursor:pointer;font-weight:700;">✓</button>
@@ -3062,7 +3175,7 @@
             </summary>
             <div style="padding:14px;position:relative;">
               <canvas id="acd-alltime-canvas" style="width:100%;height:260px;display:block;"></canvas>
-              <div id="acd-alltime-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+              <div id="acd-alltime-tooltip" style="display:none;position:absolute;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
             </div>
           </details>
         </section>
@@ -3128,12 +3241,12 @@
     const yAtUSD = v => padT + chartH * (1 - (v - minDollar) / Math.max(maxDollar - minDollar, 1));
 
     // Grid lines (left axis %)
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
     ctx.lineWidth = 1;
     [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
       const y = yAt(v);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillStyle = '#64748b';
       ctx.font = '9.5px -apple-system,sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
@@ -3141,7 +3254,7 @@
 
     // Right-axis dollar labels
     const dollarTicks = 4;
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillStyle = '#64748b';
     ctx.font = '9px -apple-system,sans-serif';
     ctx.textAlign = 'left';
     for (let i = 0; i <= dollarTicks; i++) {
@@ -3151,7 +3264,7 @@
       ctx.fillText(label, W - padR + 4, y + 3.5);
     }
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
 
@@ -3232,7 +3345,7 @@
       y: p.cash_only_balance != null ? yAtUSD(p.cash_only_balance) : null,
     }));
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([5, 4]);
     ctx.lineJoin = 'round';
@@ -3251,19 +3364,19 @@
     ctx.font = '9px -apple-system,sans-serif';
     const lx = padL + 6, ly = padT + 10;
     ctx.fillStyle = '#5BB8D4'; ctx.fillRect(lx, ly - 5, 16, 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.textAlign = 'left';
+    ctx.fillStyle = '#1e293b'; ctx.textAlign = 'left';
     ctx.fillText('Portfolio Balance', lx + 20, ly);
-    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5;
+    ctx.save(); ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1.5;
     ctx.setLineDash([4,3]);
     ctx.beginPath(); ctx.moveTo(lx + 80, ly - 4); ctx.lineTo(lx + 96, ly - 4); ctx.stroke();
     ctx.restore();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillStyle = '#64748b';
     ctx.fillText('If Not Invested', lx + 100, ly);
     ctx.restore();
 
     // X-axis labels — diagonal to prevent overlap
     ctx.save();
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle = '#475569';
     ctx.font = '9.5px -apple-system,sans-serif';
     const skipEvery = (view === 'monthly' && n > 24) ? 3 : (view === 'monthly' && n > 12) ? 2 : 1;
     pts.forEach((p, i) => {
@@ -3291,12 +3404,12 @@
       let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label}</div>`;
       if (p.skip) {
         html += `<div style="color:#f59e0b;font-size:11px;">N/A — Custodial Transfer</div>`;
-        html += `<div style="color:rgba(255,255,255,0.5);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from performance calculations.</div>`;
+        html += `<div style="color:var(--mid);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from performance calculations.</div>`;
       } else {
         const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
         html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct || 0)}</span></div>`;
         if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Ending Balance</span><span>${fmtUSDLocal(p.end_balance)}</span></div>`;
-        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:rgba(255,255,255,0.55);">If Not Invested</span><span style="color:rgba(255,255,255,0.55);">${fmtUSDLocal(p.cash_only_balance)}</span></div>`;
+        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:var(--mid);">If Not Invested</span><span style="color:var(--mid);">${fmtUSDLocal(p.cash_only_balance)}</span></div>`;
         const netDep = (p.deposits || 0) - (p.withdrawals || 0);
         if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDLocal(Math.abs(netDep))}</span></div>`;
         if (p.dividends) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Dividends</span><span style="color:#c9a84c;">${fmtUSDLocal(p.dividends)}</span></div>`;
@@ -3350,21 +3463,42 @@
   // ── LP Fund renderers ────────────────────────────────────────
   function renderLpMeta(d) {
     const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
-    const tile = (label, value, sub) => `
-      <div class="fd-tile">
-        <div class="fd-tile-label">${label}</div>
-        <div class="fd-tile-val">${value}</div>
-        ${sub ? `<div class="fd-tile-sub">${sub}</div>` : ''}
-      </div>`;
-    const lpFeeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' annual fee' : '';
+    const lpFeeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' fee' : '';
+    const navStr = d.nav != null ? fmtUSD(d.nav) : '—';
+    const navSub = d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot');
+    const lc  = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px 5px 14px;white-space:nowrap;vertical-align:middle;"';
+    const lci = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px;white-space:nowrap;vertical-align:middle;"';
+    const vc  = 'style="font-weight:700;color:#0f172a;padding:5px 16px 5px 0;vertical-align:middle;"';
     document.getElementById('lpd-meta').innerHTML = `
-      <div class="fd-tile-grid">
-        ${tile('TYPE',     'LP Fund', d.short_name)}
-        ${tile('STATUS',   (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—') + (lpFeeStr ? ' · ' + lpFeeStr : ''))}
-        ${tile('NAV',      d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : (d.market_nav > 0 ? 'Live from positions' : 'No snapshot'))}
-        ${tile('LP COUNT', d.lp_count, fmtUSD(d.total_committed) + ' committed')}
-        ${tile('CARRY',    fmtPct(d.carry_pct), 'Hurdle ' + fmtPct(d.hurdle_pct))}
-      </div>`;
+      <details open id="lpd-stats-details" style="background:var(--panel-bg);border:1px solid var(--panel-edge);border-radius:8px;margin-bottom:4px;">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:9px;font-weight:800;letter-spacing:1px;color:var(--mid);user-select:none;">
+          <span>FUND OVERVIEW</span><span class="ac-chevron">▸</span>
+        </summary>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;border-top:1px solid var(--panel-edge);">
+          <tbody>
+            <tr style="border-bottom:1px solid var(--panel-edge);">
+              <td ${lc}>TYPE</td>
+              <td ${vc}>LP Fund<div style="font-size:9px;color:var(--dim);font-weight:400;">${d.short_name || ''}</div></td>
+              <td ${lci}>STATUS</td>
+              <td ${vc}>${(d.status||'open').toUpperCase()}<div style="font-size:9px;color:var(--dim);font-weight:400;">Inception ${d.inception_date||'—'}${lpFeeStr ? ' · ' + lpFeeStr : ''}</div></td>
+              <td ${lci}>NAV</td>
+              <td ${vc}>${navStr}<div style="font-size:9px;color:var(--dim);font-weight:400;">${navSub}</div></td>
+              <td ${lci}>CARRY</td>
+              <td style="font-weight:600;color:var(--mid);padding:5px 14px 5px 0;vertical-align:middle;font-size:10px;">${fmtPct(d.carry_pct)}<div style="font-size:9px;color:var(--dim);">Hurdle ${fmtPct(d.hurdle_pct)}</div></td>
+            </tr>
+            <tr>
+              <td ${lc}>LP COUNT</td>
+              <td ${vc}>${d.lp_count||'—'}<div style="font-size:9px;color:var(--dim);font-weight:400;">${fmtUSD(d.total_committed||0)} committed</div></td>
+              <td ${lci}>HIGH WATERMARK</td>
+              <td style="font-weight:700;color:#0f172a;padding:5px 16px 5px 0;vertical-align:middle;" id="lpd-st-hwm">—</td>
+              <td ${lci}>GP ACCRUED CARRY</td>
+              <td style="font-weight:700;color:#0f172a;padding:5px 16px 5px 0;vertical-align:middle;" id="lpd-st-gp-carry">—</td>
+              <td ${lci}>LP NAV (NET OF CARRY)</td>
+              <td style="font-weight:700;color:#0f172a;padding:5px 14px 5px 0;vertical-align:middle;" id="lpd-st-lp-nav-net">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </details>`;
   }
 
   function renderLpRoster(d) {
@@ -3383,7 +3517,7 @@
               ${d.lps.map(lp => {
                 const share = d.total_committed ? (lp.commitment_amount / d.total_committed * 100) : 0;
                 return `<tr>
-                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name || '—'}</td>
+                  <td style="font-weight:700;color:#0f172a;">${lp.legal_name || '—'}</td>
                   <td style="color:var(--mid);font-size:11px;">${lp.primary_email || '—'}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment_amount)}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${share.toFixed(2)}%</td>
@@ -3464,7 +3598,7 @@
     }
     const html = `
       <section class="panel">
-        <details>
+        <details open>
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">Open Positions</span>
             <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
@@ -3477,6 +3611,7 @@
               <th id="pos-th-curpct" style="text-align:center;">Current %</th>
               <th style="text-align:center;">→ Suggested %</th>
               <th style="text-align:right;">Qty</th>
+              <th style="text-align:right;">→ New QTY</th>
               <th style="text-align:right;">Avg Cost</th>
               <th style="text-align:right;">Cost Basis</th>
               <th style="text-align:right;">Last</th>
@@ -3496,6 +3631,7 @@
                   '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);" data-sort-val="' + (curPct != null ? curPct.toFixed(4) : '') + '">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
                   '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--dim);" data-suggested="' + (p.symbol || '') + '">—</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.total_qty || 0).toFixed(2) + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--dim);" data-newqty="' + (p.symbol || '') + '">—</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtUSD(p.total_cost || 0) + '</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.last_price != null ? fmtUSD(p.last_price) : '—') + '</td>' +
@@ -3504,7 +3640,7 @@
                   '</tr>';
               }).join('')}
               <tr id="pos-ev-row" data-pin="bottom" style="display:none;background:rgba(91,184,212,0.06);border-top:1px solid rgba(91,184,212,0.2);">
-                <td colspan="10" style="padding:6px 10px;font-size:11px;color:var(--mid);">Run rebalance to see EV improvement</td>
+                <td colspan="11" style="padding:6px 10px;font-size:11px;color:var(--mid);">Run rebalance to see EV improvement</td>
               </tr>
             </tbody>
           </table>
@@ -3521,6 +3657,76 @@
     return html;
   }
 
+  // ── LP NAV bar chart (native canvas, no Chart.js) ──────────────
+  function _drawLpNavChart(canvasId, rows) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !rows.length) return;
+    const dpr  = window.devicePixelRatio || 1;
+    const cssW = canvas.offsetWidth || 480;
+    const cssH = 150;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const padL = 64, padR = 16, padT = 14, padB = 34;
+    const W = cssW - padL - padR;
+    const H = cssH - padT - padB;
+
+    const maxNav = Math.max(...rows.map(r => r.end_nav || 0)) * 1.12;
+    const minNav = 0;
+    const range  = maxNav - minNav || 1;
+    const barW   = Math.max(4, W / rows.length * 0.55);
+    const gap    = W / rows.length;
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + H - (i / 4) * H;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + W, y); ctx.stroke();
+      const val = minNav + (i / 4) * range;
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px system-ui,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(val >= 1e6 ? '$' + (val / 1e6).toFixed(1) + 'M' : val >= 1e3 ? '$' + (val / 1e3).toFixed(0) + 'K' : '$' + val.toFixed(0), padL - 4, y + 3);
+    }
+
+    // Bars
+    rows.forEach(function(r, i) {
+      const x = padL + i * gap + gap / 2 - barW / 2;
+      const navH = ((r.end_nav || 0) - minNav) / range * H;
+      const y = padT + H - navH;
+      const grad = ctx.createLinearGradient(0, y, 0, padT + H);
+      grad.addColorStop(0, 'rgba(91,184,212,0.90)');
+      grad.addColorStop(1, 'rgba(91,184,212,0.20)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, y, barW, navH, [3, 3, 0, 0]) : ctx.rect(x, y, barW, navH);
+      ctx.fill();
+      // Year label
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9px system-ui,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(r.year), x + barW / 2, padT + H + 14);
+      // Value label on top of bar
+      if (navH > 18) {
+        ctx.fillStyle = '#334155';
+        ctx.font = '8px system-ui,sans-serif';
+        const lbl = (r.end_nav || 0) >= 1e6 ? '$' + ((r.end_nav) / 1e6).toFixed(1) + 'M'
+                  : (r.end_nav || 0) >= 1e3  ? '$' + ((r.end_nav) / 1e3).toFixed(0) + 'K'
+                  : '$' + (r.end_nav || 0).toFixed(0);
+        ctx.fillText(lbl, x + barW / 2, y - 4);
+      }
+    });
+
+    // Axis
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + H); ctx.lineTo(padL + W, padT + H); ctx.stroke();
+  }
+
   // ── LP Waterfall (CORRECT FIELD NAMES from /api/fund/waterfall) ─
   async function loadLpWaterfall(fundId) {
     const elW = document.getElementById('lpd-waterfall');
@@ -3533,34 +3739,39 @@
       const rows = wf.annual_snapshots || [];
       const fmtPct = v => v == null ? '—' : v.toFixed(2) + '%';
 
-      // Summary tiles
-      const summaryTiles = `
-        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
-          <div class="fd-tile">
-            <div class="fd-tile-label">CURRENT NAV</div>
-            <div class="fd-tile-val">${fmtUSD(wf.nav)}</div>
-            <div class="fd-tile-sub">Live market value</div>
-          </div>
-          <div class="fd-tile">
-            <div class="fd-tile-label">HIGH WATERMARK</div>
-            <div class="fd-tile-val">${wf.high_watermark != null ? fmtUSD(wf.high_watermark) : '—'}</div>
-            <div class="fd-tile-sub">Hurdle ${wf.hurdle_cleared ? '✓ cleared' : 'not cleared'}</div>
-          </div>
-          <div class="fd-tile">
-            <div class="fd-tile-label">GP ACCRUED CARRY</div>
-            <div class="fd-tile-val">${wf.gp_accrued_carry != null ? fmtUSD(wf.gp_accrued_carry) : '—'}</div>
-            <div class="fd-tile-sub">${wf.gp_equity_pct != null ? wf.gp_equity_pct.toFixed(2) + '% of NAV' : ''}</div>
-          </div>
-          <div class="fd-tile">
-            <div class="fd-tile-label">LP NAV (NET OF CARRY)</div>
-            <div class="fd-tile-val">${wf.lp_nav_after_carry != null ? fmtUSD(wf.lp_nav_after_carry) : '—'}</div>
-            <div class="fd-tile-sub">After fractional carry</div>
-          </div>
-        </div>`;
+      // Fill placeholder cells in the compact Fund Overview table (renderLpMeta)
+      const hwmEl = document.getElementById('lpd-st-hwm');
+      if (hwmEl) {
+        hwmEl.textContent = wf.high_watermark != null ? fmtUSD(wf.high_watermark) : '—';
+        if (wf.hurdle_cleared != null) {
+          const sub = document.createElement('div');
+          sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+          sub.textContent = 'Hurdle ' + (wf.hurdle_cleared ? '✓ cleared' : 'not cleared');
+          hwmEl.appendChild(sub);
+        }
+      }
+      const gpCarryEl = document.getElementById('lpd-st-gp-carry');
+      if (gpCarryEl) {
+        gpCarryEl.textContent = wf.gp_accrued_carry != null ? fmtUSD(wf.gp_accrued_carry) : '—';
+        if (wf.gp_equity_pct != null) {
+          const sub = document.createElement('div');
+          sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+          sub.textContent = wf.gp_equity_pct.toFixed(2) + '% of NAV';
+          gpCarryEl.appendChild(sub);
+        }
+      }
+      const lpNavNetEl = document.getElementById('lpd-st-lp-nav-net');
+      if (lpNavNetEl) {
+        lpNavNetEl.textContent = wf.lp_nav_after_carry != null ? fmtUSD(wf.lp_nav_after_carry) : '—';
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:9px;color:var(--dim);font-weight:400;';
+        sub.textContent = 'after fractional carry';
+        lpNavNetEl.appendChild(sub);
+      }
 
       if (!rows.length) {
-        elW.innerHTML = summaryTiles + `
-          <section class="panel" style="margin-top:14px;">
+        elW.innerHTML = `
+          <section class="panel">
             <header class="panel-head"><span class="panel-title">GP Waterfall &amp; Carry</span></header>
             <div class="tab-empty">${wf.data_source_warning || 'No annual snapshots yet — upload the Annual NAV / Waterfall Excel.'}</div>
           </section>`;
@@ -3568,8 +3779,11 @@
         return;
       }
 
-      elW.innerHTML = summaryTiles + `
-        <section class="panel" style="margin-top:14px;">
+      // NAV chart canvas id
+      const navChartId = 'lpd-nav-chart-canvas';
+
+      elW.innerHTML = `
+        <section class="panel">
           <header class="panel-head">
             <span class="panel-title">GP Waterfall &amp; Carry</span>
             <span class="panel-badge">${rows.length} year${rows.length !== 1 ? 's' : ''}</span>
@@ -3594,7 +3808,14 @@
               </tr>`).join('')}
             </tbody>
           </table>
+          <div style="padding:14px 14px 6px;">
+            <div style="font-size:9px;color:var(--dim);font-weight:800;letter-spacing:0.8px;margin-bottom:8px;">NAV BY YEAR</div>
+            <canvas id="${navChartId}" style="width:100%;display:block;"></canvas>
+          </div>
         </section>`;
+
+      // Draw NAV bar chart after DOM settles
+      requestAnimationFrame(function() { _drawLpNavChart(navChartId, rows); });
 
       // Per-LP allocation table
       if (wf.per_lp && wf.per_lp.length) {
@@ -3611,7 +3832,7 @@
               </tr></thead>
               <tbody>
                 ${wf.per_lp.map(lp => `<tr>
-                  <td style="font-weight:700;color:#e0e8f0;">${lp.legal_name}</td>
+                  <td style="font-weight:700;color:#0f172a;">${lp.legal_name}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(lp.commitment)}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);">${lp.share_pct.toFixed(2)}%</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--red);">${fmtUSD(lp.carry_charge || 0)}</td>
@@ -3645,21 +3866,51 @@
 
   function renderAcctMeta(d) {
     const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
-    const feeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' annual fee' : '';
-    const statusSub = 'Inception ' + (d.inception_date || '—') + (feeStr ? ' · ' + feeStr : '');
-    const tile = (label, value, sub, extraSub) => `
-      <div class="fd-tile">
-        <div class="fd-tile-label">${label}</div>
-        <div class="fd-tile-val" id="${label === 'NAV' ? 'acd-nav-tile-val' : ''}">${value}</div>
-        ${sub     ? `<div class="fd-tile-sub">${sub}</div>`     : ''}
-        ${extraSub ? `<div class="fd-tile-sub">${extraSub}</div>` : ''}
-      </div>`;
+    const feeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' fee' : '';
+    const navStr = d.nav != null ? fmtUSD(d.nav) : '—';
+    const navSub = d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions';
+    const selOpts = BENCH_OPTIONS.map(o =>
+      `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+    const lc  = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px 5px 14px;white-space:nowrap;vertical-align:middle;"';
+    const lci = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px;white-space:nowrap;vertical-align:middle;"';
+    const vc  = 'style="font-weight:700;color:#0f172a;padding:5px 16px 5px 0;vertical-align:middle;"';
     document.getElementById('acd-meta').innerHTML = `
-      <div class="fd-tile-grid">
-        ${tile('TYPE',   'Managed Account', d.short_name)}
-        ${tile('STATUS', (d.status || 'open').toUpperCase(), 'Inception ' + (d.inception_date || '—'), feeStr)}
-        ${tile('NAV',    d.nav != null ? fmtUSD(d.nav) : '—', d.nav_as_of ? 'as of ' + d.nav_as_of : 'Live from positions')}
-      </div>`;
+      <details open id="acd-stats-details" style="background:var(--panel-bg);border:1px solid var(--panel-edge);border-radius:8px;margin-bottom:4px;">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:9px;font-weight:800;letter-spacing:1px;color:var(--mid);user-select:none;">
+          <span>ACCOUNT OVERVIEW</span><span class="ac-chevron">▸</span>
+        </summary>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;border-top:1px solid var(--panel-edge);">
+          <tbody>
+            <tr style="border-bottom:1px solid var(--panel-edge);">
+              <td ${lc}>TYPE</td>
+              <td ${vc}>Managed Account<div style="font-size:9px;color:var(--dim);font-weight:400;">${d.short_name || ''}</div></td>
+              <td ${lci}>STATUS</td>
+              <td ${vc}>${(d.status||'open').toUpperCase()}<div style="font-size:9px;color:var(--dim);font-weight:400;">Inception ${d.inception_date||'—'}${feeStr ? ' · ' + feeStr : ''}</div></td>
+              <td ${lci}>NAV</td>
+              <td ${vc}><span id="acd-nav-tile-val">${navStr}</span><div id="acd-nav-tile-sub" style="font-size:9px;color:var(--dim);font-weight:400;">${navSub}</div></td>
+            </tr>
+            <tr>
+              <td ${lc}>YTD RETURN</td>
+              <td style="font-weight:700;color:var(--mid);padding:5px 16px 5px 0;vertical-align:top;" id="acd-pos-ret-val">—</td>
+              <td ${lci} id="acd-bench-label">${_acctBenchKey} YTD</td>
+              <td style="padding:4px 16px 4px 0;vertical-align:top;">
+                <div id="acd-bench-val" style="font-weight:700;color:var(--mid);">—</div>
+                <select id="acd-bench-select" style="margin-top:4px;background:#f8fafc;border:1px solid var(--panel-edge);color:#1e293b;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;width:100%;">
+                  ${selOpts}
+                </select>
+              </td>
+              <td ${lci}>ALPHA</td>
+              <td style="padding:4px 16px 4px 0;vertical-align:top;">
+                <div id="acd-alpha-val" style="font-weight:700;color:var(--mid);">—</div>
+                <div id="acd-alpha-sub" style="font-size:9px;color:var(--dim);">vs ${_acctBenchKey}</div>
+              </td>
+              <td ${lci}>MOD. DIETZ</td>
+              <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-md-val">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </details>`;
   }
 
   async function loadAcctPositions(fundId) {
@@ -3678,6 +3929,8 @@
       if (totalMV > 0) {
         const navEl = document.getElementById('acd-nav-tile-val');
         if (navEl) navEl.textContent = fmtUSD(totalMV);
+        const navSub = document.getElementById('acd-nav-tile-sub');
+        if (navSub) navSub.textContent = 'Live from positions';
         _acctPositionsMV = totalMV;
         _updatePositionsReturnTile();
       }
@@ -3760,15 +4013,28 @@
   function renderRebalanceResult(data, fundId) {
     if (!data || !data.rows) return;
 
-    // 1. Populate Suggested % cells in positions table
+    // 1. Populate Suggested % and New QTY cells in positions table
     data.rows.forEach(function(row) {
+      // Suggested %
       const cell = document.querySelector('[data-suggested="' + row.ticker + '"]');
       if (cell) {
-        const pct = (row.suggested_pct || 0).toFixed(1);
+        const pct  = (row.suggested_pct || 0).toFixed(1);
         const diff = (row.suggested_pct || 0) - (row.current_pct || 0);
-        const col = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
+        const col  = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
         cell.textContent = pct + '%';
         cell.style.color = col;
+      }
+      // New QTY
+      const qtyCell = document.querySelector('[data-newqty="' + row.ticker + '"]');
+      if (qtyCell && row.new_qty != null) {
+        const sd    = row.shares_delta;
+        const newQty = row.new_qty;
+        const isBuy  = sd > 0.01;
+        const isSell = sd < -0.01;
+        const col    = isBuy ? 'var(--green)' : isSell ? 'var(--red)' : 'var(--mid)';
+        const arrow  = isBuy ? '↑' : isSell ? '↓' : '';
+        qtyCell.innerHTML = '<span style="color:' + col + ';font-weight:700;">' + arrow + ' ' + newQty.toFixed(2) + '</span>';
+        qtyCell.title = 'Δ ' + (sd >= 0 ? '+' : '') + sd.toFixed(2) + ' shares';
       }
     });
 
@@ -3783,7 +4049,7 @@
         '<td colspan="2" style="font-weight:800;color:var(--blue);font-size:11px;">EXPECTED VALUE</td>' +
         '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);">' + curEV + '%</td>' +
         '<td style="text-align:center;font-variant-numeric:tabular-nums;' + evCol + ';font-weight:700;">' + sugEV + '%</td>' +
-        '<td colspan="6" style="font-size:10px;color:var(--mid);">Weighted avg upside across equity positions</td>';
+        '<td colspan="7" style="font-size:10px;color:var(--mid);">Weighted avg upside across equity positions</td>';
     }
 
     // 3. Render summary panel
@@ -3800,6 +4066,13 @@
       const ratingColors = {'Buy':'var(--green)','Strong Buy':'var(--green)','Hold':'var(--mid)','Sell':'var(--red)','Strong Sell':'var(--red)'};
       const ratingCol = ratingColors[row.rating] || 'var(--mid)';
       const upside = row.upside_pct;
+      // Shares column
+      const sd = row.shares_delta;
+      let sharesStr = '—', sharesCol = 'var(--dim)';
+      if (sd != null && Math.abs(sd) >= 0.01) {
+        sharesStr = (sd > 0 ? '+' : '') + sd.toFixed(2) + ' sh';
+        sharesCol = sd > 0 ? 'var(--green)' : 'var(--red)';
+      }
       return '<tr>' +
         '<td style="font-weight:800;color:var(--blue);">' + row.ticker + '</td>' +
         '<td style="text-align:right;color:' + ratingCol + ';">' + (row.rating||'—') + '</td>' +
@@ -3809,6 +4082,7 @@
         '<td style="text-align:center;color:var(--blue);opacity:0.6;">→</td>' +
         '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + diffCol + ';font-weight:700;">' + (row.suggested_pct||0).toFixed(1) + '%</td>' +
         '<td style="text-align:right;font-size:10px;color:' + diffCol + ';">' + diffStr + '</td>' +
+        '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:' + sharesCol + ';">' + sharesStr + '</td>' +
         '</tr>';
     }).join('');
 
@@ -3821,8 +4095,9 @@
               '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
-            '<span style="display:flex;align-items:center;gap:8px;" onclick="event.stopPropagation();">' +
+            '<span style="display:flex;align-items:center;gap:8px;flex-direction:column;align-items:flex-end;" onclick="event.stopPropagation();">' +
               '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
+              '<div id="acd-rebalance-email-status" style="font-size:9px;min-height:12px;text-align:right;max-width:240px;line-height:1.3;"></div>' +
             '</span>' +
           '</summary>' +
           '<div style="padding:12px 14px 6px;">' +
@@ -3852,6 +4127,7 @@
               '<th style="text-align:center;">→</th>' +
               '<th style="text-align:right;">Suggested %</th>' +
               '<th style="text-align:right;">Action</th>' +
+              '<th style="text-align:right;">Shares</th>' +
             '</tr></thead>' +
             '<tbody>' + rowsHtml + '</tbody>' +
           '</table>' +
@@ -3860,18 +4136,33 @@
       '</section>';
 
     // Wire email button
-    const emailBtn = document.getElementById('acd-rebalance-email-btn');
+    const emailBtn    = document.getElementById('acd-rebalance-email-btn');
+    const emailStatus = document.getElementById('acd-rebalance-email-status');
+    function _setEmailStatus(msg, color) {
+      if (emailStatus) { emailStatus.textContent = msg; emailStatus.style.color = color || 'var(--dim)'; }
+    }
     if (emailBtn) {
       emailBtn.addEventListener('click', async function() {
-        emailBtn.disabled = true; emailBtn.textContent = 'Sending…';
+        emailBtn.disabled = true; emailBtn.textContent = '⏳ Sending…';
+        _setEmailStatus('Connecting…', 'var(--dim)');
         try {
           const r2 = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email', {method:'POST'});
           const d2 = await r2.json();
-          if (!r2.ok) throw new Error(d2.detail || r2.status);
-          emailBtn.textContent = '✓ Sent'; emailBtn.style.color = 'var(--green)';
-          setTimeout(function(){ emailBtn.disabled=false; emailBtn.textContent='📧 Email GP'; emailBtn.style.color=''; }, 3000);
+          if (!r2.ok) {
+            const detail = d2.detail || ('HTTP ' + r2.status);
+            throw new Error(detail);
+          }
+          const transport = d2.transport || 'unknown';
+          const sentTo    = d2.sent_to   || '';
+          emailBtn.textContent = '📧 Email GP';
+          emailBtn.disabled = false;
+          emailBtn.style.color = '';
+          _setEmailStatus('✓ Sent via ' + transport + (sentTo ? ' → ' + sentTo : ''), 'var(--green)');
+          setTimeout(function(){ _setEmailStatus('', ''); }, 8000);
         } catch(e) {
-          emailBtn.textContent = '❌ ' + e.message; emailBtn.disabled = false;
+          emailBtn.disabled = false;
+          emailBtn.textContent = '📧 Email GP';
+          _setEmailStatus('❌ ' + e.message, 'var(--red)');
         }
       });
     }
@@ -3914,38 +4205,37 @@
 
   function renderAcctPerfTiles(data, cachedYtdPct) {
     const elP = document.getElementById('acd-perf-tiles');
-    if (!elP) return;
-    const mc     = data.monthly_chart;
-    const spy    = data.spy_monthly;
-    const mdPct  = data.md_return_pct != null ? data.md_return_pct
-                 : (cachedYtdPct != null ? cachedYtdPct : null);
+    // Compact stats are now in acd-meta; this div is no longer used for tiles
+    if (elP) elP.innerHTML = '';
+
+    const mc    = data.monthly_chart;
+    const spy   = data.spy_monthly;
+    const mdPct = data.md_return_pct != null ? data.md_return_pct
+                : (cachedYtdPct != null ? cachedYtdPct : null);
     const spyPts = spy && spy.points ? spy.points : [];
     const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
     const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-    const cls    = v => v == null ? '' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
+    const cls    = v => v == null ? 'color:var(--mid);' : (v >= 0 ? 'color:var(--green);' : 'color:var(--red);');
 
     // Extract beginning-of-year balance and YTD flows from monthly data.
     // Three-tier fallback for begBalance:
     //   1. Server-side ytd_beg_balance (present in new cache entries)
     //   2. months[0].beg_balance       (added to mc_monthly in the same server update)
     //   3. Modified-Dietz algebra:     BMV = (EMV - CF·(1+0.5·R)) / (1+R)
-    //      Inverts Jan's Mod. Dietz equation to recover the Jan 1 starting balance
-    //      from the data that was always present: end_balance, return_pct, perf_detail.
-    const months    = (mc && mc.monthly) ? mc.monthly : [];
-    const totalDeps  = data.ytd_total_deposits
-                    ?? months.reduce((s, m) => s + (m.perf_detail?.deposits    || 0), 0);
-    const totalWdrs  = data.ytd_total_withdrawals
-                    ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
+    const months   = (mc && mc.monthly) ? mc.monthly : [];
+    const totalDeps = data.ytd_total_deposits
+                   ?? months.reduce((s, m) => s + (m.perf_detail?.deposits    || 0), 0);
+    const totalWdrs = data.ytd_total_withdrawals
+                   ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
 
     let begBalance = data.ytd_beg_balance ?? 0;
     if (!begBalance && months.length) begBalance = months[0].beg_balance || 0;
     if (!begBalance && months.length) {
-      // Modified Dietz inversion on January (first non-skip month)
       const m0  = months.find(m => !m.skip) || months[0];
-      const R   = (m0.return_pct || 0) / 100;        // Jan Mod. Dietz return as decimal
-      const EMV = m0.end_balance || 0;                 // Jan ending balance
+      const R   = (m0.return_pct || 0) / 100;
+      const EMV = m0.end_balance || 0;
       const CF  = (m0.perf_detail?.deposits    || 0)
-                - (m0.perf_detail?.withdrawals || 0);  // net inflow (positive = money in)
+                - (m0.perf_detail?.withdrawals || 0);
       const denom = 1 + R;
       if (EMV > 0 && Math.abs(denom) > 0.0001) {
         begBalance = (EMV - CF * (1 + 0.5 * R)) / denom;
@@ -3954,11 +4244,8 @@
       console.log('  Source month :', m0.label || m0.month);
       console.log('  R (return)   :', (R * 100).toFixed(4) + '%');
       console.log('  EMV (end bal):', EMV.toLocaleString());
-      console.log('  CF (net flow):', CF.toLocaleString(), '  (deps −', (m0.perf_detail?.deposits||0).toLocaleString(), '  wdrs −', (m0.perf_detail?.withdrawals||0).toLocaleString(), ')');
+      console.log('  CF (net flow):', CF.toLocaleString());
       console.log('  BMV derived  :', begBalance.toFixed(2));
-      console.log('  Verify R     :', begBalance > 0
-        ? (((EMV - begBalance - CF) / (begBalance + 0.5 * CF)) * 100).toFixed(4) + '% ← should equal R above'
-        : 'n/a');
       console.groupEnd();
     } else {
       console.log('[DGA] YTD begBalance source:', data.ytd_beg_balance != null ? 'server field' : (months[0]?.beg_balance ? 'mc_monthly[0]' : 'n/a'), '→', begBalance);
@@ -3967,54 +4254,25 @@
     // Cache for re-use when positions load or benchmark changes
     _acctChartData = { mc, spy, mdPct, begBalance, totalDeps, totalWdrs, benchYtd: spyPct };
 
-    const selOpts = BENCH_OPTIONS.map(o =>
-      `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
-    ).join('');
+    // Populate compact table cells (renderAcctMeta renders the skeleton)
+    const benchVal = document.getElementById('acd-bench-val');
+    if (benchVal) { benchVal.textContent = fmtP(spyPct); benchVal.style.cssText = 'font-weight:700;' + cls(spyPct); }
+    const mdEl = document.getElementById('acd-md-val');
+    if (mdEl) { mdEl.textContent = fmtP(mdPct); mdEl.style.cssText = 'font-weight:700;' + cls(mdPct); }
 
-    elP.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-        <div class="fd-tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));flex:1;margin:0;">
-
-          <!-- Investment return — computed from live positions MV -->
-          <div class="fd-tile">
-            <div class="fd-tile-label">YTD RETURN</div>
-            <div class="fd-tile-val" id="acd-pos-ret-val" style="color:var(--mid);">—</div>
-            <div class="fd-tile-sub">from positions · matches Fidelity</div>
-          </div>
-
-          <!-- Benchmark -->
-          <div class="fd-tile" id="acd-bench-tile">
-            <div class="fd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div>
-            <div class="fd-tile-val" id="acd-bench-val" style="${cls(spyPct)}">${fmtP(spyPct)}</div>
-          </div>
-
-          <!-- Alpha (investment rtn − benchmark) -->
-          <div class="fd-tile">
-            <div class="fd-tile-label">ALPHA</div>
-            <div class="fd-tile-val" id="acd-alpha-val" style="color:var(--mid);">—</div>
-            <div class="fd-tile-sub">vs ${_acctBenchKey}</div>
-          </div>
-
-          <!-- Mod. Dietz — secondary reference -->
-          <div class="fd-tile" style="opacity:0.65;">
-            <div class="fd-tile-label">YTD (MOD. DIETZ)</div>
-            <div class="fd-tile-val" style="font-size:18px;${cls(mdPct)}">${fmtP(mdPct)}</div>
-            <div class="fd-tile-sub">cash-flow weighted</div>
-          </div>
-        </div>
-
-        <div style="display:flex;flex-direction:column;gap:4px;min-width:170px;">
-          <label style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;">BENCHMARK</label>
-          <select id="acd-bench-select" style="background:var(--navy-mid);border:1px solid var(--panel-edge);color:white;border-radius:6px;padding:5px 8px;font-size:12px;height:32px;cursor:pointer;">
-            ${selOpts}
-          </select>
-        </div>
-      </div>`;
-
-    document.getElementById('acd-bench-select')?.addEventListener('change', e => {
-      _acctBenchKey = e.target.value;
-      if (_acctChartData) fetchBenchAndRedraw(_acctChartData.mc, _acctChartData.spy);
-    });
+    // Wire benchmark selector (embedded in the compact table)
+    const sel = document.getElementById('acd-bench-select');
+    if (sel) {
+      sel.value = _acctBenchKey;
+      sel.addEventListener('change', function(e) {
+        _acctBenchKey = e.target.value;
+        const lbl = document.getElementById('acd-bench-label');
+        if (lbl) lbl.textContent = _acctBenchKey + ' YTD';
+        const sub = document.getElementById('acd-alpha-sub');
+        if (sub) sub.textContent = 'vs ' + _acctBenchKey;
+        if (_acctChartData) fetchBenchAndRedraw(_acctChartData.mc, _acctChartData.spy);
+      });
+    }
 
     // Populate investment-return tile if positions are already loaded
     _updatePositionsReturnTile();
@@ -4040,7 +4298,7 @@
       bv.textContent = benchYtd != null ? (benchYtd >= 0 ? '+' : '') + benchYtd.toFixed(2) + '%' : '—';
       bv.style.color = benchYtd != null ? (benchYtd >= 0 ? 'var(--green)' : 'var(--red)') : '';
     }
-    const alSub = document.querySelector('#acd-perf-tiles .fd-tile:nth-child(3) .fd-tile-sub');
+    const alSub = document.getElementById('acd-alpha-sub');
     if (alSub) alSub.textContent = 'vs ' + benchLabel;
     // Store updated benchYtd and recompute alpha via positions-return
     if (_acctChartData) _acctChartData.benchYtd = benchYtd;
@@ -4075,7 +4333,7 @@
           </summary>
           <div style="position:relative;padding:0 12px 8px;">
             <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
-            <div id="acd-bar-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+            <div id="acd-bar-tooltip" style="display:none;position:absolute;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
           </div>
           <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
             <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
@@ -4132,19 +4390,19 @@
     const y0  = yAt(0);
 
     // Grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
     ctx.lineWidth = 1;
     [-yRange * 0.5, 0, yRange * 0.5, yRange].forEach(v => {
       const y = yAt(v);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillStyle = '#64748b';
       ctx.font = '9.5px -apple-system,sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', padL - 5, y + 3.5);
     });
 
     // Zero line
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
 
@@ -4217,7 +4475,7 @@
     });
 
     // X labels
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle = '#475569';
     ctx.font = '10px -apple-system,sans-serif';
     ctx.textAlign = 'center';
     pts.forEach((p, i) => {
@@ -4245,7 +4503,7 @@
       let html = `<div style="font-weight:800;font-size:12px;color:var(--blue);margin-bottom:6px;">${p.label} ${curYear}</div>`;
       if (p.skip) {
         html += `<div style="color:#f59e0b;font-size:11px;">N/A — Custodial Transfer</div>`;
-        html += `<div style="color:rgba(255,255,255,0.5);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from YTD calculation.</div>`;
+        html += `<div style="color:var(--mid);font-size:10px;margin-top:4px;">Assets moved between custodians this month; excluded from YTD calculation.</div>`;
       } else {
         const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
         html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;">`;
@@ -4258,7 +4516,7 @@
           html += `<span>Alpha</span><span style="color:${alpha>=0?'#4ade80':'#f87171'};">${fmtM(alpha)}</span></div>`;
         }
         if (movers.length) {
-          html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
+          html += `<div style="font-size:10px;color:var(--mid);margin-bottom:4px;letter-spacing:0.5px;">TOP CONTRIBUTORS</div>`;
           movers.forEach(m => {
             const mc = m.dollar_gain >= 0 ? '#4ade80' : '#f87171';
             html += `<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:2px;">`;
@@ -4268,14 +4526,14 @@
         if (pd) {
           const deps = pd.deposits, with_ = pd.withdrawals, netFlow = pd.net_flow;
           if (deps || with_) {
-            html += `<div style="font-size:10px;color:rgba(255,255,255,0.5);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
+            html += `<div style="font-size:10px;color:var(--mid);margin:8px 0 4px;letter-spacing:0.5px;">CASH FLOWS</div>`;
             if (deps) html += `<div style="display:flex;justify-content:space-between;"><span>Deposits</span><span style="color:#4ade80;">${fmtC(deps)}</span></div>`;
             if (with_) html += `<div style="display:flex;justify-content:space-between;"><span>Withdrawals</span><span style="color:#f87171;">${fmtC(with_)}</span></div>`;
             if (netFlow != null) html += `<div style="display:flex;justify-content:space-between;"><span>Net Flow</span><span>${fmtC(netFlow)}</span></div>`;
             if (pd.advisory_fees) html += `<div style="display:flex;justify-content:space-between;"><span>Advisory Fee</span><span style="color:#f87171;">${fmtC(pd.advisory_fees)}</span></div>`;
           }
         }
-        if (p.exact) html += `<div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:6px;">✓ Exact Fidelity data</div>`;
+        if (p.exact) html += `<div style="font-size:9px;color:var(--dim);margin-top:6px;">✓ Exact Fidelity data</div>`;
       }
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
@@ -4315,7 +4573,7 @@
       return `
         <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
           <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${col};min-width:52px;text-align:right;">${fmtP(val)}</span>
-          <div style="width:72px;height:10px;background:rgba(255,255,255,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
+          <div style="width:72px;height:10px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
             <div style="width:${pct.toFixed(1)}%;height:100%;background:${col};border-radius:3px;float:${dir};opacity:0.85;"></div>
           </div>
         </div>`;
@@ -4473,12 +4731,12 @@
         <div class="lp-roster-row" data-lp-id="${u.lp_id}" style="width:100%;">
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--panel-edge);">
             <div style="flex:0 0 260px;min-width:0;text-align:left;">
-              <div style="font-weight:800;color:#e0e8f0;font-size:13px;">${u.name}</div>
+              <div style="font-weight:800;color:#0f172a;font-size:13px;">${u.name}</div>
               <div style="color:var(--mid);font-size:11px;margin-top:1px;">${u.email}</div>
             </div>
             <div style="flex:1;"></div>
             <span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;flex-shrink:0;
-              ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(255,255,255,0.06);color:var(--mid)'}">${u.role.toUpperCase()}</span>
+              ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(0,0,0,0.05);color:var(--mid)'}">${u.role.toUpperCase()}</span>
             ${u.must_change_password ? '<span style="font-size:9px;font-weight:700;color:var(--amber);flex-shrink:0;">PW RESET</span>' : ''}
             <div style="font-size:10px;color:var(--mid);flex-shrink:0;">${assignSummary}</div>
             ${isLP ? `<button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>` : ''}
@@ -4498,7 +4756,7 @@
                     <input type="checkbox" ${checked} data-fund-check="${f.fund_name}" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
                     <span style="font-size:11px;color:#d0dae8;flex:1;">${f.fund_name}</span>
                     <input type="text" value="${alias}" placeholder="alias" data-fund-alias="${f.fund_name}"
-                      style="width:60px;height:22px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:10px;padding:0 6px;outline:none;">
+                      style="width:60px;height:22px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:10px;padding:0 6px;outline:none;">
                   </div>`;
                 }).join('') : '<div style="font-size:11px;color:var(--dim);font-style:italic;">No LP funds created yet.</div>'}
               </div>
@@ -4520,9 +4778,9 @@
             </div>
 
             <!-- Password reset + Save row -->
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--panel-edge);">
               <input type="text" placeholder="New password (optional)" data-lp-pw-input="${u.lp_id}"
-                style="width:180px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:white;font-size:11px;padding:0 9px;outline:none;">
+                style="width:180px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:11px;padding:0 9px;outline:none;">
               <button class="tab-btn sm" style="font-size:9px;padding:0 12px;" data-lp-save="${u.lp_id}">Save Changes</button>
               <span data-lp-save-msg="${u.lp_id}" style="font-size:10px;"></span>
             </div>
@@ -4872,11 +5130,84 @@
   $miniAddBtn?.addEventListener('click', addMiniTicker);
   $miniInput?.addEventListener('keypress', (e) => { if (e.key === 'Enter') addMiniTicker(); });
 
-  // SCAN NOW → switch to Scan tab and trigger the scan
-  $miniBtn?.addEventListener('click', () => {
-    showTab('scan');
-    setTimeout(() => document.getElementById('run-scan-btn')?.click(), 350);
+  // SCAN NOW → run watchlist scan inline in Market Scan panel
+  $miniBtn?.addEventListener('click', async () => {
+    if ($miniBtn.disabled) return;
+    $miniBtn.disabled = true; $miniBtn.textContent = '⏳…';
+    try {
+      const r = await window.dgaFetch('/api/scan', { method: 'POST' });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+      const job = await r.json();
+      const badge = document.getElementById('mini-scan-badge');
+      _pollScanJob(job.job_id,
+        function(tk, res) {
+          if (badge) badge.textContent = (job.tickers_done?.length || '?') + '/' + (job.tickers?.length || '?');
+        },
+        function(jp) {
+          $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
+          const ts = jp.scanned_at ? fmtDate(jp.scanned_at) : 'done';
+          if (badge) badge.textContent = Object.keys(jp.results||{}).length + ' tickers · ' + ts;
+        },
+        function(err) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
+      );
+    } catch(e) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
   });
+
+  // ── Ticker Scan widget ────────────────────────────────────────
+  (function() {
+    const $tsInput  = document.getElementById('tscan-input');
+    const $tsBtn    = document.getElementById('tscan-btn');
+    const $tsStatus = document.getElementById('tscan-status');
+    const $tsResult = document.getElementById('tscan-result');
+    const $tsBadge  = document.getElementById('tscan-badge');
+    if (!$tsBtn) return;
+
+    function _tsSetStatus(msg, color) {
+      $tsStatus.textContent = msg;
+      $tsStatus.style.color = color || 'var(--dim)';
+    }
+
+    async function runTickerScan() {
+      const ticker = ($tsInput.value || '').trim().toUpperCase().replace(/[^A-Z.0-9]/g, '');
+      if (!ticker) { _tsSetStatus('Enter a ticker first.', 'var(--red)'); return; }
+      $tsBtn.disabled = true; $tsBtn.textContent = '⏳…';
+      _tsSetStatus('Scanning ' + ticker + '…', 'var(--dim)');
+      $tsResult.innerHTML = '';
+      if ($tsBadge) { $tsBadge.style.display = ''; $tsBadge.textContent = ticker; }
+      try {
+        const r = await window.dgaFetch('/api/scan/ticker', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ticker}),
+        });
+        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+        const job = await r.json();
+
+        _pollScanJob(job.job_id,
+          function(tk, res) {
+            _renderOneScanResult($tsResult, tk, res);
+            _tsSetStatus('', '');
+            $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
+          },
+          function(jp) {
+            const ts = jp.scanned_at ? fmtDate(jp.scanned_at) : '';
+            if (ts) _tsSetStatus('Scanned ' + ts, 'var(--dim)');
+          },
+          function(err) {
+            $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
+            _tsSetStatus('❌ ' + err, 'var(--red)');
+          }
+        );
+      } catch(e) {
+        $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
+        _tsSetStatus('❌ ' + e.message, 'var(--red)');
+      }
+    }
+
+    $tsBtn.addEventListener('click', runTickerScan);
+    $tsInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') runTickerScan(); });
+    $tsInput.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+  })();
 
   // Check if Gamma API key is configured, update label
   (async () => {
@@ -5067,7 +5398,6 @@
   loadIndices();
   loadWatchlist();
   loadReports();
-  loadLastPortfolio();
   loadTrendingTickers();
   loadGPMarketPulse();
   loadMiniScanChips();
@@ -5076,14 +5406,159 @@
   setInterval(loadWatchlist,        60_000);   // watchlist: every 60s
   setInterval(loadTrendingTickers,  60_000);   // trending: every 60s
   setInterval(loadGPMarketPulse,   900_000);   // pulse: every 15 min
+
+  // ── Dashboard drag-and-drop ──────────────────────────────────────
+  (function _initDashboard() {
+    var RESEARCH = document.getElementById('tab-research');
+    if (!RESEARCH) return;
+    var COL_SELECTORS = ['.col-left', '.col-center', 'aside.col-right'];
+
+    var dragging    = null;   // the panel being dragged
+    var placeholder = null;  // blue-dashed drop target div
+
+    function _makePlaceholder(h) {
+      var el = document.createElement('div');
+      el.className = 'dash-placeholder';
+      el.style.height = (h || 60) + 'px';
+      return el;
+    }
+
+    function _clearOverCls() {
+      COL_SELECTORS.forEach(function(s) {
+        var c = RESEARCH.querySelector(s);
+        if (c) c.classList.remove('dash-over');
+      });
+    }
+
+    // Returns the panel that clientY is closest to inside col, plus 'before'/'after'
+    function _getInsertTarget(e, col) {
+      var panels = Array.from(col.querySelectorAll(':scope > section.panel[data-wid]'));
+      for (var i = 0; i < panels.length; i++) {
+        var p = panels[i];
+        if (p === dragging || p === placeholder) continue;
+        var rect = p.getBoundingClientRect();
+        if (e.clientY <= rect.top + rect.height / 2) {
+          return { ref: p, where: 'before' };
+        }
+        if (e.clientY <= rect.bottom) {
+          return { ref: p, where: 'after' };
+        }
+      }
+      return { ref: null, where: 'end' };
+    }
+
+    function _placeholderTo(col, target) {
+      if (!placeholder) return;
+      if (target.ref) {
+        if (target.where === 'before') {
+          col.insertBefore(placeholder, target.ref);
+        } else {
+          col.insertBefore(placeholder, target.ref.nextSibling);
+        }
+      } else {
+        col.appendChild(placeholder);
+      }
+    }
+
+    function _saveDashLayout() {
+      var layout = {};
+      COL_SELECTORS.forEach(function(s) {
+        var col = RESEARCH.querySelector(s);
+        if (!col) return;
+        layout[s] = Array.from(col.querySelectorAll(':scope > section.panel[data-wid]'))
+                         .map(function(p) { return p.dataset.wid; });
+      });
+      try { localStorage.setItem('dgaDashLayout_v2', JSON.stringify(layout)); } catch(e) {}
+    }
+
+    function _restoreDashLayout() {
+      var saved;
+      try { saved = JSON.parse(localStorage.getItem('dgaDashLayout_v2') || 'null'); } catch(e) {}
+      if (!saved) return;
+      COL_SELECTORS.forEach(function(s) {
+        var col = RESEARCH.querySelector(s);
+        if (!col) return;
+        var wids = saved[s];
+        if (!Array.isArray(wids)) return;
+        wids.forEach(function(wid) {
+          var panel = RESEARCH.querySelector('section.panel[data-wid="' + wid + '"]');
+          if (panel && panel.parentNode !== col) col.appendChild(panel);
+        });
+      });
+    }
+
+    function _initPanel(panel) {
+      if (panel.dataset.dashInit) return;
+      panel.dataset.dashInit = '1';
+      panel.setAttribute('draggable', 'true');
+
+      panel.addEventListener('dragstart', function(e) {
+        dragging = panel;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', panel.dataset.wid || '');
+        placeholder = _makePlaceholder(panel.offsetHeight);
+        setTimeout(function() { panel.classList.add('dash-dragging'); }, 0);
+      });
+
+      panel.addEventListener('dragend', function() {
+        panel.classList.remove('dash-dragging');
+        _clearOverCls();
+        if (placeholder && placeholder.parentNode) {
+          placeholder.parentNode.insertBefore(dragging, placeholder);
+          placeholder.remove();
+        }
+        placeholder = null;
+        dragging = null;
+        _saveDashLayout();
+      });
+    }
+
+    // Wire each column to accept drops
+    COL_SELECTORS.forEach(function(s) {
+      var col = RESEARCH.querySelector(s);
+      if (!col) return;
+
+      col.addEventListener('dragover', function(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        _clearOverCls();
+        col.classList.add('dash-over');
+        var target = _getInsertTarget(e, col);
+        _placeholderTo(col, target);
+      });
+
+      col.addEventListener('dragleave', function(e) {
+        // Only clear if leaving the column entirely (not entering a child)
+        if (!col.contains(e.relatedTarget)) {
+          col.classList.remove('dash-over');
+        }
+      });
+
+      col.addEventListener('drop', function(e) {
+        e.preventDefault();
+        // dragend handles the actual DOM move
+      });
+    });
+
+    // Init all panels that currently exist
+    RESEARCH.querySelectorAll('section.panel[data-wid]').forEach(_initPanel);
+
+    // Restore saved layout, then init any newly placed panels
+    _restoreDashLayout();
+
+    // Expose for external callers
+    window._dashInitPanel   = _initPanel;
+    window._saveDashLayout  = _saveDashLayout;
+  })();
 })();
 </script>
 
 <!-- ── Report Viewer Modal ─────────────────────────────────── -->
 <div id="report-modal" style="display:none;position:fixed;inset:0;background:rgba(0,10,20,0.88);z-index:200;overflow-y:auto;padding:24px 16px;">
   <div style="max-width:860px;margin:0 auto;background:var(--panel);border-radius:12px;border:1px solid var(--panel-edge);box-shadow:0 12px 48px rgba(0,0,0,0.65);">
-    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid rgba(255,255,255,0.07);flex-wrap:wrap;">
-      <span id="rm-ticker" style="font-size:16px;font-weight:800;color:#e0e8f0;letter-spacing:0.8px;"></span>
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 18px 11px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
+      <span id="rm-ticker" style="font-size:16px;font-weight:800;color:#0f172a;letter-spacing:0.8px;"></span>
       <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:4px;"></span>
       <div style="margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
@@ -5093,7 +5568,7 @@
         <button id="rm-pptx-btn"
            style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:5px 13px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
         <button id="rm-close"
-          style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#c0cfe0;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
+          style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);color:#475569;border-radius:5px;padding:4px 13px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
       </div>
     </div>
     <div id="rm-body" class="md-body" style="padding:20px 22px;max-height:78vh;overflow-y:auto;"></div>
