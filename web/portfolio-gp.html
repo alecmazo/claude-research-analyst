@@ -4102,10 +4102,10 @@
               '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
-            '<span style="display:flex;align-items:center;gap:6px;flex-direction:column;align-items:flex-end;" onclick="event.stopPropagation();">' +
-              '<span style="display:flex;gap:6px;">' +
-                '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
-                '<button class="tab-btn sm" id="acd-email-diag-btn" style="font-size:10px;padding:0 8px;background:var(--navy-mid);color:#475569;border:1px solid var(--panel-edge);" title="Diagnose email transport">🔍</button>' +
+            '<span style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;" onclick="event.stopPropagation();">' +
+              '<span style="display:flex;gap:6px;align-items:center;">' +
+                '<input id="acd-email-to" type="email" placeholder="recipient@email.com" style="height:28px;padding:0 8px;font-size:11px;border:1px solid var(--panel-edge);border-radius:5px;background:#fff;color:#1e293b;width:190px;outline:none;" />' +
+                '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;height:28px;">📧 Send</button>' +
               '</span>' +
               '<div id="acd-rebalance-email-status" style="font-size:9px;min-height:12px;text-align:right;max-width:320px;line-height:1.4;"></div>' +
             '</span>' +
@@ -4147,73 +4147,50 @@
 
     // Wire email button
     const emailBtn    = document.getElementById('acd-rebalance-email-btn');
-    const emailDiagBtn = document.getElementById('acd-email-diag-btn');
+    const emailToInput = document.getElementById('acd-email-to');
     const emailStatus = document.getElementById('acd-rebalance-email-status');
-    function _setEmailStatus(msg, color, isHtml) {
-      if (emailStatus) {
-        if (isHtml) emailStatus.innerHTML = msg;
-        else emailStatus.textContent = msg;
-        emailStatus.style.color = color || 'var(--dim)';
-      }
+    function _setEmailStatus(msg, color) {
+      if (emailStatus) { emailStatus.textContent = msg; emailStatus.style.color = color || 'var(--dim)'; }
+    }
+    // Pre-fill with GP's email if available
+    if (emailToInput && window.DGA_USER && window.DGA_USER.email) {
+      emailToInput.value = window.DGA_USER.email;
     }
     if (emailBtn) {
       emailBtn.addEventListener('click', async function() {
+        const toAddr = (emailToInput ? emailToInput.value : '').trim();
+        if (!toAddr || !toAddr.includes('@')) {
+          _setEmailStatus('Enter a valid email address first.', 'var(--red)');
+          if (emailToInput) emailToInput.focus();
+          return;
+        }
         emailBtn.disabled = true; emailBtn.textContent = '⏳ Sending…';
-        _setEmailStatus('Connecting…', 'var(--dim)');
+        _setEmailStatus('', '');
         try {
-          const r2 = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email', {method:'POST'});
+          const r2 = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: toAddr }),
+          });
           const d2 = await r2.json();
-          if (!r2.ok) {
-            const detail = d2.detail || ('HTTP ' + r2.status);
-            throw new Error(detail);
-          }
-          const transport = d2.transport || 'unknown';
-          const sentTo    = d2.sent_to   || '';
-          emailBtn.textContent = '📧 Email GP';
+          if (!r2.ok) throw new Error(d2.detail || ('HTTP ' + r2.status));
+          emailBtn.textContent = '📧 Send';
           emailBtn.disabled = false;
-          emailBtn.style.color = '';
-          _setEmailStatus('✓ Sent via ' + transport + (sentTo ? ' → ' + sentTo : ''), 'var(--green)');
+          _setEmailStatus('✓ Sent → ' + (d2.sent_to || toAddr), 'var(--green)');
           setTimeout(function(){ _setEmailStatus('', ''); }, 8000);
         } catch(e) {
           emailBtn.disabled = false;
-          emailBtn.textContent = '📧 Email GP';
+          emailBtn.textContent = '📧 Send';
           _setEmailStatus('❌ ' + e.message, 'var(--red)');
         }
       });
+      // Also send on Enter in the input
+      if (emailToInput) emailToInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') emailBtn.click();
+      });
     }
 
-    // Wire diagnose button — hits /api/v2/gp/email-diag and shows readable summary
-    if (emailDiagBtn) {
-      emailDiagBtn.addEventListener('click', async function() {
-        emailDiagBtn.disabled = true; emailDiagBtn.textContent = '⏳';
-        _setEmailStatus('Running diagnostics…', 'var(--dim)');
-        try {
-          const rd = await window.dgaFetch('/api/v2/gp/email-diag');
-          const dd = await rd.json();
-          // Format concise readable output
-          const env = dd.env || {};
-          const ts  = dd.resend_test_send || {};
-          const domains = (dd.resend_domains_summary || []);
-          const domainStr = Array.isArray(domains)
-            ? (domains.length ? domains.map(d => d.name + ':' + d.status).join(', ') : 'none')
-            : String(domains);
-          const testStr = ts.ok === true
-            ? '✅ test send OK → ' + ts.to
-            : ts.ok === false
-              ? '❌ test send failed (status ' + ts.http_status + '): ' + JSON.stringify(ts.body || ts.error || '').slice(0, 120)
-              : ts.skipped || 'no test';
-          _setEmailStatus(
-            '<b>Resend key:</b> ' + (env.RESEND_API_KEY||'?') + '<br>' +
-            '<b>From:</b> ' + (env.RESEND_FROM||'?') + '<br>' +
-            '<b>Domains:</b> ' + domainStr + '<br>' +
-            '<b>Test send:</b> ' + testStr,
-            '#334155', true
-          );
-          console.log('[email-diag]', dd);
-        } catch(e) {
-          _setEmailStatus('Diag error: ' + e.message, 'var(--red)');
-        } finally {
-          emailDiagBtn.disabled = false; emailDiagBtn.textContent = '🔍';
+    if (false) { // diag button removed
         }
       });
     }

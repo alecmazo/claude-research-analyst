@@ -7068,7 +7068,7 @@ async def run_account_rebalance(fund_id: str, request: Request):
 
 @app.post("/api/v2/gp/fund/{fund_id}/rebalance/email")
 async def email_account_rebalance(fund_id: str, request: Request):
-    """Email the rebalance summary for a managed account to the GP."""
+    """Email the rebalance summary for a managed account to a specified address."""
     claims = getattr(request.state, "auth_claims", None)
     if not claims or claims.get("role") != "gp":
         _require_fund_token(request)
@@ -7078,14 +7078,20 @@ async def email_account_rebalance(fund_id: str, request: Request):
     if not data or not data.get("ok"):
         raise HTTPException(status_code=404, detail="No rebalance found — run one first")
 
-    # Determine GP email
+    # Determine recipient — prefer explicitly provided address from request body
     to_addr = ""
-    if claims:
+    try:
+        body_raw = await request.body()
+        if body_raw:
+            body_json = json.loads(body_raw)
+            to_addr = (body_json.get("to") or "").strip()
+    except Exception:
+        pass
+    # Fall back to GP's auth email
+    if not to_addr and claims:
         to_addr = claims.get("email", "")
-    if not to_addr:
-        to_addr = os.environ.get("GMAIL_USER", "")
     if not to_addr or "@" not in to_addr:
-        raise HTTPException(status_code=422, detail="Could not determine GP email address")
+        raise HTTPException(status_code=422, detail="Provide a valid recipient email address")
 
     run_date = data.get("run_at", "")[:10] if data.get("run_at") else "—"
     evImprove = (data.get("suggested_ev") or 0) - (data.get("current_ev") or 0)
