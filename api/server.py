@@ -6732,117 +6732,53 @@ async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
 
 
 def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
-    """Send a simple HTML email using the same transport as the analyst module."""
-    import smtplib, ssl as _ssl
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
+    """Send HTML email via Resend API (Railway-compatible — no SMTP needed)."""
+    import urllib.request as _urlreq, urllib.error as _urlerr
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    from_addr = os.environ.get("GMAIL_USER", "noreply@dgacapital.com")
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg.attach(MIMEText(html_body, "html"))
+    resend_key  = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
 
-    resend_error = None
-    smtp_error   = None
+    if not resend_key:
+        return {"ok": False, "error": "RESEND_API_KEY not set in Railway environment variables"}
 
-    # Try Resend first (Railway compatible — no outbound SMTP needed)
-    resend_key      = os.environ.get("RESEND_API_KEY", "")
-    resend_from     = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
-    # RESEND_ACCOUNT_EMAIL: the email address you signed up to Resend with.
-    # Resend test-mode (no verified domain) only allows sending to this address.
-    # Set this in Railway env vars to make email work without domain verification.
-    resend_acct_email = os.environ.get("RESEND_ACCOUNT_EMAIL", "").strip()
+    payload = json.dumps({
+        "from":    resend_from,
+        "to":      [to_addr],
+        "subject": subject,
+        "html":    html_body,
+    }).encode()
 
-    if resend_key:
-        import urllib.request as _urlreq, urllib.error as _urlerr
-
-        def _try_resend(from_addr: str, actual_to: str, reply_to: str | None = None) -> dict:
-            """Attempt one Resend send. Returns result dict."""
-            try:
-                body_dict: dict = {
-                    "from":    from_addr,
-                    "to":      [actual_to],
-                    "subject": subject,
-                    "html":    html_body,
-                }
-                if reply_to:
-                    body_dict["reply_to"] = reply_to
-                payload = json.dumps(body_dict).encode()
-                req = _urlreq.Request(
-                    "https://api.resend.com/emails",
-                    data=payload,
-                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                    method="POST",
-                )
-                with _urlreq.urlopen(req, timeout=15):
-                    note = "" if actual_to == to_addr else f" (forwarded to account email {actual_to})"
-                    return {"ok": True, "transport": "resend", "sent_to": actual_to,
-                            "from": from_addr, "note": note}
-            except _urlerr.HTTPError as _he:
-                body_txt = _he.read().decode("utf-8", errors="replace")
-                return {"ok": False, "code": _he.code, "body": body_txt}
-            except Exception as _e:
-                return {"ok": False, "code": None, "body": str(_e)}
-
-        try:
-            # Attempt 1: send directly to the intended recipient
-            r1 = _try_resend(resend_from, to_addr)
-            if r1.get("ok"):
-                return r1
-
-            if r1.get("code") == 403:
-                # 403/1010 = domain not verified. Resend only allows sending to the
-                # account-owner's email in test mode.
-                # Attempt 2: if RESEND_ACCOUNT_EMAIL is set, send there instead.
-                if resend_acct_email:
-                    r2 = _try_resend(resend_from, resend_acct_email, reply_to=to_addr)
-                    if r2.get("ok"):
-                        return r2
-                    resend_error = (
-                        f"Resend 403 — domain not verified. Tried RESEND_ACCOUNT_EMAIL "
-                        f"({resend_acct_email}) but still got: {r2.get('body','')[:120]}. "
-                        "Verify dgacapital.com at resend.com/domains."
-                    )
-                else:
-                    resend_error = (
-                        f"Resend HTTP 403 — domain not verified (error code: 1010). "
-                        "Quick fix: set RESEND_ACCOUNT_EMAIL in Railway env vars to the email "
-                        "you used to sign up at resend.com — emails will be delivered there. "
-                        "Permanent fix: verify your sending domain at resend.com/domains."
-                    )
-            else:
-                resend_error = f"Resend HTTP {r1.get('code','?')}: {r1.get('body','')[:200]}"
-        except Exception as _e:
-            resend_error = f"Resend setup error: {_e}"
-    else:
-        resend_error = "RESEND_API_KEY not set"
-
-    # Gmail SMTP fallback (note: Railway blocks outbound SMTP — use Resend instead)
-    user = os.environ.get("GMAIL_USER", "")
-    pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
-    if user and pwd:
-        try:
-            ctx = _ssl.create_default_context()
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=15) as s:
-                s.login(user, pwd)
-                s.send_message(msg)
-            return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr}
-        except OSError as _e:
-            if getattr(_e, "errno", None) in (101, 111, 113):
-                smtp_error = "Gmail SMTP blocked (Railway does not allow outbound SMTP — use RESEND_API_KEY instead)"
-            else:
-                smtp_error = f"Gmail SMTP failed: {_e}"
-        except Exception as _e:
-            smtp_error = f"Gmail SMTP failed: {_e}"
-    else:
-        smtp_error = "GMAIL_USER or GMAIL_APP_PASSWORD not set (Railway blocks SMTP — set RESEND_API_KEY)"
-
-    parts = []
-    if resend_error: parts.append(f"Resend: {resend_error}")
-    if smtp_error:   parts.append(f"SMTP: {smtp_error}")
-    return {"ok": False, "error": " | ".join(parts) or "No email transport configured"}
+    try:
+        req = _urlreq.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {resend_key}",
+                "Content-Type":  "application/json",
+            },
+            method="POST",
+        )
+        with _urlreq.urlopen(req, timeout=20) as resp:
+            resp_body = resp.read().decode("utf-8", errors="replace")
+        return {"ok": True, "transport": "resend", "sent_to": to_addr, "from": resend_from}
+    except _urlerr.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        # Surface the raw Resend error so it's actionable
+        hint = ""
+        if e.code == 403:
+            hint = (
+                " — The API key in Railway (RESEND_API_KEY) may belong to a different "
+                "Resend workspace than where dgacapital.com is verified. "
+                "Go to resend.com → API Keys, create a new key in the correct workspace, "
+                "and update RESEND_API_KEY in Railway."
+            )
+        elif e.code == 422:
+            hint = " — Invalid from/to address or missing required field."
+        elif e.code == 401:
+            hint = " — RESEND_API_KEY is invalid or revoked. Generate a new one at resend.com/api-keys."
+        return {"ok": False, "error": f"Resend HTTP {e.code}: {body[:300]}{hint}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Resend request failed: {e}"}
 
 
 @app.get("/api/v2/gp/email-diag")
