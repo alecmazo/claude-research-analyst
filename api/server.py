@@ -2545,6 +2545,14 @@ def gp_fund_detail(fund_id: str, request: Request):
         raise HTTPException(403, "GP access required")
     if not _PSYCOPG2_OK:
         raise HTTPException(503, "psycopg2 not available")
+
+    # ── 25s response cache (per fund_id, GP-scoped) ────────────────────────
+    cache_key = ("gp_fund_detail", "gp", fund_id)
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
+
+    _t0 = time.time()
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("SELECT id, name, short_name, fund_type, inception_date, status, mgmt_fee_pct, carry_pct, hurdle_pct FROM funds WHERE id = %s", (fund_id,))
@@ -2606,7 +2614,7 @@ def gp_fund_detail(fund_id: str, request: Request):
             using_live_nav = market_nav > 0
             effective_nav  = (market_nav if using_live_nav else None) or snap_nav
 
-            return {
+            result = {
                 "fund_id":        fund_id,
                 "fund_name":      fund["name"],
                 "short_name":     fund["short_name"],
@@ -2631,6 +2639,9 @@ def gp_fund_detail(fund_id: str, request: Request):
                 ),
                 "ytd_pct":        ytd_pct_val,
             }
+            print(f"[perf] gp_fund_detail {fund_id[:8]} {time.time()-_t0:.2f}s")
+            _user_cache_put(cache_key, result)
+            return result
     except HTTPException:
         raise
     except Exception as exc:
@@ -5459,6 +5470,12 @@ async def fund_list(request: Request, fund_type: str = None):
     N-sequential-query loops.
     """
     _require_fund_token(request)
+    # 25s response cache — fund list is identical for any caller
+    resp_cache_key = ("fund_list", "fund", str(fund_type or "all"))
+    _cached = _user_cache_get(resp_cache_key)
+    if _cached is not None:
+        return _cached
+    _t0 = time.time()
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -5726,6 +5743,8 @@ async def fund_list(request: Request, fund_type: str = None):
                     "ytd_pos_pct":    ytd_pos_pct,          # positions-based, matches Fidelity
                     "market_nav":     round(market_nav_val, 2) if market_nav_val > 0 else None,
                 })
+            print(f"[perf] fund_list ({fund_type or 'all'}) {time.time()-_t0:.2f}s ({len(result)} funds)")
+            _user_cache_put(resp_cache_key, result)
             return result
     finally:
         conn.close()
@@ -5964,6 +5983,13 @@ async def fund_lps(request: Request, fund_id: str = None):
 @app.get("/api/fund/positions")
 async def fund_positions(request: Request, fund_id: str = None):
     _require_fund_token(request)
+    # 25s response cache, keyed by fund_id (positions are the same for any
+    # caller — they're fund-scoped, not user-scoped).
+    cache_key = ("fund_positions", "fund", str(fund_id or ""))
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
+    _t0 = time.time()
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -6111,6 +6137,8 @@ async def fund_positions(request: Request, fund_id: str = None):
                     except Exception:
                         pass  # non-fatal fallback
 
+            print(f"[perf] fund_positions {str(fund_id or '')[:8]} {time.time()-_t0:.2f}s ({len(result)} positions)")
+            _user_cache_put(cache_key, result)
             return result
     finally:
         conn.close()
@@ -6168,6 +6196,12 @@ async def fund_waterfall(request: Request, fund_id: str = None):
       2. Approximation from contribution + current NAV (shows warning)
     """
     _require_fund_token(request)
+    # 25s response cache — waterfall is identical for any caller of the same fund
+    cache_key = ("fund_waterfall", "fund", str(fund_id or ""))
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
+    _t0 = time.time()
     from datetime import date as _date
     conn = _fund_conn()
     try:
@@ -6310,7 +6344,7 @@ async def fund_waterfall(request: Request, fund_id: str = None):
                         "nav_after_carry": round(lp_nav_after_carry * share, 2),
                     })
 
-                return {
+                result = {
                     "as_of":                 today.isoformat(),
                     "inception_date":        str(inception),
                     "data_source":           "annual_snapshots",
@@ -6337,6 +6371,9 @@ async def fund_waterfall(request: Request, fund_id: str = None):
                     "annual_snapshots":      snapshot_rows_out,
                     "per_lp":                per_lp,
                 }
+                print(f"[perf] fund_waterfall {str(fund_id or '')[:8]} {time.time()-_t0:.2f}s (snapshots path)")
+                _user_cache_put(cache_key, result)
+                return result
 
             else:
                 # ── Approximation (no annual snapshots yet) ───────────────
@@ -6366,7 +6403,7 @@ async def fund_waterfall(request: Request, fund_id: str = None):
                         "nav_after_carry": round(commitment + lp_net * share, 2),
                     })
 
-                return {
+                result = {
                     "as_of":                today.isoformat(),
                     "inception_date":       str(inception),
                     "data_source":          "approximation",
@@ -6387,6 +6424,9 @@ async def fund_waterfall(request: Request, fund_id: str = None):
                     "annual_snapshots":     [],
                     "per_lp":               per_lp,
                 }
+                print(f"[perf] fund_waterfall {str(fund_id or '')[:8]} {time.time()-_t0:.2f}s (approx path)")
+                _user_cache_put(cache_key, result)
+                return result
     finally:
         conn.close()
 
