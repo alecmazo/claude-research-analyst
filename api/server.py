@@ -58,6 +58,34 @@ _PRICE_CACHE_TTL = 900   # seconds
 # Cache for information_schema column checks (avoid slow system-table hits per request)
 _col_exists_cache: dict = {}   # { "table.column": bool }
 
+# ── Per-user response cache for hot read endpoints (TTL: 25 sec) ─────────────
+# Keyed by (endpoint, user_id, role). On a fresh reload the cached JSON is
+# returned instantly — no DB queries, no yfinance calls. Mutating endpoints
+# (NAV save, CSV upload, etc.) call _invalidate_user_cache() to flush.
+_user_resp_cache: dict = {}   # { key_tuple: (payload, fetched_at) }
+_USER_RESP_TTL   = 25         # seconds
+
+def _user_cache_get(key: tuple):
+    hit = _user_resp_cache.get(key)
+    if not hit: return None
+    payload, ts = hit
+    if (time.time() - ts) > _USER_RESP_TTL:
+        _user_resp_cache.pop(key, None)
+        return None
+    return payload
+
+def _user_cache_put(key: tuple, payload):
+    _user_resp_cache[key] = (payload, time.time())
+
+def _invalidate_user_cache(user_id: str | None = None):
+    """Drop cached responses. If user_id is None, flush everything."""
+    if user_id is None:
+        _user_resp_cache.clear()
+        return
+    for k in list(_user_resp_cache.keys()):
+        if len(k) >= 2 and k[1] == user_id:
+            _user_resp_cache.pop(k, None)
+
 def _fetch_prices(symbols: list) -> dict:
     """Return {symbol: last_price} for the given list, using a 15-min cache.
 
@@ -1010,6 +1038,24 @@ async def auth_middleware(request: Request, call_next):
 
     return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
+
+@app.middleware("http")
+async def _invalidate_cache_on_mutation(request: Request, call_next):
+    """Flush the in-memory response cache after any successful mutation on
+    /api/* (POST / PUT / DELETE / PATCH). Keeps the 25s LP-overview cache
+    consistent — freshly-imported data shows up on the next reload without
+    having to wait for natural TTL expiry."""
+    response = await call_next(request)
+    try:
+        if (request.url.path.startswith("/api/")
+                and request.method in ("POST", "PUT", "DELETE", "PATCH")
+                and 200 <= response.status_code < 400):
+            _invalidate_user_cache(None)   # flush all — TTL is small
+    except Exception:
+        pass
+    return response
+
+
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
@@ -1755,6 +1801,13 @@ def lp_me_overview(request: Request):
     role           = claims.get("role", "lp")
     fund_memberships  = claims.get("fund_memberships", {}) or {}
     managed_accts     = claims.get("managed_account_ids", []) or []
+    user_id           = str(claims.get("lp_id") or claims.get("email") or "")
+
+    # ── Hot-response cache: instant on repeat loads within TTL ──────────────
+    cache_key = ("lp_overview", user_id, role)
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
 
     out = {
         "profile": {
@@ -1988,17 +2041,24 @@ def lp_me_overview(request: Request):
                     except Exception:
                         conn.rollback()
                 else:
-                    # LP: each fund needs its own alias — run one small query per fund
-                    # (typically 1-3 funds, so cost is low)
+                    # LP: bulk-fetch every LP row matching (fund_id, alias) in ONE query
+                    # (was N+1 — one query per fund). Build (fund_id, alias_lower) pairs
+                    # then resolve to a Postgres VALUES clause.
+                    pairs = []
                     for f in fund_rows:
                         fname = f["name"]
                         alias = (fund_memberships.get(fname)
                                  or fund_memberships.get(fname.upper())
                                  or fund_memberships.get(fname.lower())
                                  or None)
+                        if alias:
+                            pairs.append((str(f["id"]), alias.strip().lower()))
+                            lp_rows_by_fid[str(f["id"])] = []  # default empty
+                    if pairs:
                         try:
-                            cur.execute("""
-                                SELECT l.legal_name, l.primary_email,
+                            import psycopg2.extras as _pgex
+                            sql = """
+                                SELECT l.fund_id::text, l.legal_name, l.primary_email,
                                        COALESCE(c.commitment, 0) AS commitment_amount
                                   FROM lps l
                                   LEFT JOIN (
@@ -2007,13 +2067,15 @@ def lp_me_overview(request: Request):
                                        WHERE superseded_by IS NULL
                                        GROUP BY lp_id
                                   ) c ON c.lp_id = l.id
-                                 WHERE l.fund_id = %s
-                                   AND LOWER(TRIM(l.legal_name)) = LOWER(%s)
-                            """, (f["id"], alias or ""))
-                            lp_rows_by_fid[str(f["id"])] = cur.fetchall()
+                                  JOIN (VALUES %s) AS m(fid, alias)
+                                       ON l.fund_id::text = m.fid
+                                      AND LOWER(TRIM(l.legal_name)) = m.alias
+                            """
+                            _pgex.execute_values(cur, sql, pairs)
+                            for r in cur.fetchall():
+                                lp_rows_by_fid.setdefault(str(r["fund_id"]), []).append(dict(r))
                         except Exception:
                             conn.rollback()
-                            lp_rows_by_fid[str(f["id"])] = []
 
             # (ytd_cache_by_fid was already loaded above before the symbol pre-warm)
 
@@ -2032,7 +2094,10 @@ def lp_me_overview(request: Request):
                 total_committed_fund = total_committed_by_fid.get(fid, 0.0)
                 market_nav_fund    = mkt_nav_by_fid.get(fid, 0.0)
                 fund_nav_val       = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
-                effective_nav      = fund_nav_val or (market_nav_fund if market_nav_fund > 0 else None)
+                # Prefer LIVE market NAV when positions are loaded; fall back to
+                # the GP-saved snapshot only when no positions are in tax_lots.
+                using_live_nav     = market_nav_fund > 0
+                effective_nav      = (market_nav_fund if using_live_nav else None) or fund_nav_val
 
                 gp_accrued_carry = 0.0
                 last_wf = annual_snap_by_fid.get(fid)
@@ -2061,7 +2126,14 @@ def lp_me_overview(request: Request):
                     "gp_accrued_carry":   round(gp_accrued_carry, 2) if gp_accrued_carry else None,
                     "lp_nav_after_carry": round(lp_nav_after_carry, 2) if lp_nav_after_carry else None,
                     "stake_value":        stake_value,
-                    "fund_nav_as_of":     snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    # Only return an "as of" date when we are actually showing
+                    # the GP-saved snapshot. When the live market NAV is in use,
+                    # the frontend renders "Live from positions" instead.
+                    "fund_nav_as_of":     (
+                        snap["as_of_date"].isoformat()
+                        if (not using_live_nav) and snap and snap.get("as_of_date")
+                        else None
+                    ),
                 })
 
             # ── Assemble managed accounts ─────────────────────────────
@@ -2103,7 +2175,10 @@ def lp_me_overview(request: Request):
                     acct_ytd_upd = ytd_row["updated_at"].isoformat()[:10] if ytd_row.get("updated_at") else None
 
                 snap_nav           = float(snap["net_nav"]) if snap and snap.get("net_nav") is not None else None
-                effective_acct_nav = snap_nav or (acct_market_nav if acct_market_nav > 0 else None)
+                # Prefer LIVE market NAV when positions are loaded; fall back
+                # to GP-saved snapshot, then the YTD cache's stored NAV.
+                _acct_using_live   = acct_market_nav > 0
+                effective_acct_nav = (acct_market_nav if _acct_using_live else None) or snap_nav
                 if effective_acct_nav is None and ytd_row and float(ytd_row.get("nav") or 0) > 0:
                     effective_acct_nav = float(ytd_row["nav"])
 
@@ -2113,7 +2188,11 @@ def lp_me_overview(request: Request):
                     "short_name":            a["short_name"],
                     "nav":                   effective_acct_nav,
                     "market_nav":            acct_market_nav if acct_market_nav > 0 else None,
-                    "nav_as_of":             snap["as_of_date"].isoformat() if snap and snap.get("as_of_date") else None,
+                    "nav_as_of":             (
+                        snap["as_of_date"].isoformat()
+                        if (not _acct_using_live) and snap and snap.get("as_of_date")
+                        else None
+                    ),
                     "ytd_pct":               acct_ytd_pct,
                     "ytd_as_of":             acct_ytd_upd,
                     "ytd_beg_balance":       ytd_beg_balance,
@@ -2126,6 +2205,175 @@ def lp_me_overview(request: Request):
     except Exception as exc:
         out["warnings"].append(f"DB query failed: {str(exc)[:200]}")
 
+    # Cache for the next ~25s (per-user). Mutating endpoints flush this via
+    # _invalidate_user_cache(user_id) so freshly-imported data shows up.
+    if not out.get("warnings"):
+        _user_cache_put(cache_key, out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v2 LP — Aggregated portfolio history (annual + live YTD endpoint)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v2/lp/me/portfolio-history")
+def lp_me_portfolio_history(request: Request):
+    """Return aggregated time series for the authenticated LP:
+
+      • fund_stakes:       year-by-year LP stake value across all LP funds,
+                           plus a current ("YTD") live endpoint.
+      • managed_acct_nav:  year-by-year managed-account NAV across all
+                           managed accounts the LP owns, plus a live endpoint.
+
+    Annual values are sourced from:
+      • fund_annual_snapshots.end_nav × (LP commitment / total committed)
+        for fund stakes (best approximation when lp_annual_snapshots is empty).
+      • account_balance_history.data_json (last month of each year) for
+        managed-account NAV.
+
+    The current (live) endpoint is derived from /lp/me/overview values, so
+    chart endpoint == hero-card endpoint, by construction.
+    """
+    claims         = _claims_or_401(request)
+    role           = claims.get("role", "lp")
+    user_id        = str(claims.get("lp_id") or claims.get("email") or "")
+
+    # Reuse the same cache key family so this endpoint is also instant on reload
+    cache_key = ("lp_history", user_id, role)
+    _cached   = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
+
+    # Pull the assembled overview (cached too) so the live endpoint values
+    # match the hero card exactly — single source of truth.
+    overview = lp_me_overview(request)
+    funds_ov = overview.get("funds") or []
+    accts_ov = overview.get("managed_accounts") or []
+
+    out = {"fund_stakes": [], "managed_acct_nav": [], "warnings": []}
+    if not _PSYCOPG2_OK or (not funds_ov and not accts_ov):
+        return out
+
+    today_iso = datetime.utcnow().date().isoformat()
+    cur_year  = datetime.utcnow().year
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+
+            # ── Fund stakes history (per LP) ─────────────────────────────
+            fund_fids = [f["fund_id"] for f in funds_ov]
+            stake_by_year: dict = {}  # {year: sum_of_lp_shares}
+            if fund_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, year, end_nav, gp_equity_end
+                          FROM fund_annual_snapshots
+                         WHERE fund_id::text = ANY(%s)
+                         ORDER BY fund_id, year ASC
+                    """, (fund_fids,))
+                    rows = cur.fetchall()
+                except Exception:
+                    conn.rollback()
+                    rows = []
+
+                # Build commitment-ratio per fund from the overview
+                ratio_by_fid = {}
+                for f in funds_ov:
+                    tot = float(f.get("total_committed") or 0)
+                    cmt = float(f.get("commitment") or 0)
+                    if tot > 0 and cmt > 0:
+                        ratio_by_fid[f["fund_id"]] = cmt / tot
+
+                for r in rows:
+                    fid   = str(r["fund_id"])
+                    yr    = int(r["year"])
+                    ratio = ratio_by_fid.get(fid, 0.0)
+                    if ratio <= 0:
+                        continue
+                    end_nav     = float(r["end_nav"] or 0)
+                    gp_eq_end   = float(r["gp_equity_end"] or 0)
+                    lp_side_nav = max(0.0, end_nav - gp_eq_end)
+                    lp_share    = ratio * lp_side_nav
+                    stake_by_year[yr] = round(stake_by_year.get(yr, 0.0) + lp_share, 2)
+
+            for yr in sorted(stake_by_year.keys()):
+                out["fund_stakes"].append({
+                    "year":  yr,
+                    "date":  f"{yr}-12-31",
+                    "value": stake_by_year[yr],
+                })
+
+            # Append the live YTD point (sum of current stake_value across funds)
+            live_fund_stakes = round(
+                sum(float(f.get("stake_value") or 0) for f in funds_ov), 2
+            )
+            if live_fund_stakes > 0:
+                # Drop the current-year annual point if we already added one
+                # (avoid two dots in the same year)
+                out["fund_stakes"] = [p for p in out["fund_stakes"] if p["year"] != cur_year]
+                out["fund_stakes"].append({
+                    "year":       cur_year,
+                    "date":       today_iso,
+                    "value":      live_fund_stakes,
+                    "is_current": True,
+                })
+
+            # ── Managed account NAV history ──────────────────────────────
+            acct_fids = [a["fund_id"] for a in accts_ov]
+            acct_by_year: dict = {}
+            if acct_fids:
+                try:
+                    cur.execute("""
+                        SELECT fund_id::text, data_json
+                          FROM account_balance_history
+                         WHERE fund_id::text = ANY(%s)
+                    """, (acct_fids,))
+                    for row in cur.fetchall():
+                        _raw  = row["data_json"]
+                        _recs = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                        # Group by year, keep the last month with end_balance
+                        by_yr: dict = {}
+                        for rec in _recs:
+                            if rec.get("skip"):
+                                continue
+                            y = rec.get("year"); m = rec.get("month") or 0
+                            eb = rec.get("end_balance")
+                            if y is None or eb is None:
+                                continue
+                            cur_best = by_yr.get(y)
+                            if cur_best is None or m > cur_best[0]:
+                                by_yr[y] = (m, float(eb))
+                        for y, (_m, eb) in by_yr.items():
+                            acct_by_year[y] = round(acct_by_year.get(y, 0.0) + eb, 2)
+                except Exception:
+                    conn.rollback()
+
+            for yr in sorted(acct_by_year.keys()):
+                # Don't include partial current year — we'll add the live point below
+                if yr == cur_year:
+                    continue
+                out["managed_acct_nav"].append({
+                    "year":  yr,
+                    "date":  f"{yr}-12-31",
+                    "value": acct_by_year[yr],
+                })
+
+            live_acct_nav = round(
+                sum(float(a.get("nav") or 0) for a in accts_ov), 2
+            )
+            if live_acct_nav > 0:
+                out["managed_acct_nav"].append({
+                    "year":       cur_year,
+                    "date":       today_iso,
+                    "value":      live_acct_nav,
+                    "is_current": True,
+                })
+
+    except Exception as exc:
+        out["warnings"].append(f"history query failed: {str(exc)[:200]}")
+
+    if not out.get("warnings"):
+        _user_cache_put(cache_key, out)
     return out
 
 

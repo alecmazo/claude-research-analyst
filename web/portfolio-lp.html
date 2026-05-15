@@ -722,7 +722,205 @@
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // PORTFOLIO HISTORY CHART  —  /api/v2/lp/me/portfolio-history
+  // Opened from the hero-card tiles (FUND STAKES / MANAGED ACCT NAV).
+  // ══════════════════════════════════════════════════════════════
+  window._lpPhCache        = null;   // last fetched history JSON
+  window._lpPhCurrentSeries = null;  // 'fund_stakes' | 'managed_acct_nav'
+  window._lpPhCurrentRange  = 'All';
+
+  async function openPortfolioHistory(series) {
+    window._lpPhCurrentSeries = series;
+    window._lpPhCurrentRange  = 'All';   // always reset to All on tile click
+    const panel = document.getElementById('lp-portfolio-chart-panel');
+    panel.style.display = 'block';
+
+    if (!window._lpPhCache) {
+      // Show loading state
+      document.getElementById('lp-ph-eyebrow').textContent = 'Loading history…';
+      try {
+        const r = await window.dgaFetch('/api/v2/lp/me/portfolio-history');
+        if (!r.ok) throw new Error('history ' + r.status);
+        window._lpPhCache = await r.json();
+      } catch (err) {
+        console.warn('[lp-portfolio-history]', err);
+        document.getElementById('lp-ph-eyebrow').textContent = 'Could not load history';
+        return;
+      }
+    }
+    renderPortfolioHistory();
+    // Smooth scroll the panel into view
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function renderPortfolioHistory() {
+    const series = window._lpPhCurrentSeries;
+    const cache  = window._lpPhCache;
+    if (!series || !cache) return;
+
+    const allPts = (cache[series] || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    const range  = window._lpPhCurrentRange || 'All';
+    const now    = new Date();
+    let cutoff;
+    if (range === 'YTD') cutoff = new Date(now.getFullYear(), 0, 1);
+    else if (range === '1Y')  cutoff = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+    else if (range === '3Y')  cutoff = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
+    else if (range === '5Y')  cutoff = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
+    else                       cutoff = null;
+    const pts = cutoff
+      ? allPts.filter(p => new Date(p.date) >= cutoff)
+      : allPts;
+
+    // Update tab styling
+    document.querySelectorAll('[data-ph-range]').forEach(btn => {
+      const active = btn.dataset.phRange === range;
+      btn.style.background = active ? 'var(--blue)' : 'transparent';
+      btn.style.color      = active ? '#0A1628' : 'rgba(255,255,255,0.55)';
+    });
+
+    const label = series === 'fund_stakes' ? 'FUND STAKES · HISTORY' : 'MANAGED ACCT NAV · HISTORY';
+    document.getElementById('lp-ph-eyebrow').textContent = label;
+
+    const $value = document.getElementById('lp-ph-value');
+    const $delta = document.getElementById('lp-ph-delta');
+    const $empty = document.getElementById('lp-ph-empty');
+    const $canvas = document.getElementById('lp-ph-canvas');
+
+    if (!pts.length || pts.every(p => !p.value)) {
+      $value.textContent = '—';
+      $delta.textContent = '';
+      $canvas.style.display = 'none';
+      $empty.style.display  = 'block';
+      $empty.textContent    = `No history available for ${range === 'All' ? 'this view' : range}.`;
+      return;
+    }
+    $canvas.style.display = 'block';
+    $empty.style.display  = 'none';
+
+    const first = pts[0], last = pts[pts.length - 1];
+    $value.textContent = fmtUSD(last.value || 0);
+    if (pts.length >= 2 && first.value > 0) {
+      const delta = (last.value || 0) - first.value;
+      const pct   = (delta / first.value) * 100;
+      const sign  = delta >= 0 ? '+' : '−';
+      const color = delta >= 0 ? '#22C55E' : '#EF4444';
+      $delta.style.color = color;
+      $delta.textContent = `${sign}${fmtUSD(Math.abs(delta))} (${sign}${Math.abs(pct).toFixed(2)}%) · ${range}`;
+    } else {
+      $delta.textContent = `${pts.length} data point${pts.length !== 1 ? 's' : ''}`;
+      $delta.style.color = 'rgba(255,255,255,0.55)';
+    }
+
+    drawPortfolioHistoryChart($canvas, pts);
+  }
+
+  function drawPortfolioHistoryChart(canvas, pts) {
+    if (!canvas || !pts || !pts.length) return;
+    const dpr  = window.devicePixelRatio || 1;
+    const cssW = Math.round(canvas.getBoundingClientRect().width) || canvas.offsetWidth || 640;
+    const cssH = 200;
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = cssW, H = cssH;
+    const padL = 8, padR = 56, padT = 14, padB = 22;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
+
+    const vals = pts.map(p => p.value || 0);
+    const vMax = Math.max(...vals);
+    const vMin = Math.min(...vals);
+    const span = Math.max(vMax - vMin, 1);
+    const yMax = vMax + span * 0.15;
+    const yMin = Math.max(0, vMin - span * 0.15);
+    const ySpan = Math.max(yMax - yMin, 1);
+
+    const xAt = (i) => pts.length === 1
+      ? padL + chartW / 2
+      : padL + (chartW * i / (pts.length - 1));
+    const yAt = (v) => padT + chartH * (1 - (v - yMin) / ySpan);
+
+    // Faint horizontal gridlines + right-side $ labels (3 ticks)
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth   = 1;
+    ctx.fillStyle   = 'rgba(255,255,255,0.4)';
+    ctx.font        = '9.5px -apple-system,sans-serif';
+    ctx.textAlign   = 'left';
+    for (let i = 0; i <= 3; i++) {
+      const v = yMin + ySpan * (i / 3);
+      const y = yAt(v);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      const lbl = v >= 1e6 ? '$' + (v/1e6).toFixed(2) + 'M'
+                : v >= 1e3 ? '$' + (v/1e3).toFixed(0) + 'K'
+                : '$' + v.toFixed(0);
+      ctx.fillText(lbl, W - padR + 4, y + 3.5);
+    }
+
+    // Dashed reference line at the start value
+    if (pts[0].value != null) {
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+      ctx.beginPath();
+      const y0 = yAt(pts[0].value);
+      ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Main line (gradient stroke, blue)
+    ctx.lineWidth   = 2.2;
+    ctx.lineJoin    = 'round';
+    ctx.strokeStyle = '#5BB8D4';
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = xAt(i), y = yAt(p.value || 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Soft fill under the curve
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+    grad.addColorStop(0, 'rgba(91,184,212,0.22)');
+    grad.addColorStop(1, 'rgba(91,184,212,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = xAt(i), y = yAt(p.value || 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(xAt(pts.length - 1), padT + chartH);
+    ctx.lineTo(xAt(0), padT + chartH);
+    ctx.closePath(); ctx.fill();
+
+    // Endpoint dot
+    const lastX = xAt(pts.length - 1);
+    const lastY = yAt(pts[pts.length - 1].value || 0);
+    ctx.fillStyle = '#5BB8D4';
+    ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(10,22,40,0.9)';
+    ctx.lineWidth = 1.5; ctx.stroke();
+
+    // X-axis: first and last date labels
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font      = '10px -apple-system,sans-serif';
+    ctx.textAlign = 'left';
+    const fmtDate = (d) => {
+      const dt = new Date(d);
+      return dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    };
+    ctx.fillText(fmtDate(pts[0].date), padL, H - 6);
+    ctx.textAlign = 'right';
+    ctx.fillText(fmtDate(pts[pts.length - 1].date), W - padR, H - 6);
+  }
+
   function renderOverview(data) {
+    // Flush portfolio-history cache so the chart re-fetches against the
+    // freshly-rendered hero card (avoids stale data after a manual reload).
+    window._lpPhCache = null;
     const me = data.profile || {};
     const funds = data.funds || [];
     const accts = data.managed_accounts || [];
@@ -753,22 +951,32 @@
     $sub.textContent     = `You have ${segments.join(' + ')}. Snapshot data shown below. Latest LP reports are auto-distributed via Dropbox; tax docs (K-1) are sent at year-end.`;
 
     // ── Portfolio summary: total on left, breakdown tiles on right ──
-    const subTile = (label, val, sub) => `
-      <div style="flex:1;min-width:120px;">
-        <div style="font-size:8px;font-weight:800;color:var(--blue);letter-spacing:1.1px;margin-bottom:3px;">${label}</div>
+    // Tiles are clickable → expand the history chart panel below the hero.
+    const subTile = (label, val, sub, series) => {
+      const clickable = !!series;
+      return `
+      <div ${clickable ? `data-series="${series}" role="button" tabindex="0"` : ''}
+           style="flex:1;min-width:120px;${clickable ? 'cursor:pointer;border-radius:6px;padding:6px 8px;margin:-6px -8px;transition:background .12s;' : ''}"
+           ${clickable ? 'onmouseover="this.style.background=\'rgba(91,184,212,0.08)\'" onmouseout="this.style.background=\'transparent\'"' : ''}>
+        <div style="font-size:8px;font-weight:800;color:var(--blue);letter-spacing:1.1px;margin-bottom:3px;">
+          ${label}${clickable ? ' <span style="font-size:8px;opacity:0.55;letter-spacing:0;">▾ chart</span>' : ''}
+        </div>
         <div style="font-size:20px;font-weight:800;color:white;" class="mono">${val}</div>
         ${sub ? `<div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:2px;">${sub}</div>` : ''}
       </div>`;
+    };
 
     const rightTiles = [];
     if (fundCount && totalFundStakes > 0)
       rightTiles.push(subTile('FUND STAKES (TOTAL)',
         fmtUSD(totalFundStakes),
-        totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : `${fundCount} fund${fundCount > 1 ? 's' : ''}`));
+        totalCommit ? `Commitment ${fmtUSD(totalCommit)}` : `${fundCount} fund${fundCount > 1 ? 's' : ''}`,
+        'fund_stakes'));
     if (acctCount)
       rightTiles.push(subTile('MANAGED ACCT NAV',
         totalAcctNav ? fmtUSD(totalAcctNav) : '—',
-        `${acctCount} managed account${acctCount > 1 ? 's' : ''}`));
+        `${acctCount} managed account${acctCount > 1 ? 's' : ''}`,
+        'managed_acct_nav'));
 
     $stats.innerHTML = `
       <div style="display:flex;align-items:center;gap:0;margin-top:4px;">
@@ -786,7 +994,45 @@
         <div style="display:flex;gap:20px;flex:1;flex-wrap:wrap;">
           ${rightTiles.join('')}
         </div>` : ''}
+      </div>
+      <!-- Inline portfolio-history chart (revealed when a tile is clicked) -->
+      <div id="lp-portfolio-chart-panel" style="display:none;margin-top:18px;padding-top:14px;border-top:1px solid rgba(91,184,212,0.18);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:8px;flex-wrap:wrap;">
+          <div>
+            <div id="lp-ph-eyebrow" style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.3px;"></div>
+            <div id="lp-ph-value"   style="font-size:24px;font-weight:800;color:white;" class="mono">—</div>
+            <div id="lp-ph-delta"   style="font-size:11px;margin-top:2px;color:rgba(255,255,255,0.55);"></div>
+          </div>
+          <div id="lp-ph-ranges" style="display:flex;gap:4px;background:rgba(91,184,212,0.08);padding:4px;border-radius:8px;">
+            ${['YTD','1Y','3Y','5Y','All'].map(r => `
+              <button data-ph-range="${r}" style="background:transparent;border:none;color:rgba(255,255,255,0.55);padding:5px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.5px;cursor:pointer;">${r}</button>
+            `).join('')}
+          </div>
+          <button id="lp-ph-close" title="Close" style="background:transparent;border:none;color:rgba(255,255,255,0.4);font-size:18px;cursor:pointer;">×</button>
+        </div>
+        <canvas id="lp-ph-canvas" style="width:100%;height:200px;display:block;"></canvas>
+        <div id="lp-ph-empty" style="display:none;font-size:11px;color:rgba(255,255,255,0.45);padding:30px 0;text-align:center;"></div>
       </div>`;
+    // Click handlers for the two clickable tiles
+    $stats.querySelectorAll('[data-series]').forEach(el => {
+      const open = () => openPortfolioHistory(el.dataset.series);
+      el.addEventListener('click', open);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+      });
+    });
+    const closeBtn = document.getElementById('lp-ph-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+      document.getElementById('lp-portfolio-chart-panel').style.display = 'none';
+    });
+    // Range buttons
+    document.querySelectorAll('[data-ph-range]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const r = btn.dataset.phRange;
+        window._lpPhCurrentRange = r;
+        renderPortfolioHistory();
+      });
+    });
 
     const fundCards = funds.map(f => {
       const stakeVal   = f.stake_value;
