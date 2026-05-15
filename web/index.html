@@ -183,12 +183,25 @@
     <div class="analysis-title" id="analysis-title"></div>
     <p class="analysis-subtitle">Institutional Research Analysis</p>
 
+    <!-- Live progress bar driven by /api/jobs/{id}/status → progress.pct -->
+    <div class="progress-bar-track" id="progress-bar-track">
+      <div class="progress-bar-fill" id="progress-bar-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-meta">
+      <span id="progress-label">Starting…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+
+    <!-- Step checklist — matches claude_analyst.py _emit_progress(step, …) keys -->
     <ul class="steps" id="steps">
-      <li data-step="0"><span class="step-icon">⏱</span> Queued</li>
-      <li data-step="1"><span class="step-icon">⬇</span> Downloading SEC Filings</li>
-      <li data-step="2"><span class="step-icon">📊</span> Extracting Financials</li>
-      <li data-step="3"><span class="step-icon">🧠</span> Grok AI Analysis</li>
-      <li data-step="4"><span class="step-icon">✓</span> Report Ready</li>
+      <li data-step="sec_filings"><span class="step-icon">⬇</span> Downloading SEC Filings</li>
+      <li data-step="financials"><span class="step-icon">📊</span> Extracting Financials</li>
+      <li data-step="market_data"><span class="step-icon">📈</span> Live Price + Analyst Ratings</li>
+      <li data-step="grok"><span class="step-icon">🧠</span> Grok AI Analysis</li>
+      <li data-step="rendering"><span class="step-icon">📝</span> Rendering Word Report</li>
+      <li data-step="gamma"><span class="step-icon">🎨</span> Gamma Presentation</li>
+      <li data-step="upload"><span class="step-icon">☁</span> Uploading to Dropbox</li>
+      <li data-step="done"><span class="step-icon">✓</span> Report Ready</li>
     </ul>
 
     <div id="analysis-result" class="result-box" style="display:none;"></div>

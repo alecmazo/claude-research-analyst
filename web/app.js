@@ -394,42 +394,71 @@ async function startAnalysis() {
   }
 }
 
+// Ordered list of progress steps emitted by claude_analyst._emit_progress.
+// Must stay in sync with mobile/src/screens/AnalysisScreen.js STEPS.
+const ANALYSIS_STEPS = [
+  'sec_filings', 'financials', 'market_data', 'grok',
+  'rendering', 'gamma', 'upload', 'done',
+];
+
 function openAnalysis(ticker, jobId) {
   document.getElementById('analysis-ticker').textContent = ticker;
   document.getElementById('analysis-title').textContent = ticker;
   document.getElementById('analysis-result').style.display = 'none';
   document.getElementById('analysis-error').style.display = 'none';
   document.getElementById('view-report-btn').style.display = 'none';
-  setStepActive(0);
+  // Reset progress UI
+  renderProgress({ step: 'queued', pct: 0, label: 'Starting…' }, 'running');
   showView('view-analysis');
 
   if (pollTimer) clearInterval(pollTimer);
   currentJobId = jobId;
   pollJob();
-  pollTimer = setInterval(pollJob, 3000);
+  pollTimer = setInterval(pollJob, 2000);  // match mobile cadence
 }
 
-function setStepActive(idx) {
+// Drive the step checklist + animated progress bar from server progress.
+// progress.step is one of ANALYSIS_STEPS (or 'queued' before the first emit).
+function renderProgress(progress, jobStatus) {
+  const step  = progress?.step || 'queued';
+  const pct   = Math.max(0, Math.min(100, Math.round((progress?.pct ?? 0) * 100)));
+  const label = progress?.label || (jobStatus === 'queued' ? 'Queued…' : 'Working…');
+
+  const fillEl  = document.getElementById('progress-bar-fill');
+  const pctEl   = document.getElementById('progress-pct');
+  const lblEl   = document.getElementById('progress-label');
+  if (fillEl) fillEl.style.width = pct + '%';
+  if (pctEl)  pctEl.textContent  = pct + '%';
+  if (lblEl)  lblEl.textContent  = label;
+
+  // Step classes: pending (default) / active / done.
+  // Anything before the current step in ANALYSIS_STEPS is done.
+  const curIdx = ANALYSIS_STEPS.indexOf(step);
   document.querySelectorAll('#steps li').forEach(li => {
-    const i = parseInt(li.dataset.step);
+    const idx = ANALYSIS_STEPS.indexOf(li.dataset.step);
     li.classList.remove('active', 'done');
-    if (i < idx) li.classList.add('done');
-    else if (i === idx) li.classList.add('active');
+    if (jobStatus === 'done') {
+      li.classList.add('done');
+    } else if (curIdx < 0) {
+      // Before any progress emits — first step is active
+      if (idx === 0) li.classList.add('active');
+    } else if (idx < curIdx) {
+      li.classList.add('done');
+    } else if (idx === curIdx) {
+      li.classList.add('active');
+    }
   });
 }
 
-let simStep = 0;
 async function pollJob() {
   if (!currentJobId) return;
   try {
     const job = await api.getJob(currentJobId);
-    if (job.status === 'running') {
-      // Cycle through sub-steps visually
-      if (simStep < 3) { simStep++; setStepActive(simStep); }
-    } else if (job.status === 'done') {
+    renderProgress(job.progress, job.status);
+    if (job.status === 'done') {
       clearInterval(pollTimer);
-      setStepActive(4);
-      document.querySelectorAll('#steps li').forEach(li => li.classList.add('done'));
+      // Force-mark every step done, fill bar to 100
+      renderProgress({ step: 'done', pct: 1.0, label: 'Report ready' }, 'done');
       showResult(job.result);
     } else if (job.status === 'failed') {
       clearInterval(pollTimer);
@@ -437,7 +466,19 @@ async function pollJob() {
     }
   } catch (err) {
     clearInterval(pollTimer);
-    showError(err.message);
+    // Server restart (404 on /jobs/{id}/status) — same fallback path as mobile:
+    // check if the report file already exists on disk and jump straight to it.
+    const msg = err?.message || String(err);
+    if (msg.includes('404') || /not found|was lost/i.test(msg)) {
+      const ticker = document.getElementById('analysis-ticker').textContent;
+      try {
+        const r = await api.getReport(ticker);
+        if (r?.report_md) { openReport(ticker); return; }
+      } catch (_) { /* fall through to error */ }
+      showError('The server restarted mid-analysis. Try Run again.');
+    } else {
+      showError(msg);
+    }
   }
 }
 

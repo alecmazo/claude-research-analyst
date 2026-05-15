@@ -1709,25 +1709,97 @@ def gurufocus_snapshot(ticker: str):
 
 
 # ── Watchlist (per-user, v2-token scoped) ───────────────────────────────────
+# PERSISTENCE: stored in the `watchlists` Postgres table so the data
+# survives Railway redeploys. The legacy JSON file is read once on first
+# DB-write and migrated in, then never touched again.
 _WATCHLISTS_FILE = Path(os.environ.get(
     "DGA_WATCHLISTS_PATH",
     str(analyst.STOCKS_FOLDER / "_dga_watchlists.json"),
 ))
 _watchlists_lock = threading.Lock()
+_WATCHLIST_LEGACY_MIGRATED = False
 
 
-def _load_watchlists() -> dict[str, list[str]]:
+def _watchlist_db_available() -> bool:
+    return bool(_PSYCOPG2_OK and os.environ.get("DATABASE_URL"))
+
+
+def _watchlist_migrate_legacy_once() -> None:
+    """First-time migration: if a JSON file exists from the old code path
+    AND the DB watchlists table is empty for those users, copy it in. Runs
+    at most once per process. Safe to leave indefinitely — does nothing if
+    the file or table can't be reached."""
+    global _WATCHLIST_LEGACY_MIGRATED
+    if _WATCHLIST_LEGACY_MIGRATED:
+        return
+    _WATCHLIST_LEGACY_MIGRATED = True   # set up-front so concurrent calls bail
+    if not _watchlist_db_available() or not _WATCHLISTS_FILE.exists():
+        return
     try:
-        if _WATCHLISTS_FILE.exists():
-            return json.loads(_WATCHLISTS_FILE.read_text())
-    except Exception:
-        pass
-    return {}
+        legacy = json.loads(_WATCHLISTS_FILE.read_text())
+        if not isinstance(legacy, dict) or not legacy:
+            return
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for lp_id, tickers in legacy.items():
+                if not isinstance(tickers, list):
+                    continue
+                for tk in tickers:
+                    tk_clean = (str(tk) or "").strip().upper()
+                    if tk_clean:
+                        cur.execute("""
+                            INSERT INTO watchlists (lp_id, ticker, added_at)
+                            VALUES (%s, %s, now())
+                            ON CONFLICT (lp_id, ticker) DO NOTHING
+                        """, (str(lp_id), tk_clean))
+            conn.commit()
+        print(f"[watchlist] migrated legacy file → DB ({sum(len(v) for v in legacy.values() if isinstance(v, list))} tickers)")
+    except Exception as e:
+        print(f"[watchlist] legacy migrate skipped: {e}")
 
 
-def _save_watchlists(data: dict[str, list[str]]) -> None:
-    _WATCHLISTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _WATCHLISTS_FILE.write_text(json.dumps(data, indent=2, sort_keys=True))
+def _wl_get_db(lp_id: str) -> list[str]:
+    if not _watchlist_db_available():
+        return []
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker FROM watchlists
+                 WHERE lp_id = %s
+                 ORDER BY added_at ASC
+            """, (lp_id,))
+            return [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        print(f"[watchlist] get_db: {e}")
+        return []
+
+
+def _wl_add_db(lp_id: str, ticker: str) -> None:
+    if not _watchlist_db_available():
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO watchlists (lp_id, ticker, added_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (lp_id, ticker) DO NOTHING
+            """, (lp_id, ticker))
+            conn.commit()
+    except Exception as e:
+        print(f"[watchlist] add_db: {e}")
+
+
+def _wl_remove_db(lp_id: str, ticker: str) -> None:
+    if not _watchlist_db_available():
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM watchlists WHERE lp_id = %s AND ticker = %s",
+                (lp_id, ticker),
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[watchlist] remove_db: {e}")
 
 
 def _claims_or_401(request: Request) -> dict:
@@ -1743,22 +1815,29 @@ def _claims_or_401(request: Request) -> dict:
 def watchlist_get(request: Request):
     claims = _claims_or_401(request)
     lp_id = claims["lp_id"]
-    with _watchlists_lock:
-        wl = _load_watchlists()
-    tickers = wl.get(lp_id, [])
+    # First call after deploy: copy any legacy JSON file into the DB
+    _watchlist_migrate_legacy_once()
+    tickers = _wl_get_db(lp_id)
 
-    # Enrich with live quotes so the UI doesn't need a second call
+    # Enrich with live quotes so the UI doesn't need a second call.
+    # Uses the same 15-min price cache as the rest of the app.
     quotes: dict[str, dict] = {}
-    if tickers and yf is not None:
-        for tk in tickers:
-            try:
-                t = yf.Ticker(tk)
-                fi = t.fast_info
-                last = float(fi.last_price)      if fi.last_price      is not None else None
-                prev = float(fi.previous_close)  if fi.previous_close  is not None else None
-                pct  = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
+    if tickers:
+        prices_now = _fetch_prices(tickers)
+        if yf is not None:
+            for tk in tickers:
+                last = prices_now.get(tk)
+                prev = None
+                try:
+                    t = yf.Ticker(tk)
+                    fi = t.fast_info
+                    prev = float(fi.previous_close) if fi.previous_close is not None else None
+                except Exception:
+                    pass
+                pct = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
                 quotes[tk] = {"price": last, "prev": prev, "pct": pct}
-            except Exception:
+        else:
+            for tk in tickers:
                 quotes[tk] = {"price": None, "prev": None, "pct": None}
 
     return {"tickers": tickers, "quotes": quotes}
@@ -1775,15 +1854,9 @@ def watchlist_add(request: Request, body: WatchlistAddRequest):
     tk = (body.ticker or "").strip().upper()
     if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
         raise HTTPException(status_code=400, detail="invalid ticker")
-
-    with _watchlists_lock:
-        wl = _load_watchlists()
-        cur = wl.get(lp_id, [])
-        if tk not in cur:
-            cur.append(tk)
-            wl[lp_id] = cur
-            _save_watchlists(wl)
-    return {"tickers": wl.get(lp_id, [])}
+    _watchlist_migrate_legacy_once()
+    _wl_add_db(lp_id, tk)
+    return {"tickers": _wl_get_db(lp_id)}
 
 
 @app.delete("/api/watchlist/{ticker}")
@@ -1791,12 +1864,9 @@ def watchlist_remove(request: Request, ticker: str):
     claims = _claims_or_401(request)
     lp_id = claims["lp_id"]
     tk = (ticker or "").strip().upper()
-    with _watchlists_lock:
-        wl = _load_watchlists()
-        cur = wl.get(lp_id, [])
-        wl[lp_id] = [t for t in cur if t != tk]
-        _save_watchlists(wl)
-    return {"tickers": wl[lp_id]}
+    _watchlist_migrate_legacy_once()
+    _wl_remove_db(lp_id, tk)
+    return {"tickers": _wl_get_db(lp_id)}
 
 
 # ===========================================================================
@@ -3212,7 +3282,14 @@ def _run_portfolio(
                         "result":       lean_result,
                         "input_weights": _pjobs[job_id].get("input_weights") or {},
                     }
-                    _LAST_JOB_PATH.write_text(json.dumps(last_job_payload, default=str))
+                    # Persist to Postgres so the last-rebalance survives Railway
+                    # deploys; also keep the file write as a Dropbox-synced
+                    # backup when running locally.
+                    _kv_put("rebalance.last_job", last_job_payload)
+                    try:
+                        _LAST_JOB_PATH.write_text(json.dumps(last_job_payload, default=str))
+                    except Exception:
+                        pass
                 except Exception as _e:
                     print(f"⚠️  Could not write last-job snapshot: {_e}")
         # Auto-promote the input holdings as the new "live portfolio" benchmark
@@ -4340,6 +4417,17 @@ def _run_intelligence(job_id: str, sector: str) -> None:
             _ijobs[job_id]["result"] = result
             if not result.get("ok"):
                 _ijobs[job_id]["error"] = result.get("error", "Unknown error")
+        # Persist the latest successful run to Postgres so /api/intelligence/latest
+        # survives Railway redeploys (file in STOCKS_FOLDER is ephemeral).
+        if result.get("ok"):
+            try:
+                _kv_put("intelligence.latest", {
+                    **result,
+                    "completed_at": datetime.utcnow().isoformat() + "Z",
+                    "sector": sector,
+                })
+            except Exception as _e:
+                print(f"[intelligence] kv_put failed: {_e}")
     except BaseException as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         print(f"\n❌ Intelligence job {job_id} CRASHED:\n{tb}", flush=True)
@@ -4369,13 +4457,24 @@ def start_intelligence(req: IntelligenceRequest, background_tasks: BackgroundTas
 
 @app.get("/api/intelligence/latest")
 def get_latest_intelligence():
-    """Return the most-recently-completed intelligence run (persisted to disk)."""
+    """Return the most-recently-completed intelligence run.
+
+    PRIMARY: kv_store row `intelligence.latest` (Postgres — survives deploys).
+    FALLBACK: legacy intelligence.json on disk for local-only runs that
+    pre-date the DB migration.
+    """
+    payload = _kv_get("intelligence.latest")
+    if payload is not None:
+        payload["exists"] = True
+        return payload
     path = analyst.INTEL_FILE
     if not path.exists():
         return {"exists": False}
     try:
         data = json.loads(path.read_text())
         data["exists"] = True
+        # Opportunistic backfill so the next deploy doesn't have to re-read disk
+        _kv_put("intelligence.latest", data)
         return data
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not read intelligence: {exc}")
@@ -4405,6 +4504,14 @@ def _run_daily_brief(job_id: str) -> None:
             _bjobs[job_id]["result"] = result
             if not result.get("ok"):
                 _bjobs[job_id]["error"] = result.get("error", "Unknown error")
+        if result.get("ok"):
+            try:
+                _kv_put("daily_brief.latest", {
+                    **result,
+                    "completed_at": datetime.utcnow().isoformat() + "Z",
+                })
+            except Exception as _e:
+                print(f"[daily_brief] kv_put failed: {_e}")
     except BaseException as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         print(f"\n❌ Daily Brief job {job_id} CRASHED:\n{tb}", flush=True)
@@ -4432,13 +4539,22 @@ def start_daily_brief(background_tasks: BackgroundTasks):
 
 @app.get("/api/daily-brief/latest")
 def get_latest_daily_brief():
-    """Return the most-recently-completed daily brief (persisted to disk)."""
+    """Return the most-recently-completed daily brief.
+
+    PRIMARY: kv_store row `daily_brief.latest` (Postgres — survives deploys).
+    FALLBACK: legacy daily_brief.json on disk.
+    """
+    payload = _kv_get("daily_brief.latest")
+    if payload is not None:
+        payload["exists"] = True
+        return payload
     path = analyst.DAILY_BRIEF_FILE
     if not path.exists():
         return {"exists": False}
     try:
         data = json.loads(path.read_text())
         data["exists"] = True
+        _kv_put("daily_brief.latest", data)
         return data
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not read daily brief: {exc}")
@@ -4716,16 +4832,23 @@ def get_last_portfolio():
 def get_last_portfolio_job():
     """Return the full payload of the most recent completed rebalance run.
 
-    Reads from _portfolio_last_job.json in STOCKS_FOLDER (Dropbox-synced),
-    so both the web client and the mobile app see the same result regardless
-    of which device triggered the run.  Returns 404 if no run has completed yet.
+    PRIMARY source: kv_store row `rebalance.last_job` (Postgres — survives
+    Railway redeploys). FALLBACK: legacy _portfolio_last_job.json on disk
+    for local-only runs that pre-date the DB migration.
+    Returns 404 if no run has completed yet.
     """
-    if not _LAST_JOB_PATH.exists():
-        raise HTTPException(status_code=404, detail="No completed portfolio run yet")
-    try:
-        return json.loads(_LAST_JOB_PATH.read_text())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read last-job file: {exc}")
+    payload = _kv_get("rebalance.last_job")
+    if payload is not None:
+        return payload
+    if _LAST_JOB_PATH.exists():
+        try:
+            data = json.loads(_LAST_JOB_PATH.read_text())
+            # Opportunistically migrate the legacy file into kv_store
+            _kv_put("rebalance.last_job", data)
+            return data
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not read last-job file: {exc}")
+    raise HTTPException(status_code=404, detail="No completed portfolio run yet")
 
 
 @app.get("/api/portfolio/summary")
@@ -5065,6 +5188,73 @@ def _ensure_fund_display_settings_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_kv_store_table(conn) -> None:
+    """Generic durable key/value store. Used to persist things that previously
+    lived in JSON files on disk (Market Pulse output, last rebalance snapshot,
+    daily brief, etc.) so they survive Railway redeploys.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS kv_store (
+                k          TEXT PRIMARY KEY,
+                v          JSONB NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+    conn.commit()
+
+
+def _ensure_watchlists_table(conn) -> None:
+    """Per-user watchlist, replacing the ephemeral _dga_watchlists.json file.
+    Composite PK so ADD/REMOVE are O(log n) and the schema is naturally
+    de-duplicated."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS watchlists (
+                lp_id     TEXT NOT NULL,
+                ticker    TEXT NOT NULL,
+                added_at  TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (lp_id, ticker)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS watchlists_lp_idx ON watchlists(lp_id, added_at)")
+    conn.commit()
+
+
+# ── KV helpers (used by Market Pulse, rebalance snapshot, daily brief, …) ──
+def _kv_get(key: str):
+    """Return the value for `key`, or None. Falls back gracefully if the DB
+    is unavailable (returns None)."""
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return None
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT v FROM kv_store WHERE k = %s", (key,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _kv_put(key: str, value) -> bool:
+    """Upsert (key, value). Returns True on success."""
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return False
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO kv_store (k, v, updated_at)
+                VALUES (%s, %s::jsonb, now())
+                ON CONFLICT (k) DO UPDATE
+                  SET v = EXCLUDED.v, updated_at = now()
+            """, (key, json.dumps(value)))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[kv_put] {key}: {e}")
+        return False
+
+
 def _ensure_benchmark_annual_returns_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("""
@@ -5375,6 +5565,8 @@ def _apply_self_migrations() -> None:
         _step("balance_history_table",      lambda: _ensure_balance_history_table(conn))
         _step("lp_creds_table",             lambda: _ensure_lp_creds_table(conn))
         _step("fund_display_settings",      lambda: _ensure_fund_display_settings_table(conn))
+        _step("kv_store_table",             lambda: _ensure_kv_store_table(conn))
+        _step("watchlists_table",           lambda: _ensure_watchlists_table(conn))
         _step("benchmark_annual_returns",   lambda: _ensure_benchmark_annual_returns_table(conn))
         _step("seed_benchmark_historical",  lambda: _seed_benchmark_historical(conn))
         _step("manual_annual_returns",      lambda: _ensure_manual_annual_returns_table(conn))
