@@ -731,30 +731,37 @@
   window._lpPhCurrentRange  = 'All';
 
   async function openPortfolioHistory(series) {
-    window._lpPhCurrentSeries = series;
-    window._lpPhCurrentRange  = 'All';   // always reset to All on tile click
-    const panel = document.getElementById('lp-portfolio-chart-panel');
-    panel.style.display = 'block';
+    try {
+      window._lpPhCurrentSeries = series;
+      window._lpPhCurrentRange  = 'All';   // always reset to All on tile click
+      const panel = document.getElementById('lp-portfolio-chart-panel');
+      if (!panel) { console.warn('[lp-ph] panel not in DOM'); return; }
+      panel.style.display = 'block';
 
-    if (!window._lpPhCache) {
-      // Show loading state
-      document.getElementById('lp-ph-eyebrow').textContent = 'Loading history…';
-      try {
-        const r = await window.dgaFetch('/api/v2/lp/me/portfolio-history');
-        if (!r.ok) throw new Error('history ' + r.status);
-        window._lpPhCache = await r.json();
-      } catch (err) {
-        console.warn('[lp-portfolio-history]', err);
-        document.getElementById('lp-ph-eyebrow').textContent = 'Could not load history';
-        return;
+      if (!window._lpPhCache) {
+        const eyebrow = document.getElementById('lp-ph-eyebrow');
+        if (eyebrow) eyebrow.textContent = 'Loading history…';
+        try {
+          const r = await window.dgaFetch('/api/v2/lp/me/portfolio-history');
+          if (!r.ok) throw new Error('history ' + r.status);
+          window._lpPhCache = await r.json();
+        } catch (err) {
+          console.warn('[lp-portfolio-history fetch]', err);
+          if (eyebrow) eyebrow.textContent = 'Could not load history';
+          return;
+        }
       }
+      renderPortfolioHistory();
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (e) {
+      // Never let chart-panel failures break the surrounding LP page —
+      // fund-card expand and other handlers must keep working.
+      console.warn('[lp-portfolio-history open]', e);
     }
-    renderPortfolioHistory();
-    // Smooth scroll the panel into view
-    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function renderPortfolioHistory() {
+    try {
     const series = window._lpPhCurrentSeries;
     const cache  = window._lpPhCache;
     if (!series || !cache) return;
@@ -822,9 +829,13 @@
     }
 
     drawPortfolioHistoryChart($canvas, pts);
+    } catch (e) {
+      console.warn('[lp-portfolio-history render]', e);
+    }
   }
 
   function drawPortfolioHistoryChart(canvas, pts) {
+    try {
     if (!canvas || !pts || !pts.length) return;
     const dpr  = window.devicePixelRatio || 1;
     const cssW = Math.round(canvas.getBoundingClientRect().width) || canvas.offsetWidth || 640;
@@ -924,6 +935,9 @@
     ctx.fillText(fmtDate(pts[0].date), padL, H - 6);
     ctx.textAlign = 'right';
     ctx.fillText(fmtDate(pts[pts.length - 1].date), W - padR, H - 6);
+    } catch (e) {
+      console.warn('[lp-portfolio-history draw]', e);
+    }
   }
 
   function renderOverview(data) {

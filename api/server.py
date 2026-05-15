@@ -131,70 +131,76 @@ def _fetch_prices(symbols: list) -> dict:
         return sym
 
     yahoo_syms = [_normalize(s) for s in clean_syms]
-    batch_prices: dict[str, float | None] = {}
 
-    try:
-        import pandas as _pd
-        data = yf.download(
-            " ".join(yahoo_syms),
-            period="2d",          # need 2d so market-closed days still have a price
-            auto_adjust=True,
-            progress=False,
-            threads=True,         # yfinance uses threads internally for multi-ticker
-        )
-        if data is not None and not data.empty:
-            close = data["Close"] if "Close" in data.columns else data.get("close")
-            if close is not None and not close.empty:
-                last_row = close.dropna(how="all").iloc[-1] if len(close.dropna(how="all")) else close.iloc[-1]
-                if hasattr(last_row, "items"):
-                    # Multi-ticker: Series indexed by ticker symbol
-                    for tk, price in last_row.items():
-                        tk_str = str(tk)
-                        try:
-                            p = float(price)
-                            if p > 0:
-                                batch_prices[tk_str] = p
-                        except (TypeError, ValueError):
-                            pass
-                else:
-                    # Single-ticker: scalar
-                    try:
-                        p = float(last_row)
-                        if p > 0 and yahoo_syms:
-                            batch_prices[yahoo_syms[0]] = p
-                    except (TypeError, ValueError):
-                        pass
-    except Exception:
-        pass  # fall through to per-ticker fallback below
-
-    # Map batch results back to original clean symbols
-    for orig_sym, clean in zip(
-        [s for s, _ in fetch], [c for _, c in fetch]
-    ):
-        yahoo = _normalize(clean)
-        price = batch_prices.get(yahoo) or batch_prices.get(clean)
-
-        if price is None:
-            # Fallback: single Ticker call for anything the batch missed.
-            # Also try alternate ticker formats (e.g. BRKB → BRK-B, BRK.B)
-            # when the original symbol fails.
-            import re as _re2
-            variants = [yahoo]
-            _m2 = _re2.match(r'^([A-Z]{2,4})([A-Z])$', clean)
-            if _m2:
-                _pfx, _sfx = _m2.group(1), _m2.group(2)
-                variants += [_pfx + '-' + _sfx, _pfx + '.' + _sfx]
-
-            for _variant in variants:
+    def _yf_batch(query_syms: list) -> dict:
+        """One yf.download call for a list of symbols. Returns
+        {symbol: last_price>0}. Never raises — failures map to empty dict."""
+        prices: dict = {}
+        if not query_syms:
+            return prices
+        try:
+            data = yf.download(
+                " ".join(query_syms),
+                period="2d",       # 2d so market-closed days still resolve a close
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+        except Exception:
+            return prices
+        if data is None or data.empty:
+            return prices
+        close = data["Close"] if "Close" in data.columns else data.get("close")
+        if close is None or close.empty:
+            return prices
+        last_row = close.dropna(how="all").iloc[-1] if len(close.dropna(how="all")) else close.iloc[-1]
+        if hasattr(last_row, "items"):
+            for tk, price in last_row.items():
                 try:
-                    t = yf.Ticker(_variant)
-                    p = t.fast_info.last_price
-                    price = float(p) if p and float(p) > 0 else None
-                    if price:
-                        break
-                except Exception:
-                    price = None
+                    p = float(price)
+                    if p > 0:
+                        prices[str(tk)] = p
+                except (TypeError, ValueError):
+                    pass
+        else:
+            try:
+                p = float(last_row)
+                if p > 0 and query_syms:
+                    prices[query_syms[0]] = p
+            except (TypeError, ValueError):
+                pass
+        return prices
 
+    # ── Pass 1: batch with normalized symbols ────────────────────────────────
+    batch_prices: dict = _yf_batch(yahoo_syms)
+
+    # ── Pass 2: BATCH retry with class-share variants for anything still
+    # missing (e.g. BRKB → BRK-B). One additional HTTP request — never
+    # per-ticker loops, so total time is bounded to ~2 batch downloads.
+    import re as _re_var
+    variant_map: dict = {}   # {variant_sym: original_clean}
+    for clean in clean_syms:
+        yahoo = _normalize(clean)
+        if batch_prices.get(yahoo) or batch_prices.get(clean):
+            continue
+        m = _re_var.match(r'^([A-Z]{2,4})([A-Z])$', clean)
+        if not m:
+            continue
+        variant = f"{m.group(1)}-{m.group(2)}"
+        variant_map[variant] = clean
+    if variant_map:
+        variant_prices = _yf_batch(list(variant_map.keys()))
+        for variant, p in variant_prices.items():
+            orig_clean = variant_map.get(variant)
+            if orig_clean and p:
+                batch_prices[orig_clean] = p
+
+    # ── Map results back to caller-supplied symbols ──────────────────────────
+    for orig_sym, clean in fetch:
+        yahoo = _normalize(clean)
+        price = batch_prices.get(clean) or batch_prices.get(yahoo)
+        # Cache the result (even None) so subsequent calls within TTL don't
+        # re-hit yfinance for the same dead ticker.
         _price_cache[clean] = (price, now)
         out[orig_sym] = price
 
