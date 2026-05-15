@@ -762,14 +762,23 @@
     const allPts = (cache[series] || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
     const range  = window._lpPhCurrentRange || 'All';
     const now    = new Date();
-    let cutoff;
-    if (range === 'YTD') cutoff = new Date(now.getFullYear(), 0, 1);
-    else if (range === '1Y')  cutoff = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
-    else if (range === '3Y')  cutoff = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
-    else if (range === '5Y')  cutoff = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
-    else                       cutoff = null;
-    const pts = cutoff
-      ? allPts.filter(p => new Date(p.date) >= cutoff)
+    // ISO date strings sort lexically — use string compare to avoid
+    // timezone drift when parsing "YYYY-MM-DD" via new Date(...).
+    const pad = n => String(n).padStart(2, '0');
+    let cutoffStr;
+    if (range === 'YTD') {
+      // YTD spans Dec 31 of the previous completed year → today.
+      // Include the prior-year-end anchor as the starting point.
+      cutoffStr = `${now.getFullYear() - 1}-12-31`;
+    } else if (range === '1Y' || range === '3Y' || range === '5Y') {
+      const yrsBack = range === '1Y' ? 1 : (range === '3Y' ? 3 : 5);
+      const d = new Date(now); d.setFullYear(d.getFullYear() - yrsBack);
+      cutoffStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    } else {
+      cutoffStr = null;   // All time
+    }
+    const pts = cutoffStr
+      ? allPts.filter(p => p.date >= cutoffStr)
       : allPts;
 
     // Update tab styling

@@ -2261,12 +2261,21 @@ def lp_me_portfolio_history(request: Request):
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
 
             # ── Fund stakes history (per LP) ─────────────────────────────
+            # Per-fund timeline:
+            #   • inception start point at fund.inception_date with value
+            #     = start_nav × LP_ratio  (no GP carry on day 1)
+            #   • year-end points at YYYY-12-31 with value
+            #     = (end_nav - gp_equity_end) × LP_ratio
+            # Then aggregate across funds by date with forward-fill — at any
+            # given date the value is the sum of each fund's most recent
+            # point at or before that date (0 for funds not yet incepted).
             fund_fids = [f["fund_id"] for f in funds_ov]
-            stake_by_year: dict = {}  # {year: sum_of_lp_shares}
+            rows = []
+            inception_by_fid: dict = {}
             if fund_fids:
                 try:
                     cur.execute("""
-                        SELECT fund_id::text, year, end_nav, gp_equity_end
+                        SELECT fund_id::text, year, start_nav, end_nav, gp_equity_end
                           FROM fund_annual_snapshots
                          WHERE fund_id::text = ANY(%s)
                          ORDER BY fund_id, year ASC
@@ -2276,40 +2285,99 @@ def lp_me_portfolio_history(request: Request):
                     conn.rollback()
                     rows = []
 
-                # Build commitment-ratio per fund from the overview
-                ratio_by_fid = {}
-                for f in funds_ov:
-                    tot = float(f.get("total_committed") or 0)
-                    cmt = float(f.get("commitment") or 0)
-                    if tot > 0 and cmt > 0:
-                        ratio_by_fid[f["fund_id"]] = cmt / tot
+                try:
+                    cur.execute("""
+                        SELECT id::text AS fid, inception_date
+                          FROM funds
+                         WHERE id::text = ANY(%s)
+                    """, (fund_fids,))
+                    for r in cur.fetchall():
+                        if r.get("inception_date"):
+                            inception_by_fid[r["fid"]] = r["inception_date"]
+                except Exception:
+                    conn.rollback()
 
-                for r in rows:
-                    fid   = str(r["fund_id"])
-                    yr    = int(r["year"])
-                    ratio = ratio_by_fid.get(fid, 0.0)
-                    if ratio <= 0:
-                        continue
-                    end_nav     = float(r["end_nav"] or 0)
-                    gp_eq_end   = float(r["gp_equity_end"] or 0)
-                    lp_side_nav = max(0.0, end_nav - gp_eq_end)
-                    lp_share    = ratio * lp_side_nav
-                    stake_by_year[yr] = round(stake_by_year.get(yr, 0.0) + lp_share, 2)
+            # Build commitment-ratio per fund from the overview
+            ratio_by_fid = {}
+            for f in funds_ov:
+                tot = float(f.get("total_committed") or 0)
+                cmt = float(f.get("commitment") or 0)
+                if tot > 0 and cmt > 0:
+                    ratio_by_fid[f["fund_id"]] = cmt / tot
 
-            for yr in sorted(stake_by_year.keys()):
+            # Per-fund sorted timelines: [(date_iso, value), ...]
+            fund_timelines: dict = {fid: [] for fid in fund_fids}
+
+            # 1) Annual end-of-year points
+            for r in rows:
+                fid   = str(r["fund_id"])
+                ratio = ratio_by_fid.get(fid, 0.0)
+                if ratio <= 0:
+                    continue
+                yr          = int(r["year"])
+                end_nav     = float(r["end_nav"] or 0)
+                gp_eq_end   = float(r["gp_equity_end"] or 0)
+                lp_side_nav = max(0.0, end_nav - gp_eq_end)
+                fund_timelines[fid].append(
+                    (f"{yr}-12-31", round(ratio * lp_side_nav, 2))
+                )
+
+            # 2) Inception start point: each fund's earliest snapshot's start_nav,
+            #    dated at the fund's actual inception_date (e.g. 7/1/2016 for
+            #    Event I), or Jan 1 of the first year if inception_date is unknown.
+            earliest_by_fid: dict = {}
+            for r in rows:
+                fid = str(r["fund_id"])
+                cur_best = earliest_by_fid.get(fid)
+                if cur_best is None or int(r["year"]) < int(cur_best["year"]):
+                    earliest_by_fid[fid] = r
+            for fid, r in earliest_by_fid.items():
+                ratio = ratio_by_fid.get(fid, 0.0)
+                if ratio <= 0:
+                    continue
+                start_nav = float(r["start_nav"] or 0)
+                if start_nav <= 0:
+                    continue
+                incep = inception_by_fid.get(fid)
+                if incep is not None:
+                    start_date = incep.isoformat() if hasattr(incep, "isoformat") else str(incep)
+                else:
+                    start_date = f"{int(r['year'])}-01-01"
+                fund_timelines[fid].insert(
+                    0, (start_date, round(ratio * start_nav, 2))
+                )
+
+            # Sort each fund's timeline by date
+            for fid in fund_timelines:
+                fund_timelines[fid].sort(key=lambda p: p[0])
+
+            # 3) Aggregate by union of dates with forward-fill per fund.
+            all_dates = sorted({d for tl in fund_timelines.values() for d, _ in tl})
+            for d in all_dates:
+                total = 0.0
+                for fid, tl in fund_timelines.items():
+                    best = None
+                    for pd, pv in tl:
+                        if pd <= d:
+                            best = pv
+                        else:
+                            break
+                    if best is not None:
+                        total += best
+                yr_int = int(d[:4]) if len(d) >= 4 else cur_year
                 out["fund_stakes"].append({
-                    "year":  yr,
-                    "date":  f"{yr}-12-31",
-                    "value": stake_by_year[yr],
+                    "year":  yr_int,
+                    "date":  d,
+                    "value": round(total, 2),
                 })
 
-            # Append the live YTD point (sum of current stake_value across funds)
+            # 4) Append the live YTD point (sum of current stake_value across funds)
             live_fund_stakes = round(
                 sum(float(f.get("stake_value") or 0) for f in funds_ov), 2
             )
             if live_fund_stakes > 0:
-                # Drop the current-year annual point if we already added one
-                # (avoid two dots in the same year)
+                # Drop any same-year annual point that would overlap with the
+                # live endpoint (avoid two dots in the current year).
                 out["fund_stakes"] = [p for p in out["fund_stakes"] if p["year"] != cur_year]
                 out["fund_stakes"].append({
                     "year":       cur_year,
