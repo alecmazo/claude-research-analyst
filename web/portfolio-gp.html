@@ -370,7 +370,12 @@
     font-size: 9px; font-weight: 800;
     color: var(--dim); letter-spacing: 1.2px; text-transform: uppercase;
     border-bottom: 1px solid rgba(255,255,255,0.06);
+    transition: color .12s;
   }
+  .rep-table th[style*="cursor:pointer"]:hover,
+  th[style*="cursor:pointer"]:hover { color: var(--blue) !important; }
+  /* Sortable column headers in data-table */
+  .data-table th[style*="cursor:pointer"]:hover { color: var(--blue); }
   .rep-table td {
     padding: 9px 14px;
     border-bottom: 1px solid rgba(255,255,255,0.03);
@@ -901,14 +906,13 @@
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
-        <span class="panel-action">SORT: TGT/UPSIDE ▼</span>
       </header>
       <table class="rep-table">
         <thead>
           <tr>
             <th>Ticker</th>
             <th class="rep-num">Price</th>
-            <th class="rep-num">TGT / Upside</th>
+            <th class="rep-num" id="rep-th-upside" style="cursor:pointer;user-select:none;">TGT / Upside</th>
           </tr>
         </thead>
         <tbody id="reports-tbody">
@@ -1619,6 +1623,9 @@
     }
   }
 
+  // Sort state for reports table (persists across re-renders within the session)
+  let _repSortDir = 'desc';
+
   function renderReports(reports) {
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
@@ -1639,31 +1646,56 @@
         const upside = (target != null && price != null && price > 0)
                        ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
         const dateStr = rep.generated_at ? new Date(rep.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-        return `
-          <tr data-ticker="${rep.ticker}">
-            <td>
-              <span class="rep-tk">${rep.ticker}</span>
-              ${rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : ''}
-              ${rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : ''}
-              <div class="rep-date">${dateStr}</div>
-            </td>
-            <td class="rep-num">
-              <div style="color:#e0e8f0; font-weight:700;">${price != null ? '$' + fmtPx(price) : '—'}</div>
-              <div class="${cssClass(pct)}" style="font-size:10px;">${fmtPct(pct)}</div>
-            </td>
-            <td class="rep-num">
-              <div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>
-              <div style="color:#e0e8f0; font-weight:700;">${target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—'}</div>
-              <div class="${cssClass(upside)}" style="font-size:10px;">${fmtPct(upside)}</div>
-            </td>
-          </tr>
-        `;
+        const sortVal = upside != null ? upside.toFixed(4) : '';
+        return (
+          '<tr data-ticker="' + rep.ticker + '">' +
+          '<td>' +
+            '<span class="rep-tk">' + rep.ticker + '</span>' +
+            (rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : '') +
+            (rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : '') +
+            '<div class="rep-date">' + dateStr + '</div>' +
+          '</td>' +
+          '<td class="rep-num">' +
+            '<div style="color:#e0e8f0; font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + '</div>' +
+            '<div class="' + cssClass(pct) + '" style="font-size:10px;">' + fmtPct(pct) + '</div>' +
+          '</td>' +
+          '<td class="rep-num" data-sort-val="' + sortVal + '">' +
+            '<div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>' +
+            '<div style="color:#e0e8f0; font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>' +
+            '<div class="' + cssClass(upside) + '" style="font-size:10px;">' + fmtPct(upside) + '</div>' +
+          '</td>' +
+          '</tr>'
+        );
       }).join('');
 
       // Click row → open inline report viewer
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
         tr.addEventListener('click', () => openReport(tr.getAttribute('data-ticker')));
       });
+
+      // Apply current sort direction immediately after render
+      _sortTableByCol(tbody, 2, _repSortDir);
+
+      // Wire the "TGT / Upside" column header — first call or re-wire after re-render
+      const th = document.getElementById('rep-th-upside');
+      if (th && !th.dataset.sortWired) {
+        th.dataset.sortWired = '1';
+        // Show current direction arrow
+        const arrow = document.createElement('span');
+        arrow.id = 'rep-sort-arrow';
+        arrow.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.7;';
+        arrow.textContent = _repSortDir === 'desc' ? '▼' : '▲';
+        th.appendChild(arrow);
+        th.addEventListener('click', function() {
+          _repSortDir = _repSortDir === 'desc' ? 'asc' : 'desc';
+          document.getElementById('rep-sort-arrow').textContent = _repSortDir === 'desc' ? '▼' : '▲';
+          _sortTableByCol(tbody, 2, _repSortDir);
+        });
+      } else {
+        // Update arrow text in case it already exists
+        const arrow = document.getElementById('rep-sort-arrow');
+        if (arrow) arrow.textContent = _repSortDir === 'desc' ? '▼' : '▲';
+      }
     });
   }
 
@@ -3356,13 +3388,57 @@
     }
   }
 
+  // ── Shared table sort utility ────────────────────────────────────────────────
+  // Sorts <tr> elements inside a <tbody> by a numeric data attribute on a given
+  // column index. Pinned rows (data-pin="bottom") are always kept at the end.
+  // Returns the new sort direction ('asc'|'desc').
+  function _sortTableByCol(tbody, colIndex, dir) {
+    const rows = Array.from(tbody.querySelectorAll('tr:not([data-pin])'));
+    const pinned = Array.from(tbody.querySelectorAll('tr[data-pin="bottom"]'));
+    rows.sort(function(a, b) {
+      const av = parseFloat(a.children[colIndex]?.dataset?.sortVal ?? 'NaN');
+      const bv = parseFloat(b.children[colIndex]?.dataset?.sortVal ?? 'NaN');
+      const an = isNaN(av), bn = isNaN(bv);
+      if (an && bn) return 0;
+      if (an) return 1;   // NaN always sinks to bottom
+      if (bn) return -1;
+      return dir === 'asc' ? av - bv : bv - av;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    pinned.forEach(r => tbody.appendChild(r));
+    return dir;
+  }
+
+  // Wire a <th> element to sort its table column on click.
+  // colIndex: 0-based column to sort. initialDir: 'desc'|'asc'.
+  // Returns a cleanup function (call to detach listener).
+  function _wireColumnSort(th, tbody, colIndex, initialDir) {
+    let dir = initialDir || 'desc';
+    const arrows = document.createElement('span');
+    arrows.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.55;user-select:none;';
+    arrows.textContent = dir === 'desc' ? '▼' : '▲';
+    th.style.cursor = 'pointer';
+    th.appendChild(arrows);
+
+    function onClick() {
+      dir = dir === 'desc' ? 'asc' : 'desc';
+      arrows.textContent = dir === 'desc' ? '▼' : '▲';
+      arrows.style.opacity = '1';
+      _sortTableByCol(tbody, colIndex, dir);
+    }
+    th.addEventListener('click', onClick);
+    // Apply initial sort immediately
+    _sortTableByCol(tbody, colIndex, dir);
+    return function() { th.removeEventListener('click', onClick); };
+  }
+
   function renderPositionsPanel(rows) {
     const totalMv   = rows.reduce((s, p) => s + (p.market_value || 0), 0);
     const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
     if (!rows.length) {
       return `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
     }
-    return `
+    const html = `
       <section class="panel">
         <details>
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
@@ -3370,11 +3446,11 @@
             <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
             <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
           </summary>
-          <table class="data-table" style="width:100%;">
+          <table class="data-table" id="pos-table" style="width:100%;">
             <thead><tr>
               <th>Symbol</th>
               <th>Name</th>
-              <th style="text-align:center;">Current %</th>
+              <th id="pos-th-curpct" style="text-align:center;">Current %</th>
               <th style="text-align:center;">→ Suggested %</th>
               <th style="text-align:right;">Qty</th>
               <th style="text-align:right;">Avg Cost</th>
@@ -3383,7 +3459,7 @@
               <th style="text-align:right;">Market Value</th>
               <th style="text-align:right;">Unrealized</th>
             </tr></thead>
-            <tbody>
+            <tbody id="pos-tbody">
               ${rows.map(p => {
                 const unr = p.unrealized_gain;
                 const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
@@ -3393,7 +3469,7 @@
                 return '<tr>' +
                   '<td style="font-weight:800;color:var(--blue);">' + (p.symbol || '—') + '</td>' +
                   '<td style="color:var(--mid);font-size:11px;">' + (p.name || '').slice(0, 30) + '</td>' +
-                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
+                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);" data-sort-val="' + (curPct != null ? curPct.toFixed(4) : '') + '">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
                   '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--dim);" data-suggested="' + (p.symbol || '') + '">—</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.total_qty || 0).toFixed(2) + '</td>' +
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
@@ -3403,13 +3479,22 @@
                   '<td style="text-align:right;font-variant-numeric:tabular-nums;' + cls + '">' + (unr != null ? fmtUSD(unr) : '—') + '</td>' +
                   '</tr>';
               }).join('')}
-              <tr id="pos-ev-row" style="display:none;background:rgba(91,184,212,0.06);border-top:1px solid rgba(91,184,212,0.2);">
+              <tr id="pos-ev-row" data-pin="bottom" style="display:none;background:rgba(91,184,212,0.06);border-top:1px solid rgba(91,184,212,0.2);">
                 <td colspan="10" style="padding:6px 10px;font-size:11px;color:var(--mid);">Run rebalance to see EV improvement</td>
               </tr>
             </tbody>
           </table>
         </details>
       </section>`;
+
+    // Wire sort after DOM settles (requestAnimationFrame)
+    requestAnimationFrame(function() {
+      const th    = document.getElementById('pos-th-curpct');
+      const tbody = document.getElementById('pos-tbody');
+      if (th && tbody) _wireColumnSort(th, tbody, 2, 'desc');
+    });
+
+    return html;
   }
 
   // ── LP Waterfall (CORRECT FIELD NAMES from /api/fund/waterfall) ─
