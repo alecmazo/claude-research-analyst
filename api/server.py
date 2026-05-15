@@ -2581,7 +2581,10 @@ def gp_fund_detail(fund_id: str, request: Request):
             # Live market NAV from positions (sum of qty × live price)
             market_nav = _fund_market_nav(cur, fund_id)
             snap_nav   = float(snap["net_nav"]) if snap and snap["net_nav"] is not None else None
-            effective_nav = snap_nav or (market_nav if market_nav > 0 else None)
+            # Prefer LIVE market NAV when positions are loaded; only fall back
+            # to the GP-saved snapshot when no positions exist in tax_lots.
+            using_live_nav = market_nav > 0
+            effective_nav  = (market_nav if using_live_nav else None) or snap_nav
 
             return {
                 "fund_id":        fund_id,
@@ -2598,7 +2601,14 @@ def gp_fund_detail(fund_id: str, request: Request):
                 "total_committed": sum(lp["commitment_amount"] for lp in lps),
                 "nav":            effective_nav,
                 "market_nav":     market_nav if market_nav > 0 else None,
-                "nav_as_of":      snap["as_of_date"].isoformat() if snap and snap["as_of_date"] else None,
+                # Only return an "as of" date when the GP-saved snapshot is
+                # actually being used; otherwise the frontend should render
+                # "Live from positions" (which is what the NAV value reflects).
+                "nav_as_of":      (
+                    snap["as_of_date"].isoformat()
+                    if (not using_live_nav) and snap and snap["as_of_date"]
+                    else None
+                ),
                 "ytd_pct":        ytd_pct_val,
             }
     except HTTPException:
