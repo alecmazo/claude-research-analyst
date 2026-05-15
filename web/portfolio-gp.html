@@ -207,6 +207,30 @@
   }
   .panel-action:hover { color: var(--blue); }
 
+  /* ── Universal collapsible panels ───────────────────────────────────────── */
+  /* Any section.panel whose header has been converted to a <summary> by the
+     auto-collapsify system gets a consistent toggle chevron via CSS. */
+  section.panel > details > summary,
+  section.panel > details > summary.panel-head {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+  }
+  section.panel > details > summary::-webkit-details-marker { display: none; }
+  section.panel > details > summary::marker              { display: none; }
+  /* Chevron injected by auto-collapsify: .ac-chevron span */
+  .ac-chevron {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--mid);
+    flex-shrink: 0;
+    transition: transform .18s;
+  }
+  /* Flip when open — only for auto-generated; manual ones have their own span */
+  details[open] > summary > .ac-chevron { transform: rotate(90deg); }
+  /* Hover tint on any collapsible summary */
+  section.panel > details > summary:hover .panel-title { color: var(--blue-light); }
+
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
     display: flex; flex-direction: column;
@@ -3047,7 +3071,7 @@
             <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
               <span class="panel-title">Annual Performance</span>
               <span class="panel-badge">${annual.length} year${annual.length!==1?'s':''} · ${data.benchmark_label||'S&P 500'}</span>
-              <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+              <span class="ac-chevron">▸</span>
             </summary>
             <div id="acd-annual-table-wrap"></div>
           </details>
@@ -3351,7 +3375,7 @@
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">LP Roster</span>
             <span class="panel-badge">${d.lp_count} partners · ${fmtUSD(d.total_committed)}</span>
-            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+            <span class="ac-chevron">▸</span>
           </summary>
           <table class="data-table" style="width:100%;">
             <thead><tr><th>Name</th><th>Email</th><th style="text-align:right;">Commitment</th><th style="text-align:right;">Share</th></tr></thead>
@@ -3444,7 +3468,7 @@
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">Open Positions</span>
             <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
-            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+            <span class="ac-chevron">▸</span>
           </summary>
           <table class="data-table" id="pos-table" style="width:100%;">
             <thead><tr>
@@ -3789,18 +3813,19 @@
     }).join('');
 
     elResult.innerHTML =
-      '<section class="panel">' +
-        '<header class="panel-head" style="justify-content:space-between;">' +
-          '<span>' +
-            '<span class="panel-title">Rebalance Suggestions</span>' +
-            '<span class="panel-badge" style="margin-left:8px;">' + (data.equity_count || data.rows.length) + ' equities</span>' +
-          '</span>' +
-          '<span style="display:flex;align-items:center;gap:8px;">' +
-            '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
-            '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
-          '</span>' +
-        '</header>' +
-        '<div style="padding:12px 14px 6px;">' +
+      '<section class="panel" data-ac="1">' +
+        '<details open>' +
+          '<summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;justify-content:space-between;">' +
+            '<span style="display:flex;align-items:center;gap:8px;">' +
+              '<span class="panel-title">Rebalance Suggestions</span>' +
+              '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
+              '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
+            '</span>' +
+            '<span style="display:flex;align-items:center;gap:8px;" onclick="event.stopPropagation();">' +
+              '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
+            '</span>' +
+          '</summary>' +
+          '<div style="padding:12px 14px 6px;">' +
           '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">' +
             '<div style="text-align:center;">' +
               '<div style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;margin-bottom:3px;">CURRENT EV</div>' +
@@ -3831,6 +3856,7 @@
             '<tbody>' + rowsHtml + '</tbody>' +
           '</table>' +
         '</div>' +
+        '</details>' +
       '</section>';
 
     // Wire email button
@@ -4301,7 +4327,7 @@
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">YTD Attribution (per-stock contribution)</span>
             <span class="panel-badge">${rows.length} names</span>
-            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+            <span class="ac-chevron">▸</span>
           </summary>
           <table class="data-table" style="width:100%;">
             <thead><tr>
@@ -4341,7 +4367,7 @@
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">YTD Account History (Cash Flows)</span>
             <span class="panel-badge">${flows.length} transactions</span>
-            <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
+            <span class="ac-chevron">▸</span>
           </summary>
           <table class="data-table" style="width:100%;">
             <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
@@ -4957,6 +4983,85 @@
       if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load market pulse.</div>';
     }
   }
+
+  // ── Universal auto-collapsify ────────────────────────────────────────────
+  // Converts any <section class="panel"> that contains a <table> and has a
+  // direct-child <header class="panel-head"> into a <details>/<summary> panel.
+  // Runs once at init (static HTML) and re-runs whenever the DOM changes
+  // (dynamic renders).  Panels already using <details> are left untouched.
+  (function _installAutoCollapsify() {
+    function collapsify() {
+      document.querySelectorAll('section.panel:not([data-ac])').forEach(function(section) {
+        // Already converted or uses manual <details> pattern
+        if (section.querySelector(':scope > details')) return;
+
+        // Must have a direct-child <header class="panel-head">
+        var hdr = null;
+        for (var i = 0; i < section.childNodes.length; i++) {
+          var c = section.childNodes[i];
+          if (c.nodeType === 1 && c.tagName === 'HEADER' && c.classList.contains('panel-head')) {
+            hdr = c; break;
+          }
+        }
+        if (!hdr) return;
+
+        // Must contain at least one <table> (or a loading placeholder that
+        // will eventually contain one — still wrap it so dynamic content
+        // that arrives later is inside the open details).
+        // We skip panels that are pure-tile/chart with no table at all,
+        // UNLESS they have already been opted in via data-collapsible.
+        var hasTable = section.querySelector('table');
+        var optedIn  = section.dataset.collapsible === '1';
+        if (!hasTable && !optedIn) return;
+
+        section.setAttribute('data-ac', '1');
+
+        // Build <details><summary>…header children…<span.ac-chevron>▸</summary>…rest…
+        var details = document.createElement('details');
+        var summary = document.createElement('summary');
+        summary.className = 'panel-head';
+        // Transfer any inline style from the original header (e.g. justify-content)
+        var hdrStyle = hdr.getAttribute('style');
+        summary.style.cssText = 'display:flex;align-items:center;gap:8px;' + (hdrStyle || '');
+
+        while (hdr.firstChild) summary.appendChild(hdr.firstChild);
+
+        // Add rotating chevron (CSS rotates it when [open])
+        var chev = document.createElement('span');
+        chev.className = 'ac-chevron';
+        chev.textContent = '▸';
+        summary.appendChild(chev);
+
+        details.appendChild(summary);
+
+        // Move all remaining section children into <details>
+        var toMove = [];
+        section.childNodes.forEach(function(n) { if (n !== hdr) toMove.push(n); });
+        toMove.forEach(function(n) { details.appendChild(n); });
+        hdr.remove();
+        section.appendChild(details);
+      });
+    }
+
+    // Run after static HTML is ready
+    collapsify();
+
+    // Re-run whenever nodes are added (catches dynamic innerHTML updates).
+    // Debounced with rAF so rapid mutations collapse into one pass.
+    var _acPending = false;
+    new MutationObserver(function(muts) {
+      var added = false;
+      for (var i = 0; i < muts.length; i++) {
+        if (muts[i].addedNodes.length) { added = true; break; }
+      }
+      if (added && !_acPending) {
+        _acPending = true;
+        requestAnimationFrame(function() { _acPending = false; collapsify(); });
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    window._collapsifyPanels = collapsify;
+  })();
 
   // ── Init ─────────────────────────────────────────────────────
   loadIndices();
