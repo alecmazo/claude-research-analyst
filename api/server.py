@@ -6567,51 +6567,82 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
     resend_error = None
     smtp_error   = None
 
-    # Try Resend first (Railway compatible)
+    # Try Resend first (Railway compatible — no outbound SMTP needed)
     resend_key = os.environ.get("RESEND_API_KEY", "")
     resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
     if resend_key:
-        try:
-            import urllib.request as _urlreq, urllib.error as _urlerr
-            payload = json.dumps({
-                "from": resend_from,
-                "to": [to_addr],
-                "subject": subject,
-                "html": html_body,
-            }).encode()
-            req = _urlreq.Request(
-                "https://api.resend.com/emails",
-                data=payload,
-                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                method="POST",
-            )
+        import urllib.request as _urlreq, urllib.error as _urlerr
+
+        def _try_resend(from_addr: str, reply_to: str | None = None) -> dict | None:
+            """Attempt one Resend send. Returns result dict on success, None on failure."""
             try:
-                with _urlreq.urlopen(req, timeout=15) as resp:
-                    return {"ok": True, "transport": "resend", "sent_to": to_addr}
+                body_dict: dict = {
+                    "from": from_addr,
+                    "to": [to_addr],
+                    "subject": subject,
+                    "html": html_body,
+                }
+                if reply_to:
+                    body_dict["reply_to"] = reply_to
+                payload = json.dumps(body_dict).encode()
+                req = _urlreq.Request(
+                    "https://api.resend.com/emails",
+                    data=payload,
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with _urlreq.urlopen(req, timeout=15):
+                    return {"ok": True, "transport": "resend", "sent_to": to_addr,
+                            "from": from_addr}
             except _urlerr.HTTPError as _he:
-                body = _he.read().decode("utf-8", errors="replace")
-                resend_error = f"Resend HTTP {_he.code}: {body[:200]}"
+                body_txt = _he.read().decode("utf-8", errors="replace")
+                return {"ok": False, "code": _he.code, "body": body_txt}
             except Exception as _e:
-                resend_error = f"Resend error: {_e}"
+                return {"ok": False, "code": None, "body": str(_e)}
+
+        try:
+            # First attempt: configured from address
+            r1 = _try_resend(resend_from)
+            if r1 and r1.get("ok"):
+                return r1
+
+            # If 403 (domain not verified / permission denied), fall back to
+            # Resend's built-in onboarding sender which requires no domain setup.
+            if r1 and r1.get("code") == 403:
+                r2 = _try_resend("DGA Capital <onboarding@resend.dev>", reply_to=resend_from)
+                if r2 and r2.get("ok"):
+                    return r2
+                resend_error = (
+                    f"Resend HTTP 403 (domain not verified): {r1.get('body','')[:120]}. "
+                    f"Fallback also failed: {r2.get('body','')[:80] if r2 else 'n/a'}. "
+                    "Fix: verify your sending domain at resend.com/domains and set RESEND_FROM."
+                )
+            else:
+                resend_error = f"Resend HTTP {r1.get('code','?')}: {r1.get('body','')[:200]}"
         except Exception as _e:
             resend_error = f"Resend setup error: {_e}"
     else:
         resend_error = "RESEND_API_KEY not set"
 
-    # Gmail SMTP fallback
+    # Gmail SMTP fallback (note: Railway blocks outbound SMTP — use Resend instead)
     user = os.environ.get("GMAIL_USER", "")
     pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
     if user and pwd:
         try:
             ctx = _ssl.create_default_context()
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as s:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=15) as s:
                 s.login(user, pwd)
                 s.send_message(msg)
             return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr}
+        except OSError as _e:
+            if getattr(_e, "errno", None) in (101, 111, 113):
+                smtp_error = "Gmail SMTP blocked (Railway does not allow outbound SMTP — use RESEND_API_KEY instead)"
+            else:
+                smtp_error = f"Gmail SMTP failed: {_e}"
         except Exception as _e:
             smtp_error = f"Gmail SMTP failed: {_e}"
     else:
-        smtp_error = "GMAIL_USER or GMAIL_APP_PASSWORD not set"
+        smtp_error = "GMAIL_USER or GMAIL_APP_PASSWORD not set (Railway blocks SMTP — set RESEND_API_KEY)"
 
     parts = []
     if resend_error: parts.append(f"Resend: {resend_error}")
