@@ -1186,6 +1186,8 @@
     <div id="acd-perf-tiles"  style="margin-top:14px;"></div>
     <div id="acd-balance"     style="margin-top:18px;"></div>
     <div id="acd-positions"   style="margin-top:18px;"></div>
+    <div id="acd-rebalance-wrap"  style="margin-top:14px;"></div>
+    <div id="acd-rebalance-result" style="margin-top:14px;"></div>
     <div id="acd-attribution" style="margin-top:18px;"></div>
     <div id="acd-history"     style="margin-top:18px;"></div>
     <div id="acd-alltime" style="margin-top:18px;"></div>
@@ -3369,22 +3371,41 @@
             <span style="margin-left:auto;font-size:10px;color:var(--mid);">click to expand ▸</span>
           </summary>
           <table class="data-table" style="width:100%;">
-            <thead><tr><th>Symbol</th><th>Name</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Cost Basis</th><th style="text-align:right;">Last</th><th style="text-align:right;">Market Value</th><th style="text-align:right;">Unrealized</th></tr></thead>
+            <thead><tr>
+              <th>Symbol</th>
+              <th>Name</th>
+              <th style="text-align:center;">Current %</th>
+              <th style="text-align:center;">→ Suggested %</th>
+              <th style="text-align:right;">Qty</th>
+              <th style="text-align:right;">Avg Cost</th>
+              <th style="text-align:right;">Cost Basis</th>
+              <th style="text-align:right;">Last</th>
+              <th style="text-align:right;">Market Value</th>
+              <th style="text-align:right;">Unrealized</th>
+            </tr></thead>
             <tbody>
               ${rows.map(p => {
                 const unr = p.unrealized_gain;
                 const cls = unr == null ? '' : (unr >= 0 ? 'color:var(--green);' : 'color:var(--red);');
-                return `<tr>
-                  <td style="font-weight:800;color:var(--blue);">${p.symbol || '—'}</td>
-                  <td style="color:var(--mid);font-size:11px;">${(p.name || '').slice(0, 30)}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${(p.total_qty || 0).toFixed(2)}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.avg_cost != null ? fmtUSD(p.avg_cost) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmtUSD(p.total_cost || 0)}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.last_price != null ? fmtUSD(p.last_price) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${p.market_value != null ? fmtUSD(p.market_value) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;${cls}">${unr != null ? fmtUSD(unr) : '—'}</td>
-                </tr>`;
+                const curPct = p.market_weight_pct != null
+                  ? p.market_weight_pct
+                  : (p.market_value && totalMv > 0 ? (p.market_value / totalMv * 100) : (p.weight_pct || null));
+                return '<tr>' +
+                  '<td style="font-weight:800;color:var(--blue);">' + (p.symbol || '—') + '</td>' +
+                  '<td style="color:var(--mid);font-size:11px;">' + (p.name || '').slice(0, 30) + '</td>' +
+                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
+                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--dim);" data-suggested="' + (p.symbol || '') + '">—</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.total_qty || 0).toFixed(2) + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtUSD(p.total_cost || 0) + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.last_price != null ? fmtUSD(p.last_price) : '—') + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.market_value != null ? fmtUSD(p.market_value) : '—') + '</td>' +
+                  '<td style="text-align:right;font-variant-numeric:tabular-nums;' + cls + '">' + (unr != null ? fmtUSD(unr) : '—') + '</td>' +
+                  '</tr>';
               }).join('')}
+              <tr id="pos-ev-row" style="display:none;background:rgba(91,184,212,0.06);border-top:1px solid rgba(91,184,212,0.2);">
+                <td colspan="10" style="padding:6px 10px;font-size:11px;color:var(--mid);">Run rebalance to see EV improvement</td>
+              </tr>
             </tbody>
           </table>
         </details>
@@ -3551,8 +3572,24 @@
         _acctPositionsMV = totalMV;
         _updatePositionsReturnTile();
       }
+
+      // Show rebalance button
+      const wrap = document.getElementById('acd-rebalance-wrap');
+      if (wrap) {
+        wrap.innerHTML =
+          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<button class="tab-btn" id="acd-rebalance-btn" style="font-size:12px;padding:6px 18px;">📊 Run Rebalance</button>' +
+            '<span id="acd-rebalance-status" style="font-size:11px;"></span>' +
+          '</div>';
+        const rbtn = document.getElementById('acd-rebalance-btn');
+        if (rbtn) rbtn.addEventListener('click', () => runAcctRebalance(fundId));
+      }
+
+      // Load and render saved rebalance (if any)
+      loadSavedRebalance(fundId);
+
     } catch (e) {
-      el.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
+      el.innerHTML = '<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>';
     }
   }
 
@@ -3578,6 +3615,154 @@
     } catch (e) {
       if (elP) elP.innerHTML = '';
       elB.innerHTML = `<section class="panel"><header class="panel-head"><span class="panel-title">Monthly Performance YTD</span></header><div class="tab-empty">No data yet. Upload the Fidelity "Investment Income &amp; Balance Detail" CSV below.</div></section>`;
+    }
+  }
+
+  // ── Rebalance helpers ──────────────────────────────────────────────────────
+
+  async function runAcctRebalance(fundId) {
+    const btn = document.getElementById('acd-rebalance-btn');
+    const status = document.getElementById('acd-rebalance-status');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+    if (status) status.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance', {method:'POST'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.detail || 'Rebalance failed');
+      renderRebalanceResult(data, fundId);
+      if (status) { status.style.color='var(--green)'; status.textContent='✓ Done — ' + new Date(data.run_at).toLocaleString(); }
+    } catch(e) {
+      if (status) { status.style.color='var(--red)'; status.textContent='❌ ' + e.message; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📊 Run Rebalance'; }
+    }
+  }
+
+  async function loadSavedRebalance(fundId) {
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.ok && data.rows) renderRebalanceResult(data, fundId);
+    } catch(_) {}
+  }
+
+  function renderRebalanceResult(data, fundId) {
+    if (!data || !data.rows) return;
+
+    // 1. Populate Suggested % cells in positions table
+    data.rows.forEach(function(row) {
+      const cell = document.querySelector('[data-suggested="' + row.ticker + '"]');
+      if (cell) {
+        const pct = (row.suggested_pct || 0).toFixed(1);
+        const diff = (row.suggested_pct || 0) - (row.current_pct || 0);
+        const col = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
+        cell.textContent = pct + '%';
+        cell.style.color = col;
+      }
+    });
+
+    // 2. Update/show EV row
+    const evRow = document.getElementById('pos-ev-row');
+    if (evRow) {
+      const curEV = (data.current_ev || 0).toFixed(1);
+      const sugEV = (data.suggested_ev || 0).toFixed(1);
+      const evCol = (data.suggested_ev || 0) > (data.current_ev || 0) ? 'var(--green)' : 'var(--red)';
+      evRow.style.display = '';
+      evRow.innerHTML =
+        '<td colspan="2" style="font-weight:800;color:var(--blue);font-size:11px;">EXPECTED VALUE</td>' +
+        '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);">' + curEV + '%</td>' +
+        '<td style="text-align:center;font-variant-numeric:tabular-nums;' + evCol + ';font-weight:700;">' + sugEV + '%</td>' +
+        '<td colspan="6" style="font-size:10px;color:var(--mid);">Weighted avg upside across equity positions</td>';
+    }
+
+    // 3. Render summary panel
+    const elResult = document.getElementById('acd-rebalance-result');
+    if (!elResult) return;
+
+    const runDate = data.run_at ? new Date(data.run_at).toLocaleString() : '—';
+    const evImprove = (data.suggested_ev || 0) - (data.current_ev || 0);
+
+    const rowsHtml = (data.rows || []).slice().sort(function(a,b){ return (b.suggested_pct||0)-(a.suggested_pct||0); }).map(function(row) {
+      const diff = (row.suggested_pct||0) - (row.current_pct||0);
+      const diffCol = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
+      const diffStr = diff > 0.1 ? '▲ +' + diff.toFixed(1) + '%' : diff < -0.1 ? '▼ ' + diff.toFixed(1) + '%' : '—';
+      const ratingColors = {'Buy':'var(--green)','Strong Buy':'var(--green)','Hold':'var(--mid)','Sell':'var(--red)','Strong Sell':'var(--red)'};
+      const ratingCol = ratingColors[row.rating] || 'var(--mid)';
+      const upside = row.upside_pct;
+      return '<tr>' +
+        '<td style="font-weight:800;color:var(--blue);">' + row.ticker + '</td>' +
+        '<td style="text-align:right;color:' + ratingCol + ';">' + (row.rating||'—') + '</td>' +
+        '<td style="text-align:right;color:' + ((upside||0)>=0?'var(--green)':'var(--red)') + ';">' + (upside!=null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—') + '</td>' +
+        '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (row.score||0).toFixed(2) + '</td>' +
+        '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (row.current_pct||0).toFixed(1) + '%</td>' +
+        '<td style="text-align:center;color:var(--blue);opacity:0.6;">→</td>' +
+        '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + diffCol + ';font-weight:700;">' + (row.suggested_pct||0).toFixed(1) + '%</td>' +
+        '<td style="text-align:right;font-size:10px;color:' + diffCol + ';">' + diffStr + '</td>' +
+        '</tr>';
+    }).join('');
+
+    elResult.innerHTML =
+      '<section class="panel">' +
+        '<header class="panel-head" style="justify-content:space-between;">' +
+          '<span>' +
+            '<span class="panel-title">Rebalance Suggestions</span>' +
+            '<span class="panel-badge" style="margin-left:8px;">' + (data.equity_count || data.rows.length) + ' equities</span>' +
+          '</span>' +
+          '<span style="display:flex;align-items:center;gap:8px;">' +
+            '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
+            '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;">📧 Email GP</button>' +
+          '</span>' +
+        '</header>' +
+        '<div style="padding:12px 14px 6px;">' +
+          '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">' +
+            '<div style="text-align:center;">' +
+              '<div style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;margin-bottom:3px;">CURRENT EV</div>' +
+              '<div style="font-size:20px;font-weight:800;color:var(--mid);">' + (data.current_ev||0).toFixed(1) + '%</div>' +
+              '<div style="font-size:9px;color:var(--dim);">wtd avg upside</div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;font-size:22px;color:var(--blue);opacity:0.7;">→</div>' +
+            '<div style="text-align:center;">' +
+              '<div style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;margin-bottom:3px;">SUGGESTED EV</div>' +
+              '<div style="font-size:20px;font-weight:800;' + (evImprove>=0?'color:var(--green)':'color:var(--red)') + ';">' + (data.suggested_ev||0).toFixed(1) + '%</div>' +
+              '<div style="font-size:9px;color:var(--dim);">wtd avg upside</div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;">' +
+              '<span style="background:rgba(34,197,94,0.12);color:var(--green);padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;">' + (evImprove>=0?'+':'') + evImprove.toFixed(1) + '% EV improvement</span>' +
+            '</div>' +
+          '</div>' +
+          '<table class="data-table" style="width:100%;">' +
+            '<thead><tr>' +
+              '<th>Ticker</th>' +
+              '<th style="text-align:right;">Rating</th>' +
+              '<th style="text-align:right;">Upside</th>' +
+              '<th style="text-align:right;">Score</th>' +
+              '<th style="text-align:right;">Current %</th>' +
+              '<th style="text-align:center;">→</th>' +
+              '<th style="text-align:right;">Suggested %</th>' +
+              '<th style="text-align:right;">Action</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rowsHtml + '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</section>';
+
+    // Wire email button
+    const emailBtn = document.getElementById('acd-rebalance-email-btn');
+    if (emailBtn) {
+      emailBtn.addEventListener('click', async function() {
+        emailBtn.disabled = true; emailBtn.textContent = 'Sending…';
+        try {
+          const r2 = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email', {method:'POST'});
+          const d2 = await r2.json();
+          if (!r2.ok) throw new Error(d2.detail || r2.status);
+          emailBtn.textContent = '✓ Sent'; emailBtn.style.color = 'var(--green)';
+          setTimeout(function(){ emailBtn.disabled=false; emailBtn.textContent='📧 Email GP'; emailBtn.style.color=''; }, 3000);
+        } catch(e) {
+          emailBtn.textContent = '❌ ' + e.message; emailBtn.disabled = false;
+        }
+      });
     }
   }
 
@@ -3772,21 +3957,31 @@
     }
     elB.innerHTML = `
       <section class="panel">
-        <header class="panel-head">
-          <span class="panel-title">Monthly Performance YTD</span>
-          <span class="panel-badge">${pts.length} months</span>
-        </header>
-        <div style="position:relative;padding:0 12px 8px;">
-          <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
-          <div id="acd-bar-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
-        </div>
-        <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
-          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
-          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#cc3333;border-radius:2px;"></span> Portfolio loss</span>
-          <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:24px;height:2px;background:#c9a84c;"></span> SPY monthly</span>
-        </div>
+        <details open id="acd-balance-details">
+          <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span class="panel-title">Monthly Performance YTD</span>
+            <span class="panel-badge">${pts.length} months</span>
+          </summary>
+          <div style="position:relative;padding:0 12px 8px;">
+            <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
+            <div id="acd-bar-tooltip" style="display:none;position:absolute;background:rgba(10,22,40,0.97);border:1px solid rgba(91,184,212,0.3);border-radius:8px;padding:10px 14px;font-size:11px;color:#e0e8f0;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+          </div>
+          <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#cc3333;border-radius:2px;"></span> Portfolio loss</span>
+            <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:24px;height:2px;background:#c9a84c;"></span> SPY monthly</span>
+          </div>
+        </details>
       </section>`;
-    // Draw after layout settles
+    // Draw after layout settles; also redraw when toggled open (canvas needs visible dimensions)
+    const detailsEl = document.getElementById('acd-balance-details');
+    if (detailsEl) {
+      detailsEl.addEventListener('toggle', () => {
+        if (detailsEl.open) {
+          requestAnimationFrame(() => drawAcctMonthlyBarChart(pts));
+        }
+      });
+    }
     requestAnimationFrame(() => drawAcctMonthlyBarChart(pts));
   }
 

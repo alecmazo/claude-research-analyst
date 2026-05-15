@@ -6361,6 +6361,354 @@ async def fund_positions(request: Request, fund_id: str = None):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Per-account rebalance endpoints  (TASK 4 / 6 / 7)
+# ---------------------------------------------------------------------------
+
+# Money-market / cash tickers to exclude from equity rebalance
+_CASH_TICKERS = {"SPAXX", "FDRXX", "FDLXX", "FZFXX", "FZDXX", "SPRXX", "VMFXX"}
+
+def _is_cash_ticker(sym: str) -> bool:
+    """Return True if this ticker represents cash / money-market (exclude from rebalance)."""
+    clean = sym.rstrip("*").upper()
+    if clean in _CASH_TICKERS:
+        return True
+    # Tickers that start with a digit or are all non-alpha chars are not equities
+    if clean and clean[0].isdigit():
+        return True
+    return False
+
+
+def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
+    """Send a simple HTML email using the same transport as the analyst module."""
+    import smtplib, ssl as _ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    from_addr = os.environ.get("GMAIL_USER", "noreply@dgacapital.com")
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.attach(MIMEText(html_body, "html"))
+
+    # Try Resend first (Railway compatible)
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
+    if resend_key:
+        try:
+            import urllib.request as _urlreq
+            payload = json.dumps({
+                "from": resend_from,
+                "to": [to_addr],
+                "subject": subject,
+                "html": html_body,
+            }).encode()
+            req = _urlreq.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with _urlreq.urlopen(req, timeout=15) as resp:
+                return {"ok": True, "transport": "resend", "sent_to": to_addr}
+        except Exception as _e:
+            pass  # fall through to SMTP
+
+    # Gmail SMTP fallback
+    user = os.environ.get("GMAIL_USER", "")
+    pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
+    if user and pwd:
+        try:
+            ctx = _ssl.create_default_context()
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as s:
+                s.login(user, pwd)
+                s.send_message(msg)
+            return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr}
+        except Exception as _e:
+            return {"ok": False, "error": f"Gmail SMTP failed: {_e}"}
+
+    return {"ok": False, "error": "No email transport configured (set RESEND_API_KEY or GMAIL_USER + GMAIL_APP_PASSWORD)"}
+
+
+@app.get("/api/v2/gp/fund/{fund_id}/rebalance")
+async def get_account_rebalance(fund_id: str, request: Request):
+    """Return the persisted rebalance result for a managed account."""
+    _require_fund_token(request)
+    result = _kv_get(f"rebalance.account.{fund_id}")
+    if result is None:
+        return {"ok": False, "detail": "No rebalance yet"}
+    return result
+
+
+@app.post("/api/v2/gp/fund/{fund_id}/rebalance")
+async def run_account_rebalance(fund_id: str, request: Request):
+    """Run a fresh portfolio rebalance for a managed account and persist results."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims or claims.get("role") != "gp":
+        _require_fund_token(request)  # fall back to legacy fund token
+
+    if not _PSYCOPG2_OK:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # 1. Resolve fund id
+            fid = _resolve_fund_id(cur, fund_id)
+
+            # 2. Load open positions from tax_lots
+            cur.execute("""
+                SELECT s.symbol,
+                       SUM(tl.quantity) AS qty,
+                       SUM(tl.quantity * tl.cost_basis_per_unit) AS cost
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.symbol
+            """, (fid,))
+            lot_rows = cur.fetchall()
+
+            if not lot_rows:
+                raise HTTPException(status_code=422, detail="No open positions found for this fund")
+
+            # 3. Fetch live prices
+            all_syms = [r["symbol"] for r in lot_rows if r["symbol"]]
+            prices = _fetch_prices(all_syms)
+
+            # Compute total MV (all positions including cash)
+            total_mv_all = 0.0
+            pos_map = {}  # symbol -> {qty, cost, price, mv}
+            for r in lot_rows:
+                sym = r["symbol"]
+                qty = float(r["qty"] or 0)
+                cost = float(r["cost"] or 0)
+                price = prices.get(sym)
+                mv = qty * price if price else cost
+                total_mv_all += mv
+                pos_map[sym] = {"qty": qty, "cost": cost, "price": price, "mv": mv}
+
+            # 4. Filter to equity tickers only
+            equity_syms = [s for s in all_syms if not _is_cash_ticker(s)]
+
+            total_equity_mv = sum(pos_map[s]["mv"] for s in equity_syms if s in pos_map)
+            if total_equity_mv <= 0:
+                total_equity_mv = max(sum(pos_map[s]["cost"] for s in equity_syms if s in pos_map), 1.0)
+
+            # 5. Look up research reports from saved markdown files in STOCKS_FOLDER.
+            #    Falls back to Hold/0 upside when no report exists for a ticker.
+            reports_folder = analyst.STOCKS_FOLDER
+            ticker_results = []
+            for sym in equity_syms:
+                md_path = reports_folder / f"{sym}_DGA_Report.md"
+                summary_dict: dict = {}
+                if md_path.exists():
+                    try:
+                        raw_summary = _extract_summary_cached(md_path)
+                        if raw_summary:
+                            summary_dict = {
+                                "rating":       raw_summary.get("rating") or "Hold",
+                                "price_target": raw_summary.get("price_target"),
+                                "upside_pct":   raw_summary.get("upside_pct") or 0,
+                            }
+                    except Exception:
+                        pass
+
+                ticker_results.append({
+                    "ticker": sym,
+                    "ok": True,
+                    "summary": summary_dict or {"rating": "Hold", "price_target": None, "upside_pct": 0},
+                    "sector":   "Unknown",
+                    "industry": "Unknown",
+                })
+
+            if not ticker_results:
+                raise HTTPException(status_code=422, detail="No equity positions found to rebalance")
+
+            # 6. Compute rebalance (uses "current" strategy = keep all positions)
+            try:
+                rebalance = analyst.compute_rebalance(ticker_results, strategy="current")
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"compute_rebalance failed: {exc}")
+
+            weights = rebalance.get("weights", {})  # {ticker: fraction 0-1}
+            reb_rows = rebalance.get("rows", [])
+
+            # Build a lookup from compute_rebalance rows
+            reb_lookup = {r["ticker"]: r for r in reb_rows}
+
+            # 7. Build result rows
+            result_rows = []
+            current_ev = 0.0
+            suggested_ev = 0.0
+
+            for sym in equity_syms:
+                pm = pos_map.get(sym, {})
+                cur_pct = (pm.get("mv", 0) / total_equity_mv * 100) if total_equity_mv > 0 else 0
+                sug_frac = weights.get(sym, 0)
+                sug_pct = sug_frac * 100
+
+                reb = reb_lookup.get(sym, {})
+                rating = reb.get("rating") or (ticker_results[equity_syms.index(sym)].get("summary") or {}).get("rating") or "Hold"
+                upside_pct = reb.get("upside_pct")
+                if upside_pct is None:
+                    upside_pct = (ticker_results[equity_syms.index(sym)].get("summary") or {}).get("upside_pct") or 0
+                score = float(reb.get("score") or 0)
+                sec = reb.get("sector") or ticker_results[equity_syms.index(sym)].get("sector") or "Unknown"
+
+                current_ev  += (cur_pct / 100) * float(upside_pct)
+                suggested_ev += sug_frac * float(upside_pct)
+
+                # Action determination
+                diff = sug_pct - cur_pct
+                if diff > 1.5:
+                    action = "BUY MORE"
+                elif diff < -1.5:
+                    action = "TRIM"
+                else:
+                    action = "HOLD"
+
+                result_rows.append({
+                    "ticker":       sym,
+                    "name":         sym,  # no name in tax_lots directly
+                    "current_pct":  round(cur_pct, 2),
+                    "suggested_pct": round(sug_pct, 2),
+                    "rating":       rating,
+                    "upside_pct":   round(float(upside_pct), 2),
+                    "score":        round(score, 4),
+                    "sector":       sec,
+                    "action":       action,
+                })
+
+            # EV = weighted-average upside across equity positions
+            # current_ev  = Σ (cur_pct/100 × upside_pct)  — e.g. 15.3% allocation × 18.5% upside
+            # suggested_ev = Σ (sug_frac × upside_pct)     — already a fraction (0–1)
+            result = {
+                "ok":               True,
+                "fund_id":          fund_id,
+                "run_at":           datetime.utcnow().isoformat() + "Z",
+                "strategy":         "current",
+                "total_equity_mv":  round(total_equity_mv, 2),
+                "rows":             result_rows,
+                "current_ev":       round(current_ev, 2),
+                "suggested_ev":     round(suggested_ev, 2),
+                "positions_count":  len(lot_rows),
+                "equity_count":     len(equity_syms),
+            }
+
+            # 8. Persist and flush cache
+            _kv_put(f"rebalance.account.{fund_id}", result)
+            _invalidate_user_cache()
+
+            return result
+    finally:
+        conn.close()
+
+
+@app.post("/api/v2/gp/fund/{fund_id}/rebalance/email")
+async def email_account_rebalance(fund_id: str, request: Request):
+    """Email the rebalance summary for a managed account to the GP."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims or claims.get("role") != "gp":
+        _require_fund_token(request)
+
+    # Load persisted rebalance
+    data = _kv_get(f"rebalance.account.{fund_id}")
+    if not data or not data.get("ok"):
+        raise HTTPException(status_code=404, detail="No rebalance found — run one first")
+
+    # Determine GP email
+    to_addr = ""
+    if claims:
+        to_addr = claims.get("email", "")
+    if not to_addr:
+        to_addr = os.environ.get("GMAIL_USER", "")
+    if not to_addr or "@" not in to_addr:
+        raise HTTPException(status_code=422, detail="Could not determine GP email address")
+
+    run_date = data.get("run_at", "")[:10] if data.get("run_at") else "—"
+    evImprove = (data.get("suggested_ev") or 0) - (data.get("current_ev") or 0)
+    evSign = "+" if evImprove >= 0 else ""
+    sug_ev_color = "#22c55e" if evImprove >= 0 else "#ef4444"
+
+    rows_html = ""
+    for row in sorted(data.get("rows", []), key=lambda r: -(r.get("suggested_pct") or 0)):
+        diff = (row.get("suggested_pct") or 0) - (row.get("current_pct") or 0)
+        diff_str = f"+{diff:.1f}%" if diff > 0.1 else (f"{diff:.1f}%" if diff < -0.1 else "—")
+        diff_color = "#22c55e" if diff > 0.5 else ("#ef4444" if diff < -0.5 else "#8899aa")
+        upside = row.get("upside_pct") or 0
+        upside_sign = "+" if upside >= 0 else ""
+        rows_html += (
+            f"<tr style='border-bottom:1px solid #2a3a4a;'>"
+            f"<td style='padding:6px 10px;font-weight:bold;color:#5bb8d4;'>{row.get('ticker','')}</td>"
+            f"<td style='padding:6px 10px;text-align:right;'>{row.get('rating','—')}</td>"
+            f"<td style='padding:6px 10px;text-align:right;'>{upside_sign}{upside:.1f}%</td>"
+            f"<td style='padding:6px 10px;text-align:right;'>{(row.get('current_pct') or 0):.1f}%</td>"
+            f"<td style='padding:6px 10px;text-align:right;'>{(row.get('suggested_pct') or 0):.1f}%</td>"
+            f"<td style='padding:6px 10px;text-align:right;color:{diff_color};'>{diff_str}</td>"
+            f"<td style='padding:6px 10px;text-align:right;'>{row.get('action','—')}</td>"
+            f"</tr>"
+        )
+
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a1628;color:#c0d0e0;margin:0;padding:24px;">
+  <div style="max-width:700px;margin:0 auto;">
+    <h1 style="color:#5bb8d4;font-size:20px;margin-bottom:4px;">Portfolio Rebalance Summary</h1>
+    <p style="color:#6688aa;font-size:13px;margin-top:0;">Fund {fund_id} &mdash; Run {run_date}</p>
+
+    <div style="display:flex;gap:24px;margin:20px 0;flex-wrap:wrap;">
+      <div style="text-align:center;background:#112233;padding:16px 24px;border-radius:8px;">
+        <div style="font-size:11px;color:#6688aa;font-weight:bold;margin-bottom:6px;">CURRENT EV</div>
+        <div style="font-size:28px;font-weight:bold;color:#8899aa;">{(data.get('current_ev') or 0):.1f}%</div>
+        <div style="font-size:11px;color:#445566;">wtd avg upside</div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:28px;color:#5bb8d4;">→</div>
+      <div style="text-align:center;background:#112233;padding:16px 24px;border-radius:8px;">
+        <div style="font-size:11px;color:#6688aa;font-weight:bold;margin-bottom:6px;">SUGGESTED EV</div>
+        <div style="font-size:28px;font-weight:bold;color:{sug_ev_color};">{(data.get('suggested_ev') or 0):.1f}%</div>
+        <div style="font-size:11px;color:#445566;">wtd avg upside</div>
+      </div>
+      <div style="display:flex;align-items:center;">
+        <span style="background:rgba(34,197,94,0.15);color:#22c55e;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:bold;">
+          {evSign}{evImprove:.1f}% EV improvement
+        </span>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;background:#112233;border-radius:8px;overflow:hidden;">
+      <thead>
+        <tr style="background:#1a3050;">
+          <th style="padding:8px 10px;text-align:left;color:#8899aa;font-size:11px;">TICKER</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">RATING</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">UPSIDE</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">CURRENT %</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">SUGGESTED %</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">CHANGE</th>
+          <th style="padding:8px 10px;text-align:right;color:#8899aa;font-size:11px;">ACTION</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+
+    <p style="font-size:11px;color:#445566;margin-top:20px;">
+      Generated by DGA Capital GP Portal &mdash; {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC
+    </p>
+  </div>
+</body>
+</html>"""
+
+    subject = f"[DGA] Portfolio Rebalance — Fund {fund_id} — {run_date}"
+    result = _send_simple_email(to_addr, subject, html_body)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Email failed"))
+    return result
+
+
 @app.get("/api/fund/activity")
 async def fund_activity(request: Request, fund_id: str = None):
     _require_fund_token(request)
