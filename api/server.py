@@ -6867,7 +6867,7 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
 
     # Try Resend first (Railway compatible — no outbound SMTP needed)
     resend_key      = os.environ.get("RESEND_API_KEY", "")
-    resend_from     = os.environ.get("RESEND_FROM", "") or "DGA Capital <onboarding@resend.dev>"
+    resend_from     = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
     # RESEND_ACCOUNT_EMAIL: the email address you signed up to Resend with.
     # Resend test-mode (no verified domain) only allows sending to this address.
     # Set this in Railway env vars to make email work without domain verification.
@@ -7022,8 +7022,9 @@ async def email_diag(request: Request):
         #    fall back to the GP's JWT email.
         gp_email = resend_acct_email or (claims.get("email", "") if claims else "")
         if gp_email:
+            diag_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
             test_payload = json.dumps({
-                "from": "DGA Capital <onboarding@resend.dev>",
+                "from": diag_from,
                 "to":   [gp_email],
                 "subject": "[DGA diag] Email transport test",
                 "html": "<p>Email transport is working.</p>",
