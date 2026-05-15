@@ -4102,13 +4102,7 @@
               '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
-            '<span style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;" onclick="event.stopPropagation();">' +
-              '<span style="display:flex;gap:6px;align-items:center;">' +
-                '<input id="acd-email-to" type="email" placeholder="recipient@email.com" style="height:28px;padding:0 8px;font-size:11px;border:1px solid var(--panel-edge);border-radius:5px;background:#fff;color:#1e293b;width:190px;outline:none;" />' +
-                '<button class="tab-btn sm" id="acd-rebalance-email-btn" style="font-size:10px;padding:0 10px;height:28px;">📧 Send</button>' +
-              '</span>' +
-              '<div id="acd-rebalance-email-status" style="font-size:9px;min-height:12px;text-align:right;max-width:320px;line-height:1.4;"></div>' +
-            '</span>' +
+            '<span></span>' +
           '</summary>' +
           '<div style="padding:12px 14px 6px;">' +
           '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">' +
@@ -4145,50 +4139,7 @@
         '</details>' +
       '</section>';
 
-    // Wire email button
-    const emailBtn    = document.getElementById('acd-rebalance-email-btn');
-    const emailToInput = document.getElementById('acd-email-to');
-    const emailStatus = document.getElementById('acd-rebalance-email-status');
-    function _setEmailStatus(msg, color) {
-      if (emailStatus) { emailStatus.textContent = msg; emailStatus.style.color = color || 'var(--dim)'; }
-    }
-    // Pre-fill with GP's email if available
-    if (emailToInput && window.DGA_USER && window.DGA_USER.email) {
-      emailToInput.value = window.DGA_USER.email;
-    }
-    if (emailBtn) {
-      emailBtn.addEventListener('click', async function() {
-        const toAddr = (emailToInput ? emailToInput.value : '').trim();
-        if (!toAddr || !toAddr.includes('@')) {
-          _setEmailStatus('Enter a valid email address first.', 'var(--red)');
-          if (emailToInput) emailToInput.focus();
-          return;
-        }
-        emailBtn.disabled = true; emailBtn.textContent = '⏳ Sending…';
-        _setEmailStatus('', '');
-        try {
-          const r2 = await window.dgaFetch('/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ to: toAddr }),
-          });
-          const d2 = await r2.json();
-          if (!r2.ok) throw new Error(d2.detail || ('HTTP ' + r2.status));
-          emailBtn.textContent = '📧 Send';
-          emailBtn.disabled = false;
-          _setEmailStatus('✓ Sent → ' + (d2.sent_to || toAddr), 'var(--green)');
-          setTimeout(function(){ _setEmailStatus('', ''); }, 8000);
-        } catch(e) {
-          emailBtn.disabled = false;
-          emailBtn.textContent = '📧 Send';
-          _setEmailStatus('❌ ' + e.message, 'var(--red)');
-        }
-      });
-      // Also send on Enter in the input
-      if (emailToInput) emailToInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') emailBtn.click();
-      });
-    }
+    // Email functionality disabled
 
   }
 
