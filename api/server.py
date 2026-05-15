@@ -134,40 +134,54 @@ def _fetch_prices(symbols: list) -> dict:
 
     def _yf_batch(query_syms: list) -> dict:
         """One yf.download call for a list of symbols. Returns
-        {symbol: last_price>0}. Never raises — failures map to empty dict."""
+        {symbol: last_price>0}. Never raises — failures map to empty dict.
+
+        Uses PER-COLUMN last-non-NaN lookup so illiquid tickers that didn't
+        trade on the most recent market day still resolve to their last
+        actual close. (yf.download fills no-trade days with NaN; taking
+        the last row globally would miss any ticker that's quiet today.)
+        Period is "5d" so weekends + holidays + a couple of no-trade days
+        in a row still produce a price."""
         prices: dict = {}
         if not query_syms:
             return prices
         try:
             data = yf.download(
                 " ".join(query_syms),
-                period="2d",       # 2d so market-closed days still resolve a close
+                period="5d",
                 auto_adjust=True,
                 progress=False,
                 threads=True,
             )
         except Exception:
             return prices
-        if data is None or data.empty:
+        if data is None or getattr(data, "empty", True):
             return prices
         close = data["Close"] if "Close" in data.columns else data.get("close")
-        if close is None or close.empty:
+        if close is None or getattr(close, "empty", True):
             return prices
-        last_row = close.dropna(how="all").iloc[-1] if len(close.dropna(how="all")) else close.iloc[-1]
-        if hasattr(last_row, "items"):
-            for tk, price in last_row.items():
+
+        # Multi-ticker DataFrame: each column is a ticker.
+        # Single-ticker Series: one column of dates -> close.
+        if hasattr(close, "columns"):
+            for col in close.columns:
                 try:
-                    p = float(price)
+                    s = close[col].dropna()
+                    if s.empty:
+                        continue
+                    p = float(s.iloc[-1])
                     if p > 0:
-                        prices[str(tk)] = p
-                except (TypeError, ValueError):
+                        prices[str(col)] = p
+                except Exception:
                     pass
         else:
             try:
-                p = float(last_row)
-                if p > 0 and query_syms:
-                    prices[query_syms[0]] = p
-            except (TypeError, ValueError):
+                s = close.dropna()
+                if not s.empty:
+                    p = float(s.iloc[-1])
+                    if p > 0 and query_syms:
+                        prices[query_syms[0]] = p
+            except Exception:
                 pass
         return prices
 
