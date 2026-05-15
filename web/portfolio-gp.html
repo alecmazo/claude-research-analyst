@@ -890,7 +890,6 @@
   <nav class="topbar-right">
     <span class="topbar-link active" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
-    <span class="topbar-link" data-tab="tracker">Tracker</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
     <span class="status-dot" title="API online"></span>
@@ -1539,16 +1538,22 @@
 
   // ── Generic job poller ────────────────────────────────────────
   function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail) {
-    const iv = setInterval(async () => {
+    async function tick() {
       try {
         const r = await window.dgaFetch(pollPath + jobId);
         const job = await r.json();
         const pct = job.progress?.pct;
-        if (pct != null) btn.textContent = Math.round(pct) + '% …';
+        const lbl = job.progress?.label || '';
+        if (pct != null) {
+          const pctInt = Math.round(pct * 100);
+          btn.textContent = pctInt + '% — ' + (lbl || '…');
+        }
         if (job.status === 'done')   { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; onDone(job); }
         if (job.status === 'failed') { clearInterval(iv); btn.disabled=false; btn.textContent='❌ Failed'; setTimeout(()=>btn.textContent=idleLabel,3000); if(onFail) onFail(job); }
       } catch { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; }
-    }, 4000);
+    }
+    tick(); // immediate first check
+    const iv = setInterval(tick, 3000);
   }
 
   // ══════════════════════════════════════════════════════════════
