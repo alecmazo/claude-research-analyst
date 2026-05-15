@@ -3272,6 +3272,20 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
             else:
                 _jobs[job_id]["status"] = "failed"
                 _jobs[job_id]["error"] = result.get("error", "Unknown error")
+
+        # Persist report to PostgreSQL so it survives Railway redeploys.
+        # Wrapped in try/except — a DB failure must never affect the job result.
+        if result.get("ok"):
+            try:
+                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+                _md_text = _md_path.read_text() if _md_path.exists() else ""
+                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
+                _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
+                _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
+                _gamma_url = (result.get("gamma_url") or None)
+                _db_upsert_report(ticker, _md_text, _summary, _has_docx, _has_pptx, _gamma_url)
+            except Exception as _dbe:
+                print(f"[analyst_reports] post-run DB persist failed for {ticker} (non-fatal): {_dbe!s:.200}")
     except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
         # Log FULL traceback so we can see where the error actually happened.
         tb_str = traceback.format_exc()
@@ -3648,8 +3662,37 @@ def list_jobs():
 
 @app.get("/api/report/{ticker}")
 def get_report(ticker: str):
-    """Return the full markdown report text for the most-recently-analyzed ticker."""
+    """Return the full markdown report text for the most-recently-analyzed ticker.
+
+    Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
+    Fallback: reads the .md file from STOCKS_FOLDER (local cache).
+    """
     ticker = ticker.strip().upper()
+
+    # ── Primary: PostgreSQL ──────────────────────────────────────────────────
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT report_md, has_docx, has_pptx, generated_at, gamma_url
+                    FROM analyst_reports
+                    WHERE ticker = %s
+                """, (ticker,))
+                row = cur.fetchone()
+            if row and row["report_md"]:
+                return {
+                    "ticker": ticker,
+                    "report_md": row["report_md"],
+                    "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
+                    "has_docx": row["has_docx"],
+                    "has_pptx": row["has_pptx"],
+                    "gamma_url": row["gamma_url"],
+                    "gamma_generated_at": None,
+                }
+        except Exception as _e:
+            print(f"[analyst_reports] get_report DB query failed for {ticker} (falling back): {_e!s:.200}")
+
+    # ── Fallback: filesystem ─────────────────────────────────────────────────
     md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
     if not md_path.exists():
         raise HTTPException(status_code=404, detail=f"No report found for {ticker}")
@@ -4187,6 +4230,51 @@ def delete_report(ticker: str):
 _summary_cache: dict[str, dict] = {}
 
 
+def _db_upsert_report(
+    ticker: str,
+    md_text: str,
+    summary: dict,
+    has_docx: bool,
+    has_pptx: bool,
+    gamma_url: str | None = None,
+) -> None:
+    """Upsert one analyst report row into PostgreSQL.
+
+    Entirely wrapped in try/except — never raises, so a DB failure never
+    affects the job result or any calling code.
+    """
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO analyst_reports
+                    (ticker, generated_at, report_md, has_docx, has_pptx,
+                     rating, price_target, upside_pct, gamma_url)
+                VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker) DO UPDATE SET
+                    generated_at = NOW(),
+                    report_md    = EXCLUDED.report_md,
+                    has_docx     = EXCLUDED.has_docx,
+                    has_pptx     = EXCLUDED.has_pptx,
+                    rating       = EXCLUDED.rating,
+                    price_target = EXCLUDED.price_target,
+                    upside_pct   = EXCLUDED.upside_pct,
+                    gamma_url    = EXCLUDED.gamma_url
+            """, (
+                ticker,
+                md_text,
+                has_docx,
+                has_pptx,
+                summary.get("rating"),
+                summary.get("price_target"),
+                summary.get("upside_pct"),
+                gamma_url,
+            ))
+    except Exception as _e:
+        print(f"[analyst_reports] upsert failed for {ticker} (non-fatal): {_e!s:.200}")
+
+
 def _extract_summary_cached(md_file: Path) -> dict:
     """Return {rating, price_target, upside_pct} for a saved report.
 
@@ -4225,7 +4313,40 @@ def list_reports():
     Each entry now includes an extracted summary (`rating`, `price_target`,
     `upside_pct`) so the Research tab can show a target-vs-price chip in
     the saved-reports list without an extra API round-trip per row.
+
+    Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
+    Fallback: filesystem glob of *_DGA_Report.md files.
     """
+    # ── Primary: PostgreSQL ──────────────────────────────────────────────────
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT ticker, generated_at, has_docx, has_pptx,
+                           rating, price_target, upside_pct, gamma_url
+                    FROM analyst_reports
+                    ORDER BY generated_at DESC
+                """)
+                rows = cur.fetchall()
+            if rows:
+                return [
+                    {
+                        "ticker":        r["ticker"],
+                        "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
+                        "has_docx":      r["has_docx"],
+                        "has_pptx":      r["has_pptx"],
+                        "gamma_url":     r["gamma_url"],
+                        "rating":        r["rating"],
+                        "price_target":  float(r["price_target"]) if r["price_target"] is not None else None,
+                        "current_price": None,  # not stored in DB; omit gracefully
+                        "upside_pct":    float(r["upside_pct"]) if r["upside_pct"] is not None else None,
+                    }
+                    for r in rows
+                ]
+        except Exception as _e:
+            print(f"[analyst_reports] list_reports DB query failed (falling back): {_e!s:.200}")
+
+    # ── Fallback: filesystem glob ────────────────────────────────────────────
     folder = analyst.STOCKS_FOLDER
     try:
         gamma_idx = analyst._load_gamma_index()
@@ -5326,6 +5447,25 @@ def _ensure_kv_store_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_analyst_reports_table(conn) -> None:
+    """Persist analyst reports to PostgreSQL so they survive Railway redeploys."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS analyst_reports (
+                ticker       VARCHAR(20) PRIMARY KEY,
+                generated_at TIMESTAMP   NOT NULL DEFAULT NOW(),
+                report_md    TEXT,
+                has_docx     BOOLEAN     NOT NULL DEFAULT FALSE,
+                has_pptx     BOOLEAN     NOT NULL DEFAULT FALSE,
+                rating       VARCHAR(30),
+                price_target NUMERIC,
+                upside_pct   NUMERIC,
+                gamma_url    TEXT
+            )
+        """)
+    conn.commit()
+
+
 def _ensure_watchlists_table(conn) -> None:
     """Per-user watchlist, replacing the ephemeral _dga_watchlists.json file.
     Composite PK so ADD/REMOVE are O(log n) and the schema is naturally
@@ -5688,6 +5828,7 @@ def _apply_self_migrations() -> None:
         _step("lp_creds_table",             lambda: _ensure_lp_creds_table(conn))
         _step("fund_display_settings",      lambda: _ensure_fund_display_settings_table(conn))
         _step("kv_store_table",             lambda: _ensure_kv_store_table(conn))
+        _step("analyst_reports_v1",         lambda: _ensure_analyst_reports_table(conn))
         _step("watchlists_table",           lambda: _ensure_watchlists_table(conn))
         _step("benchmark_annual_returns",   lambda: _ensure_benchmark_annual_returns_table(conn))
         _step("seed_benchmark_historical",  lambda: _seed_benchmark_historical(conn))
@@ -5705,6 +5846,42 @@ def _apply_self_migrations() -> None:
         except Exception: pass
 
 
+def _hydrate_analyst_reports_to_db() -> None:
+    """Daemon thread: scan STOCKS_FOLDER for *_DGA_Report.md files and upsert
+    each one into PostgreSQL. Runs once at startup so existing reports are
+    backfilled after a Railway redeploy. Idempotent (ON CONFLICT DO UPDATE).
+    """
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return
+    try:
+        folder = analyst.STOCKS_FOLDER
+        md_files = list(folder.glob("*_DGA_Report.md"))
+        if not md_files:
+            return
+        print(f"[analyst_reports] hydrating {len(md_files)} report(s) to DB…")
+        for md_file in md_files:
+            try:
+                ticker = md_file.name.replace("_DGA_Report.md", "")
+                md_text = md_file.read_text()
+                summary = _extract_summary_cached(md_file)
+                has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
+                has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
+                gamma_url = None
+                try:
+                    idx = analyst._load_gamma_index()
+                    entry = idx.get(ticker)
+                    if entry:
+                        gamma_url = entry.get("gamma_url")
+                except Exception:
+                    pass
+                _db_upsert_report(ticker, md_text, summary, has_docx, has_pptx, gamma_url)
+            except Exception as _e:
+                print(f"[analyst_reports] hydration failed for {md_file.name} (non-fatal): {_e!s:.200}")
+        print("[analyst_reports] hydration complete")
+    except Exception as _e:
+        print(f"[analyst_reports] hydration thread error (non-fatal): {_e!s:.200}")
+
+
 @app.on_event("startup")
 async def _on_startup_run_migrations() -> None:
     _apply_self_migrations()
@@ -5717,6 +5894,9 @@ async def _on_startup_run_migrations() -> None:
             print("[auth_v2] DB backend registered")
         except Exception as _e:
             print(f"[auth_v2] DB backend registration failed: {_e}")
+    # Backfill any existing on-disk reports into PostgreSQL (non-blocking).
+    _t = threading.Thread(target=_hydrate_analyst_reports_to_db, daemon=True, name="analyst-reports-hydration")
+    _t.start()
 
 def _fund_id(cur) -> str:
     fid = os.environ.get("FUND_ID")
