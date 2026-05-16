@@ -5270,7 +5270,15 @@ def _hydrate_from_dropbox() -> None:
               f"MD cached, Rebalanced)")
 
 
-threading.Thread(target=_hydrate_from_dropbox, daemon=True).start()
+def _hydrate_all() -> None:
+    """Run Dropbox download THEN DB upsert sequentially in one thread.
+    This guarantees the .md files exist on disk before the DB hydration
+    tries to read them — preventing the race condition where the DB ended
+    up empty because the two threads ran concurrently."""
+    _hydrate_from_dropbox()
+    _hydrate_analyst_reports_to_db()
+
+threading.Thread(target=_hydrate_all, daemon=True, name="hydrate-all").start()
 
 # Start the daily snapshot worker (runs once per day after market close)
 analyst._start_tracker_snapshot_worker()
@@ -5894,9 +5902,8 @@ async def _on_startup_run_migrations() -> None:
             print("[auth_v2] DB backend registered")
         except Exception as _e:
             print(f"[auth_v2] DB backend registration failed: {_e}")
-    # Backfill any existing on-disk reports into PostgreSQL (non-blocking).
-    _t = threading.Thread(target=_hydrate_analyst_reports_to_db, daemon=True, name="analyst-reports-hydration")
-    _t.start()
+    # Note: Dropbox hydration + DB backfill run sequentially in _hydrate_all()
+    # (started at module load time). No separate thread needed here.
 
 def _fund_id(cur) -> str:
     fid = os.environ.get("FUND_ID")
