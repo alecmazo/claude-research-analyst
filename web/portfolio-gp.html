@@ -1714,18 +1714,16 @@
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
 
-    // Live-quote fetch for all reports in parallel — best-effort, soft-fail per ticker
-    Promise.all(reports.map(async (r) => {
-      try {
-        const q = await window.dgaFetch(`/api/quote/${encodeURIComponent(r.ticker)}`);
-        return q.ok ? await q.json() : null;
-      } catch { return null; }
-    })).then(quotes => {
+    // Single batch quote call — one request for all tickers instead of N
+    // parallel /api/quote/ calls that hammer Yahoo and trigger rate limits.
+    const tickerList = reports.map(r => r.ticker).join(',');
+    window.dgaFetch('/api/quotes?tickers=' + encodeURIComponent(tickerList))
+      .then(r => r.ok ? r.json() : {}).catch(() => ({}))
+      .then(quotesMap => {
       tbody.innerHTML = reports.map((rep, i) => {
-        const q = quotes[i] || {};
+        const q = quotesMap[rep.ticker] || {};
         const price = q.price != null ? Number(q.price) : null;
-        const pct = q.pct_change != null ? Number(q.pct_change) :
-                    (price != null && q.previous_close > 0 ? ((price - q.previous_close) / q.previous_close * 100) : null);
+        const pct = q.pct_change != null ? Number(q.pct_change) : null;
         const target = rep.price_target != null ? Number(rep.price_target) : null;
         const upside = (target != null && price != null && price > 0)
                        ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);

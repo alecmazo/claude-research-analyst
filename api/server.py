@@ -4818,36 +4818,81 @@ def start_reports_scan(background_tasks: BackgroundTasks):
     return _sjobs[job_id]
 
 
+# Cache for batch quote results (TTL: 10 min) — avoids re-hitting Yahoo on
+# every page load when the saved-reports table re-renders.
+_batch_quote_cache: dict = {}   # { frozenset(syms): (result_dict, ts) }
+_BATCH_QUOTE_TTL = 600          # seconds
+
 @app.get("/api/quotes")
 def batch_quotes(tickers: str = ""):
-    """Return live prices + day-change % for a comma-separated list of tickers."""
-    syms = [t.strip().upper() for t in tickers.split(",") if t.strip()][:20]
-    if not syms:
+    """Return live prices + day-change % for a comma-separated list of tickers.
+
+    Uses a single yf.download() batch call (one HTTP request to Yahoo) instead
+    of N individual fast_info calls, so the saved-reports table never triggers
+    a rate-limit regardless of how many rows it has.
+
+    Alias map is applied before the download (BRKB→BRK-B etc.) and the
+    original symbol is used as the response key so the UI maps back cleanly.
+    Results are cached for 10 minutes server-side.
+    """
+    originals = [t.strip().upper().rstrip("*") for t in tickers.split(",") if t.strip()][:100]
+    if not originals:
         return {}
+
+    # Check cache first (keyed on the sorted symbol set)
+    cache_key = frozenset(originals)
+    hit = _batch_quote_cache.get(cache_key)
+    if hit:
+        cached_result, ts = hit
+        if (time.time() - ts) < _BATCH_QUOTE_TTL:
+            return cached_result
+
     if not _YFINANCE_OK:
-        return {s: {"price": None, "pct": None} for s in syms}
-    result = {}
+        return {s: {"price": None, "pct_change": None} for s in originals}
+
+    # Apply alias map: build yahoo_sym→original mapping
+    alias_map: dict[str, str] = {}   # yahoo_sym → original
+    yahoo_syms: list[str] = []
+    for orig in originals:
+        ysym = _resolve_ticker_alias(orig)
+        alias_map[ysym] = orig
+        yahoo_syms.append(ysym)
+
+    result: dict[str, dict] = {}
     try:
         import yfinance as _yf
-        data = _yf.download(syms, period="2d", auto_adjust=True, progress=False)
-        closes = data["Close"] if "Close" in data else data
-        for sym in syms:
+        import pandas as _pd
+        data = _yf.download(yahoo_syms, period="2d", auto_adjust=True,
+                            progress=False, group_by="ticker")
+
+        def _extract(ysym: str) -> tuple:
+            """Return (price, pct_change) for a single yahoo symbol."""
             try:
-                col = closes[sym] if sym in closes.columns else closes
-                vals = col.dropna()
-                if len(vals) >= 2:
-                    price = float(vals.iloc[-1])
-                    prev  = float(vals.iloc[-2])
-                    pct   = (price - prev) / prev * 100 if prev else None
-                    result[sym] = {"price": price, "pct": pct}
-                elif len(vals) == 1:
-                    result[sym] = {"price": float(vals.iloc[-1]), "pct": None}
+                if len(yahoo_syms) == 1:
+                    # Single-ticker download returns flat DataFrame
+                    closes = data["Close"].dropna()
                 else:
-                    result[sym] = {"price": None, "pct": None}
+                    closes = data[ysym]["Close"].dropna()
+                if len(closes) >= 2:
+                    price = float(closes.iloc[-1])
+                    prev  = float(closes.iloc[-2])
+                    pct   = (price - prev) / prev * 100 if prev else None
+                    return price, pct
+                elif len(closes) == 1:
+                    return float(closes.iloc[-1]), None
             except Exception:
-                result[sym] = {"price": None, "pct": None}
-    except Exception:
-        result = {s: {"price": None, "pct": None} for s in syms}
+                pass
+            return None, None
+
+        for ysym, orig in alias_map.items():
+            price, pct = _extract(ysym)
+            result[orig] = {"price": price, "pct_change": pct}
+
+    except Exception as _e:
+        print(f"[batch_quotes] yf.download failed: {_e}")
+        result = {s: {"price": None, "pct_change": None} for s in originals}
+
+    _batch_quote_cache[cache_key] = (result, time.time())
     return result
 
 
