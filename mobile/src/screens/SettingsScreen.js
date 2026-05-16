@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ScrollView, ActivityIndicator,
+  Alert, ScrollView, ActivityIndicator, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
@@ -15,27 +15,152 @@ import AppHeader from '../components/AppHeader';
 // Bump on every JS / OTA push so the user can verify what's running.
 const APP_BUILD = 'mobile-ui16-20260505';
 
-export default function SettingsScreen() {
-  const [baseUrl, setBaseUrlState]     = useState('');
-  const [password, setPassword]        = useState('');
-  const [serverStatus, setServerStatus] = useState(null);   // null | 'ok' | 'error'
-  const [authStatus, setAuthStatus]    = useState(null);    // null | 'ok' | 'error'
-  const [testingConn, setTestingConn]  = useState(false);
-  const [savingPw, setSavingPw]        = useState(false);
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtNextRun(secs) {
+  if (secs == null || secs < 0) return 'Disabled';
+  if (secs < 60) return `▶ in <1m`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `▶ in ${h}h ${m}m`;
+  return `▶ in ${m}m`;
+}
 
-  // ── App version + OTA update state ─────────────────────────────────────
-  const [serverBuild, setServerBuild]    = useState(null);
-  const [updateState, setUpdateState]    = useState('idle');   // idle | checking | downloading | uptodate | available | reloading | error
-  const [updateMessage, setUpdateMessage] = useState('');
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+// ── Automation Row ─────────────────────────────────────────────────────────────
+function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHourChange, onMinuteChange, nextRunSecs }) {
+  return (
+    <View style={styles.autoRow}>
+      {/* Label + subtitle */}
+      <View style={styles.autoRowLeft}>
+        <Text style={styles.autoRowLabel}>{icon} {label}</Text>
+        <Text style={styles.autoRowSubtitle}>{subtitle}</Text>
+        <Text style={[styles.autoNextRun, !enabled && { color: colors.midGray }]}>
+          {enabled ? fmtNextRun(nextRunSecs) : 'Disabled'}
+        </Text>
+      </View>
+
+      {/* Time inputs + switch */}
+      <View style={styles.autoRowRight}>
+        <View style={styles.timeInputRow}>
+          <TextInput
+            style={[styles.timeInput, !enabled && styles.timeInputDisabled]}
+            value={hour}
+            onChangeText={v => onHourChange(v.replace(/\D/g, '').slice(0, 2))}
+            keyboardType="number-pad"
+            maxLength={2}
+            editable={enabled}
+            selectTextOnFocus
+          />
+          <Text style={styles.timeColon}>:</Text>
+          <TextInput
+            style={[styles.timeInput, !enabled && styles.timeInputDisabled]}
+            value={minute}
+            onChangeText={v => onMinuteChange(v.replace(/\D/g, '').slice(0, 2))}
+            keyboardType="number-pad"
+            maxLength={2}
+            editable={enabled}
+            selectTextOnFocus
+          />
+        </View>
+        <Switch
+          value={enabled}
+          onValueChange={onToggle}
+          trackColor={{ false: colors.lightGray, true: colors.gold }}
+          thumbColor={colors.white}
+          style={{ marginTop: 6 }}
+        />
+      </View>
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+export default function SettingsScreen() {
+  const [baseUrl, setBaseUrlState]      = useState('');
+  const [password, setPassword]         = useState('');
+  const [serverStatus, setServerStatus] = useState(null);
+  const [authStatus, setAuthStatus]     = useState(null);
+  const [testingConn, setTestingConn]   = useState(false);
+  const [savingPw, setSavingPw]         = useState(false);
+
+  // OTA
+  const [serverBuild, setServerBuild]       = useState(null);
+  const [updateState, setUpdateState]       = useState('idle');
+  const [updateMessage, setUpdateMessage]   = useState('');
+
+  // Automation settings
+  const [autoLoading, setAutoLoading]       = useState(false);
+  const [autoSaving, setAutoSaving]         = useState(false);
+  const [autoSaveMsg, setAutoSaveMsg]       = useState('');
+  const [briefEnabled, setBriefEnabled]     = useState(false);
+  const [briefHour, setBriefHour]           = useState('06');
+  const [briefMinute, setBriefMinute]       = useState('00');
+  const [briefNextRun, setBriefNextRun]     = useState(null);
+  const [pulseEnabled, setPulseEnabled]     = useState(false);
+  const [pulseHour, setPulseHour]           = useState('07');
+  const [pulseMinute, setPulseMinute]       = useState('00');
+  const [pulseNextRun, setPulseNextRun]     = useState(null);
 
   useEffect(() => {
     getBaseUrl().then(setBaseUrlState);
     getStoredPassword().then(pw => setPassword(pw || ''));
-    // Fetch server build for display
     api.getBuild().then(j => setServerBuild(j?.build || 'unknown')).catch(() => setServerBuild('offline'));
+    loadAutomationSettings();
   }, []);
 
-  // ── OTA: pull latest JS bundle from EAS Update without TestFlight rebuild
+  const loadAutomationSettings = async () => {
+    setAutoLoading(true);
+    try {
+      const data = await api.getAutomationSettings();
+      const db = data.daily_brief || {};
+      const mp = data.market_pulse || {};
+      setBriefEnabled(!!db.enabled);
+      setBriefHour(pad2(db.hour ?? 6));
+      setBriefMinute(pad2(db.minute ?? 0));
+      setBriefNextRun(db.next_run_secs ?? null);
+      setPulseEnabled(!!mp.enabled);
+      setPulseHour(pad2(mp.hour ?? 7));
+      setPulseMinute(pad2(mp.minute ?? 0));
+      setPulseNextRun(mp.next_run_secs ?? null);
+    } catch (err) {
+      console.warn('loadAutomationSettings:', err.message);
+    } finally {
+      setAutoLoading(false);
+    }
+  };
+
+  const saveAutomationSettings = async () => {
+    // Validate
+    const bh = parseInt(briefHour, 10);
+    const bm = parseInt(briefMinute, 10);
+    const ph = parseInt(pulseHour, 10);
+    const pm = parseInt(pulseMinute, 10);
+    if (isNaN(bh) || bh < 0 || bh > 23) { Alert.alert('Invalid Time', 'Daily Brief hour must be 0–23.'); return; }
+    if (isNaN(bm) || bm < 0 || bm > 59) { Alert.alert('Invalid Time', 'Daily Brief minute must be 0–59.'); return; }
+    if (isNaN(ph) || ph < 0 || ph > 23) { Alert.alert('Invalid Time', 'Market Pulse hour must be 0–23.'); return; }
+    if (isNaN(pm) || pm < 0 || pm > 59) { Alert.alert('Invalid Time', 'Market Pulse minute must be 0–59.'); return; }
+
+    setAutoSaving(true);
+    setAutoSaveMsg('');
+    try {
+      await api.saveAutomationSettings({
+        daily_brief:  { enabled: briefEnabled, hour: bh, minute: bm },
+        market_pulse: { enabled: pulseEnabled, hour: ph, minute: pm },
+      });
+      setAutoSaveMsg('✓ Saved — takes effect on next cycle');
+      // Reload to get fresh next_run_secs
+      await loadAutomationSettings();
+    } catch (err) {
+      setAutoSaveMsg(`⚠ ${err.message}`);
+    } finally {
+      setAutoSaving(false);
+    }
+  };
+
+  // ── OTA ────────────────────────────────────────────────────────────────────
   const checkForUpdates = async () => {
     setUpdateState('checking');
     setUpdateMessage('');
@@ -56,7 +181,6 @@ export default function SettingsScreen() {
       await Updates.fetchUpdateAsync();
       setUpdateState('reloading');
       setUpdateMessage('Restarting to apply update…');
-      // Tiny delay so the user sees the message before reload
       setTimeout(() => Updates.reloadAsync(), 600);
     } catch (e) {
       setUpdateState('error');
@@ -64,7 +188,6 @@ export default function SettingsScreen() {
     }
   };
 
-  // ── Test server connection ──────────────────────────────────────────────────
   const testConnection = async () => {
     setTestingConn(true);
     setServerStatus(null);
@@ -78,7 +201,6 @@ export default function SettingsScreen() {
     }
   };
 
-  // ── Save server URL ─────────────────────────────────────────────────────────
   const saveUrl = async () => {
     const url = baseUrl.trim();
     if (!url.startsWith('http')) {
@@ -89,13 +211,10 @@ export default function SettingsScreen() {
     Alert.alert('Saved', 'Server URL updated.');
   };
 
-  // ── One-tap recovery: nuke any stored localhost/private URL and switch
-  //    back to the public Railway production server.
   const resetUrl = async () => {
     const newUrl = await resetBaseUrlToProd();
     setBaseUrlState(newUrl);
     setServerStatus(null);
-    // Re-test connectivity to give immediate feedback
     try {
       await api.health();
       setServerStatus('ok');
@@ -106,13 +225,12 @@ export default function SettingsScreen() {
     }
   };
 
-  // ── Save password — exchange for HMAC token via /api/auth ──────────────────
   const savePassword = async () => {
     const pw = password.trim() || 'dgacapital';
     setSavingPw(true);
     setAuthStatus(null);
     try {
-      await login(pw);           // stores token in AsyncStorage automatically
+      await login(pw);
       setAuthStatus('ok');
     } catch {
       setAuthStatus('error');
@@ -122,12 +240,14 @@ export default function SettingsScreen() {
     }
   };
 
+  const isUpdating = updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading';
+
   return (
     <View style={styles.wrapper}>
       <AppHeader title="Settings" />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
-        {/* ── Server URL ── */}
+        {/* ── API Server ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>API SERVER</Text>
           <Text style={styles.sectionHint}>
@@ -188,7 +308,7 @@ export default function SettingsScreen() {
             placeholderTextColor={colors.midGray}
             autoCapitalize="none"
             autoCorrect={false}
-            secureTextEntry={false}   // plain text so user can see what they typed
+            secureTextEntry={false}
           />
           <View style={styles.buttonRow}>
             <TouchableOpacity
@@ -206,6 +326,70 @@ export default function SettingsScreen() {
           </View>
           {authStatus === 'ok' && (
             <Text style={styles.authOkText}>✓ Connected — token saved</Text>
+          )}
+        </View>
+
+        {/* ── Automation Schedule ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>AUTOMATION SCHEDULE</Text>
+          <Text style={styles.sectionHint}>
+            Times are Pacific. Changes take effect on the next scheduled cycle.
+          </Text>
+
+          {autoLoading ? (
+            <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
+          ) : (
+            <>
+              <AutoRow
+                icon="📰"
+                label="Daily Brief"
+                subtitle="Runs at set time, populates Today's Movers"
+                enabled={briefEnabled}
+                onToggle={setBriefEnabled}
+                hour={briefHour}
+                minute={briefMinute}
+                onHourChange={setBriefHour}
+                onMinuteChange={setBriefMinute}
+                nextRunSecs={briefNextRun}
+              />
+
+              <View style={styles.autoSep} />
+
+              <AutoRow
+                icon="⚡"
+                label="Market Pulse Scan"
+                subtitle="Scans saved reports, merges into Market Pulse"
+                enabled={pulseEnabled}
+                onToggle={setPulseEnabled}
+                hour={pulseHour}
+                minute={pulseMinute}
+                onHourChange={setPulseHour}
+                onMinuteChange={setPulseMinute}
+                nextRunSecs={pulseNextRun}
+              />
+
+              <TouchableOpacity
+                style={[styles.saveBtn, styles.saveBtnGold, styles.autoSaveBtn, autoSaving && styles.disabledBtn]}
+                onPress={saveAutomationSettings}
+                disabled={autoSaving}
+                activeOpacity={0.8}
+              >
+                {autoSaving
+                  ? <ActivityIndicator size="small" color={colors.navy} />
+                  : <Text style={styles.saveBtnGoldText}>Save Schedule</Text>
+                }
+              </TouchableOpacity>
+
+              {autoSaveMsg ? (
+                <Text style={[
+                  styles.autoSaveMsg,
+                  autoSaveMsg.startsWith('✓') && { color: colors.green },
+                  autoSaveMsg.startsWith('⚠') && { color: colors.red },
+                ]}>
+                  {autoSaveMsg}
+                </Text>
+              ) : null}
+            </>
           )}
         </View>
 
@@ -233,12 +417,11 @@ export default function SettingsScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.saveBtn, styles.saveBtnGold,
-                    (updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading') && styles.disabledBtn]}
+            style={[styles.saveBtn, styles.saveBtnGold, isUpdating && styles.disabledBtn]}
             onPress={checkForUpdates}
-            disabled={updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading'}
+            disabled={isUpdating}
           >
-            {(updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading')
+            {isUpdating
               ? <ActivityIndicator size="small" color={colors.navy} />
               : <Ionicons name="refresh" size={16} color={colors.navy} />}
             <Text style={styles.saveBtnGoldText}>
@@ -286,11 +469,8 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  sectionTitle: {
-    fontSize: 11, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5, marginBottom: 8,
-  },
-  sectionHint: { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 10 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 8 },
+  sectionHint:  { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 10 },
   hint_default: { fontSize: 12, color: colors.midGray },
   hint_code:    { fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '700' },
   input: {
@@ -332,15 +512,7 @@ const styles = StyleSheet.create({
   disabledBtn:  { opacity: 0.5 },
   testBtnText:  { color: colors.navy, fontWeight: '700', fontSize: 13 },
   authOkText:   { fontSize: 12, color: colors.green, marginTop: 8, fontWeight: '600' },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  switchLabel:     { flex: 1, marginRight: 12 },
-  switchLabelText: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
-  switchLabelHint: { fontSize: 12, color: colors.midGray, marginTop: 2 },
-  aboutText:       { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
+  aboutText:    { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
   versionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -352,15 +524,42 @@ const styles = StyleSheet.create({
     fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '600',
     maxWidth: '60%', textAlign: 'right',
   },
-  updateStatusText: {
-    fontSize: 12, color: colors.midGray, marginTop: 8, lineHeight: 16,
-  },
+  updateStatusText: { fontSize: 12, color: colors.midGray, marginTop: 8, lineHeight: 16 },
   resetBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 8, marginTop: 8,
   },
-  resetBtnText: {
-    fontSize: 12, fontWeight: '600', color: colors.midGray,
-    textDecorationLine: 'underline',
+  resetBtnText: { fontSize: 12, fontWeight: '600', color: colors.midGray, textDecorationLine: 'underline' },
+
+  // ── Automation styles ──
+  autoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
   },
+  autoRowLeft: { flex: 1, paddingRight: 12 },
+  autoRowLabel: { fontSize: 14, fontWeight: '700', color: colors.navy, marginBottom: 2 },
+  autoRowSubtitle: { fontSize: 12, color: colors.midGray, lineHeight: 16 },
+  autoNextRun: { fontSize: 11, color: colors.green, fontWeight: '600', marginTop: 4 },
+  autoRowRight: { alignItems: 'flex-end' },
+  timeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  timeInput: {
+    width: 44,
+    height: 36,
+    borderWidth: 1.5,
+    borderColor: colors.lightGray,
+    borderRadius: 6,
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.navy,
+    fontFamily: 'Courier New',
+    backgroundColor: colors.offWhite,
+  },
+  timeInputDisabled: { color: colors.midGray, backgroundColor: colors.lightGray },
+  timeColon: { fontSize: 18, fontWeight: '800', color: colors.navy, paddingHorizontal: 2 },
+  autoSep: { height: 1, backgroundColor: colors.lightGray, marginVertical: 4 },
+  autoSaveBtn: { marginTop: 16, justifyContent: 'center', height: 46 },
+  autoSaveMsg: { fontSize: 12, color: colors.midGray, marginTop: 8, fontWeight: '600' },
 });

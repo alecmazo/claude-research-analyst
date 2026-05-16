@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch, Linking,
-  Platform,
+  StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
+  Linking, Platform, ScrollView, Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,18 +14,123 @@ import {
   colors, formatTime, formatDateCompact, haptics, SkeletonList,
 } from '../design';
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function sentimentColor(s) {
+  if (!s) return colors.midGray;
+  const u = s.toUpperCase();
+  if (u === 'BULLISH') return colors.green;
+  if (u === 'BEARISH') return colors.red;
+  return colors.amber;
+}
+
+function formatPct(pct) {
+  if (pct == null) return '';
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${Number(pct).toFixed(2)}%`;
+}
+
+// Simple markdown renderer: bold (**text**) and headings (### text)
+function SimpleMarkdown({ text, style }) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  return (
+    <View>
+      {lines.map((line, i) => {
+        const headingMatch = line.match(/^(#{1,3})\s+(.*)/);
+        if (headingMatch) {
+          const level = headingMatch[1].length;
+          const content = headingMatch[2];
+          return (
+            <Text key={i} style={[styles.mdHeading, level === 1 && styles.mdH1, level === 2 && styles.mdH2, style]}>
+              {content}
+            </Text>
+          );
+        }
+        // Parse bold within line
+        const parts = line.split(/\*\*(.+?)\*\*/g);
+        return (
+          <Text key={i} style={[styles.mdBody, style]}>
+            {parts.map((part, j) =>
+              j % 2 === 1 ? (
+                <Text key={j} style={styles.mdBold}>{part}</Text>
+              ) : (
+                part
+              )
+            )}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── Market Pulse Detail Modal ─────────────────────────────────────────────────
+function PulseModal({ item, visible, onClose }) {
+  if (!item) return null;
+  const { ticker, result } = item;
+  const sentiment = result?.sentiment || 'NEUTRAL';
+  const price = result?.price;
+  const pct = result?.pct_change;
+  const markdown = result?.markdown || '';
+  const isUp = pct != null && pct >= 0;
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalContainer}>
+        {/* Modal header */}
+        <View style={styles.modalHeader}>
+          <View style={styles.modalHeaderLeft}>
+            <Text style={styles.modalTicker}>{ticker}</Text>
+            <View style={[styles.sentimentBadge, { backgroundColor: sentimentColor(sentiment) }]}>
+              <Text style={styles.sentimentText}>{sentiment}</Text>
+            </View>
+            {price != null && (
+              <View style={styles.modalPriceRow}>
+                <Text style={styles.modalPrice}>${Number(price).toFixed(2)}</Text>
+                {pct != null && (
+                  <Text style={[styles.modalPct, isUp ? styles.pctUp : styles.pctDown]}>
+                    {formatPct(pct)}
+                  </Text>
+                )}
+              </View>
+            )}
+          </View>
+          <TouchableOpacity style={styles.modalCloseBtn} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="close" size={24} color={colors.midGray} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
+          <SimpleMarkdown text={markdown} />
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation, route }) {
-  const [ticker, setTicker]       = useState('');
-  const [loading, setLoading]     = useState(false);
-  const [runningTicker, setRunningTicker] = useState('');  // ticker shown in RUN button while loading
-  const [reports, setReports]     = useState([]);
-  const [prices, setPrices]       = useState({});  // { AAPL: { price, pct_change } }
-  const [refreshing, setRefreshing] = useState(false);
-  const [serverOk, setServerOk]   = useState(null);
+  const [ticker, setTicker]             = useState('');
+  const [loading, setLoading]           = useState(false);
+  const [runningTicker, setRunningTicker] = useState('');
+  const [reports, setReports]           = useState([]);
+  const [prices, setPrices]             = useState({});
+  const [refreshing, setRefreshing]     = useState(false);
+  const [serverOk, setServerOk]         = useState(null);
   const [serverLatencyMs, setServerLatencyMs] = useState(null);
-  const [gammaEnabled, setGammaEnabled] = useState(false);  // default OFF
-  const [lastLoadedAt, setLastLoadedAt] = useState(null);   // Date of last successful list load
-  const [initialLoading, setInitialLoading] = useState(true); // first-load only — drives skeleton list
+  const [gammaEnabled, setGammaEnabled] = useState(false);
+  const [lastLoadedAt, setLastLoadedAt] = useState(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // Market Pulse strip
+  const [pulseResults, setPulseResults] = useState([]); // [{ticker, result}]
+  const [selectedPulse, setSelectedPulse] = useState(null);
+  const [pulseModalVisible, setPulseModalVisible] = useState(false);
 
   const checkServer = async () => {
     const t0 = Date.now();
@@ -39,24 +144,47 @@ export default function HomeScreen({ navigation, route }) {
     }
   };
 
+  const loadPulse = async () => {
+    try {
+      const data = await api.getLatestScan();
+      if (data?.exists && data?.results) {
+        // Take last 5 by scanned_at
+        const entries = Object.entries(data.results)
+          .map(([t, r]) => ({ ticker: t, result: r }))
+          .sort((a, b) => {
+            const ta = a.result?._scanned_at || a.result?.scanned_at || '';
+            const tb = b.result?._scanned_at || b.result?.scanned_at || '';
+            return tb.localeCompare(ta);
+          })
+          .slice(0, 5);
+        setPulseResults(entries);
+      }
+    } catch (err) {
+      console.warn('loadPulse:', err.message);
+    }
+  };
+
   const loadReports = async () => {
     try {
       const data = await api.listReports();
       setReports(data);
       setLastLoadedAt(new Date());
-      // Fetch live prices in parallel (non-blocking — failures silently dropped)
-      const map = {};
-      await Promise.allSettled(
-        data.map(async (r) => {
-          try {
-            const q = await api.getQuote(r.ticker);
-            if (q && q.price != null) map[r.ticker] = q;
-          } catch {}
-        })
-      );
-      setPrices(map);
-    } catch {
-      // server may be offline; fail silently
+      // Batch quote fetch for all tickers at once
+      if (data.length > 0) {
+        try {
+          const tickers = data.map(r => r.ticker);
+          const result = await api.getBatchQuotes(tickers);
+          if (result?.quotes) {
+            setPrices(result.quotes);
+          }
+        } catch (err) {
+          console.warn('getBatchQuotes:', err.message);
+          // Fall back to no prices
+          setPrices({});
+        }
+      }
+    } catch (err) {
+      console.warn('loadReports:', err.message);
     } finally {
       setInitialLoading(false);
     }
@@ -66,21 +194,21 @@ export default function HomeScreen({ navigation, route }) {
     useCallback(() => {
       checkServer();
       loadReports();
+      loadPulse();
       getGammaEnabled().then(setGammaEnabled);
-      // Pre-fill ticker if navigated here from Intelligence screen
-      const prefill = route?.params?.prefillTicker;
+      // Pre-fill ticker if navigated here from Intelligence/other screen
+      const prefill = route?.params?.prefillTicker || route?.params?.ticker;
       if (prefill) {
         setTicker(prefill.toUpperCase());
-        // Clear the param so it doesn't re-fire on next focus
-        navigation.setParams({ prefillTicker: undefined });
+        navigation.setParams({ prefillTicker: undefined, ticker: undefined });
       }
-    }, [route?.params?.prefillTicker])
+    }, [route?.params?.prefillTicker, route?.params?.ticker])
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
     haptics.onPressTab();
-    await Promise.all([checkServer(), loadReports()]);
+    await Promise.all([checkServer(), loadReports(), loadPulse()]);
     setRefreshing(false);
   };
 
@@ -112,7 +240,22 @@ export default function HomeScreen({ navigation, route }) {
     }
   };
 
-  // ── Tap status dot → show server URL + latency + state ─────────────────────
+  const handleScanAll = async () => {
+    if (reports.length === 0) {
+      Alert.alert('No Reports', 'Add reports first by running analyses.');
+      return;
+    }
+    haptics.onPressPrimary();
+    const tickers = reports.map(r => r.ticker);
+    try {
+      await api.startScan(tickers);
+      navigation.getParent()?.navigate('Scan');
+    } catch (err) {
+      haptics.onError();
+      Alert.alert('Scan Error', err.message);
+    }
+  };
+
   const handleStatusDotPress = async () => {
     const url = await getBaseUrl();
     const stateLabel =
@@ -130,7 +273,6 @@ export default function HomeScreen({ navigation, route }) {
     );
   };
 
-  // ── Long-press a report row → action sheet ─────────────────────────────────
   const handleRowLongPress = (item) => {
     haptics.onLongPress();
     const downloadAndOpen = async (type) => {
@@ -145,18 +287,18 @@ export default function HomeScreen({ navigation, route }) {
     const confirmDelete = () => {
       haptics.onWarn();
       Alert.alert(
-        'Delete Cached Report?',
-        `Removes the local .md / .docx / .pptx for ${item.ticker}. The Dropbox copy is NOT touched — the next portfolio run can rehydrate it.`,
+        'Archive Report?',
+        `Archives the report for ${item.ticker}. You can restore it from the web app.`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Delete', style: 'destructive', onPress: async () => {
+          { text: 'Archive', style: 'destructive', onPress: async () => {
               try {
                 await api.deleteReport(item.ticker);
                 haptics.onSuccess();
                 await loadReports();
               } catch (err) {
                 haptics.onError();
-                Alert.alert('Could not delete', err.message);
+                Alert.alert('Could not archive', err.message);
               }
           }},
         ]
@@ -185,16 +327,14 @@ export default function HomeScreen({ navigation, route }) {
     if (item.has_pptx) {
       buttons.push({ text: 'Open .pptx', onPress: () => downloadAndOpen('pptx') });
     }
-    buttons.push({ text: 'Delete from Cache', style: 'destructive', onPress: confirmDelete });
+    buttons.push({ text: 'Archive from Cache', style: 'destructive', onPress: confirmDelete });
     buttons.push({ text: 'Cancel', style: 'cancel' });
 
     Alert.alert(item.ticker, 'Choose an action', buttons);
   };
 
   const renderReport = ({ item }) => {
-    const q   = prices[item.ticker];
-    // pct_change is now returned by the server; fall back to client-side compute
-    // if the server is older or previous_close is available but pct_change is not.
+    const q = prices[item.ticker];
     let pct = q?.pct_change ?? null;
     if (pct == null && q?.price != null && q?.previous_close) {
       const p = Number(q.price), pr = Number(q.previous_close);
@@ -204,10 +344,6 @@ export default function HomeScreen({ navigation, route }) {
     const pctStr   = pct != null ? `${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%` : null;
     const isUp     = pct != null && pct >= 0;
 
-    // ── Target price + upside (from saved report) ──
-    // Recompute upside live whenever we have both target + current quote price
-    // so the % stays in sync with intraday moves. Falls back to the server's
-    // stored upside_pct (computed against close-of-day price at report time).
     const target = item.price_target != null ? Number(item.price_target) : null;
     const livePrice = q?.price != null ? Number(q.price) : null;
     let targetUpside = null;
@@ -216,13 +352,12 @@ export default function HomeScreen({ navigation, route }) {
     } else if (item.upside_pct != null) {
       targetUpside = Number(item.upside_pct);
     }
-    const targetStr  = target != null ? `$${target.toFixed(0)}` : null;
-    const upsideStr  = targetUpside != null
+    const targetStr = target != null ? `$${target.toFixed(0)}` : null;
+    const upsideStr = targetUpside != null
       ? `${targetUpside >= 0 ? '+' : ''}${targetUpside.toFixed(1)}%`
       : null;
-    const targetUp   = targetUpside != null && targetUpside >= 0;
+    const targetUp = targetUpside != null && targetUpside >= 0;
 
-    // Compact date "May 4" — year only when not current year
     const dateStr = formatDateCompact(item.generated_at);
 
     return (
@@ -233,7 +368,6 @@ export default function HomeScreen({ navigation, route }) {
         delayLongPress={350}
         activeOpacity={0.7}
       >
-        {/* Left: ticker + format pills + date */}
         <View style={styles.tickerCell}>
           <Text style={styles.reportTicker}>{item.ticker}</Text>
           <View style={styles.formatRow}>
@@ -251,7 +385,6 @@ export default function HomeScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Center: live price + today's % change */}
         <View style={styles.priceCell}>
           {priceStr ? (
             <>
@@ -267,7 +400,6 @@ export default function HomeScreen({ navigation, route }) {
           )}
         </View>
 
-        {/* Right: 12M target + upside */}
         <View style={styles.targetCell}>
           {targetStr ? (
             <>
@@ -289,12 +421,10 @@ export default function HomeScreen({ navigation, route }) {
     );
   };
 
-  // ── Last-updated stamp ─────────────────────────────────────────────────────
   const lastLoadedStr = lastLoadedAt ? `Updated ${formatTime(lastLoadedAt)}` : '';
 
   return (
     <View style={styles.container}>
-      {/* Header — status dot is now tappable for server details */}
       <AppHeader
         title="Research"
         right={
@@ -311,7 +441,7 @@ export default function HomeScreen({ navigation, route }) {
         }
       />
 
-      {/* Ticker input */}
+      {/* Ticker input card */}
       <View style={styles.inputSection}>
         <Text style={styles.label}>ANALYZE TICKER</Text>
         <View style={styles.inputRow}>
@@ -339,12 +469,12 @@ export default function HomeScreen({ navigation, route }) {
                 ) : null}
               </View>
             ) : (
-              <Text style={styles.analyzeBtnText}>RUN</Text>
+              <Text style={styles.analyzeBtnText}>RUN ▶</Text>
             )}
           </TouchableOpacity>
         </View>
         <View style={styles.gammaRow}>
-          <Text style={styles.gammaLabel}>Generate Gamma Presentation</Text>
+          <Text style={styles.gammaLabel}>Generate Presentation</Text>
           <Switch
             value={gammaEnabled}
             onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
@@ -354,18 +484,54 @@ export default function HomeScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* Reports list */}
+      {/* Market Pulse strip */}
+      {pulseResults.length > 0 && (
+        <View style={styles.pulseSection}>
+          <Text style={styles.pulseSectionLabel}>MARKET PULSE</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pulseStrip}>
+            {pulseResults.map(({ ticker: t, result }) => {
+              const sentiment = result?.sentiment || 'NEUTRAL';
+              const price = result?.price;
+              return (
+                <TouchableOpacity
+                  key={t}
+                  style={styles.pulseChip}
+                  onPress={() => {
+                    setSelectedPulse({ ticker: t, result });
+                    setPulseModalVisible(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.pulseChipTicker}>{t}</Text>
+                  <View style={[styles.pulseSentimentDot, { backgroundColor: sentimentColor(sentiment) }]} />
+                  {price != null && (
+                    <Text style={styles.pulseChipPrice}>${Number(price).toFixed(0)}</Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Reports section header */}
       <View style={styles.listHeaderRow}>
         <Text style={styles.sectionTitle}>SAVED REPORTS</Text>
         {reports.length > 0 && (
           <Text style={styles.countBadge}>{reports.length}</Text>
         )}
         <View style={{ flex: 1 }} />
-        {lastLoadedStr ? (
-          <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
-        ) : null}
+        <TouchableOpacity style={styles.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
+          <Text style={styles.scanAllBtnText}>⚡ Scan All</Text>
+        </TouchableOpacity>
       </View>
-      {/* Show skeleton on first load before any reports arrive */}
+      {lastLoadedStr ? (
+        <View style={{ marginHorizontal: 16, marginBottom: 4 }}>
+          <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
+        </View>
+      ) : null}
+
+      {/* Reports list */}
       {initialLoading && reports.length === 0 ? (
         <SkeletonList count={5} />
       ) : (
@@ -389,24 +555,7 @@ export default function HomeScreen({ navigation, route }) {
               <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
               <Text style={styles.emptyTitle}>No reports yet</Text>
               <Text style={styles.emptySubtitle}>
-                Run your first institutional analysis in three steps:
-              </Text>
-              <View style={styles.emptySteps}>
-                <View style={styles.emptyStep}>
-                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>1</Text></View>
-                  <Text style={styles.emptyStepText}>Type a ticker above (e.g. AAPL)</Text>
-                </View>
-                <View style={styles.emptyStep}>
-                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>2</Text></View>
-                  <Text style={styles.emptyStepText}>Tap RUN — Grok pulls SEC filings + live news</Text>
-                </View>
-                <View style={styles.emptyStep}>
-                  <View style={styles.emptyStepNum}><Text style={styles.emptyStepNumText}>3</Text></View>
-                  <Text style={styles.emptyStepText}>~90 sec later, your Wall Street-format report appears here</Text>
-                </View>
-              </View>
-              <Text style={styles.emptyTip}>
-                Tip: long-press any saved report row to re-run, open files, or delete from cache.
+                Type a ticker above and tap RUN ▶ to generate your first institutional analysis.
               </Text>
             </View>
           }
@@ -415,6 +564,13 @@ export default function HomeScreen({ navigation, route }) {
           }
         />
       )}
+
+      {/* Pulse detail modal */}
+      <PulseModal
+        item={selectedPulse}
+        visible={pulseModalVisible}
+        onClose={() => setPulseModalVisible(false)}
+      />
     </View>
   );
 }
@@ -422,9 +578,12 @@ export default function HomeScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container:  { flex: 1, backgroundColor: colors.offWhite },
   statusDot:  { width: 10, height: 10, borderRadius: 5 },
+
+  // Input card
   inputSection: {
     backgroundColor: colors.white,
     margin: 16,
+    marginBottom: 8,
     borderRadius: 12,
     padding: 16,
     shadowColor: '#000',
@@ -450,14 +609,14 @@ const styles = StyleSheet.create({
   analyzeBtn: {
     backgroundColor: colors.gold,
     borderRadius: 8,
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
     minWidth: 90,
     justifyContent: 'center',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: colors.goldLight,          // top highlight edge
+    borderTopColor: colors.goldLight,
     borderBottomWidth: 2,
-    borderBottomColor: colors.goldDark,        // bottom depth edge
+    borderBottomColor: colors.goldDark,
     ...Platform.select({
       ios: {
         shadowColor: colors.gold,
@@ -469,14 +628,9 @@ const styles = StyleSheet.create({
     }),
   },
   analyzeBtnDisabled: { opacity: 0.5 },
-  analyzeBtnInner: {
-    flexDirection: 'row', alignItems: 'center',
-  },
+  analyzeBtnInner: { flexDirection: 'row', alignItems: 'center' },
   analyzeBtnText: { color: colors.navy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  analyzeBtnLoadingText: {
-    color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 1,
-    marginLeft: 6,
-  },
+  analyzeBtnLoadingText: { color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 1, marginLeft: 6 },
   gammaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -486,17 +640,43 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.lightGray,
   },
-  gammaLabel:   { fontSize: 14, fontWeight: '600', color: colors.darkGray },
+  gammaLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
 
-  // Section header row
+  // Market Pulse strip
+  pulseSection: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  pulseSectionLabel: {
+    fontSize: 10, fontWeight: '700', color: colors.midGray,
+    letterSpacing: 1.5, marginBottom: 6,
+  },
+  pulseStrip: { gap: 8, paddingRight: 4 },
+  pulseChip: {
+    backgroundColor: colors.white,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+    minWidth: 72,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: colors.lightGray,
+  },
+  pulseChipTicker: { fontSize: 12, fontWeight: '800', color: colors.navy, letterSpacing: 0.8 },
+  pulseSentimentDot: { width: 6, height: 6, borderRadius: 3, marginTop: 4 },
+  pulseChipPrice: { fontSize: 10, color: colors.midGray, marginTop: 2, fontFamily: 'Courier New' },
+
+  // Reports header row
   listHeaderRow: {
     flexDirection: 'row', alignItems: 'center',
-    marginHorizontal: 16, marginBottom: 6,
+    marginHorizontal: 16, marginBottom: 4,
   },
-  sectionTitle: {
-    fontSize: 11, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5,
-  },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
   countBadge: {
     marginLeft: 8,
     fontSize: 11, fontWeight: '700', color: colors.gold,
@@ -504,12 +684,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
     overflow: 'hidden',
   },
-  lastLoadedText: {
-    fontSize: 10, fontWeight: '600', color: colors.midGray,
-    letterSpacing: 0.3,
+  lastLoadedText: { fontSize: 10, fontWeight: '600', color: colors.midGray, letterSpacing: 0.3 },
+  scanAllBtn: {
+    backgroundColor: colors.gold,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
+  scanAllBtnText: { color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 0.5 },
 
-  // List container - one shared card holds all rows for tighter info density
+  // List container
   listContent: {
     backgroundColor: colors.white,
     marginHorizontal: 16,
@@ -521,100 +705,48 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-
-  // Column header row (TICKER / PRICE)
   colHeader: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6,
     borderBottomWidth: 1, borderBottomColor: colors.lightGray,
   },
-  colHeaderText: {
-    fontSize: 9, fontWeight: '800', color: colors.midGray,
-    letterSpacing: 1.2,
-  },
+  colHeaderText: { fontSize: 9, fontWeight: '800', color: colors.midGray, letterSpacing: 1.2 },
 
-  // Compact two-line row, ~46px tall vs old ~70px
   reportRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12,            // slightly less left-pad to make room for accent bar
+    paddingHorizontal: 12,
     paddingVertical: 9,
     borderLeftWidth: 3,
-    borderLeftColor: `rgba(91,184,212,0.25)`, // subtle permanent accent bar
+    borderLeftColor: 'rgba(91,184,212,0.25)',
   },
   sep: { height: 1, backgroundColor: colors.lightGray, marginLeft: 14 },
   tickerCell:    { flex: 1 },
-  reportTicker:  {
-    fontSize: 15, fontWeight: '800', color: colors.navy,
-    letterSpacing: 1.2, lineHeight: 18,
-  },
-
-  // Format pills (replaces the old 6×6 colored dots — readable at a glance)
+  reportTicker:  { fontSize: 15, fontWeight: '800', color: colors.navy, letterSpacing: 1.2, lineHeight: 18 },
   formatRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
-  docPill: {
-    backgroundColor: colors.navy,
-    borderRadius: 3,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  docPillText: {
-    color: colors.white,
-    fontSize: 8,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
-  pptPill: {
-    backgroundColor: colors.gold,
-    borderRadius: 3,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  pptPillText: {
-    color: colors.navy,
-    fontSize: 8,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
+  docPill: { backgroundColor: colors.navy, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  docPillText: { color: colors.white, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
+  pptPill: { backgroundColor: colors.gold, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  pptPillText: { color: colors.navy, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
   reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 3 },
 
   priceCell: { alignItems: 'flex-end', minWidth: 78, marginRight: 10 },
-  priceText: {
-    fontSize: 14, fontWeight: '700', color: colors.navy,
-    fontFamily: 'Courier New', lineHeight: 16,
-  },
-  pctText: {
-    fontSize: 11, fontWeight: '700', fontFamily: 'Courier New',
-    lineHeight: 13, marginTop: 1,
-  },
-  pctUp:        { color: colors.green },
-  pctDown:      { color: colors.red },
+  priceText: { fontSize: 14, fontWeight: '700', color: colors.navy, fontFamily: 'Courier New', lineHeight: 16 },
+  pctText: { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', lineHeight: 13, marginTop: 1 },
+  pctUp:   { color: colors.green },
+  pctDown: { color: colors.red },
   priceMissing: { fontSize: 14, color: colors.lightGray, fontFamily: 'Courier New' },
 
-  // Target column — visually distinct (gold-tinged) so it doesn't compete
-  // with the live-price column. Slightly smaller font to keep row density.
   targetCell: { alignItems: 'flex-end', minWidth: 70 },
-  targetLabel: {
-    fontSize: 7, fontWeight: '800', color: colors.gold,
-    letterSpacing: 1.0, lineHeight: 10,
-  },
-  targetText: {
-    fontSize: 13, fontWeight: '700', color: colors.darkGray,
-    fontFamily: 'Courier New', lineHeight: 16,
-  },
-  upsideText: {
-    fontSize: 11, fontWeight: '700', fontFamily: 'Courier New',
-    lineHeight: 13, marginTop: 1,
-  },
+  targetLabel: { fontSize: 7, fontWeight: '800', color: colors.gold, letterSpacing: 1.0, lineHeight: 10 },
+  targetText: { fontSize: 13, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New', lineHeight: 16 },
+  upsideText: { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', lineHeight: 13, marginTop: 1 },
   targetMissing: { fontSize: 13, color: colors.lightGray, fontFamily: 'Courier New' },
 
-  // Column-header alignment for the new 3-column layout
   colHeaderPrice:  { width: 78, marginRight: 10, textAlign: 'right' },
   colHeaderTarget: { width: 70, textAlign: 'right', color: colors.gold },
-
   chev: { marginLeft: 6 },
 
   emptyContainer: { flexGrow: 1, justifyContent: 'center', backgroundColor: 'transparent' },
-
-  // ── New empty state — illustrated, 3-step walkthrough ─────────────────────
   emptyWrap: {
     alignItems: 'center',
     paddingHorizontal: 28,
@@ -628,36 +760,43 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  emptyTitle: {
-    fontSize: 17, fontWeight: '800', color: colors.navy,
-    marginTop: 12, letterSpacing: 0.4,
-  },
-  emptySubtitle: {
-    fontSize: 13, color: colors.midGray,
-    textAlign: 'center', marginTop: 6, marginBottom: 18,
-    lineHeight: 18,
-  },
-  emptySteps: { alignSelf: 'stretch', gap: 12 },
-  emptyStep: {
+  emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.navy, marginTop: 12, letterSpacing: 0.4 },
+  emptySubtitle: { fontSize: 13, color: colors.midGray, textAlign: 'center', marginTop: 6, lineHeight: 18 },
+
+  // Sentiment badge (used in modal)
+  sentimentBadge: { borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8 },
+  sentimentText: { color: colors.white, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+
+  // Pulse detail modal
+  modalContainer: { flex: 1, backgroundColor: colors.offWhite },
+  modalHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    backgroundColor: colors.white,
+    padding: 20,
+    paddingTop: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.lightGray,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  emptyStepNum: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: colors.navy,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  emptyStepNumText: {
-    color: colors.gold, fontSize: 12, fontWeight: '800',
-  },
-  emptyStepText: {
-    flex: 1,
-    fontSize: 13, color: colors.darkGray, lineHeight: 18,
-  },
-  emptyTip: {
-    fontSize: 11, color: colors.midGray,
-    textAlign: 'center', marginTop: 18,
-    fontStyle: 'italic', lineHeight: 16,
-  },
+  modalHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  modalTicker: { fontSize: 22, fontWeight: '900', color: colors.navy, letterSpacing: 1.2 },
+  modalPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, width: '100%', marginTop: 4 },
+  modalPrice: { fontSize: 15, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New' },
+  modalPct:   { fontSize: 13, fontWeight: '700', fontFamily: 'Courier New' },
+  modalCloseBtn: { padding: 4, marginLeft: 12 },
+  modalBody: { flex: 1 },
+  modalBodyContent: { padding: 20, paddingBottom: 60 },
+
+  // Simple markdown rendering
+  mdHeading: { fontSize: 14, fontWeight: '700', color: colors.navy, marginTop: 14, marginBottom: 4 },
+  mdH1: { fontSize: 17, fontWeight: '800' },
+  mdH2: { fontSize: 15, fontWeight: '800' },
+  mdBody: { fontSize: 13, color: colors.darkGray, lineHeight: 20, marginVertical: 2 },
+  mdBold: { fontWeight: '800', color: colors.navy },
 });

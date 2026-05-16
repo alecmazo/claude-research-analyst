@@ -534,4 +534,70 @@ export const api = {
     if (!resp.ok) throw new Error(`${resp.status}`);
     return resp.json();
   },
+
+  // ---------- Batch quotes (avoids Yahoo rate limits) ----------
+  getBatchQuotes: async (tickers) => {
+    // uses v2Fetch so it attaches the v2 token
+    const qs = tickers.map(encodeURIComponent).join(',');
+    const r = await v2Fetch(`/api/quotes?tickers=${qs}`);
+    if (!r.ok) throw new Error(`quotes ${r.status}`);
+    return r.json(); // { quotes: { TICKER: { price, pct_change, ... } } }
+  },
+
+  // ---------- Market Scan (independent ticker list) ----------
+  getMarketScanTickers: async () => {
+    const r = await v2Fetch('/api/scan/market-tickers');
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json(); // { tickers: [...] }
+  },
+  addMarketScanTicker: async (ticker) => {
+    const r = await v2Fetch('/api/scan/market-tickers', {
+      method: 'POST',
+      body: JSON.stringify({ ticker }),
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  removeMarketScanTicker: async (ticker) => {
+    const r = await v2Fetch(`/api/scan/market-tickers/${encodeURIComponent(ticker)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  startMarketScan: async () => {
+    const r = await v2Fetch('/api/scan/market', { method: 'POST' });
+    if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.detail || `${r.status}`); }
+    return r.json();
+  },
+
+  // ---------- Archived reports ----------
+  getArchivedReports: async () => {
+    const r = await v2Fetch('/api/reports/archived');
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  restoreReport: async (ticker) => {
+    const r = await v2Fetch(`/api/reports/${encodeURIComponent(ticker)}/restore`, { method: 'POST' });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  restoreAllReports: async () => {
+    const r = await v2Fetch('/api/reports/restore-all', { method: 'POST' });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+
+  // ---------- Automation settings ----------
+  getAutomationSettings: async () => {
+    const r = await v2Fetch('/api/automation/settings');
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  saveAutomationSettings: async (settings) => {
+    const r = await v2Fetch('/api/automation/settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
 };

@@ -50,11 +50,28 @@ export default function IntelligenceScreen({ navigation }) {
   const [initialLoading, setInitialLoading] = useState(true); // first-focus skeleton
   const pollRef                   = useRef(null);
 
+  // ── Today's Movers (from latest daily brief tickers) ──────────────────────
+  const [moverTickers, setMoverTickers]   = useState([]);
+  const [moverTimestamp, setMoverTimestamp] = useState(null);
+
+  const loadMovers = async () => {
+    try {
+      const data = await api.getLatestDailyBrief();
+      if (data?.exists && data?.tickers?.length) {
+        setMoverTickers(data.tickers);
+        setMoverTimestamp(data.generated_at || null);
+      }
+    } catch (err) {
+      console.warn('loadMovers:', err.message);
+    }
+  };
+
   // ── Load latest persisted result on tab focus ──────────────────────────────
   // Show the freshest of (intelligence brief, daily brief) — daily briefs
   // change every morning so they usually win.
   useFocusEffect(
     useCallback(() => {
+      loadMovers();
       Promise.allSettled([
         api.getLatestIntelligence(),
         api.getLatestDailyBrief(),
@@ -274,6 +291,35 @@ export default function IntelligenceScreen({ navigation }) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* ── Today's Movers strip (from latest daily brief) ── */}
+        <View style={styles.moversCard}>
+          <View style={styles.moversHeader}>
+            <Text style={styles.moversLabel}>TODAY'S MOVERS</Text>
+            {moverTimestamp && (
+              <Text style={styles.moversTimestamp}>
+                {new Date(moverTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            )}
+          </View>
+          {moverTickers.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moversStrip}>
+              {moverTickers.map(t => (
+                <TouchableOpacity
+                  key={t}
+                  style={styles.moverChip}
+                  onPress={() => openTicker(t)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.moverChipText}>{t}</Text>
+                  <Ionicons name="arrow-forward" size={10} color={colors.navy} style={{ marginLeft: 3 }} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={styles.moversEmpty}>Run Daily Brief to populate</Text>
+          )}
+        </View>
+
         {/* ── Daily Brief card (Grok 4.30-beta — fast, action-oriented) ── */}
         <View style={[styles.card, styles.briefCard]}>
           <View style={styles.briefHeader}>
@@ -449,6 +495,35 @@ const styles = StyleSheet.create({
   container:   { flex: 1, backgroundColor: colors.offWhite },
   scroll:      { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 48 },
+
+  // ── Today's Movers ──
+  moversCard: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accentBlue,
+  },
+  moversHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  moversLabel: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
+  moversTimestamp: { fontSize: 11, color: colors.midGray },
+  moversStrip: { gap: 8, paddingRight: 4 },
+  moverChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.gold,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  moverChipText: { color: colors.navy, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
+  moversEmpty: { fontSize: 12, color: colors.midGray, fontStyle: 'italic' },
 
   card: {
     backgroundColor: colors.white,
