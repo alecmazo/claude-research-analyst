@@ -6081,18 +6081,30 @@ def _kv_get(key: str):
         return None
 
 
+def _kv_sanitize(obj):
+    """Recursively replace NaN/Inf floats with None so JSONB accepts the value."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _kv_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_kv_sanitize(v) for v in obj]
+    return obj
+
+
 def _kv_put(key: str, value) -> bool:
     """Upsert (key, value). Returns True on success."""
     if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
         return False
     try:
+        safe = _kv_sanitize(value)
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO kv_store (k, v, updated_at)
                 VALUES (%s, %s::jsonb, now())
                 ON CONFLICT (k) DO UPDATE
                   SET v = EXCLUDED.v, updated_at = now()
-            """, (key, json.dumps(value)))
+            """, (key, json.dumps(safe, allow_nan=False)))
             conn.commit()
         return True
     except Exception as e:
