@@ -3813,10 +3813,15 @@ def download_pptx(ticker: str):
 
 @app.get("/api/quote/{ticker}")
 def get_quote(ticker: str):
-    """Return live market price for *ticker* from Yahoo Finance."""
-    ticker = ticker.strip().upper()
-    snapshot = analyst.fetch_market_snapshot(ticker)
-    return {"ticker": ticker, **snapshot}
+    """Return live market price for *ticker* from Yahoo Finance.
+
+    Applies the alias map before fetching so BRKB→BRK-B etc. resolve
+    correctly. The original symbol is preserved in the response.
+    """
+    original = ticker.strip().upper().rstrip("*")
+    yahoo_sym = _resolve_ticker_alias(original)   # e.g. BRKB → BRK-B
+    snapshot = analyst.fetch_market_snapshot(yahoo_sym)
+    return {"ticker": original, **snapshot}
 
 
 # ── SPY YTD cache (TTL: 15 min) ───────────────────────────────────────────────
