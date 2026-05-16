@@ -3819,6 +3819,10 @@ def get_quote(ticker: str):
     correctly. The original symbol is preserved in the response.
     """
     original  = ticker.strip().upper().rstrip("*")
+    # Skip Yahoo/Tiingo entirely for tickers in the exclusion list —
+    # they're preferred stocks or ETFs that generate 404/delisted spam.
+    if original in _SCAN_EXCLUDE:
+        return {"ticker": original, "price": None, "pct_change": None}
     yahoo_sym = _resolve_ticker_alias(original)   # e.g. BRKB → BRK-B
     snapshot  = analyst.fetch_market_snapshot(yahoo_sym)
     # If Yahoo returned no price, try Tiingo before giving up
@@ -4945,6 +4949,16 @@ def batch_quotes(tickers: str = ""):
     if not originals:
         return {}
 
+    # Pre-filter: skip tickers in the exclusion dict (preferred stocks, ETFs,
+    # alias mismatches) — they generate Yahoo 404 / "possibly delisted" spam.
+    # Return null placeholders for them so the UI shows "—" gracefully.
+    excluded = {s for s in originals if s in _SCAN_EXCLUDE}
+    originals = [s for s in originals if s not in _SCAN_EXCLUDE]
+    null_row: dict = {"price": None, "pct_change": None}
+
+    if not originals:
+        return {s: null_row for s in excluded}
+
     # Check cache first (keyed on the sorted symbol set)
     cache_key = frozenset(originals)
     hit = _batch_quote_cache.get(cache_key)
@@ -5006,6 +5020,10 @@ def batch_quotes(tickers: str = ""):
             if orig in tiingo_data:
                 result[orig] = tiingo_data[orig]
                 print(f"[quotes] {orig}: Yahoo miss → Tiingo hit")
+
+    # Merge excluded tickers back as null placeholders
+    for s in excluded:
+        result[s] = null_row
 
     _batch_quote_cache[cache_key] = (result, time.time())
     return result
