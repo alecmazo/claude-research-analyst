@@ -26,9 +26,32 @@ import csv
 import io
 import re
 import time
+import math
 from itertools import groupby
 import hashlib
 import hmac
+
+# ── Global NaN / Inf guard ───────────────────────────────────────────────────
+# Monkey-patch starlette's JSONResponse.render so that NaN/Inf floats
+# (common from yfinance when a stock has no data) are silently converted to
+# null instead of crashing with "Out of range float values are not JSON
+# compliant: nan".  Patching the class directly — rather than setting
+# app.router.default_response_class — ensures ALL responses are covered,
+# including explicit JSONResponse(...) calls inside endpoint handlers.
+def _nan_safe_render(self, content) -> bytes:
+    def _s(o):
+        if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+            return None
+        if isinstance(o, dict):
+            return {k: _s(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_s(v) for v in o]
+        return o
+    return json.dumps(_s(content), ensure_ascii=False,
+                      allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+import starlette.responses as _sr
+_sr.JSONResponse.render = _nan_safe_render  # type: ignore[method-assign]
 
 # ── yfinance (optional — for live price fetching) ─────────────────────────────
 try:
