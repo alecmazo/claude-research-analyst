@@ -7553,6 +7553,53 @@ async def email_diag(request: Request):
     return result
 
 
+@app.post("/api/v2/gp/email-test")
+async def email_test_send(request: Request):
+    """Send a quick test email to verify Resend is working end-to-end.
+    Body: { "to": "user@example.com" }   (required)
+    Returns the raw result from _send_simple_email so the caller sees
+    exactly what Resend replied."""
+    claims = getattr(request.state, "auth_claims", None)
+    if not claims or claims.get("role") != "gp":
+        raise HTTPException(status_code=403, detail="GP access required")
+    try:
+        body_raw = await request.body()
+        body_json = json.loads(body_raw) if body_raw else {}
+    except Exception:
+        body_json = {}
+    to_addr = (body_json.get("to") or "").strip()
+    if not to_addr or "@" not in to_addr:
+        raise HTTPException(status_code=422, detail="Provide a valid 'to' email address in the request body")
+
+    resend_key  = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
+
+    html_body = f"""
+<!DOCTYPE html><html><body style="font-family:sans-serif;padding:32px;background:#f0f4f8;">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:28px;
+              box-shadow:0 4px 20px rgba(0,0,0,0.10);border-top:4px solid #5BB8D4;">
+    <img src="https://portfolio.dgacapital.com/web/assets/dga_logo.png"
+         style="height:36px;margin-bottom:20px;" alt="DGA Capital" onerror="this.style.display='none'">
+    <h2 style="color:#0A1628;margin:0 0 8px;">✅ Email Transport Working</h2>
+    <p style="color:#475569;font-size:14px;margin:0 0 16px;">
+      This is a test email from the DGA Capital GP Portal.<br>
+      Sent via Resend from <strong>{resend_from}</strong>.
+    </p>
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;">
+    <p style="color:#94a3b8;font-size:11px;margin:0;">
+      Sent {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC &mdash; DGA Capital GP Portal
+    </p>
+  </div>
+</body></html>"""
+
+    result = _send_simple_email(to_addr, "[DGA] Email test — GP Portal", html_body)
+    # Always return 200 so the UI gets the full result dict (ok + error detail)
+    result["to"]   = to_addr
+    result["from"] = resend_from
+    result["key_set"] = bool(resend_key)
+    return result
+
+
 @app.get("/api/v2/gp/fund/{fund_id}/rebalance")
 async def get_account_rebalance(fund_id: str, request: Request):
     """Return the persisted rebalance result for a managed account."""

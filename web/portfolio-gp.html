@@ -1342,6 +1342,34 @@
         </div>
       </section>
 
+      <!-- Email Diagnostics -->
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">Email Diagnostics</span>
+          <span class="panel-badge">Resend</span>
+        </header>
+        <div style="padding:14px;">
+          <div style="font-size:11px;color:var(--dim);margin-bottom:12px;line-height:1.6;">
+            Use this panel to verify that Resend is configured correctly and can deliver email.
+            <strong>Run Diagnostics</strong> checks your API key and domain status.
+            <strong>Send Test Email</strong> fires a real message end-to-end.
+          </div>
+
+          <!-- Test email row -->
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+            <input id="email-test-addr" type="email" class="settings-input"
+              placeholder="recipient@example.com" style="flex:1;min-width:180px;">
+            <button id="email-test-btn" class="tab-btn" style="white-space:nowrap;">📨 Send Test Email</button>
+            <button id="email-diag-btn" class="tab-btn sm" style="white-space:nowrap;font-size:9px;padding:0 12px;">🔍 Run Diagnostics</button>
+          </div>
+
+          <!-- Result area -->
+          <div id="email-diag-result" style="display:none;margin-top:10px;border-radius:8px;border:1px solid var(--panel-edge);overflow:hidden;">
+            <!-- filled by JS -->
+          </div>
+        </div>
+      </section>
+
       <!-- Automation Schedule -->
       <section class="panel" style="grid-column:1/-1;">
         <header class="panel-head">
@@ -4724,6 +4752,72 @@
     loadLPRoster();
     loadBuildInfo();
     loadAutomationSettings();
+    _wireEmailDiag();
+  }
+
+  // ── Email Diagnostics ────────────────────────────────────────────────────
+  let _emailDiagWired = false;
+  function _wireEmailDiag() {
+    if (_emailDiagWired) return;
+    _emailDiagWired = true;
+
+    const $result  = document.getElementById('email-diag-result');
+    const $testBtn = document.getElementById('email-test-btn');
+    const $diagBtn = document.getElementById('email-diag-btn');
+    const $addr    = document.getElementById('email-test-addr');
+
+    function _showResult(data, isOk) {
+      $result.style.display = 'block';
+      const bg    = isOk ? 'rgba(22,163,74,0.06)' : 'rgba(220,38,38,0.06)';
+      const color = isOk ? '#16a34a' : '#dc2626';
+      const icon  = isOk ? '✅' : '❌';
+      $result.innerHTML = `
+        <div style="padding:10px 14px;background:${bg};border-bottom:1px solid var(--panel-edge);">
+          <span style="font-weight:800;color:${color};font-size:12px;">${icon} ${isOk ? 'Success' : 'Failed'}</span>
+        </div>
+        <pre style="margin:0;padding:12px 14px;font-size:10.5px;font-family:'SF Mono',Menlo,monospace;
+                    color:var(--navy-light);line-height:1.55;overflow-x:auto;white-space:pre-wrap;
+                    background:#fafbfc;max-height:340px;overflow-y:auto;">${JSON.stringify(data, null, 2)}</pre>`;
+    }
+
+    $testBtn?.addEventListener('click', async () => {
+      const to = ($addr?.value || '').trim();
+      if (!to || !to.includes('@')) {
+        $addr?.focus();
+        $result.style.display = 'block';
+        $result.innerHTML = '<div style="padding:10px 14px;color:#dc2626;font-size:12px;">⚠ Enter a valid email address first.</div>';
+        return;
+      }
+      $testBtn.disabled = true; $testBtn.textContent = '⏳ Sending…';
+      try {
+        const r = await window.dgaFetch('/api/v2/gp/email-test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to }),
+        });
+        const d = await r.json();
+        _showResult(d, d.ok === true);
+      } catch(e) {
+        _showResult({ error: e.message }, false);
+      } finally {
+        $testBtn.disabled = false; $testBtn.textContent = '📨 Send Test Email';
+      }
+    });
+
+    $diagBtn?.addEventListener('click', async () => {
+      $diagBtn.disabled = true; $diagBtn.textContent = '⏳ Running…';
+      try {
+        const r = await window.dgaFetch('/api/v2/gp/email-diag');
+        const d = await r.json();
+        // Consider it "ok" if the test send succeeded or no API key error
+        const ok = d?.resend_test_send?.ok === true;
+        _showResult(d, ok);
+      } catch(e) {
+        _showResult({ error: e.message }, false);
+      } finally {
+        $diagBtn.disabled = false; $diagBtn.textContent = '🔍 Run Diagnostics';
+      }
+    });
   }
 
   // ── Automation Schedule ───────────────────────────────────────────────────
