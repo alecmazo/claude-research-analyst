@@ -13,7 +13,7 @@ import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
-const APP_BUILD = 'mobile-ui16-20260505';
+const APP_BUILD = 'mobile-ui17-20260516';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtNextRun(secs) {
@@ -68,7 +68,7 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
         <Switch
           value={enabled}
           onValueChange={onToggle}
-          trackColor={{ false: colors.lightGray, true: colors.gold }}
+          trackColor={{ false: colors.lightGray, true: colors.primary }}
           thumbColor={colors.white}
           style={{ marginTop: 6 }}
         />
@@ -337,7 +337,7 @@ export default function SettingsScreen() {
           </Text>
 
           {autoLoading ? (
-            <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
+            <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
           ) : (
             <>
               <AutoRow
@@ -493,7 +493,7 @@ const styles = StyleSheet.create({
   },
   saveBtnText: { color: colors.white, fontWeight: '700', fontSize: 13 },
   saveBtnGold: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,

@@ -199,7 +199,7 @@ export default function PaperTrackerScreen({ navigation }) {
         {liveExpanded && (
           <View style={styles.liveDetailWrap}>
             {liveLoading || !liveDetail ? (
-              <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
             ) : (
               <>
                 <View style={styles.liveYtdMetrics}>
@@ -347,7 +347,7 @@ export default function PaperTrackerScreen({ navigation }) {
         {isOpen && (
           <View style={styles.detail}>
             {!detail ? (
-              <ActivityIndicator color={colors.gold} style={{ marginVertical: 16 }} />
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
             ) : (
               <>
                 <AttributionView
@@ -404,7 +404,7 @@ export default function PaperTrackerScreen({ navigation }) {
           style={{ flex: 1 }}
           contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
           keyboardShouldPersistTaps="handled"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         >
           {renderLiveCard()}
 
@@ -470,7 +470,7 @@ function HoldingRow({ h, idx, arr }) {
   const top3    = sorted.filter(x => (x.contribution_pct ?? 0) > 0).slice(0, 3).map(x => x.ticker);
   const bot3    = sorted.slice().reverse().filter(x => (x.contribution_pct ?? 0) < 0).slice(0, 3).map(x => x.ticker);
   const tag     = top3.includes(h.ticker) ? '★ ' : bot3.includes(h.ticker) ? '▼ ' : '';
-  const tagC    = top3.includes(h.ticker) ? colors.gold : bot3.includes(h.ticker) ? '#DC2626' : colors.midGray;
+  const tagC    = top3.includes(h.ticker) ? colors.primary : bot3.includes(h.ticker) ? '#DC2626' : colors.midGray;
   return (
     <View style={styles.tableRow}>
       <Text style={[styles.tdCell, { flex: 1.2, textAlign: 'left' }]}>
@@ -567,7 +567,7 @@ const styles = StyleSheet.create({
   // Live benchmark
   liveHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   liveDrillHint: { backgroundColor: 'rgba(91,184,212,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
-  liveDrillHintText: { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
+  liveDrillHintText: { color: colors.primary, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   liveLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: colors.lightGray },
   liveKey:  { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 0.5 },
   liveVal:  { fontSize: 13, fontWeight: '700', color: colors.navy },
@@ -581,10 +581,10 @@ const styles = StyleSheet.create({
 
   // Email
   emailBox: { marginTop: 18, padding: 14, borderRadius: 8, backgroundColor: 'rgba(91,184,212,0.05)', borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)' },
-  emailBoxTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 1, color: colors.gold, marginBottom: 8 },
+  emailBoxTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 1, color: colors.primary, marginBottom: 8 },
   emailStatus: { fontSize: 12, marginTop: 8, fontWeight: '600' },
   formInput: { backgroundColor: colors.offWhite, borderWidth: 1, borderColor: colors.lightGray, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: colors.navy, fontFamily: 'Courier New' },
-  btnPrimary: { backgroundColor: colors.gold, paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginTop: 10 },
+  btnPrimary: { backgroundColor: colors.primary, paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginTop: 10 },
   btnPrimaryText: { color: colors.navy, fontSize: 13, fontWeight: '800', letterSpacing: 0.4 },
 
   // Metrics / milestones
@@ -594,7 +594,7 @@ const styles = StyleSheet.create({
   metricVal: { fontSize: 12, fontWeight: '800', fontFamily: 'Courier New', marginTop: 1 },
   milestones: { flexDirection: 'row', gap: 5, marginTop: 10, alignItems: 'center' },
   ms: { backgroundColor: colors.lightGray, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
-  msReached: { backgroundColor: colors.gold },
+  msReached: { backgroundColor: colors.primary },
   msText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.7, color: colors.midGray },
   msTextReached: { color: colors.navy },
 

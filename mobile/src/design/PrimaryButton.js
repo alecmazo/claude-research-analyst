@@ -77,8 +77,8 @@ export default function PrimaryButton({
 }
 
 const VARIANTS = {
-  primary: { bg: colors.gold,     fg: colors.navy, border: 'transparent' },
-  navy:    { bg: colors.navy,     fg: colors.gold, border: colors.gold, borderWidth: 1.5 },
+  primary: { bg: colors.primary,     fg: colors.navy, border: 'transparent' },
+  navy:    { bg: colors.navy,     fg: colors.primary, border: colors.primary, borderWidth: 1.5 },
   ghost:   { bg: 'transparent',   fg: colors.navy, border: colors.lightGray, borderWidth: 1.5 },
 };
 

@@ -284,7 +284,7 @@ export default function ScanScreen({ navigation }) {
       <FlatList
         data={sortedPulse}
         keyExtractor={item => item.ticker}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         contentContainerStyle={styles.content}
         ListHeaderComponent={
           <>
@@ -421,13 +421,13 @@ const styles = StyleSheet.create({
   },
   cardLabel: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
   scanNowBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
     minWidth: 110,
     alignItems: 'center',
-    shadowColor: colors.gold,
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.4,
     shadowRadius: 6,
@@ -450,7 +450,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  chipText: { color: colors.gold, fontWeight: '700', fontSize: 13, letterSpacing: 0.5 },
+  chipText: { color: colors.primary, fontWeight: '700', fontSize: 13, letterSpacing: 0.5 },
   chipX:    { color: colors.midGray, fontSize: 14, marginTop: -1 },
 
   // Add row
@@ -470,7 +470,7 @@ const styles = StyleSheet.create({
   addBtn: {
     width: 44,
     height: 44,
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
@@ -495,7 +495,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  countBadgeText: { color: colors.gold, fontSize: 11, fontWeight: '700' },
+  countBadgeText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
 
   // Pulse card
   pulseCard: {

@@ -63,7 +63,7 @@ export default function PortfolioScreen({ navigation }) {
         {/* Run Rebalance portal → Fund / My Portfolio */}
         <TouchableOpacity style={styles.portalCard} onPress={goToFundMyPortfolio} activeOpacity={0.85}>
           <View style={styles.portalIconWrap}>
-            <Ionicons name="swap-horizontal-outline" size={28} color={colors.gold} />
+            <Ionicons name="swap-horizontal-outline" size={28} color={colors.primary} />
           </View>
           <View style={styles.portalBody}>
             <Text style={styles.portalTitle}>Run Rebalance</Text>
@@ -78,7 +78,7 @@ export default function PortfolioScreen({ navigation }) {
         {/* Paper Portfolios portal → Ideas tab */}
         <TouchableOpacity style={styles.portalCard} onPress={goToIdeas} activeOpacity={0.85}>
           <View style={styles.portalIconWrap}>
-            <Ionicons name="bookmark-outline" size={28} color={colors.gold} />
+            <Ionicons name="bookmark-outline" size={28} color={colors.primary} />
           </View>
           <View style={styles.portalBody}>
             <Text style={styles.portalTitle}>Paper Portfolios</Text>
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingVertical: 12,
     paddingHorizontal: 16,
@@ -141,7 +141,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
     borderLeftWidth: 3,
-    borderLeftColor: colors.gold,
+    borderLeftColor: colors.primary,
   },
   portalIconWrap: {
     width: 48,
@@ -167,6 +167,6 @@ const styles = StyleSheet.create({
   portalCta: {
     fontSize: 12,
     fontWeight: '700',
-    color: colors.gold,
+    color: colors.primary,
   },
 });

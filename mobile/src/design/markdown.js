@@ -23,7 +23,7 @@ export const markdownColors = {
   italic:      colors.midGray,
   divider:     '#E8EDF3',
   quoteBg:     '#F0F4FA',
-  quoteAccent: colors.gold,
+  quoteAccent: colors.primary,
   codeBg:      colors.lightGray,
   codeFg:      colors.navy,
 };

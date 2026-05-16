@@ -30,7 +30,7 @@ function StepRow({ step, status }) {
   // status: 'pending' | 'active' | 'done' | 'skipped'
   const iconColor =
     status === 'done'   ? colors.green
-  : status === 'active' ? colors.gold
+  : status === 'active' ? colors.primary
   :                       colors.lightGray;
   const textColor =
     status === 'done'   ? colors.darkGray
@@ -41,7 +41,7 @@ function StepRow({ step, status }) {
       <Ionicons name={step.icon} size={20} color={iconColor} />
       <Text style={[styles.stepLabel, { color: textColor }]}>{step.label}</Text>
       {status === 'active' && (
-        <ActivityIndicator size="small" color={colors.gold} style={{ marginLeft: 'auto' }} />
+        <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 'auto' }} />
       )}
       {status === 'done' && (
         <Ionicons name="checkmark" size={16} color={colors.green} style={{ marginLeft: 'auto' }} />
@@ -201,7 +201,7 @@ export default function AnalysisScreen({ route, navigation }) {
                     inputRange:  [0, 1],
                     outputRange: ['0%', '100%'],
                   }),
-                  backgroundColor: isFailed ? colors.red : colors.gold,
+                  backgroundColor: isFailed ? colors.red : colors.primary,
                 },
               ]}
             />
@@ -239,7 +239,7 @@ export default function AnalysisScreen({ route, navigation }) {
                 navigation.replace('Analysis', { jobId: '__retry__', ticker });
               }}
             >
-              <Ionicons name="refresh" size={16} color={colors.gold} />
+              <Ionicons name="refresh" size={16} color={colors.primary} />
               <Text style={styles.retryBtnText}>Retry Analysis</Text>
             </TouchableOpacity>
           )}
@@ -410,7 +410,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginTop: 12,
   },
-  retryBtnText: { color: colors.gold, fontWeight: '700', fontSize: 14 },
+  retryBtnText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
 
   // ── Hero result card ──
   heroCard: {
@@ -419,7 +419,7 @@ const styles = StyleSheet.create({
     padding: 20,
     marginTop: 14,
     borderWidth: 1.5,
-    borderColor: colors.gold,
+    borderColor: colors.primary,
   },
   heroEntity: {
     fontSize: 16, fontWeight: '700',
@@ -448,7 +448,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2, marginBottom: 2,
   },
   priceValue: {
-    fontSize: 18, fontWeight: '800', color: colors.gold,
+    fontSize: 18, fontWeight: '800', color: colors.primary,
     fontFamily: 'Courier New',
   },
   upsideText: {
@@ -460,7 +460,7 @@ const styles = StyleSheet.create({
 
   // ── Gamma + view-report CTAs ──
   viewReportBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: radius.xl,
     padding: 16,
     marginTop: 14,
@@ -474,7 +474,7 @@ const styles = StyleSheet.create({
   // The Gamma button is now a strong gold-fill CTA (was offWhite + border)
   // since the deck is a premium output that deserves visual priority.
   gammaBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: radius.xl,
     padding: 14,
     marginTop: 10,

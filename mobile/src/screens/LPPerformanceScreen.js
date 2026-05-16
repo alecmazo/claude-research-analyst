@@ -288,7 +288,7 @@ function AnnualPerfTable({ fid }) {
   if (state === 'loading') {
     return (
       <View style={s.atpLoading}>
-        <ActivityIndicator size="small" color={colors.gold} />
+        <ActivityIndicator size="small" color={colors.primary} />
         <Text style={s.atpLoadingText}>Loading performance…</Text>
       </View>
     );
@@ -471,12 +471,12 @@ export default function LPPerformanceScreen({ onLogout }) {
         }
       />
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         contentContainerStyle={styles.scroll}
       >
         {loading && !data && (
           <View style={styles.loadingWrap}>
-            <ActivityIndicator color={colors.gold} />
+            <ActivityIndicator color={colors.primary} />
             <Text style={styles.loadingText}>Loading your portfolio…</Text>
           </View>
         )}
@@ -766,7 +766,7 @@ const styles = StyleSheet.create({
   scroll:    { padding: 14, paddingBottom: 40 },
 
   logoutText: {
-    color: colors.gold,
+    color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1.5,
@@ -794,7 +794,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   heroEyebrow: {
-    color: colors.gold,
+    color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1.3,
@@ -823,7 +823,7 @@ const styles = StyleSheet.create({
     padding: 11,
   },
   heroTileLabel: {
-    color: colors.gold,
+    color: colors.primary,
     fontSize: 8,
     fontWeight: '800',
     letterSpacing: 1.1,
@@ -854,7 +854,7 @@ const styles = StyleSheet.create({
   cardBadge: {
     fontSize: 9,
     fontWeight: '800',
-    color: colors.gold,
+    color: colors.primary,
     backgroundColor: colors.navy,
     paddingHorizontal: 7, paddingVertical: 2,
     borderRadius: 9,
@@ -862,7 +862,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   cardAlias:      { fontSize: 10, color: colors.midGray, letterSpacing: 0.6, marginBottom: 8 },
-  cardAliasValue: { color: colors.goldDark, fontWeight: '800' },
+  cardAliasValue: { color: colors.primaryDark, fontWeight: '800' },
 
   cardStats: { flexDirection: 'row', gap: 10 },
   cardStat: {

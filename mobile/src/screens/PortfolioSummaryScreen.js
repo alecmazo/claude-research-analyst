@@ -76,7 +76,7 @@ export default function PortfolioSummaryScreen({ navigation }) {
 
       {loading && (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.gold} />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Loading summary…</Text>
         </View>
       )}
@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16, bottom: 24,
     width: 46, height: 46, borderRadius: 23,
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },

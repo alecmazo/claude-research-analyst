@@ -478,7 +478,7 @@ export default function HomeScreen({ navigation, route }) {
           <Switch
             value={gammaEnabled}
             onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
-            trackColor={{ false: colors.lightGray, true: colors.gold }}
+            trackColor={{ false: colors.lightGray, true: colors.primary }}
             thumbColor={colors.white}
           />
         </View>
@@ -540,7 +540,7 @@ export default function HomeScreen({ navigation, route }) {
           keyExtractor={item => item.ticker}
           renderItem={renderReport}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           ListHeaderComponent={
             reports.length > 0 ? (
               <View style={styles.colHeader}>
@@ -607,19 +607,19 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   analyzeBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingHorizontal: 18,
     minWidth: 90,
     justifyContent: 'center',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: colors.goldLight,
+    borderTopColor: colors.primaryLight,
     borderBottomWidth: 2,
-    borderBottomColor: colors.goldDark,
+    borderBottomColor: colors.primaryDark,
     ...Platform.select({
       ios: {
-        shadowColor: colors.gold,
+        shadowColor: colors.primary,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.55,
         shadowRadius: 10,
@@ -679,14 +679,14 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
   countBadge: {
     marginLeft: 8,
-    fontSize: 11, fontWeight: '700', color: colors.gold,
+    fontSize: 11, fontWeight: '700', color: colors.primary,
     backgroundColor: colors.navy,
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
     overflow: 'hidden',
   },
   lastLoadedText: { fontSize: 10, fontWeight: '600', color: colors.midGray, letterSpacing: 0.3 },
   scanAllBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -725,7 +725,7 @@ const styles = StyleSheet.create({
   formatRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
   docPill: { backgroundColor: colors.navy, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
   docPillText: { color: colors.white, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
-  pptPill: { backgroundColor: colors.gold, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  pptPill: { backgroundColor: colors.primary, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
   pptPillText: { color: colors.navy, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
   reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 3 },
 
@@ -737,13 +737,13 @@ const styles = StyleSheet.create({
   priceMissing: { fontSize: 14, color: colors.lightGray, fontFamily: 'Courier New' },
 
   targetCell: { alignItems: 'flex-end', minWidth: 70 },
-  targetLabel: { fontSize: 7, fontWeight: '800', color: colors.gold, letterSpacing: 1.0, lineHeight: 10 },
+  targetLabel: { fontSize: 7, fontWeight: '800', color: colors.primary, letterSpacing: 1.0, lineHeight: 10 },
   targetText: { fontSize: 13, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New', lineHeight: 16 },
   upsideText: { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', lineHeight: 13, marginTop: 1 },
   targetMissing: { fontSize: 13, color: colors.lightGray, fontFamily: 'Courier New' },
 
   colHeaderPrice:  { width: 78, marginRight: 10, textAlign: 'right' },
-  colHeaderTarget: { width: 70, textAlign: 'right', color: colors.gold },
+  colHeaderTarget: { width: 70, textAlign: 'right', color: colors.primary },
   chev: { marginLeft: 6 },
 
   emptyContainer: { flexGrow: 1, justifyContent: 'center', backgroundColor: 'transparent' },

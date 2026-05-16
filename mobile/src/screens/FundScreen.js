@@ -812,7 +812,7 @@ export default function FundScreen({ navigation }) {
               const recentDev = meta?.recent_dev || '…';
               return (
                 <View key={w.ticker} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-                  <Text style={[s.td, { width: 50, color: colors.gold, fontWeight: '700' }]}>
+                  <Text style={[s.td, { width: 50, color: colors.primary, fontWeight: '700' }]}>
                     {w.ticker}
                   </Text>
                   <Text style={[s.td, s.tdRight, s.tdDim, { width: 46 }]}>
@@ -852,7 +852,7 @@ export default function FundScreen({ navigation }) {
         {/* Back nav */}
         <View style={s.detailNavBar}>
           <TouchableOpacity style={s.backBtn} onPress={() => { setAcctDetailId(null); setAcctDetailName(''); }}>
-            <Ionicons name="chevron-back" size={16} color={colors.gold} />
+            <Ionicons name="chevron-back" size={16} color={colors.primary} />
             <Text style={s.backBtnText}>All Accounts</Text>
           </TouchableOpacity>
           <Text style={s.detailNavTitle} numberOfLines={1}>{acctDetailName}</Text>
@@ -861,7 +861,7 @@ export default function FundScreen({ navigation }) {
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
           {acctLoadingDetail ? (
             <View style={s.center}>
-              <ActivityIndicator color={colors.gold} size="large" />
+              <ActivityIndicator color={colors.primary} size="large" />
               <Text style={s.loadingText}>Loading account…</Text>
             </View>
           ) : (
@@ -906,7 +906,7 @@ export default function FundScreen({ navigation }) {
                     setAcctOverview(ov2);
                   } catch (e) { Alert.alert('Import failed', e.message); }
                 })}>
-                  <Ionicons name="cloud-upload-outline" size={13} color={colors.gold} />
+                  <Ionicons name="cloud-upload-outline" size={13} color={colors.primary} />
                   <Text style={s.importBtnText}>Import CSV</Text>
                 </TouchableOpacity>
               </View>
@@ -919,7 +919,7 @@ export default function FundScreen({ navigation }) {
                       <Text style={[s.posTh, { flex: 1.2, textAlign: 'left' }]}>SYMBOL</Text>
                       <Text style={s.posTh}>QTY</Text>
                       <Text style={s.posTh}>COST</Text>
-                      <Text style={[s.posTh, { color: colors.gold }]}>MKT VAL</Text>
+                      <Text style={[s.posTh, { color: colors.primary }]}>MKT VAL</Text>
                       <Text style={s.posTh}>G/L</Text>
                     </View>
                     {acctPositions.map((p, i) => {
@@ -932,7 +932,7 @@ export default function FundScreen({ navigation }) {
                           </View>
                           <Text style={s.posNum}>{Number(p.total_qty).toLocaleString()}</Text>
                           <Text style={s.posNum}>{fmt$(p.total_cost)}</Text>
-                          <Text style={[s.posNum, { color: colors.gold }]}>{p.market_value != null ? fmt$(p.market_value) : '—'}</Text>
+                          <Text style={[s.posNum, { color: colors.primary }]}>{p.market_value != null ? fmt$(p.market_value) : '—'}</Text>
                           <Text style={[s.posNum, { color: gc }]}>{p.unrealized_gain != null ? fmt$(p.unrealized_gain) : '—'}</Text>
                         </View>
                       );
@@ -942,7 +942,7 @@ export default function FundScreen({ navigation }) {
                       <Text style={[s.posTicker, { color: '#6a8aaa', fontSize: 10, flex: 1.2 }]}>TOTAL</Text>
                       <Text style={s.posNum}></Text>
                       <Text style={s.posNum}>{fmt$(acctPositions.reduce((a, p) => a + (p.total_cost || 0), 0))}</Text>
-                      <Text style={[s.posNum, { color: colors.gold, fontWeight: '700' }]}>{fmt$(acctPositions.reduce((a, p) => a + (p.market_value || 0), 0))}</Text>
+                      <Text style={[s.posNum, { color: colors.primary, fontWeight: '700' }]}>{fmt$(acctPositions.reduce((a, p) => a + (p.market_value || 0), 0))}</Text>
                       <Text style={[s.posNum, { color: acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0) >= 0 ? '#4cc870' : '#e06050', fontWeight: '700' }]}>
                         {fmt$(acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0))}
                       </Text>
@@ -1056,7 +1056,7 @@ export default function FundScreen({ navigation }) {
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
         {managedAccLoading ? (
           <View style={s.center}>
-            <ActivityIndicator color={colors.gold} size="large" />
+            <ActivityIndicator color={colors.primary} size="large" />
             <Text style={s.loadingText}>Loading accounts…</Text>
           </View>
         ) : managedAccList.length === 0 ? (
@@ -1133,7 +1133,7 @@ export default function FundScreen({ navigation }) {
                 </Text>
               )}
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity style={[s.importBtn2, { flex: 1, backgroundColor: colors.gold }]}
+                <TouchableOpacity style={[s.importBtn2, { flex: 1, backgroundColor: colors.primary }]}
                   onPress={submitCreateAccount} disabled={createAcctBusy}>
                   {createAcctBusy
                     ? <ActivityIndicator color={colors.navy} size="small" />
@@ -1245,7 +1245,7 @@ export default function FundScreen({ navigation }) {
   // ── LP Fund panels ───────────────────────────────────────────────────────
   function OverviewPanel() {
     if (!overview) return null;
-    const gainColor = overview.total_gain >= 0 ? colors.gold : '#e05a4e';
+    const gainColor = overview.total_gain >= 0 ? colors.primary : '#e05a4e';
     return (
       <View style={s.overviewWrap}>
         <View style={s.heroCard}>
@@ -1333,7 +1333,7 @@ export default function FundScreen({ navigation }) {
           <View key={lp.id} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
             <Text style={[s.td, { flex: 1.4 }]} numberOfLines={1}>{lp.legal_name}</Text>
             <Text style={[s.td, s.tdRight]}>{fmt$(lp.commitment)}</Text>
-            <Text style={[s.td, s.tdRight, { color: colors.gold }]}>{fmt$(lp.gain)}</Text>
+            <Text style={[s.td, s.tdRight, { color: colors.primary }]}>{fmt$(lp.gain)}</Text>
             <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(lp.current_value)}</Text>
             <Text style={[s.td, s.tdRight, s.tdDim, { flex: 0.6 }]}>{lp.share_pct.toFixed(0)}%</Text>
           </View>
@@ -1341,7 +1341,7 @@ export default function FundScreen({ navigation }) {
         <View style={[s.tableRow, s.totalsRow]}>
           <Text style={[s.td, s.tdBold, { flex: 1.4 }]}>Total</Text>
           <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(lpOnly.reduce((a,l) => a + l.commitment, 0))}</Text>
-          <Text style={[s.td, s.tdRight, { color: colors.gold, fontWeight:'700' }]}>{fmt$(lpOnly.reduce((a,l) => a + l.gain, 0))}</Text>
+          <Text style={[s.td, s.tdRight, { color: colors.primary, fontWeight:'700' }]}>{fmt$(lpOnly.reduce((a,l) => a + l.gain, 0))}</Text>
           <Text style={[s.td, s.tdRight, s.tdBold]}>{fmt$(lpOnly.reduce((a,l) => a + l.current_value, 0))}</Text>
           <Text style={[s.td, s.tdRight, s.tdDim, { flex: 0.6 }]}>100%</Text>
         </View>
@@ -1499,7 +1499,7 @@ export default function FundScreen({ navigation }) {
           <WRow label={`GP equity (${gpPct}${curCarryNote})`}
                 value={fmt$(w.gp_accrued_carry)} valueColor="#e8a060" highlight />
           <WRow label="LP net value (after carry)"
-                value={fmt$(w.lp_nav_after_carry)} valueColor={colors.gold} highlight />
+                value={fmt$(w.lp_nav_after_carry)} valueColor={colors.primary} highlight />
           <WRow label="Total fund NAV"
                 value={fmt$(w.nav)} last />
         </View>
@@ -1521,7 +1521,7 @@ export default function FundScreen({ navigation }) {
                 const carryColor = snap.carry_earned > 0 ? '#e8a060' : '#3a5070';
                 return (
                   <View key={snap.year} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-                    <Text style={[s.td, { flex: 0.55, color: colors.gold, fontWeight:'700' }]}>{snap.year}</Text>
+                    <Text style={[s.td, { flex: 0.55, color: colors.primary, fontWeight:'700' }]}>{snap.year}</Text>
                     <Text style={[s.td, s.tdRight, { color: snap.gross_profit >= 0 ? '#a0b890' : '#e06050' }]}>
                       {fmt$(snap.gross_profit)}
                     </Text>
@@ -1554,7 +1554,7 @@ export default function FundScreen({ navigation }) {
             <View key={lp.legal_name} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
               <Text style={[s.td, { flex: 1 }]} numberOfLines={1}>{lp.legal_name}</Text>
               <Text style={[s.td, s.tdRight, { color: '#e06050' }]}>−{fmt$(lp.carry_charge)}</Text>
-              <Text style={[s.td, s.tdRight, s.tdBold, { color: colors.gold }]}>{fmt$(lp.nav_after_carry)}</Text>
+              <Text style={[s.td, s.tdRight, s.tdBold, { color: colors.primary }]}>{fmt$(lp.nav_after_carry)}</Text>
             </View>
           ))}
         </View>
@@ -1585,7 +1585,7 @@ export default function FundScreen({ navigation }) {
     if (fundListLoading) {
       return (
         <View style={s.center}>
-          <ActivityIndicator color={colors.gold} size="large" />
+          <ActivityIndicator color={colors.primary} size="large" />
           <Text style={s.loadingText}>Loading funds…</Text>
         </View>
       );
@@ -1614,12 +1614,12 @@ export default function FundScreen({ navigation }) {
       <ScrollView
         style={s.scroll}
         contentContainerStyle={[s.scrollContent, { padding: 14 }]}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
         <Text style={s.fundListHint}>Select a fund to view details</Text>
         {fundList.map((fund) => {
-          const gainColor = fund.total_gain >= 0 ? colors.gold : '#e05a4e';
+          const gainColor = fund.total_gain >= 0 ? colors.primary : '#e05a4e';
           const statusColor = fund.status === 'active' ? '#4cc870' : '#6a8aaa';
           return (
             <TouchableOpacity
@@ -1736,7 +1736,7 @@ export default function FundScreen({ navigation }) {
           {/* Back button + sub-tabs */}
           <View style={s.detailNavBar}>
             <TouchableOpacity style={s.backBtn} onPress={closeFundDetail}>
-              <Ionicons name="chevron-back" size={16} color={colors.gold} />
+              <Ionicons name="chevron-back" size={16} color={colors.primary} />
               <Text style={s.backBtnText}>All Funds</Text>
             </TouchableOpacity>
           </View>
@@ -1755,7 +1755,7 @@ export default function FundScreen({ navigation }) {
 
           {loading && !refreshing ? (
             <View style={s.center}>
-              <ActivityIndicator color={colors.gold} size="large" />
+              <ActivityIndicator color={colors.primary} size="large" />
               <Text style={s.loadingText}>Loading fund data…</Text>
             </View>
           ) : error ? (
@@ -1767,7 +1767,7 @@ export default function FundScreen({ navigation }) {
             </View>
           ) : (
             <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.gold} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
               showsVerticalScrollIndicator={false}
             >
               {activeTab === 'Overview'  && <OverviewPanel />}
@@ -1866,8 +1866,8 @@ const s = StyleSheet.create({
   center:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   loadingText: { color: '#4a6080', marginTop: 12, fontSize: 13 },
   errorText:   { color: '#e05a4e', textAlign: 'center', marginBottom: 16 },
-  retryBtn:    { backgroundColor: 'rgba(91,184,212,.15)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: colors.gold },
-  retryText:   { color: colors.gold, fontWeight: '700', fontSize: 14 },
+  retryBtn:    { backgroundColor: 'rgba(91,184,212,.15)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: colors.primary },
+  retryText:   { color: colors.primary, fontWeight: '700', fontSize: 14 },
   emptyText:   { color: '#3a5070', padding: 24, fontSize: 13 },
 
   // Lock screen
@@ -1879,7 +1879,7 @@ const s = StyleSheet.create({
   lockInput:      { width: '100%', backgroundColor: '#081526', borderWidth: 1, borderColor: '#1e3a5a', borderRadius: 8, color: '#f0e8d0', fontSize: 15, padding: 12, marginBottom: 8 },
   lockInputError: { borderColor: '#e05a5a' },
   lockErrText:    { color: '#e05a5a', fontSize: 12, marginBottom: 8 },
-  lockBtn:        { width: '100%', backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 13, alignItems: 'center', marginTop: 4 },
+  lockBtn:        { width: '100%', backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 13, alignItems: 'center', marginTop: 4 },
   lockBtnText:    { color: colors.navy, fontWeight: '800', fontSize: 15, letterSpacing: 0.4 },
 
   // Branch selector
@@ -1887,14 +1887,14 @@ const s = StyleSheet.create({
   branchBtn:          { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: 'transparent' },
   branchBtnActive:    { backgroundColor: 'rgba(91,184,212,0.12)', borderColor: 'rgba(91,184,212,0.4)' },
   branchBtnText:      { fontSize: 11, fontWeight: '600', color: '#3a5070' },
-  branchBtnTextActive:{ color: colors.gold },
+  branchBtnTextActive:{ color: colors.primary },
 
   // Sub-tab bar (LP Fund)
   subTabBar:        { flexDirection: 'row', backgroundColor: '#0a1628', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
   subTab:           { flex: 1, paddingVertical: 9, alignItems: 'center' },
-  subTabActive:     { borderBottomWidth: 2, borderBottomColor: colors.gold },
+  subTabActive:     { borderBottomWidth: 2, borderBottomColor: colors.primary },
   subTabText:       { fontSize: 10, fontWeight: '600', color: '#4a6080', letterSpacing: 0.2 },
-  subTabTextActive: { color: colors.gold },
+  subTabTextActive: { color: colors.primary },
 
   // Account overview stats grid (matches fund overview style)
   acctOverviewGrid:   { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, paddingTop: 12, gap: 8 },
@@ -1910,11 +1910,11 @@ const s = StyleSheet.create({
 
   // Import button (small, inline)
   importBtn:          { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(201,168,76,0.08)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(201,168,76,0.25)' },
-  importBtnText:      { fontSize: 11, fontWeight: '700', color: colors.gold },
+  importBtnText:      { fontSize: 11, fontWeight: '700', color: colors.primary },
 
   // Full-width import button
   importBtn2:         { backgroundColor: 'rgba(201,168,76,0.08)', borderRadius: 8, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)', marginBottom: 8 },
-  importBtn2Text:     { fontSize: 12, fontWeight: '700', color: colors.gold, letterSpacing: 0.5 },
+  importBtn2Text:     { fontSize: 12, fontWeight: '700', color: colors.primary, letterSpacing: 0.5 },
 
   // Table card container
   fundTableCard:      { marginHorizontal: 12, backgroundColor: '#0e1e35', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(201,168,76,0.1)', overflow: 'hidden', marginBottom: 4 },
@@ -1947,7 +1947,7 @@ const s = StyleSheet.create({
   fundSummaryMetric:  { flex: 1, alignItems: 'center' },
   fundSummaryMetricLabel: { fontSize: 8, fontWeight: '700', color: '#3a5070', letterSpacing: 0.8, marginBottom: 3 },
   fundSummaryMetricValue: { fontSize: 13, fontWeight: '700', color: '#e8f0f8' },
-  fundSummaryCTA:     { fontSize: 11, fontWeight: '700', color: colors.gold, textAlign: 'right', paddingHorizontal: 14, paddingBottom: 10 },
+  fundSummaryCTA:     { fontSize: 11, fontWeight: '700', color: colors.primary, textAlign: 'right', paddingHorizontal: 14, paddingBottom: 10 },
 
   // Fund list empty state
   fundListEmpty:      { alignItems: 'center', paddingTop: 40, paddingHorizontal: 24 },
@@ -1956,7 +1956,7 @@ const s = StyleSheet.create({
 
   // Create account form
   createFundForm:     { backgroundColor: '#0e1e35', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', marginBottom: 12 },
-  createFundTitle:    { fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 1, marginBottom: 10 },
+  createFundTitle:    { fontSize: 11, fontWeight: '800', color: colors.primary, letterSpacing: 1, marginBottom: 10 },
   createFundInput:    { backgroundColor: '#081526', borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, color: '#e8f0f8', marginBottom: 8 },
 
   // Detail nav title
@@ -1968,16 +1968,16 @@ const s = StyleSheet.create({
   // YTD Upload card
   ytdCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.25)' },
   ytdCardHead:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  ytdCardTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, color: colors.gold },
+  ytdCardTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, color: colors.primary },
   ytdBadge:     { backgroundColor: 'rgba(91,184,212,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
-  ytdBadgeText: { fontSize: 9, fontWeight: '800', color: colors.gold, letterSpacing: 0.5 },
+  ytdBadgeText: { fontSize: 9, fontWeight: '800', color: colors.primary, letterSpacing: 0.5 },
   ytdCardDesc:  { fontSize: 11, color: '#4a6080', lineHeight: 16, marginBottom: 14 },
 
   // File picker rows
   fileRow:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#081526', borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', padding: 10, marginBottom: 8, gap: 10 },
   fileRowLeft:  { flex: 1 },
   fileRowLabel: { fontSize: 10, fontWeight: '700', color: '#4a6080', letterSpacing: 0.5, marginBottom: 2 },
-  fileRowReq:   { color: colors.gold },
+  fileRowReq:   { color: colors.primary },
   fileRowName:  { fontSize: 12, color: '#c0d0e0', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   fileRowIcon:  { width: 28, height: 28, borderRadius: 6, backgroundColor: '#1e3a5a', alignItems: 'center', justifyContent: 'center' },
   fileRowIconDone: { backgroundColor: 'rgba(22,163,74,0.25)' },
@@ -1988,7 +1988,7 @@ const s = StyleSheet.create({
   beginValueInput: { backgroundColor: '#081526', borderWidth: 1, borderColor: '#1e3a5a', borderRadius: 8, color: '#f0e8d0', fontSize: 14, padding: 10 },
 
   // YTD compute button
-  ytdBtn:     { backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
+  ytdBtn:     { backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
   ytdBtnText: { color: colors.navy, fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
   ytdError:   { color: '#e05a4e', fontSize: 12, marginBottom: 10, lineHeight: 16 },
 
@@ -2020,7 +2020,7 @@ const s = StyleSheet.create({
   portfolioCard:      { backgroundColor: '#0e1d38', borderRadius: 12, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)' },
   portfolioCardTitle: { fontSize: 15, fontWeight: '700', color: '#f0e8d0', marginBottom: 8 },
   portfolioCardDesc:  { fontSize: 12, color: '#6a8aaa', lineHeight: 18, marginBottom: 14 },
-  portfolioBtn:       { backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: colors.gold },
+  portfolioBtn:       { backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: colors.primary },
   portfolioBtnText:   { color: colors.navy, fontWeight: '700', fontSize: 13 },
 
   // Rebalance section styles
@@ -2032,7 +2032,7 @@ const s = StyleSheet.create({
     backgroundColor: '#0e1d38', borderRadius: 12, padding: 16, marginBottom: 12,
     borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)',
   },
-  rebalCardTitle:  { fontSize: 10, fontWeight: '800', letterSpacing: 1.5, color: colors.gold, marginBottom: 8 },
+  rebalCardTitle:  { fontSize: 10, fontWeight: '800', letterSpacing: 1.5, color: colors.primary, marginBottom: 8 },
   rebalCardDesc:   { fontSize: 12, color: '#6a8aaa', lineHeight: 17, marginBottom: 12 },
   rebalFilePicker: {
     flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14,
@@ -2046,7 +2046,7 @@ const s = StyleSheet.create({
   },
   rebalToggleLabel: { fontSize: 13, fontWeight: '600', color: '#c9d8e8', flex: 1, marginRight: 12 },
   rebalRunBtn: {
-    backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 13,
+    backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 13,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     marginTop: 12,
   },
@@ -2055,7 +2055,7 @@ const s = StyleSheet.create({
     height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3,
     overflow: 'hidden', marginBottom: 6,
   },
-  rebalProgressFill: { height: '100%', backgroundColor: colors.gold, borderRadius: 3 },
+  rebalProgressFill: { height: '100%', backgroundColor: colors.primary, borderRadius: 3 },
   rebalProgressLabel: { fontSize: 12, color: '#6a8aaa', marginBottom: 4 },
   rebalStatusDone: { fontSize: 13, fontWeight: '600', color: '#4ade80', marginBottom: 4 },
   rebalStatusFail: { fontSize: 13, color: '#f87171', marginBottom: 4 },
@@ -2072,7 +2072,7 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(91,184,212,0.25)',
     borderLeftWidth: 3,
-    borderLeftColor: colors.gold,
+    borderLeftColor: colors.primary,
   },
   fundCardHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
   fundCardName:      { fontSize: 15, fontWeight: '800', color: '#f0e8d0', marginBottom: 3 },
@@ -2084,17 +2084,17 @@ const s = StyleSheet.create({
   fundCardMetricLabel:{ fontSize: 8, fontWeight: '700', color: '#3a5070', letterSpacing: 0.6, marginBottom: 3 },
   fundCardMetricValue:{ fontSize: 13, fontWeight: '800', color: '#f0e8d0' },
   fundCardCta:       { alignSelf: 'flex-end' },
-  fundCardCtaText:   { fontSize: 12, fontWeight: '700', color: colors.gold },
+  fundCardCtaText:   { fontSize: 12, fontWeight: '700', color: colors.primary },
 
   // Fund detail navigation bar (back button)
   detailNavBar:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#060f1e', borderBottomWidth: 1, borderBottomColor: 'rgba(91,184,212,0.15)', paddingHorizontal: 12, paddingVertical: 8 },
   backBtn:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  backBtnText:   { fontSize: 13, fontWeight: '700', color: colors.gold },
+  backBtnText:   { fontSize: 13, fontWeight: '700', color: colors.primary },
 
   // Overview
   overviewWrap: { padding: 14 },
   heroCard:  { backgroundColor: '#0e1d38', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: 'rgba(91,184,212,0.3)', marginBottom: 10 },
-  heroLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, color: colors.gold, marginBottom: 4 },
+  heroLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, color: colors.primary, marginBottom: 4 },
   heroValue: { fontSize: 32, fontWeight: '800', color: '#f0e8d0', letterSpacing: -1, fontVariant: ['tabular-nums'] },
   heroGain:  { fontSize: 12, marginTop: 4 },
   statRow:   { flexDirection: 'row', gap: 8, marginBottom: 10 },
@@ -2106,7 +2106,7 @@ const s = StyleSheet.create({
   econTitle:    { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#4a6080', marginBottom: 10 },
   econRow:      { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   econPill:     { backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 12, alignItems: 'center' },
-  econPillGold: { backgroundColor: colors.gold },
+  econPillGold: { backgroundColor: colors.primary },
   econPillVal:  { fontSize: 16, fontWeight: '800', color: '#f0e8d0' },
   econPillLbl:  { fontSize: 9, color: '#6080a0', marginTop: 1, fontWeight: '600' },
 
@@ -2123,8 +2123,8 @@ const s = StyleSheet.create({
   tdBold:  { color: '#d8d0c0', fontWeight: '700' },
   tdDim:   { color: '#4a6080' },
   symbolCell: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  symbolText: { fontSize: 12, fontWeight: '700', color: colors.gold },
-  lotBadge:   { fontSize: 8, backgroundColor: 'rgba(91,184,212,0.2)', color: colors.gold, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' },
+  symbolText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  lotBadge:   { fontSize: 8, backgroundColor: 'rgba(91,184,212,0.2)', color: colors.primary, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' },
 
   // Import row (Positions + LPs tabs)
   importRow: {
@@ -2168,11 +2168,11 @@ const s = StyleSheet.create({
   // Managed Account selector
   accSelectorRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
   accSelectorBtn:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#1e3a5a', backgroundColor: '#0a1628' },
-  accSelectorBtnActive: { borderColor: colors.gold, backgroundColor: 'rgba(91,184,212,0.12)' },
+  accSelectorBtnActive: { borderColor: colors.primary, backgroundColor: 'rgba(91,184,212,0.12)' },
   accSelectorText:      { fontSize: 12, fontWeight: '600', color: '#4a6080' },
-  accSelectorTextActive:{ color: colors.gold, fontWeight: '800' },
+  accSelectorTextActive:{ color: colors.primary, fontWeight: '800' },
   accNameBadge:         { backgroundColor: 'rgba(91,184,212,0.1)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 14, borderWidth: 1, borderColor: 'rgba(91,184,212,0.25)' },
-  accNameBadgeText:     { fontSize: 12, fontWeight: '700', color: colors.gold },
+  accNameBadgeText:     { fontSize: 12, fontWeight: '700', color: colors.primary },
 
   // ── S&P 500 comparison card ─────────────────────────────────────────────
   spyCard:          { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(91,184,212,0.2)', padding: 14, marginTop: 14, marginBottom: 4 },
@@ -2194,7 +2194,7 @@ const s = StyleSheet.create({
   // ── Rebalanced branch panel ──────────────────────────────────────────────
   rebalBranchWrap:         { padding: 14 },
   rebalBranchHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
-  rebalBranchTitle:        { fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 0.8 },
+  rebalBranchTitle:        { fontSize: 11, fontWeight: '800', color: colors.primary, letterSpacing: 0.8 },
   rebalBranchMeta:         { fontSize: 10, color: '#4a6080', marginTop: 3 },
   rebalEmailBadge:         { borderRadius: 8, paddingVertical: 4, paddingHorizontal: 8, maxWidth: 180 },
   rebalEmailOk:            { backgroundColor: 'rgba(22,163,74,0.12)', borderWidth: 1, borderColor: 'rgba(22,163,74,0.3)' },
@@ -2204,7 +2204,7 @@ const s = StyleSheet.create({
   rebalStratBlockPrimary:  { borderColor: 'rgba(91,184,212,0.25)', backgroundColor: 'rgba(91,184,212,0.03)' },
   rebalStratLabelRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   rebalStratLabel:         { fontSize: 10, fontWeight: '800', color: '#c0cfe0', letterSpacing: 0.5, flex: 1 },
-  rebalStratPrimaryBadge:  { fontSize: 9, color: colors.gold, fontWeight: '700', backgroundColor: 'rgba(91,184,212,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  rebalStratPrimaryBadge:  { fontSize: 9, color: colors.primary, fontWeight: '700', backgroundColor: 'rgba(91,184,212,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   rebalStratCount:         { fontSize: 10, color: '#4a6080' },
   rebalEmptyWrap:          { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 60 },
   rebalEmptyIcon:          { fontSize: 40, marginBottom: 16 },
@@ -2213,10 +2213,10 @@ const s = StyleSheet.create({
 
   // ── Rebalance result table ──────────────────────────────────────────────
   rebalResultWrap:  { marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(91,184,212,0.15)', paddingTop: 12 },
-  rebalResultTitle: { fontSize: 10, fontWeight: '800', color: colors.gold, letterSpacing: 0.6, marginBottom: 8 },
+  rebalResultTitle: { fontSize: 10, fontWeight: '800', color: colors.primary, letterSpacing: 0.6, marginBottom: 8 },
   // Arrow between current → target — gold, visually distinct from the dark row background
   rebalArrow:       { width: 18, textAlign: 'center', fontSize: 11, fontWeight: '800',
-                      color: colors.gold, opacity: 0.85, paddingHorizontal: 2 },
+                      color: colors.primary, opacity: 0.85, paddingHorizontal: 2 },
   // Sector label — dim, truncated
   rebalMeta:        { fontSize: 10, color: '#7a8a9a', letterSpacing: 0.2 },
   // Recent development — slightly lighter, wraps to 2 lines
@@ -2232,7 +2232,7 @@ const as = StyleSheet.create({
   hint:       { fontSize: 10, color: '#3a5070', fontStyle: 'italic' },
 
   row:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, gap: 6 },
-  ticker:   { width: 52, fontSize: 11, fontWeight: '800', color: colors.gold, letterSpacing: 0.3 },
+  ticker:   { width: 52, fontSize: 11, fontWeight: '800', color: colors.primary, letterSpacing: 0.3 },
   track:    { flex: 1, height: 14, position: 'relative', justifyContent: 'center' },
   axis:     { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: '#1e3a5a' },
   barPos:   { position: 'absolute', left: '50%', height: 10, backgroundColor: 'rgba(22,163,74,0.8)', borderRadius: 2 },
@@ -2243,7 +2243,7 @@ const as = StyleSheet.create({
 
   // Holding rows
   holdRow:      { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#0f2240', alignItems: 'center' },
-  holdTicker:   { fontSize: 12, fontWeight: '700', color: colors.gold },
+  holdTicker:   { fontSize: 12, fontWeight: '700', color: colors.primary },
   holdNum:      { flex: 1, fontSize: 11, fontWeight: '700', textAlign: 'right' },
   holdContrib:  { fontSize: 12 },
   missingBadge: { fontSize: 9, fontWeight: '800', color: '#e8a060', backgroundColor: 'rgba(232,160,96,0.15)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },

@@ -257,10 +257,10 @@ export default function IntelligenceScreen({ navigation }) {
             activeOpacity={0.8}
           >
             {tracking ? (
-              <ActivityIndicator size="small" color={colors.gold} />
+              <ActivityIndicator size="small" color={colors.primary} />
             ) : (
               <>
-                <Ionicons name="bookmark" size={12} color={colors.gold} />
+                <Ionicons name="bookmark" size={12} color={colors.primary} />
                 <Text style={styles.trackBtnText}>Track Brief</Text>
               </>
             )}
@@ -340,12 +340,12 @@ export default function IntelligenceScreen({ navigation }) {
           >
             {briefRunning ? (
               <View style={styles.runBtnInner}>
-                <ActivityIndicator size="small" color={colors.gold} style={{ marginRight: 8 }} />
+                <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 8 }} />
                 <Text style={styles.briefBtnText}>RUNNING…</Text>
               </View>
             ) : (
               <View style={styles.runBtnInner}>
-                <Ionicons name="newspaper" size={16} color={colors.gold} style={{ marginRight: 6 }} />
+                <Ionicons name="newspaper" size={16} color={colors.primary} style={{ marginRight: 6 }} />
                 <Text style={styles.briefBtnText}>GENERATE DAILY BRIEF</Text>
               </View>
             )}
@@ -517,7 +517,7 @@ const styles = StyleSheet.create({
   moverChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -540,7 +540,7 @@ const styles = StyleSheet.create({
   // navy/gold Daily Brief card above it — neither feels demoted.
   strategicCard: {
     borderLeftWidth: 3,
-    borderLeftColor: colors.gold,
+    borderLeftColor: colors.primary,
   },
   cardLabel: {
     fontSize: 11,
@@ -572,8 +572,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.offWhite,
   },
   pillActive: {
-    borderColor: colors.gold,
-    backgroundColor: colors.gold,
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
   },
   pillText: {
     fontSize: 12,
@@ -590,12 +590,12 @@ const styles = StyleSheet.create({
     borderColor: colors.navy,
   },
   pillBestMixText: {
-    color: colors.gold,
+    color: colors.primary,
     fontWeight: '700',
   },
   pillBestMixActive: {
-    backgroundColor: colors.gold,
-    borderColor: colors.gold,
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   pillBestMixTextActive: {
     color: colors.navy,
@@ -604,18 +604,18 @@ const styles = StyleSheet.create({
 
   // ── Run button ──
   runBtn: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 10,
     height: 54,
     alignItems: 'center',
     justifyContent: 'center',
     borderTopWidth: 1,
-    borderTopColor: colors.goldLight,
+    borderTopColor: colors.primaryLight,
     borderBottomWidth: 2,
-    borderBottomColor: colors.goldDark,
+    borderBottomColor: colors.primaryDark,
     ...Platform.select({
       ios: {
-        shadowColor: colors.gold,
+        shadowColor: colors.primary,
         shadowOffset: { width: 0, height: 5 },
         shadowOpacity: 0.6,
         shadowRadius: 14,
@@ -631,11 +631,11 @@ const styles = StyleSheet.create({
   briefCard: {
     backgroundColor: colors.navy,
     borderWidth: 1.5,
-    borderColor: colors.gold,
+    borderColor: colors.primary,
   },
   briefHeader: { flexDirection: 'row', marginBottom: 14 },
   briefTitle:  {
-    color: colors.gold,
+    color: colors.primary,
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 0.5,
@@ -653,10 +653,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: colors.gold,
+    borderColor: colors.primary,
   },
   briefBtnText: {
-    color: colors.gold,
+    color: colors.primary,
     fontWeight: '800',
     fontSize: 14,
     letterSpacing: 1,
@@ -708,8 +708,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
-  liveBadgeBrief:     { backgroundColor: colors.gold },
-  liveBadgeText:      { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  liveBadgeBrief:     { backgroundColor: colors.primary },
+  liveBadgeText:      { color: colors.primary, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   liveBadgeTextBrief: { color: colors.navy },
   resultDays:  { fontSize: 11, color: colors.midGray, fontWeight: '600' },
   resultDate:  { fontSize: 11, color: colors.midGray },
@@ -733,7 +733,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: colors.navy,
-    borderColor: colors.gold,
+    borderColor: colors.primary,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -741,7 +741,7 @@ const styles = StyleSheet.create({
     minHeight: 26,
   },
   trackBtnText: {
-    color: colors.gold,
+    color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
@@ -750,7 +750,7 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -813,7 +813,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingVertical: 12,
   },

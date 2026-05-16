@@ -117,7 +117,7 @@ export default function ReportScreen({ route, navigation }) {
           left={<BackButton onPress={() => navigation.goBack()} />}
         />
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.gold} />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </View>
     );
@@ -159,11 +159,11 @@ export default function ReportScreen({ route, navigation }) {
               <TOCToggle open={tocOpen} onToggle={() => setTocOpen(o => !o)} />
             )}
             <TouchableOpacity onPress={handleShare} style={styles.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-              <Ionicons name="share-outline" size={18} color={colors.gold} />
+              <Ionicons name="share-outline" size={18} color={colors.primary} />
             </TouchableOpacity>
             {report?.has_docx !== false && (
               <TouchableOpacity onPress={() => handleDownload('docx')} style={styles.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Ionicons name="document-outline" size={18} color={colors.gold} />
+                <Ionicons name="document-outline" size={18} color={colors.primary} />
               </TouchableOpacity>
             )}
             {report?.has_pptx && (
@@ -220,7 +220,7 @@ export default function ReportScreen({ route, navigation }) {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.gold}
+            tintColor={colors.primary}
           />
         }
       >
@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     width: 36, height: 36,
     justifyContent: 'center', alignItems: 'center',
   },
-  iconBtnGold: { backgroundColor: colors.gold },
+  iconBtnGold: { backgroundColor: colors.primary },
 
   // ── Sub-bar with live price + generated-at ──
   subBar: {
@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16, bottom: 24,
     width: 46, height: 46, borderRadius: 23,
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },

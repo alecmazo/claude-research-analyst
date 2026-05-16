@@ -36,7 +36,7 @@ export default function Card({
 const VARIANTS = {
   standard: { bg: colors.white, shadow: shadow.card },
   navy:     { bg: colors.navy,  shadow: shadow.card,
-              border: colors.gold, borderWidth: 1.5 },
+              border: colors.primary, borderWidth: 1.5 },
   flat:     { bg: colors.white, shadow: null },
 };
 

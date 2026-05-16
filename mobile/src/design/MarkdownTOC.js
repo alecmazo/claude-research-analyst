@@ -79,7 +79,7 @@ export function TOCToggle({ open, onToggle, disabled = false }) {
       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
     >
       <Ionicons name="list-outline" size={20}
-                color={open ? colors.navy : colors.gold} />
+                color={open ? colors.navy : colors.primary} />
     </TouchableOpacity>
   );
 }
@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   toggleOpen: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.primary,
   },
   panel: {
     backgroundColor: colors.white,
@@ -179,7 +179,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: 'Courier New',
     fontWeight: '700',
-    color: colors.gold,
+    color: colors.primary,
     minWidth: 22,
     paddingTop: 2,
   },
