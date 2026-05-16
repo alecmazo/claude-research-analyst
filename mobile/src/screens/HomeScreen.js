@@ -1,8 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
   Linking, Platform, ScrollView, Modal,
+  Animated, PanResponder, Dimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -64,51 +65,114 @@ function SimpleMarkdown({ text, style }) {
   );
 }
 
-// ── Market Pulse Detail Modal ─────────────────────────────────────────────────
+// ── Market Pulse Detail — Pannable Bottom Sheet ───────────────────────────────
+const SCREEN_H   = Dimensions.get('window').height;
+const SNAP_HALF  = SCREEN_H * 0.52;   // default: half-screen
+const SNAP_FULL  = SCREEN_H * 0.10;   // expanded: near full-screen
+const SNAP_CLOSE = SCREEN_H * 0.95;   // threshold below which we close
+
 function PulseModal({ item, visible, onClose }) {
+  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
+  const lastY      = useRef(SNAP_HALF);
+  const scrollRef  = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+
+  // Slide in when visible
+  useEffect(() => {
+    if (visible) {
+      lastY.current = SNAP_HALF;
+      setExpanded(false);
+      Animated.spring(translateY, {
+        toValue: SNAP_HALF, useNativeDriver: true, damping: 20, stiffness: 180,
+      }).start();
+    } else {
+      translateY.setValue(SCREEN_H);
+    }
+  }, [visible]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderGrant: () => {
+        translateY.setOffset(lastY.current);
+        translateY.setValue(0);
+      },
+      onPanResponderMove: (_, g) => translateY.setValue(g.dy),
+      onPanResponderRelease: (_, g) => {
+        translateY.flattenOffset();
+        const current = lastY.current + g.dy;
+        if (current > SNAP_CLOSE) {
+          // Flicked down past threshold → close
+          Animated.timing(translateY, { toValue: SCREEN_H, duration: 200, useNativeDriver: true }).start(onClose);
+          return;
+        }
+        // Snap to closest point
+        const snapTo = Math.abs(current - SNAP_FULL) < Math.abs(current - SNAP_HALF) ? SNAP_FULL : SNAP_HALF;
+        lastY.current = snapTo;
+        setExpanded(snapTo === SNAP_FULL);
+        Animated.spring(translateY, { toValue: snapTo, useNativeDriver: true, damping: 20, stiffness: 180 }).start();
+      },
+    })
+  ).current;
+
+  const toggleExpand = () => {
+    const snapTo = expanded ? SNAP_HALF : SNAP_FULL;
+    lastY.current = snapTo;
+    setExpanded(!expanded);
+    Animated.spring(translateY, { toValue: snapTo, useNativeDriver: true, damping: 20, stiffness: 180 }).start();
+  };
+
   if (!item) return null;
   const { ticker, result } = item;
   const sentiment = result?.sentiment || 'NEUTRAL';
-  const price = result?.price;
-  const pct = result?.pct_change;
-  const markdown = result?.markdown || '';
-  const isUp = pct != null && pct >= 0;
+  const price     = result?.price;
+  const pct       = result?.pct_change;
+  const markdown  = result?.markdown || '';
+  const isUp      = pct != null && pct >= 0;
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalContainer}>
-        {/* Modal header */}
-        <View style={styles.modalHeader}>
-          <View style={styles.modalHeaderLeft}>
-            <Text style={styles.modalTicker}>{ticker}</Text>
-            <View style={[styles.sentimentBadge, { backgroundColor: sentimentColor(sentiment) }]}>
-              <Text style={styles.sentimentText}>{sentiment}</Text>
-            </View>
-            {price != null && (
-              <View style={styles.modalPriceRow}>
-                <Text style={styles.modalPrice}>${Number(price).toFixed(2)}</Text>
-                {pct != null && (
-                  <Text style={[styles.modalPct, isUp ? styles.pctUp : styles.pctDown]}>
-                    {formatPct(pct)}
-                  </Text>
-                )}
-              </View>
-            )}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+      {/* Backdrop */}
+      <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={onClose} />
+
+      <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+        {/* Drag handle strip */}
+        <View {...panResponder.panHandlers} style={styles.sheetHandleZone}>
+          <View style={styles.sheetPill} />
+        </View>
+
+        {/* Header row */}
+        <View style={styles.sheetHeader}>
+          <Text style={styles.modalTicker}>{ticker}</Text>
+          <View style={[styles.sentimentBadge, { backgroundColor: sentimentColor(sentiment) }]}>
+            <Text style={styles.sentimentText}>{sentiment}</Text>
           </View>
-          <TouchableOpacity style={styles.modalCloseBtn} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={24} color={colors.midGray} />
+          {price != null && (
+            <View style={styles.modalPriceRow}>
+              <Text style={styles.modalPrice}>${Number(price).toFixed(2)}</Text>
+              {pct != null && (
+                <Text style={[styles.modalPct, isUp ? styles.pctUp : styles.pctDown]}>
+                  {formatPct(pct)}
+                </Text>
+              )}
+            </View>
+          )}
+          <View style={{ flex: 1 }} />
+          {/* Expand / collapse toggle */}
+          <TouchableOpacity onPress={toggleExpand} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.sheetExpandBtn}>
+            <Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={18} color={colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.modalCloseBtn}>
+            <Ionicons name="close" size={22} color={colors.midGray} />
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
+        <ScrollView ref={scrollRef} style={styles.sheetBody} contentContainerStyle={styles.modalBodyContent}>
           <SimpleMarkdown text={markdown} />
         </ScrollView>
-      </View>
+      </Animated.View>
     </Modal>
   );
 }
@@ -767,29 +831,54 @@ const styles = StyleSheet.create({
   sentimentBadge: { borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8 },
   sentimentText: { color: colors.white, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
 
-  // Pulse detail modal
-  modalContainer: { flex: 1, backgroundColor: colors.offWhite },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+  // ── Bottom sheet ─────────────────────────────────────────────────────────
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.38)',
+  },
+  sheet: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    height: SCREEN_H,            // sheet spans full height; translateY controls reveal
     backgroundColor: colors.white,
-    padding: 20,
-    paddingTop: 24,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    elevation: 24,
+  },
+  sheetHandleZone: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  sheetPill: {
+    width: 40, height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.dimmer || '#cbd5e1',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.lightGray,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
   },
-  modalHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  modalTicker: { fontSize: 22, fontWeight: '900', color: colors.navy, letterSpacing: 1.2 },
-  modalPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, width: '100%', marginTop: 4 },
-  modalPrice: { fontSize: 15, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New' },
+  sheetExpandBtn: { padding: 4 },
+  sheetBody: { flex: 1 },
+
+  // Kept for shared use by header items
+  modalContainer: { flex: 1, backgroundColor: colors.offWhite },
+  modalTicker: { fontSize: 20, fontWeight: '900', color: colors.navy, letterSpacing: 1 },
+  modalPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  modalPrice: { fontSize: 14, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New' },
   modalPct:   { fontSize: 13, fontWeight: '700', fontFamily: 'Courier New' },
-  modalCloseBtn: { padding: 4, marginLeft: 12 },
+  modalCloseBtn: { padding: 4, marginLeft: 4 },
   modalBody: { flex: 1 },
   modalBodyContent: { padding: 20, paddingBottom: 60 },
 
