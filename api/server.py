@@ -1510,6 +1510,20 @@ def admin_user_create(request: Request, body: AdminCreateRequest):
         raise HTTPException(400, str(e))
 
 
+@app.delete("/api/auth/v2/user/{lp_id}")
+def user_delete(request: Request, lp_id: str):
+    """GP/admin-only: permanently delete a user account."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+    if claims.get("lp_id") == lp_id:
+        raise HTTPException(400, "Cannot delete your own account")
+    ok = auth_v2_mod.delete_user(lp_id)
+    if not ok:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "deleted": lp_id}
+
+
 @app.post("/api/v2/admin/lp/update-assignments")
 def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
     """GP-only: update which funds and managed accounts an LP can see."""

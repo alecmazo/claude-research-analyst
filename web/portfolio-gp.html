@@ -5028,15 +5028,38 @@
       const admins = (d.users || []).filter(u => u.role === 'admin');
       if (!admins.length) { el.textContent = 'No admin accounts yet.'; return; }
       el.innerHTML = admins.map(u => `
-        <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--panel-edge);">
-          <span style="font-size:11px;font-weight:700;color:var(--text);">${_esc(u.name)}</span>
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--panel-edge);">
+          <span style="font-size:12px;font-weight:700;color:#0f172a;">${_esc(u.name)}</span>
           <span style="font-size:10px;color:var(--dim);">${_esc(u.email)}</span>
           <span style="margin-left:auto;font-size:9px;font-weight:800;letter-spacing:1px;
                        background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);
-                       padding:2px 7px;border-radius:4px;">ADMIN</span>
+                       padding:2px 7px;border-radius:4px;flex-shrink:0;">⚡ ADMIN</span>
+          <button onclick="_deleteUser('${_esc(u.lp_id)}','${_esc(u.name)}')"
+            style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);
+                   color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;
+                   font-weight:800;letter-spacing:0.8px;cursor:pointer;
+                   transition:background .15s,border-color .15s;"
+            onmouseover="this.style.background='rgba(220,38,38,0.08)'"
+            onmouseout="this.style.background='transparent'">REMOVE</button>
         </div>`).join('');
     } catch { el.textContent = 'Error loading admin roster.'; }
   }
+
+  async function _deleteUser(lpId, name) {
+    if (!confirm(`Remove admin account for "${name}"?\n\nThis cannot be undone.`)) return;
+    try {
+      const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert('Could not remove user: ' + (d.detail || r.status));
+        return;
+      }
+      _loadAdminRoster();
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  }
+
   function _esc(s) { return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
   _loadAdminRoster();
 
@@ -5062,7 +5085,8 @@
       ]);
       if (!uResp.ok) throw new Error(uResp.status);
       const d = await uResp.json();
-      const users = d.users || [];
+      // LP roster shows only lp and gp accounts — admins appear in the separate Admin panel
+      const users = (d.users || []).filter(u => u.role !== 'admin');
       const funds = fData.funds || [];
       const accts = fData.accounts || [];
       if (badge) badge.textContent = String(users.length);

@@ -230,14 +230,15 @@ def _save_overlay(overlay: dict[str, dict]) -> None:
 
 
 def _all_credentials() -> dict[str, dict]:
-    """Merge seed + overlay. Overlay wins per-lp_id."""
+    """Merge seed + overlay. Overlay wins per-lp_id. Soft-deleted users are excluded."""
     out = {rec["lp_id"]: dict(rec) for rec in LP_CREDENTIALS_SEED}
     for lp_id, patch in _load_overlay().items():
         if lp_id in out:
             out[lp_id].update(patch)
         else:
             out[lp_id] = patch
-    return out
+    # Filter out soft-deleted entries
+    return {k: v for k, v in out.items() if not v.get("deleted")}
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +488,28 @@ def create_user(
     }
     _save_overlay(overlay)
     return user_id
+
+
+def delete_user(lp_id: str) -> bool:
+    """Delete a user account. Returns False if the user doesn't exist.
+
+    Seed users (baked into LP_CREDENTIALS_SEED) are soft-deleted via a
+    'deleted: True' flag in the overlay so they survive code deploys.
+    Overlay-only users (created at runtime) are removed from the overlay
+    entirely.
+    """
+    if not find_user_by_lp_id(lp_id):
+        return False
+    seed_ids = {rec["lp_id"] for rec in LP_CREDENTIALS_SEED}
+    overlay  = _load_overlay()
+    if lp_id in seed_ids:
+        # Soft-delete: mark as deleted in overlay; _all_credentials() will skip it
+        overlay[lp_id] = {**overlay.get(lp_id, {}), "deleted": True}
+    else:
+        # Hard-delete: remove from overlay entirely
+        overlay.pop(lp_id, None)
+    _save_overlay(overlay)
+    return True
 
 
 def update_assignments(

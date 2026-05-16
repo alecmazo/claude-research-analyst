@@ -254,7 +254,7 @@
         return;
       }
       const me = await r.json();
-      window.location.href = me.role === 'gp' ? '/gp' : '/lp';
+      window.location.href = (me.role === 'gp' || me.role === 'admin') ? '/gp' : '/lp';
     } catch (e) {
       // Network error — leave login visible
     }
@@ -303,8 +303,8 @@
         managed_account_ids:  data.managed_account_ids || [],
       }));
 
-      // Route to the appropriate dashboard
-      window.location.href = data.role === 'gp' ? '/gp' : '/lp';
+      // Route to the appropriate dashboard (admin has full GP access)
+      window.location.href = (data.role === 'gp' || data.role === 'admin') ? '/gp' : '/lp';
 
     } catch (err) {
       console.error(err);
