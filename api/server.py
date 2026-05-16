@@ -4685,6 +4685,58 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Market Scan card — independent ticker list (separate from user watchlist)
+# Stored in kv_store under key "scan.market_tickers"
+# ---------------------------------------------------------------------------
+
+def _get_market_scan_tickers() -> list[str]:
+    return _kv_get("scan.market_tickers") or []
+
+def _set_market_scan_tickers(tickers: list[str]) -> None:
+    _kv_put("scan.market_tickers", tickers)
+
+@app.get("/api/scan/market-tickers")
+def get_market_scan_tickers():
+    return {"tickers": _get_market_scan_tickers()}
+
+@app.post("/api/scan/market-tickers")
+async def add_market_scan_ticker(request: Request):
+    body = await request.json()
+    tk = (body.get("ticker") or "").strip().upper().rstrip("*")
+    if not tk:
+        raise HTTPException(status_code=422, detail="ticker required")
+    tickers = _get_market_scan_tickers()
+    if tk not in tickers:
+        tickers.append(tk)
+        _set_market_scan_tickers(tickers)
+    return {"tickers": tickers}
+
+@app.delete("/api/scan/market-tickers/{ticker}")
+def remove_market_scan_ticker(ticker: str):
+    tk = ticker.strip().upper().rstrip("*")
+    tickers = [t for t in _get_market_scan_tickers() if t != tk]
+    _set_market_scan_tickers(tickers)
+    return {"tickers": tickers}
+
+@app.post("/api/scan/market")
+def start_market_scan(background_tasks: BackgroundTasks):
+    """Scan the Market Scan card's own ticker list; results MERGE into scan.pulse."""
+    tickers = _filter_scan_tickers(_get_market_scan_tickers())
+    if not tickers:
+        raise HTTPException(status_code=422, detail="No tickers in Market Scan — add some first")
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _sjobs_lock:
+        _sjobs[job_id] = {
+            "job_id": job_id, "status": "queued", "created_at": now,
+            "tickers": tickers, "tickers_done": [], "results": {},
+            "scanned_at": None, "error": None,
+        }
+    background_tasks.add_task(_run_scan, job_id, tickers)
+    return _sjobs[job_id]
+
+
+# ---------------------------------------------------------------------------
 # Scan endpoints
 # ---------------------------------------------------------------------------
 
@@ -5629,6 +5681,51 @@ def _auto_daily_brief_worker() -> None:
             _time2.sleep(3600)
 
 threading.Thread(target=_auto_daily_brief_worker, daemon=True, name="daily-brief-scheduler").start()
+
+# ── Auto-scan all saved reports into Market Pulse at 08:15 Pacific ───────────
+def _auto_market_pulse_worker() -> None:
+    """Daemon: scans all saved-report tickers at 08:15 Pacific, merging into scan.pulse."""
+    import time as _time
+    from datetime import timezone, timedelta
+    PACIFIC_OFFSET = timedelta(hours=-7)
+    while True:
+        try:
+            now_pac = datetime.now(timezone(PACIFIC_OFFSET))
+            target  = now_pac.replace(hour=8, minute=15, second=0, microsecond=0)
+            if now_pac >= target:
+                target = target + timedelta(days=1)
+            wait_secs = (target - now_pac).total_seconds()
+            print(f"[pulse-scheduler] next run at 08:15 Pacific — sleeping {wait_secs/3600:.1f}h")
+            _time.sleep(wait_secs)
+            print("[pulse-scheduler] 08:15 Pacific — running market pulse scan on saved reports…")
+            # Collect tickers from DB
+            tickers = []
+            if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+                try:
+                    with _fund_conn() as conn, conn.cursor() as cur:
+                        cur.execute("SELECT ticker FROM analyst_reports ORDER BY generated_at DESC")
+                        tickers = [r[0] for r in cur.fetchall()]
+                except Exception as _e:
+                    print(f"[pulse-scheduler] DB query failed: {_e}")
+            tickers = _filter_scan_tickers(tickers)
+            if not tickers:
+                print("[pulse-scheduler] no tickers to scan — skipping")
+                continue
+            print(f"[pulse-scheduler] scanning {len(tickers)} tickers…")
+            job_id = str(uuid.uuid4())
+            with _sjobs_lock:
+                _sjobs[job_id] = {
+                    "job_id": job_id, "status": "queued", "created_at": datetime.utcnow().isoformat(),
+                    "tickers": tickers, "tickers_done": [], "results": {}, "scanned_at": None, "error": None,
+                }
+            _run_scan(job_id, tickers)   # blocking — intentional (runs in its own thread)
+            print(f"[pulse-scheduler] scan complete — {len(tickers)} tickers merged into Market Pulse")
+        except Exception as _e:
+            import time as _t2
+            print(f"[pulse-scheduler] error (retrying in 1h): {_e}")
+            _t2.sleep(3600)
+
+threading.Thread(target=_auto_market_pulse_worker, daemon=True, name="pulse-scheduler").start()
 
 
 # ---------------------------------------------------------------------------

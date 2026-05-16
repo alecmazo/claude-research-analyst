@@ -5026,13 +5026,14 @@
   // ══════════════════════════════════════════════════════════════
   // MINI SCAN CARD — mirrors watchlist, SCAN NOW → Scan tab
   // ══════════════════════════════════════════════════════════════
+  // ── Market Scan card — independent ticker list (kv-backed, not watchlist) ──
   async function loadMiniScanChips() {
     const el     = document.getElementById('mini-scan-chips');
     const badge  = document.getElementById('mini-scan-badge');
     const status = document.getElementById('mini-scan-status');
     if (!el) return;
     try {
-      const r = await window.dgaFetch('/api/watchlist');
+      const r = await window.dgaFetch('/api/scan/market-tickers');
       if (!r.ok) return;
       const data    = await r.json();
       const tickers = data.tickers || [];
@@ -5054,10 +5055,8 @@
           btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const tk = btn.getAttribute('data-mini-remove');
-            await window.dgaFetch('/api/watchlist/' + encodeURIComponent(tk), { method: 'DELETE' });
+            await window.dgaFetch('/api/scan/market-tickers/' + encodeURIComponent(tk), { method: 'DELETE' });
             loadMiniScanChips();
-            loadWatchlist();
-            loadTrendingTickers();
           });
         });
         el.querySelectorAll('[data-mini-chip]').forEach(chip => {
@@ -5068,7 +5067,7 @@
         });
       }
 
-      // Last scan timestamp
+      // Last scan timestamp from Market Pulse
       try {
         const rs = await window.dgaFetch('/api/scan/latest');
         if (rs.ok) {
@@ -5089,19 +5088,17 @@
   const $miniBtn    = document.getElementById('mini-scan-btn');
 
   async function addMiniTicker() {
-    const tk = ($miniInput?.value || '').trim().toUpperCase().replace(/[^A-Z.]/g, '');
+    const tk = ($miniInput?.value || '').trim().toUpperCase().replace(/[^A-Z.0-9]/g, '');
     if (!tk) return;
     if ($miniAddBtn) $miniAddBtn.disabled = true;
     try {
-      await window.dgaFetch('/api/watchlist', {
+      await window.dgaFetch('/api/scan/market-tickers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker: tk }),
       });
       if ($miniInput) $miniInput.value = '';
       loadMiniScanChips();
-      loadWatchlist();
-      loadTrendingTickers();
     } finally {
       if ($miniAddBtn) $miniAddBtn.disabled = false;
     }
@@ -5109,29 +5106,52 @@
 
   $miniAddBtn?.addEventListener('click', addMiniTicker);
   $miniInput?.addEventListener('keypress', (e) => { if (e.key === 'Enter') addMiniTicker(); });
+  $miniInput?.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
 
-  // SCAN NOW → run watchlist scan inline in Market Scan panel
+  // SCAN NOW → scan Market Scan card's own tickers, MERGE into Market Pulse
   $miniBtn?.addEventListener('click', async () => {
     if ($miniBtn.disabled) return;
     $miniBtn.disabled = true; $miniBtn.textContent = '⏳…';
+    const badge  = document.getElementById('mini-scan-badge');
+    const status = document.getElementById('mini-scan-status');
+    if (status) status.textContent = 'Starting scan…';
     try {
-      const r = await window.dgaFetch('/api/scan', { method: 'POST' });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+      const r = await window.dgaFetch('/api/scan/market', { method: 'POST' });
+      if (!r.ok) {
+        const e = await r.json();
+        if (status) status.textContent = '❌ ' + (e.detail || r.status);
+        $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
+        return;
+      }
       const job = await r.json();
-      const badge = document.getElementById('mini-scan-badge');
-      _pollScanJob(job.job_id,
-        function(tk, res) {
-          if (badge) badge.textContent = (job.tickers_done?.length || '?') + '/' + (job.tickers?.length || '?');
-        },
-        function(jp) {
-          $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
-          const ts = jp.scanned_at ? fmtDate(jp.scanned_at) : 'done';
-          if (badge) badge.textContent = Object.keys(jp.results||{}).length + ' tickers · ' + ts;
-          loadGPMarketPulse();
-        },
-        function(err) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
-      );
-    } catch(e) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
+      const total = (job.tickers || []).length;
+      if (badge) badge.textContent = '0/' + total;
+
+      // Poll until done — update badge with live progress
+      const iv = setInterval(async () => {
+        try {
+          const rp = await window.dgaFetch('/api/scan/' + job.job_id);
+          if (!rp.ok) return;
+          const jp = await rp.json();
+          const done = (jp.tickers_done || []).length;
+          if (badge) badge.textContent = done + '/' + total;
+          if (jp.status === 'done' || jp.status === 'failed') {
+            clearInterval(iv);
+            $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
+            if (jp.status === 'done') {
+              if (status) status.textContent = done + ' tickers scanned — pulse updated';
+              loadGPMarketPulse();
+              loadMiniScanChips();
+            } else {
+              if (status) status.textContent = '❌ ' + (jp.error || 'Scan failed');
+            }
+          }
+        } catch (e) { clearInterval(iv); $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
+      }, 3500);
+    } catch(e) {
+      $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
+      if (status) status.textContent = '❌ ' + e.message;
+    }
   });
 
   // ── Reports Scan — scan all saved report tickers → Market Pulse ──────────
