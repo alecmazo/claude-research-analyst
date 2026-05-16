@@ -965,7 +965,7 @@
     </div>
 
     <!-- Saved Reports -->
-    <section class="panel" data-wid="saved-reports">
+    <section class="panel" data-wid="saved-reports" data-expanded="1">
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
@@ -5417,6 +5417,9 @@
         summary.appendChild(chev);
 
         details.appendChild(summary);
+
+        // Expand by default if the section opts in via data-expanded="1"
+        if (section.dataset.expanded === '1') details.open = true;
 
         // Move all remaining section children into <details>
         var toMove = [];
