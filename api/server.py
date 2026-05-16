@@ -7432,9 +7432,25 @@ async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
     return {"ok": True, "ignored": sym, "reason": body.reason}
 
 
+def _force_ipv4_connect(hostname: str, port: int, timeout: int = 20):
+    """Resolve hostname to an IPv4 address and return a connected socket.
+
+    Railway containers sometimes default to IPv6 which either has no route
+    (Errno 101 ENETUNREACH) or hits Cloudflare IP bans. Forcing AF_INET
+    ensures we always go out on the IPv4 path.
+    """
+    import socket
+    addrs = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+    if not addrs:
+        raise OSError(f"No IPv4 address found for {hostname}")
+    ipv4_addr = addrs[0][4]          # (ip, port) tuple
+    sock = socket.create_connection(ipv4_addr, timeout=timeout)
+    return sock, ipv4_addr[0]
+
+
 def _send_via_gmail(to_addr: str, subject: str, html_body: str) -> dict:
-    """Send HTML email via Gmail SMTP using the app password already in Railway env."""
-    import smtplib
+    """Send HTML email via Gmail SMTP, forcing IPv4 to avoid Railway's IPv6 routing gaps."""
+    import smtplib, ssl, socket
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
@@ -7443,34 +7459,62 @@ def _send_via_gmail(to_addr: str, subject: str, html_body: str) -> dict:
     if not gmail_user or not gmail_pwd:
         return {"ok": False, "error": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
 
-    # Use a display name that matches the brand; reply-to goes back to gmail
     from_addr = f"DGA Capital Reports <{gmail_user}>"
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = from_addr
     msg["To"]      = to_addr
     msg.attach(MIMEText(html_body, "html"))
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+    smtp_host = "smtp.gmail.com"
+    last_err  = None
+
+    # Try port 587 (STARTTLS) then 465 (SSL), both forced to IPv4
+    for port, use_ssl in [(587, False), (465, True)]:
+        try:
+            raw_sock, ipv4 = _force_ipv4_connect(smtp_host, port)
+            ctx = ssl.create_default_context()
+            if use_ssl:
+                ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=smtp_host)
+                smtp = smtplib.SMTP_SSL.__new__(smtplib.SMTP_SSL)
+                smtplib.SMTP.__init__(smtp, timeout=20)
+                smtp.sock = ssl_sock
+                smtp.file = ssl_sock.makefile("rb")
+                smtp._tls_established = True
+                smtp.ehlo(smtp_host)
+            else:
+                smtp = smtplib.SMTP.__new__(smtplib.SMTP)
+                smtplib.SMTP.__init__(smtp, timeout=20)
+                smtp.sock = raw_sock
+                smtp.file = raw_sock.makefile("rb")
+                smtp.ehlo(smtp_host)
+                smtp.starttls(context=ctx)
+                smtp.ehlo(smtp_host)
             smtp.login(gmail_user, gmail_pwd)
             smtp.sendmail(gmail_user, [to_addr], msg.as_string())
-        return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr, "from": from_addr}
-    except smtplib.SMTPAuthenticationError as e:
-        return {"ok": False, "error": f"Gmail auth failed — check GMAIL_APP_PASSWORD: {e}"}
-    except Exception as e:
-        return {"ok": False, "error": f"Gmail SMTP error: {e}"}
+            smtp.quit()
+            return {"ok": True, "transport": f"gmail_smtp:{port}", "ipv4": ipv4,
+                    "sent_to": to_addr, "from": from_addr}
+        except smtplib.SMTPAuthenticationError as e:
+            # Auth error is definitive — no point trying the other port
+            return {"ok": False,
+                    "error": f"Gmail auth failed (port {port}): generate an App Password at "
+                             "myaccount.google.com → Security → App passwords. "
+                             f"Detail: {e}"}
+        except OSError as e:
+            last_err = f"port {port}: {e}"
+        except Exception as e:
+            last_err = f"port {port}: {e}"
+
+    return {"ok": False, "error": f"Gmail SMTP failed on all ports — {last_err}"}
 
 
 def _send_via_resend(to_addr: str, subject: str, html_body: str) -> dict:
-    """Send HTML email via Resend REST API. Note: Railway's datacenter IPs are
-    sometimes blocked by Cloudflare (error 1010) — use Gmail SMTP as primary."""
-    import urllib.request as _urlreq, urllib.error as _urlerr
+    """Send HTML email via Resend REST API, forcing IPv4 to avoid Cloudflare 1010 on IPv6."""
+    import http.client, ssl, socket
 
     resend_key  = os.environ.get("RESEND_API_KEY", "")
     resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
-
     if not resend_key:
         return {"ok": False, "error": "RESEND_API_KEY not set"}
 
@@ -7479,44 +7523,66 @@ def _send_via_resend(to_addr: str, subject: str, html_body: str) -> dict:
         "subject": subject, "html": html_body,
     }).encode()
 
+    api_host = "api.resend.com"
     try:
-        req = _urlreq.Request(
-            "https://api.resend.com/emails",
-            data=payload,
-            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-            method="POST",
-        )
-        with _urlreq.urlopen(req, timeout=20) as resp:
-            resp.read()
-        return {"ok": True, "transport": "resend", "sent_to": to_addr, "from": resend_from}
-    except _urlerr.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        hint = ""
-        if e.code == 403:
-            hint = (" — Cloudflare is blocking Railway's IP (error 1010). "
-                    "This is a known issue; the Gmail SMTP path should be used instead.")
-        elif e.code == 422:
-            hint = " — Invalid from/to address or missing required field."
-        elif e.code == 401:
-            hint = " — RESEND_API_KEY is invalid or revoked."
-        return {"ok": False, "error": f"Resend HTTP {e.code}: {body[:300]}{hint}"}
+        # Force IPv4 — Cloudflare 1010 is typically an IPv6 ASN block
+        raw_sock, ipv4 = _force_ipv4_connect(api_host, 443)
+        ctx = ssl.create_default_context()
+        ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=api_host)
+
+        # Reuse HTTPSConnection but inject our pre-connected socket
+        conn = http.client.HTTPSConnection(api_host, 443, timeout=20)
+        conn.sock = ssl_sock
+
+        conn.request("POST", "/emails", body=payload, headers={
+            "Authorization":  f"Bearer {resend_key}",
+            "Content-Type":   "application/json",
+            "User-Agent":     "DGA-Capital-Server/1.0",
+            "Accept":         "application/json",
+        })
+        resp      = conn.getresponse()
+        resp_body = resp.read().decode("utf-8", "replace")
+
+        if resp.status >= 400:
+            hint = ""
+            if resp.status == 403:
+                hint = (" — Still getting Cloudflare 1010 even on IPv4 "
+                        f"({ipv4}). The current Railway container's IPv4 may also be "
+                        "blocked. Re-deploy on Railway to get a fresh IP, or set "
+                        "RESEND_FROM and try again.")
+            elif resp.status == 401:
+                hint = " — API key invalid or revoked."
+            elif resp.status == 422:
+                hint = " — Invalid from/to address."
+            return {"ok": False,
+                    "error": f"Resend HTTP {resp.status}: {resp_body[:300]}{hint}",
+                    "ipv4": ipv4}
+        return {"ok": True, "transport": "resend", "ipv4": ipv4,
+                "sent_to": to_addr, "from": resend_from}
+
+    except OSError as e:
+        return {"ok": False, "error": f"Network error reaching Resend (IPv4): {e}"}
     except Exception as e:
         return {"ok": False, "error": f"Resend request failed: {e}"}
 
 
 def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
-    """Send HTML email. Tries Gmail SMTP first (bypasses Cloudflare), falls back to Resend."""
+    """Send HTML email. Both transports now force IPv4 to fix Railway's IPv6 routing gaps.
+    Tries Resend first (original working path), falls back to Gmail SMTP."""
+    resend_key = os.environ.get("RESEND_API_KEY", "")
     gmail_user = os.environ.get("GMAIL_USER", "")
     gmail_pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-    if gmail_user and gmail_pwd:
-        result = _send_via_gmail(to_addr, subject, html_body)
+    if resend_key:
+        result = _send_via_resend(to_addr, subject, html_body)
         if result["ok"]:
             return result
-        # Gmail failed — log and fall through to Resend
-        print(f"[email] Gmail SMTP failed ({result.get('error')}), trying Resend…")
+        print(f"[email] Resend failed ({result.get('error')}), trying Gmail SMTP…")
 
-    return _send_via_resend(to_addr, subject, html_body)
+    if gmail_user and gmail_pwd:
+        return _send_via_gmail(to_addr, subject, html_body)
+
+    return {"ok": False, "error": "No email transport configured (need RESEND_API_KEY or GMAIL_USER+GMAIL_APP_PASSWORD)"}
 
 
 @app.get("/api/v2/gp/email-diag")
@@ -7548,51 +7614,71 @@ async def email_diag(request: Request):
 
     test_to = resend_acct_email or (claims.get("email", "") if claims else "")
 
-    # 2. Gmail SMTP test (primary transport)
-    if gmail_user and gmail_pwd:
-        result["gmail_test"] = _send_via_gmail(
-            test_to or gmail_user,
-            "[DGA diag] Gmail SMTP test",
-            "<p>Gmail SMTP transport is working from Railway.</p>",
-        )
-    else:
-        result["gmail_test"] = {"skipped": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
-
-    # 3. Resend API test (secondary transport) — may fail with Cloudflare 1010 from Railway IPs
+    # 2. Resend API test (forced IPv4 — fixes Cloudflare 1010 on IPv6)
     if resend_key:
         result["resend_test"] = _send_via_resend(
             test_to or gmail_user or "test@dgacapital.com",
             "[DGA diag] Resend API test",
-            "<p>Resend transport test from Railway.</p>",
+            "<p>Resend transport test from Railway (IPv4-forced).</p>",
         )
     else:
         result["resend_test"] = {"skipped": "RESEND_API_KEY not set"}
 
-    # 4. Diagnosis + recommendation
-    gmail_ok  = result["gmail_test"].get("ok", False)
-    resend_ok = result["resend_test"].get("ok", False)
+    # 3. Gmail SMTP test (forced IPv4 — fixes ENETUNREACH on IPv6)
+    if gmail_user and gmail_pwd:
+        result["gmail_test"] = _send_via_gmail(
+            test_to or gmail_user,
+            "[DGA diag] Gmail SMTP test",
+            "<p>Gmail SMTP transport test from Railway (IPv4-forced).</p>",
+        )
+    else:
+        result["gmail_test"] = {"skipped": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
 
-    if gmail_ok:
-        result["active_transport"] = "gmail_smtp"
-        result["status"] = "✅ Gmail SMTP is working — all report emails will send via Gmail"
-    elif resend_ok:
+    # 4. Diagnosis
+    resend_ok = result["resend_test"].get("ok", False)
+    gmail_ok  = result["gmail_test"].get("ok", False)
+
+    if resend_ok:
         result["active_transport"] = "resend"
-        result["status"] = "⚠️ Gmail failed but Resend works — emails will send via Resend"
+        result["status"] = "✅ Resend is working (IPv4) — report emails will use Resend"
+    elif gmail_ok:
+        result["active_transport"] = "gmail_smtp"
+        result["status"] = "✅ Gmail SMTP is working (IPv4) — report emails will fall back to Gmail"
     else:
         result["active_transport"] = "none"
-        result["status"] = "❌ Both transports failed — check errors above"
+        result["status"] = "❌ Both transports failed — see notes below"
 
-    gmail_err  = result["gmail_test"].get("error", "")
     resend_err = result["resend_test"].get("error", "")
+    gmail_err  = result["gmail_test"].get("error", "")
     notes = []
-    if "1010" in resend_err:
-        notes.append("Resend 403/1010 = Cloudflare is blocking Railway's datacenter IPs. This is expected and not fixable on the Resend side — Gmail SMTP is the correct primary path.")
-    if not gmail_ok and "auth" in gmail_err.lower():
-        notes.append("Gmail auth error: make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your regular password). Generate one at myaccount.google.com → Security → 2-Step Verification → App passwords.")
+    if "1010" in resend_err and "IPv4" in resend_err:
+        notes.append(
+            "Resend: still 1010 even on IPv4 — this specific Railway container's IP is "
+            "on Cloudflare's blocklist. Re-deploy on Railway (Settings → Deploy → Redeploy) "
+            "to get a fresh IP assignment. If it keeps happening, set RESEND_FROM in Railway "
+            "env vars and open a ticket with Resend support."
+        )
+    elif "1010" in resend_err:
+        notes.append("Resend: IPv4 forcing is now in place — if 1010 persists, redeploy on Railway.")
+    if "unreachable" in gmail_err.lower() or "101" in gmail_err:
+        notes.append(
+            "Gmail: ENETUNREACH on both ports suggests Railway is restricting outbound "
+            "SMTP (25/465/587). This is uncommon on Railway — try redeploying. "
+            "If it persists, use Resend as the primary path."
+        )
+    if "auth" in gmail_err.lower():
+        notes.append(
+            "Gmail auth error: GMAIL_APP_PASSWORD must be a Gmail App Password, not your "
+            "regular Google password. Generate one at "
+            "myaccount.google.com → Security → App passwords."
+        )
     if not resend_from:
-        notes.append("Set RESEND_FROM in Railway env vars (e.g. 'DGA Capital <reports@dgacapital.com>') so Resend sends from your verified domain instead of onboarding@resend.dev.")
+        notes.append(
+            "RESEND_FROM is not set — Resend will try to send from onboarding@resend.dev "
+            "which is only allowed for Resend's own account email. "
+            "Set RESEND_FROM=DGA Capital <reports@dgacapital.com> in Railway env vars."
+        )
     result["notes"] = notes
-
     return result
 
 
