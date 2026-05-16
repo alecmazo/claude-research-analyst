@@ -153,10 +153,12 @@ export default function App() {
   }
 
   // ── Signed in → branch by role ───────────────────────────────────────────
+  // Admin has full GP access (same tabs as GP)
+  const isGPOrAdmin = authState.role === 'gp' || authState.role === 'admin';
   return (
     <NavigationContainer>
       <StatusBar style="light" />
-      {authState.role === 'gp'
+      {isGPOrAdmin
         ? <GPTabs />
         : <LPTabs onLogout={handleLogout} />
       }

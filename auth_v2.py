@@ -448,11 +448,20 @@ def create_user(
     email: str,
     name: str,
     password: str,
+    role: str = "lp",
     fund_memberships: Optional[dict] = None,
     managed_account_ids: Optional[list] = None,
+    must_change_password: bool = True,
 ) -> str:
-    """Create a new LP user. Returns the new lp_id. Raises ValueError on conflict."""
+    """Create a new user. Returns the new user_id. Raises ValueError on conflict.
+
+    role: "lp" | "gp" | "admin"  (default "lp")
+    Admin users have full GP access to both the GP and LP dashboards.
+    """
     import datetime as _dt
+    role = (role or "lp").strip().lower()
+    if role not in ("lp", "gp", "admin"):
+        raise ValueError("Role must be 'lp', 'gp', or 'admin'")
     email = (email or "").strip().lower()
     if not email:
         raise ValueError("Email is required")
@@ -460,23 +469,24 @@ def create_user(
         raise ValueError("Email already exists")
     if len(password) < 6:
         raise ValueError("Password must be at least 6 characters")
-    lp_id = "lp_" + secrets.token_hex(8)
+    prefix = {"gp": "gp_", "admin": "admin_", "lp": "lp_"}.get(role, "lp_")
+    user_id = prefix + secrets.token_hex(8)
     new_hash, new_salt = hash_password(password)
     overlay = _load_overlay()
-    overlay[lp_id] = {
-        "lp_id":                lp_id,
+    overlay[user_id] = {
+        "lp_id":                user_id,
         "email":                email,
         "name":                 (name or "").strip(),
-        "role":                 "lp",
+        "role":                 role,
         "password_hash_hex":    new_hash,
         "password_salt_hex":    new_salt,
         "fund_memberships":     fund_memberships or {},
         "managed_account_ids":  managed_account_ids or [],
-        "must_change_password": True,
+        "must_change_password": must_change_password,
         "created_at":           _dt.date.today().isoformat(),
     }
     _save_overlay(overlay)
-    return lp_id
+    return user_id
 
 
 def update_assignments(
@@ -500,20 +510,25 @@ def update_assignments(
 # ---------------------------------------------------------------------------
 # Scope checks — used by data endpoints to filter LP-visible records.
 # ---------------------------------------------------------------------------
+def _is_privileged(claims: dict) -> bool:
+    """Return True if the user has full GP-level access (role is gp or admin)."""
+    return claims.get("role") in ("gp", "admin")
+
+
 def claims_allow_fund(claims: dict, fund_name: str) -> bool:
-    """True if the token's role is GP OR fund_name is in their memberships."""
+    """True if the token's role is GP/admin OR fund_name is in their memberships."""
     if not claims:
         return False
-    if claims.get("role") == "gp":
+    if _is_privileged(claims):
         return True
     return fund_name in (claims.get("fund_memberships") or {})
 
 
 def claims_allow_account(claims: dict, account_name: str) -> bool:
-    """True if the token's role is GP OR account_name is in their managed accounts."""
+    """True if the token's role is GP/admin OR account_name is in their managed accounts."""
     if not claims:
         return False
-    if claims.get("role") == "gp":
+    if _is_privileged(claims):
         return True
     return account_name in (claims.get("managed_account_ids") or [])
 
@@ -522,7 +537,7 @@ def claims_lp_alias_in(claims: dict, fund_name: str) -> Optional[str]:
     """Return the LP's alias within a given fund, or None if not a member."""
     if not claims:
         return None
-    if claims.get("role") == "gp":
-        # GP doesn't have a per-fund LP alias — they see all rows.
+    if _is_privileged(claims):
+        # GP/admin don't have a per-fund LP alias — they see all rows.
         return None
     return (claims.get("fund_memberships") or {}).get(fund_name)

@@ -1146,7 +1146,7 @@ def _require_fund_token(request: Request) -> None:
     """
     # First check: v2 GP token (attached by auth_middleware)
     claims = getattr(request.state, 'auth_claims', None)
-    if claims and claims.get("role") == "gp":
+    if claims and claims.get("role") in ("gp", "admin"):
         return  # GP is authorized for all fund admin operations
 
     # Fall back to legacy fund token
@@ -1410,7 +1410,7 @@ class LPSetPasswordRequest(BaseModel):
 def admin_lp_list(request: Request):
     """Return all LP/GP users (no password hashes). GP-only."""
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP role required")
     return {"users": auth_v2_mod.list_users()}
 
@@ -1424,7 +1424,7 @@ def admin_lp_set_password(request: Request, body: LPSetPasswordRequest):
     choose their own password on first login.
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP role required")
 
     lp_id = (body.lp_id or "").strip()
@@ -1470,7 +1470,7 @@ class LPAssignRequest(BaseModel):
 def admin_lp_create(request: Request, body: LPCreateRequest):
     """GP-only: create a new LP user account."""
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
     try:
         lp_id = auth_v2_mod.create_user(
@@ -1485,11 +1485,36 @@ def admin_lp_create(request: Request, body: LPCreateRequest):
         raise HTTPException(400, str(e))
 
 
+class AdminCreateRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+
+
+@app.post("/api/auth/v2/admin/create")
+def admin_user_create(request: Request, body: AdminCreateRequest):
+    """GP-only: create a new admin user with access to both GP and LP dashboards."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+    try:
+        user_id = auth_v2_mod.create_user(
+            email=body.email,
+            name=body.name,
+            password=body.password,
+            role="admin",
+            must_change_password=False,
+        )
+        return {"ok": True, "user_id": user_id, "email": body.email, "name": body.name, "role": "admin"}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/v2/admin/lp/update-assignments")
 def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
     """GP-only: update which funds and managed accounts an LP can see."""
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
     ok = auth_v2_mod.update_assignments(
         lp_id=body.lp_id,
@@ -1585,7 +1610,7 @@ async def fund_get_settings(fund_id: str, request: Request):
 async def fund_save_settings(fund_id: str, request: Request, body: FundSettingsRequest):
     """GP-only: save display settings (benchmark, period) for a fund."""
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
 
     bkey   = body.benchmark if body.benchmark in _BENCHMARK_DEFS else "sp500"
@@ -2071,7 +2096,7 @@ def lp_me_overview(request: Request):
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
 
             # ── Funds ────────────────────────────────────────────────
-            if role == "gp":
+            if role in ("gp", "admin"):
                 cur.execute("""
                     SELECT id, name, short_name, fund_type
                       FROM funds
@@ -2093,7 +2118,7 @@ def lp_me_overview(request: Request):
                     fund_rows = []
 
             # ── Managed accounts ─────────────────────────────────────
-            if role == "gp":
+            if role in ("gp", "admin"):
                 cur.execute("""
                     SELECT id, name, short_name
                       FROM funds
@@ -2262,7 +2287,7 @@ def lp_me_overview(request: Request):
             # ── Bulk LP rows (GP: all funds at once; LP: per fund since alias varies) ──
             lp_rows_by_fid: dict = {}
             if fund_fids:
-                if role == "gp":
+                if role in ("gp", "admin"):
                     try:
                         cur.execute("""
                             SELECT l.fund_id::text, l.legal_name, l.primary_email,
@@ -2328,7 +2353,7 @@ def lp_me_overview(request: Request):
                 alias = (fund_memberships.get(fname)
                          or fund_memberships.get(fname.upper())
                          or fund_memberships.get(fname.lower())
-                         or None) if role != "gp" else None
+                         or None) if role not in ("gp", "admin") else None
 
                 lp_rows            = lp_rows_by_fid.get(fid, [])
                 commitment         = sum((float(r.get("commitment_amount") or 0) for r in lp_rows), 0.0)
@@ -2358,7 +2383,7 @@ def lp_me_overview(request: Request):
                     "fund_id":            fid,
                     "fund_name":          fname,
                     "short_name":         f["short_name"],
-                    "lp_alias":           alias if role != "gp" else None,
+                    "lp_alias":           alias if role not in ("gp", "admin") else None,
                     "lp_count":           len(lp_rows),
                     "commitment":         commitment,
                     "total_committed":    total_committed_fund,
@@ -2707,7 +2732,7 @@ def gp_add_nav_snapshot(request: Request, body: NavSnapshotRequest):
     snapshot for the same (fund_id, as_of_date, period_kind).
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
 
     if not _PSYCOPG2_OK:
@@ -2763,7 +2788,7 @@ def gp_fund_detail(fund_id: str, request: Request):
     NAV snapshot.  Used by the Fund tab drill-down modal.
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
     if not _PSYCOPG2_OK:
         raise HTTPException(503, "psycopg2 not available")
@@ -2886,7 +2911,7 @@ def gp_fund_create(request: Request, body: CreateFundV2Request):
     Full creation with all required fields. Idempotent on short_name.
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
     if not _PSYCOPG2_OK:
         raise HTTPException(503, "psycopg2 not available")
@@ -2959,7 +2984,7 @@ def gp_ensure_fund(request: Request, body: EnsureFundRequest):
     Use this to seed LP fund & managed-account records that LPs need to see.
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
     if not _PSYCOPG2_OK:
         raise HTTPException(503, "psycopg2 not available")
@@ -3041,7 +3066,7 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
       5. Runs DELETE in a transaction — full rollback on any error.
     """
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP role required")
     if not _PSYCOPG2_OK:
         raise HTTPException(status_code=503, detail="psycopg2 not installed")
@@ -7462,7 +7487,7 @@ async def email_diag(request: Request):
     """Diagnose email transport — checks Resend API key, verified domains, and SMTP config.
     Returns a full diagnostic report so we know exactly what to fix."""
     claims = getattr(request.state, "auth_claims", None)
-    if not claims or claims.get("role") != "gp":
+    if not claims or claims.get("role") not in ("gp", "admin"):
         _require_fund_token(request)
 
     import urllib.request as _urlreq, urllib.error as _urlerr
@@ -7560,7 +7585,7 @@ async def email_test_send(request: Request):
     Returns the raw result from _send_simple_email so the caller sees
     exactly what Resend replied."""
     claims = getattr(request.state, "auth_claims", None)
-    if not claims or claims.get("role") != "gp":
+    if not claims or claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP access required")
     try:
         body_raw = await request.body()
@@ -7614,7 +7639,7 @@ async def get_account_rebalance(fund_id: str, request: Request):
 async def run_account_rebalance(fund_id: str, request: Request):
     """Run a fresh portfolio rebalance for a managed account and persist results."""
     claims = getattr(request.state, "auth_claims", None)
-    if not claims or claims.get("role") != "gp":
+    if not claims or claims.get("role") not in ("gp", "admin"):
         _require_fund_token(request)  # fall back to legacy fund token
 
     if not _PSYCOPG2_OK:
@@ -7793,7 +7818,7 @@ async def run_account_rebalance(fund_id: str, request: Request):
 async def email_account_rebalance(fund_id: str, request: Request):
     """Email the rebalance summary for a managed account to a specified address."""
     claims = getattr(request.state, "auth_claims", None)
-    if not claims or claims.get("role") != "gp":
+    if not claims or claims.get("role") not in ("gp", "admin"):
         _require_fund_token(request)
 
     # Load persisted rebalance
@@ -9499,7 +9524,7 @@ async def fund_admin_delete(request: Request, fund_id: str):
 async def fund_purge(fund_id: str, request: Request):
     """Permanently purge a fund + all child rows. GP JWT required. No backup kept."""
     claims = _claims_or_401(request)
-    if claims.get("role") != "gp":
+    if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     conn = _fund_conn()
     try:

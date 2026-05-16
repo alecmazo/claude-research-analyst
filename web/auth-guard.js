@@ -70,9 +70,14 @@
 
       var expected = (window.PAGE_ROLE || '').toLowerCase();
       if (expected && me.role !== expected) {
-        // Wrong dashboard for this role → bounce to the right one
-        window.location.replace(me.role === 'gp' ? '/gp' : '/lp');
-        return;
+        // Admin can visit both /gp and /lp — never bounce them
+        if (me.role === 'admin') {
+          // fall through — admin is allowed everywhere
+        } else {
+          // Wrong dashboard for this role → bounce to the right one
+          window.location.replace(me.role === 'gp' ? '/gp' : '/lp');
+          return;
+        }
       }
 
       // Once DOM is parsed, inject the role bar into the topbar
@@ -129,6 +134,22 @@
         '  color: #2d7d96;',
         '  border: 1px solid rgba(91,184,212,0.30);',
         '}',
+        '.dga-rb-badge.admin {',
+        '  background: linear-gradient(135deg, #c9a84c, #d9bc76);',
+        '  color: #0A1628;',
+        '  box-shadow: 0 0 8px rgba(201,168,76,0.40);',
+        '}',
+        '.dga-rb-switch {',
+        '  background: transparent;',
+        '  color: #5BB8D4;',
+        '  border: 1px solid rgba(91,184,212,0.40);',
+        '  padding: 4px 10px; border-radius: 5px;',
+        '  font-size: 10px; font-weight: 700;',
+        '  letter-spacing: 1.1px; cursor: pointer;',
+        '  text-transform: uppercase;',
+        '  transition: background .15s, color .15s, border-color .15s;',
+        '}',
+        '.dga-rb-switch:hover { background: rgba(91,184,212,0.12); }',
         '.dga-rb-logout {',
         '  background: transparent;',
         '  color: #64748b;',
@@ -151,14 +172,23 @@
     }
 
     // Build the group element
+    var role = me.role || '';
+    var badgeLabel = role === 'gp' ? '⚡ GP' : role === 'admin' ? '⚡ ADMIN' : '🔒 LP';
+    var switchBtn  = '';
+    if (role === 'admin') {
+      var curPage = (window.PAGE_ROLE || 'gp').toLowerCase();
+      var switchTarget = curPage === 'gp' ? '/lp' : '/gp';
+      var switchLabel  = curPage === 'gp' ? 'VIEW: LP' : 'VIEW: GP';
+      switchBtn = '<button class="dga-rb-switch" id="dga-switch-btn" title="Switch dashboard view">'
+                + switchLabel + '</button>';
+    }
     var group = document.createElement('span');
     group.id = 'dga-role-bar';
     group.className = 'dga-role-group';
     group.innerHTML = ''
       + '<span class="dga-rb-name">' + escapeHtml(getInitials(me.name || '')) + '</span>'
-      + '<span class="dga-rb-badge ' + (me.role || '') + '">'
-      +   (me.role === 'gp' ? '⚡ GP' : '🔒 LP')
-      + '</span>'
+      + '<span class="dga-rb-badge ' + role + '">' + badgeLabel + '</span>'
+      + switchBtn
       + '<button class="dga-rb-logout" id="dga-logout-btn" title="Sign out">LOGOUT</button>';
 
     // Try to inject into the topbar's right side so it lives in the natural
@@ -182,6 +212,13 @@
       document.body.appendChild(group);
     }
     document.getElementById('dga-logout-btn').addEventListener('click', logout);
+    var switchEl = document.getElementById('dga-switch-btn');
+    if (switchEl) {
+      switchEl.addEventListener('click', function () {
+        var curPage = (window.PAGE_ROLE || 'gp').toLowerCase();
+        window.location.href = curPage === 'gp' ? '/lp' : '/gp';
+      });
+    }
   }
 
   function getInitials(name) {
