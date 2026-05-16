@@ -7432,54 +7432,91 @@ async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
     return {"ok": True, "ignored": sym, "reason": body.reason}
 
 
-def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
-    """Send HTML email via Resend API (Railway-compatible — no SMTP needed)."""
+def _send_via_gmail(to_addr: str, subject: str, html_body: str) -> dict:
+    """Send HTML email via Gmail SMTP using the app password already in Railway env."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    gmail_user = os.environ.get("GMAIL_USER", "")
+    gmail_pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
+    if not gmail_user or not gmail_pwd:
+        return {"ok": False, "error": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
+
+    # Use a display name that matches the brand; reply-to goes back to gmail
+    from_addr = f"DGA Capital Reports <{gmail_user}>"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = from_addr
+    msg["To"]      = to_addr
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+            smtp.login(gmail_user, gmail_pwd)
+            smtp.sendmail(gmail_user, [to_addr], msg.as_string())
+        return {"ok": True, "transport": "gmail_smtp", "sent_to": to_addr, "from": from_addr}
+    except smtplib.SMTPAuthenticationError as e:
+        return {"ok": False, "error": f"Gmail auth failed — check GMAIL_APP_PASSWORD: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Gmail SMTP error: {e}"}
+
+
+def _send_via_resend(to_addr: str, subject: str, html_body: str) -> dict:
+    """Send HTML email via Resend REST API. Note: Railway's datacenter IPs are
+    sometimes blocked by Cloudflare (error 1010) — use Gmail SMTP as primary."""
     import urllib.request as _urlreq, urllib.error as _urlerr
 
     resend_key  = os.environ.get("RESEND_API_KEY", "")
     resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
 
     if not resend_key:
-        return {"ok": False, "error": "RESEND_API_KEY not set in Railway environment variables"}
+        return {"ok": False, "error": "RESEND_API_KEY not set"}
 
     payload = json.dumps({
-        "from":    resend_from,
-        "to":      [to_addr],
-        "subject": subject,
-        "html":    html_body,
+        "from": resend_from, "to": [to_addr],
+        "subject": subject, "html": html_body,
     }).encode()
 
     try:
         req = _urlreq.Request(
             "https://api.resend.com/emails",
             data=payload,
-            headers={
-                "Authorization": f"Bearer {resend_key}",
-                "Content-Type":  "application/json",
-            },
+            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
             method="POST",
         )
         with _urlreq.urlopen(req, timeout=20) as resp:
-            resp_body = resp.read().decode("utf-8", errors="replace")
+            resp.read()
         return {"ok": True, "transport": "resend", "sent_to": to_addr, "from": resend_from}
     except _urlerr.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        # Surface the raw Resend error so it's actionable
         hint = ""
         if e.code == 403:
-            hint = (
-                " — The API key in Railway (RESEND_API_KEY) may belong to a different "
-                "Resend workspace than where dgacapital.com is verified. "
-                "Go to resend.com → API Keys, create a new key in the correct workspace, "
-                "and update RESEND_API_KEY in Railway."
-            )
+            hint = (" — Cloudflare is blocking Railway's IP (error 1010). "
+                    "This is a known issue; the Gmail SMTP path should be used instead.")
         elif e.code == 422:
             hint = " — Invalid from/to address or missing required field."
         elif e.code == 401:
-            hint = " — RESEND_API_KEY is invalid or revoked. Generate a new one at resend.com/api-keys."
+            hint = " — RESEND_API_KEY is invalid or revoked."
         return {"ok": False, "error": f"Resend HTTP {e.code}: {body[:300]}{hint}"}
     except Exception as e:
         return {"ok": False, "error": f"Resend request failed: {e}"}
+
+
+def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
+    """Send HTML email. Tries Gmail SMTP first (bypasses Cloudflare), falls back to Resend."""
+    gmail_user = os.environ.get("GMAIL_USER", "")
+    gmail_pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+    if gmail_user and gmail_pwd:
+        result = _send_via_gmail(to_addr, subject, html_body)
+        if result["ok"]:
+            return result
+        # Gmail failed — log and fall through to Resend
+        print(f"[email] Gmail SMTP failed ({result.get('error')}), trying Resend…")
+
+    return _send_via_resend(to_addr, subject, html_body)
 
 
 @app.get("/api/v2/gp/email-diag")
@@ -7509,71 +7546,52 @@ async def email_diag(request: Request):
         "GMAIL_APP_PASSWORD":   "set" if gmail_pwd else "NOT SET",
     }
 
-    # 2. Resend: check account + domains
-    if resend_key:
-        def _resend_get(path: str):
-            try:
-                req = _urlreq.Request(
-                    f"https://api.resend.com{path}",
-                    headers={"Authorization": f"Bearer {resend_key}"},
-                    method="GET",
-                )
-                with _urlreq.urlopen(req, timeout=10) as r:
-                    return json.loads(r.read())
-            except _urlerr.HTTPError as e:
-                return {"_error": f"HTTP {e.code}: {e.read().decode('utf-8','replace')[:300]}"}
-            except Exception as e:
-                return {"_error": str(e)}
+    test_to = resend_acct_email or (claims.get("email", "") if claims else "")
 
-        domains_resp = _resend_get("/domains")
-        result["resend_domains"] = domains_resp
-
-        # Summarise verified vs unverified
-        if isinstance(domains_resp.get("data"), list):
-            result["resend_domains_summary"] = [
-                {"name": d.get("name"), "status": d.get("status"), "region": d.get("region")}
-                for d in domains_resp["data"]
-            ]
-        else:
-            result["resend_domains_summary"] = "Could not retrieve domain list"
-
-        # 3. Resend: send a tiny test — prefer RESEND_ACCOUNT_EMAIL (bypasses test-mode restriction),
-        #    fall back to the GP's JWT email.
-        gp_email = resend_acct_email or (claims.get("email", "") if claims else "")
-        if gp_email:
-            diag_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
-            test_payload = json.dumps({
-                "from": diag_from,
-                "to":   [gp_email],
-                "subject": "[DGA diag] Email transport test",
-                "html": "<p>Email transport is working.</p>",
-            }).encode()
-            try:
-                req = _urlreq.Request(
-                    "https://api.resend.com/emails",
-                    data=test_payload,
-                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                    method="POST",
-                )
-                with _urlreq.urlopen(req, timeout=15) as r:
-                    body = json.loads(r.read())
-                result["resend_test_send"] = {"ok": True, "to": gp_email, "response": body}
-            except _urlerr.HTTPError as e:
-                body = e.read().decode("utf-8", "replace")
-                result["resend_test_send"] = {"ok": False, "to": gp_email,
-                                              "http_status": e.code, "body": body}
-            except Exception as e:
-                result["resend_test_send"] = {"ok": False, "error": str(e)}
-        else:
-            result["resend_test_send"] = {"skipped": "no GP email in auth claims"}
+    # 2. Gmail SMTP test (primary transport)
+    if gmail_user and gmail_pwd:
+        result["gmail_test"] = _send_via_gmail(
+            test_to or gmail_user,
+            "[DGA diag] Gmail SMTP test",
+            "<p>Gmail SMTP transport is working from Railway.</p>",
+        )
     else:
-        result["resend"] = "RESEND_API_KEY not set — cannot test"
+        result["gmail_test"] = {"skipped": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
 
-    result["recommendation"] = (
-        "1. Go to https://resend.com/domains and add + verify dgacapital.com (or any domain you own). "
-        "2. Set RESEND_FROM in Railway env vars to e.g. 'DGA Capital <noreply@dgacapital.com>'. "
-        "3. If resend_test_send above shows ok:true, the API key works but only for the account owner's email — domain verification unlocks sending to any address."
-    )
+    # 3. Resend API test (secondary transport) — may fail with Cloudflare 1010 from Railway IPs
+    if resend_key:
+        result["resend_test"] = _send_via_resend(
+            test_to or gmail_user or "test@dgacapital.com",
+            "[DGA diag] Resend API test",
+            "<p>Resend transport test from Railway.</p>",
+        )
+    else:
+        result["resend_test"] = {"skipped": "RESEND_API_KEY not set"}
+
+    # 4. Diagnosis + recommendation
+    gmail_ok  = result["gmail_test"].get("ok", False)
+    resend_ok = result["resend_test"].get("ok", False)
+
+    if gmail_ok:
+        result["active_transport"] = "gmail_smtp"
+        result["status"] = "✅ Gmail SMTP is working — all report emails will send via Gmail"
+    elif resend_ok:
+        result["active_transport"] = "resend"
+        result["status"] = "⚠️ Gmail failed but Resend works — emails will send via Resend"
+    else:
+        result["active_transport"] = "none"
+        result["status"] = "❌ Both transports failed — check errors above"
+
+    gmail_err  = result["gmail_test"].get("error", "")
+    resend_err = result["resend_test"].get("error", "")
+    notes = []
+    if "1010" in resend_err:
+        notes.append("Resend 403/1010 = Cloudflare is blocking Railway's datacenter IPs. This is expected and not fixable on the Resend side — Gmail SMTP is the correct primary path.")
+    if not gmail_ok and "auth" in gmail_err.lower():
+        notes.append("Gmail auth error: make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your regular password). Generate one at myaccount.google.com → Security → 2-Step Verification → App passwords.")
+    if not resend_from:
+        notes.append("Set RESEND_FROM in Railway env vars (e.g. 'DGA Capital <reports@dgacapital.com>') so Resend sends from your verified domain instead of onboarding@resend.dev.")
+    result["notes"] = notes
 
     return result
 
