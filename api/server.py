@@ -4646,6 +4646,75 @@ def start_ticker_scan(body: _TickerScanReq, background_tasks: BackgroundTasks):
     return _sjobs[job_id]
 
 
+@app.post("/api/scan/reports")
+def start_reports_scan(background_tasks: BackgroundTasks):
+    """Kick off a live-search scan for all tickers in the analyst_reports table."""
+    # Collect tickers from DB first, filesystem fallback
+    tickers = []
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT ticker FROM analyst_reports ORDER BY generated_at DESC")
+                tickers = [row[0] for row in cur.fetchall()]
+        except Exception as _e:
+            print(f"[scan/reports] DB query failed: {_e}")
+    if not tickers:
+        # Filesystem fallback
+        tickers = [p.name.replace("_DGA_Report.md", "")
+                   for p in analyst.STOCKS_FOLDER.glob("*_DGA_Report.md")]
+    if not tickers:
+        raise HTTPException(status_code=422, detail="No saved reports to scan")
+
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _sjobs_lock:
+        _sjobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "tickers": tickers,
+            "tickers_done": [],
+            "results": {},
+            "scanned_at": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_scan, job_id, tickers)
+    return _sjobs[job_id]
+
+
+@app.get("/api/quotes")
+def batch_quotes(tickers: str = ""):
+    """Return live prices + day-change % for a comma-separated list of tickers."""
+    syms = [t.strip().upper() for t in tickers.split(",") if t.strip()][:20]
+    if not syms:
+        return {}
+    if not _YFINANCE_OK:
+        return {s: {"price": None, "pct": None} for s in syms}
+    result = {}
+    try:
+        import yfinance as _yf
+        data = _yf.download(syms, period="2d", auto_adjust=True, progress=False)
+        closes = data["Close"] if "Close" in data else data
+        for sym in syms:
+            try:
+                col = closes[sym] if sym in closes.columns else closes
+                vals = col.dropna()
+                if len(vals) >= 2:
+                    price = float(vals.iloc[-1])
+                    prev  = float(vals.iloc[-2])
+                    pct   = (price - prev) / prev * 100 if prev else None
+                    result[sym] = {"price": price, "pct": pct}
+                elif len(vals) == 1:
+                    result[sym] = {"price": float(vals.iloc[-1]), "pct": None}
+                else:
+                    result[sym] = {"price": None, "pct": None}
+            except Exception:
+                result[sym] = {"price": None, "pct": None}
+    except Exception:
+        result = {s: {"price": None, "pct": None} for s in syms}
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Intelligence — macro → sector → company idea generation
 # ---------------------------------------------------------------------------
@@ -5282,6 +5351,40 @@ threading.Thread(target=_hydrate_all, daemon=True, name="hydrate-all").start()
 
 # Start the daily snapshot worker (runs once per day after market close)
 analyst._start_tracker_snapshot_worker()
+
+# ── Auto-schedule daily brief at 08:00 Pacific every morning ────────────────
+def _auto_daily_brief_worker() -> None:
+    """Daemon thread: fires run_daily_brief() every day at 08:00 US/Pacific."""
+    import time as _time
+    from datetime import timezone, timedelta
+    PACIFIC_OFFSET = timedelta(hours=-7)  # PDT; -8 in PST (close enough for scheduling)
+    while True:
+        try:
+            now_pacific = datetime.now(timezone(PACIFIC_OFFSET))
+            # Seconds until next 08:00 Pacific
+            target = now_pacific.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now_pacific >= target:
+                target = target + timedelta(days=1)
+            wait_secs = (target - now_pacific).total_seconds()
+            print(f"[daily-brief-scheduler] next run at 08:00 Pacific — sleeping {wait_secs/3600:.1f}h")
+            _time.sleep(wait_secs)
+            print("[daily-brief-scheduler] 08:00 Pacific — running daily brief…")
+            analyst.run_daily_brief()
+            # Persist to kv_store so the UI picks it up
+            try:
+                brief = analyst.DAILY_BRIEF_FILE
+                if brief.exists():
+                    import json as _json
+                    data = _json.loads(brief.read_text())
+                    _kv_put("daily_brief.latest", data)
+            except Exception as _e:
+                print(f"[daily-brief-scheduler] kv persist failed: {_e}")
+        except Exception as _e:
+            print(f"[daily-brief-scheduler] error (retrying in 1h): {_e}")
+            import time as _time2
+            _time2.sleep(3600)
+
+threading.Thread(target=_auto_daily_brief_worker, daemon=True, name="daily-brief-scheduler").start()
 
 
 # ---------------------------------------------------------------------------

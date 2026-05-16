@@ -969,6 +969,8 @@
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
+        <button id="reports-scan-btn"
+          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ Scan All</button>
       </header>
       <div id="reports-scroll" style="overflow-y:auto;max-height:calc(100vh - 260px);">
       <table class="rep-table">
@@ -1097,7 +1099,7 @@
     <!-- Trending tickers — live watchlist quotes -->
     <section class="panel" data-wid="watchlist-live">
       <header class="panel-head">
-        <span class="panel-title">Watchlist · Live</span>
+        <span class="panel-title">Today's Movers</span>
         <span class="panel-badge" id="trending-count">LIVE</span>
         <span class="panel-action" id="trending-action" style="cursor:default;">⟳ AUTO</span>
       </header>
@@ -1118,24 +1120,6 @@
       </div>
     </section>
 
-    <!-- Ticker Scan — on-demand single-ticker news scan -->
-    <section class="panel" data-wid="ticker-scan">
-      <header class="panel-head">
-        <span class="panel-title">Ticker Scan</span>
-        <span class="panel-badge" id="tscan-badge" style="display:none;"></span>
-      </header>
-      <div class="panel-body" style="padding:10px 14px 12px;">
-        <div style="display:flex;gap:5px;margin-bottom:8px;">
-          <input id="tscan-input"
-            style="flex:1;height:30px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
-            placeholder="Enter ticker…" autocomplete="off">
-          <button id="tscan-btn"
-            style="height:30px;padding:0 12px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:11px;cursor:pointer;letter-spacing:0.5px;">⚡ SCAN</button>
-        </div>
-        <div id="tscan-status" style="font-size:10px;color:var(--dim);min-height:12px;margin-bottom:4px;"></div>
-        <div id="tscan-result"></div>
-      </div>
-    </section>
 
   </aside>
 </main>
@@ -5122,66 +5106,45 @@
           $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
           const ts = jp.scanned_at ? fmtDate(jp.scanned_at) : 'done';
           if (badge) badge.textContent = Object.keys(jp.results||{}).length + ' tickers · ' + ts;
+          loadGPMarketPulse();
         },
         function(err) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
       );
     } catch(e) { $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
   });
 
-  // ── Ticker Scan widget ────────────────────────────────────────
+  // ── Reports Scan — scan all saved report tickers → Market Pulse ──────────
   (function() {
-    const $tsInput  = document.getElementById('tscan-input');
-    const $tsBtn    = document.getElementById('tscan-btn');
-    const $tsStatus = document.getElementById('tscan-status');
-    const $tsResult = document.getElementById('tscan-result');
-    const $tsBadge  = document.getElementById('tscan-badge');
-    if (!$tsBtn) return;
-
-    function _tsSetStatus(msg, color) {
-      $tsStatus.textContent = msg;
-      $tsStatus.style.color = color || 'var(--dim)';
-    }
-
-    async function runTickerScan() {
-      const ticker = ($tsInput.value || '').trim().toUpperCase().replace(/[^A-Z.0-9]/g, '');
-      if (!ticker) { _tsSetStatus('Enter a ticker first.', 'var(--red)'); return; }
-      $tsBtn.disabled = true; $tsBtn.textContent = '⏳…';
-      _tsSetStatus('Scanning ' + ticker + '…', 'var(--dim)');
-      $tsResult.innerHTML = '';
-      if ($tsBadge) { $tsBadge.style.display = ''; $tsBadge.textContent = ticker; }
+    const $rBtn = document.getElementById('reports-scan-btn');
+    if (!$rBtn) return;
+    $rBtn.addEventListener('click', async function() {
+      if ($rBtn.disabled) return;
+      $rBtn.disabled = true; $rBtn.textContent = '⏳ Scanning…';
+      const pulse = document.getElementById('gp-pulse-rows');
+      if (pulse) pulse.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Scanning saved reports…</div>';
       try {
-        const r = await window.dgaFetch('/api/scan/ticker', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ticker}),
-        });
+        const r = await window.dgaFetch('/api/scan/reports', { method: 'POST' });
         if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
         const job = await r.json();
-
+        const badge = document.getElementById('mini-scan-badge');
         _pollScanJob(job.job_id,
           function(tk, res) {
-            _renderOneScanResult($tsResult, tk, res);
-            _tsSetStatus('', '');
-            $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
+            const done = job.tickers_done?.length || 0;
+            const total = (job.tickers || []).length;
+            $rBtn.textContent = `⏳ ${done}/${total}`;
           },
           function(jp) {
-            const ts = jp.scanned_at ? fmtDate(jp.scanned_at) : '';
-            if (ts) _tsSetStatus('Scanned ' + ts, 'var(--dim)');
+            $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
+            loadGPMarketPulse();
           },
           function(err) {
-            $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
-            _tsSetStatus('❌ ' + err, 'var(--red)');
+            $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
           }
         );
       } catch(e) {
-        $tsBtn.disabled = false; $tsBtn.textContent = '⚡ SCAN';
-        _tsSetStatus('❌ ' + e.message, 'var(--red)');
+        $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
       }
-    }
-
-    $tsBtn.addEventListener('click', runTickerScan);
-    $tsInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') runTickerScan(); });
-    $tsInput.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+    });
   })();
 
   // Check if Gamma API key is configured, update label
@@ -5208,16 +5171,22 @@
     const badge = document.getElementById('trending-count');
     if (!el) return;
     try {
-      const r = await window.dgaFetch('/api/watchlist');
-      if (!r.ok) throw new Error('watchlist ' + r.status);
-      const data = await r.json();
-      const tickers = data.tickers || [];
-      const quotes  = data.quotes  || {};
-      if (badge) badge.textContent = tickers.length ? 'LIVE' : '0';
+      // Pull tickers from today's Daily Brief (auto-runs 8am Pacific)
+      const r = await window.dgaFetch('/api/daily-brief/latest');
+      if (!r.ok) throw new Error('daily-brief ' + r.status);
+      const brief = await r.json();
+      const tickers = (brief.tickers || []).slice(0, 10);
+      if (badge) badge.textContent = tickers.length ? 'LIVE' : 'NO BRIEF';
       if (!tickers.length) {
-        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No watchlist tickers yet.</div>';
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Run Daily Brief to populate.</div>';
         return;
       }
+      // Fetch live quotes for these tickers
+      let quotes = {};
+      try {
+        const qr = await window.dgaFetch('/api/quotes?tickers=' + tickers.join(','));
+        if (qr.ok) quotes = await qr.json();
+      } catch {}
       el.innerHTML = tickers.map((tk, i) => {
         const q = quotes[tk] || {};
         return `
@@ -5225,7 +5194,7 @@
             <div class="tr-rank">${i + 1}</div>
             <div class="tr-main">
               <div class="tr-tk">${tk}</div>
-              <div class="tr-meta">Watchlist · live price</div>
+              <div class="tr-meta">Daily brief · live price</div>
             </div>
             <div class="tr-right">
               <div class="tr-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
@@ -5238,7 +5207,7 @@
           openGuruFocus(row.getAttribute('data-ticker'))));
     } catch (e) {
       console.warn('[trending]', e);
-      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load tickers.</div>';
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Run Daily Brief to populate.</div>';
     }
   }
 
