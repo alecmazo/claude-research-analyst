@@ -1342,6 +1342,16 @@
         </div>
       </section>
 
+      <!-- Archived Reports -->
+      <section class="panel" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">Archived Reports</span>
+          <span class="panel-badge" id="archived-count">—</span>
+          <button id="restore-all-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">↩ Restore All</button>
+        </header>
+        <div id="archived-list" style="padding:10px 14px;font-size:12px;color:var(--dim);">Loading…</div>
+      </section>
+
       <!-- LP User Management -->
       <section class="panel" style="grid-column:1/-1;">
         <header class="panel-head">
@@ -5127,7 +5137,8 @@
       const total = (job.tickers || []).length;
       if (badge) badge.textContent = '0/' + total;
 
-      // Poll until done — update badge with live progress
+      // Poll until done — reload Market Pulse on each new ticker (streaming)
+      let _lastDoneCount = 0;
       const iv = setInterval(async () => {
         try {
           const rp = await window.dgaFetch('/api/scan/' + job.job_id);
@@ -5135,6 +5146,11 @@
           const jp = await rp.json();
           const done = (jp.tickers_done || []).length;
           if (badge) badge.textContent = done + '/' + total;
+          // Reload Market Pulse whenever a new ticker result arrives
+          if (done > _lastDoneCount) {
+            _lastDoneCount = done;
+            loadGPMarketPulse();
+          }
           if (jp.status === 'done' || jp.status === 'failed') {
             clearInterval(iv);
             $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
@@ -5256,6 +5272,55 @@
   // RIGHT COLUMN — Market Pulse (scan results as news)
   // Auto-refreshes every 15 minutes
   // ══════════════════════════════════════════════════════════════
+  // ── Market Pulse detail modal ─────────────────────────────────────────────
+  function _openPulseDetail(ticker, res) {
+    // Remove any existing modal
+    const existing = document.getElementById('pulse-detail-modal');
+    if (existing) existing.remove();
+
+    const sent    = (res.sentiment || 'NEUTRAL').toUpperCase();
+    const sentCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
+    const md      = res.markdown || res.summary || 'No detail available.';
+    const scannedAt = res._scanned_at ? new Date(res._scanned_at).toLocaleString() : '';
+
+    // Convert markdown to simple HTML (bold, headers, lists)
+    function _mdToHtml(text) {
+      return text
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/^### (.+)$/gm, '<div style="font-size:11px;font-weight:800;color:var(--blue);letter-spacing:1px;margin:10px 0 4px;text-transform:uppercase;">$1</div>')
+        .replace(/^## (.+)$/gm,  '<div style="font-size:12px;font-weight:800;color:#1e293b;margin:12px 0 4px;">$1</div>')
+        .replace(/^# (.+)$/gm,   '<div style="font-size:13px;font-weight:800;color:#1e293b;margin:12px 0 4px;">$1</div>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g,    '<em>$1</em>')
+        .replace(/^- (.+)$/gm,   '<div style="padding:2px 0 2px 12px;border-left:2px solid var(--blue);margin:3px 0;">$1</div>')
+        .replace(/\n{2,}/g,      '<div style="height:8px;"></div>')
+        .replace(/\n/g,          ' ');
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pulse-detail-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;
+                  display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.22);overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e2e8f0;flex-shrink:0;">
+          <span style="font-size:15px;font-weight:800;color:#0f172a;">${ticker}</span>
+          <span class="news-impact ${sentCls}" style="font-size:9px;">${sent}</span>
+          ${res.price != null ? `<span style="font-size:12px;color:#475569;">$${fmtPx(res.price)}</span>` : ''}
+          ${res.pct_change != null ? `<span class="${cssClass(res.pct_change)}" style="font-size:11px;">${fmtPct(res.pct_change)}</span>` : ''}
+          ${scannedAt ? `<span style="font-size:10px;color:var(--dim);margin-left:auto;">Scanned ${scannedAt}</span>` : ''}
+          <button onclick="document.getElementById('pulse-detail-modal').remove()"
+            style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:18px;color:#94a3b8;line-height:1;padding:0 4px;">&times;</button>
+        </div>
+        <div style="overflow-y:auto;padding:16px 18px;font-size:12px;color:#334155;line-height:1.6;">
+          ${_mdToHtml(md)}
+        </div>
+      </div>`;
+    // Close on backdrop click
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
   async function loadGPMarketPulse() {
     const el = document.getElementById('gp-pulse-rows');
     const ts = document.getElementById('gp-pulse-ts');
@@ -5292,8 +5357,11 @@
           </div>`;
       }).join('');
       el.querySelectorAll('.news-row[data-ticker]').forEach(row =>
-        row.addEventListener('click', () =>
-          openGuruFocus(row.getAttribute('data-ticker'))));
+        row.addEventListener('click', () => {
+          const tk  = row.getAttribute('data-ticker');
+          const res = d.results[tk] || {};
+          _openPulseDetail(tk, res);
+        }));
     } catch (e) {
       console.warn('[gp-pulse]', e);
       if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Could not load market pulse.</div>';
@@ -5386,6 +5454,55 @@
   loadTrendingTickers();
   loadGPMarketPulse();
   loadMiniScanChips();
+
+  // ── Archived Reports (Settings tab) ───────────────────────────────────────
+  async function loadArchivedReports() {
+    const list  = document.getElementById('archived-list');
+    const badge = document.getElementById('archived-count');
+    if (!list) return;
+    try {
+      const r = await window.dgaFetch('/api/reports/archived');
+      if (!r.ok) throw new Error(r.status);
+      const rows = await r.json();
+      if (badge) badge.textContent = rows.length || '0';
+      if (!rows.length) {
+        list.innerHTML = '<span style="color:var(--dim);">No archived reports. Tickers you remove from Saved Reports appear here.</span>';
+        return;
+      }
+      list.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
+        rows.map(r => `
+          <span style="display:inline-flex;align-items:center;gap:5px;background:var(--navy-mid);
+            border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--mid);">
+            ${r.ticker}
+            ${r.rating ? `<span style="font-size:9px;color:var(--blue);">${r.rating}</span>` : ''}
+            <button data-restore="${r.ticker}" title="Restore ${r.ticker}"
+              style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;padding:0 2px;">↩</button>
+          </span>`).join('') +
+        '</div>';
+      list.querySelectorAll('[data-restore]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const tk = btn.getAttribute('data-restore');
+          await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/restore', { method: 'POST' });
+          loadArchivedReports();
+          loadReports();
+        });
+      });
+    } catch(e) {
+      if (list) list.textContent = 'Could not load archived reports.';
+    }
+  }
+
+  document.getElementById('restore-all-btn')?.addEventListener('click', async () => {
+    if (!confirm('Restore all archived reports to Saved Reports?')) return;
+    await window.dgaFetch('/api/reports/restore-all', { method: 'POST' });
+    loadArchivedReports();
+    loadReports();
+  });
+
+  // Load archived list when Settings tab is opened
+  document.querySelectorAll('[data-tab="settings"]').forEach(el => {
+    el.addEventListener('click', loadArchivedReports);
+  });
 
   setInterval(loadIndices,          60_000);   // ribbon: every 60s
   setInterval(loadWatchlist,        60_000);   // watchlist: every 60s

@@ -4384,32 +4384,42 @@ def _extract_summary_cached(md_file: Path) -> dict:
 
 @app.delete("/api/reports/{ticker}")
 def delete_report(ticker: str):
-    """Delete a saved report: removes the DB row and any local .md/.docx/.pptx files."""
-    ticker = ticker.strip().upper()
-    deleted_db = False
-    deleted_files = []
+    """Archive a saved report: marks DB row archived=TRUE, moves local files to archive folder.
 
-    # Remove from PostgreSQL
+    The report is NOT permanently deleted — it can be restored from Settings.
+    Archived tickers are excluded from list_reports() and hydration so they
+    never reappear after a Railway redeploy.
+    """
+    ticker = ticker.strip().upper()
+    archived_db = False
+    archived_files = []
+
+    # Mark archived in PostgreSQL (do NOT delete the row — needed for restore)
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("DELETE FROM analyst_reports WHERE ticker = %s", (ticker,))
-            deleted_db = True
+                cur.execute(
+                    "UPDATE analyst_reports SET archived = TRUE WHERE ticker = %s",
+                    (ticker,)
+                )
+            archived_db = True
         except Exception as _e:
-            print(f"[delete_report] DB delete failed for {ticker}: {_e}")
+            print(f"[archive_report] DB update failed for {ticker}: {_e}")
 
-    # Remove local files
-    folder = analyst.STOCKS_FOLDER
+    # Move local files to stocks/archive/ folder instead of deleting
+    folder  = analyst.STOCKS_FOLDER
+    archive = folder / "archive"
+    archive.mkdir(exist_ok=True)
     for suffix in ("_DGA_Report.md", "_DGA_Report.docx", "_DGA_Presentation.pptx"):
         p = folder / f"{ticker}{suffix}"
         if p.exists():
             try:
-                p.unlink()
-                deleted_files.append(suffix)
+                p.rename(archive / p.name)
+                archived_files.append(suffix)
             except Exception as _e:
-                print(f"[delete_report] could not delete {p.name}: {_e}")
+                print(f"[archive_report] could not move {p.name}: {_e}")
 
-    # Also remove from kv_store scan pulse so it doesn't appear in Market Pulse
+    # Remove from Market Pulse kv_store so it disappears from the pulse panel
     try:
         pulse = _kv_get("scan.pulse") or {}
         if ticker in pulse:
@@ -4418,7 +4428,94 @@ def delete_report(ticker: str):
     except Exception:
         pass
 
-    return {"ok": True, "ticker": ticker, "deleted_db": deleted_db, "deleted_files": deleted_files}
+    return {"ok": True, "ticker": ticker, "archived_db": archived_db, "archived_files": archived_files}
+
+
+@app.get("/api/reports/archived")
+def list_archived_reports():
+    """Return all tickers that have been archived (removed from Saved Reports)."""
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT ticker, generated_at, rating, price_target, upside_pct
+                    FROM analyst_reports
+                    WHERE archived = TRUE
+                    ORDER BY generated_at DESC
+                """)
+                rows = cur.fetchall()
+            return [
+                {
+                    "ticker":       r["ticker"],
+                    "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
+                    "rating":       r["rating"],
+                    "price_target": float(r["price_target"]) if r["price_target"] else None,
+                    "upside_pct":   float(r["upside_pct"])   if r["upside_pct"]   else None,
+                }
+                for r in rows
+            ]
+        except Exception as _e:
+            print(f"[archived_reports] DB query failed: {_e}")
+    return []
+
+
+@app.post("/api/reports/{ticker}/restore")
+def restore_report(ticker: str):
+    """Restore an archived report back to active Saved Reports."""
+    ticker = ticker.strip().upper()
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE analyst_reports SET archived = FALSE WHERE ticker = %s",
+                    (ticker,)
+                )
+        except Exception as _e:
+            raise HTTPException(status_code=500, detail=f"DB restore failed: {_e}")
+
+    # Move local files back from archive/ to stocks/
+    folder  = analyst.STOCKS_FOLDER
+    archive = folder / "archive"
+    for suffix in ("_DGA_Report.md", "_DGA_Report.docx", "_DGA_Presentation.pptx"):
+        p = archive / f"{ticker}{suffix}"
+        if p.exists():
+            try:
+                p.rename(folder / p.name)
+            except Exception as _e:
+                print(f"[restore_report] could not move {p.name}: {_e}")
+
+    return {"ok": True, "ticker": ticker}
+
+
+@app.post("/api/reports/restore-all")
+def restore_all_reports():
+    """Restore ALL archived reports back to active Saved Reports."""
+    restored = []
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT ticker FROM analyst_reports WHERE archived = TRUE")
+                tickers = [r[0] for r in cur.fetchall()]
+                cur.execute("UPDATE analyst_reports SET archived = FALSE WHERE archived = TRUE")
+        except Exception as _e:
+            raise HTTPException(status_code=500, detail=f"DB restore-all failed: {_e}")
+    else:
+        tickers = []
+
+    # Move all archived local files back
+    folder  = analyst.STOCKS_FOLDER
+    archive = folder / "archive"
+    for ticker in tickers:
+        for suffix in ("_DGA_Report.md", "_DGA_Report.docx", "_DGA_Presentation.pptx"):
+            p = archive / f"{ticker}{suffix}"
+            if p.exists():
+                try:
+                    p.rename(folder / p.name)
+                    restored.append(ticker)
+                except Exception:
+                    pass
+
+    return {"ok": True, "restored": list(set(restored))}
 
 
 @app.get("/api/reports")
@@ -4440,6 +4537,7 @@ def list_reports():
                     SELECT ticker, generated_at, has_docx, has_pptx,
                            rating, price_target, upside_pct, gamma_url
                     FROM analyst_reports
+                    WHERE archived IS NOT TRUE
                     ORDER BY generated_at DESC
                 """)
                 rows = cur.fetchall()
@@ -4662,6 +4760,15 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
         with _sjobs_lock:
             _sjobs[job_id]["results"][ticker] = result
             _sjobs[job_id]["tickers_done"] = list(_sjobs[job_id]["results"].keys())
+        # Stream each result immediately into scan.pulse so Market Pulse
+        # updates ticker-by-ticker without waiting for the full scan to finish.
+        try:
+            scanned_at = datetime.utcnow().isoformat()
+            pulse = _kv_get("scan.pulse") or {}
+            pulse[ticker] = dict(result, _scanned_at=scanned_at)
+            _kv_put("scan.pulse", pulse)
+        except Exception as _pe:
+            print(f"[scan] streaming kv persist failed for {ticker}: {_pe}")
 
     try:
         final = analyst.run_portfolio_scan(tickers, on_progress=on_progress, verbose=True)
@@ -4851,7 +4958,7 @@ def start_reports_scan(background_tasks: BackgroundTasks):
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("SELECT ticker FROM analyst_reports ORDER BY generated_at DESC")
+                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY generated_at DESC")
                 tickers = [row[0] for row in cur.fetchall()]
         except Exception as _e:
             print(f"[scan/reports] DB query failed: {_e}")
@@ -5721,7 +5828,7 @@ def _auto_market_pulse_worker() -> None:
             if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
                 try:
                     with _fund_conn() as conn, conn.cursor() as cur:
-                        cur.execute("SELECT ticker FROM analyst_reports ORDER BY generated_at DESC")
+                        cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY generated_at DESC")
                         tickers = [r[0] for r in cur.fetchall()]
                 except Exception as _e:
                     print(f"[pulse-scheduler] DB query failed: {_e}")
@@ -5930,8 +6037,14 @@ def _ensure_analyst_reports_table(conn) -> None:
                 rating       VARCHAR(30),
                 price_target NUMERIC,
                 upside_pct   NUMERIC,
-                gamma_url    TEXT
+                gamma_url    TEXT,
+                archived     BOOLEAN     NOT NULL DEFAULT FALSE
             )
+        """)
+        # Add archived column to existing tables that predate this migration
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE
         """)
     conn.commit()
 
@@ -6326,6 +6439,20 @@ def _hydrate_analyst_reports_to_db() -> None:
     try:
         folder = analyst.STOCKS_FOLDER
         md_files = list(folder.glob("*_DGA_Report.md"))
+        # Skip files in the archive subfolder
+        md_files = [f for f in md_files if f.parent == folder]
+        if not md_files:
+            return
+        # Skip tickers that are archived in DB
+        archived_set: set[str] = set()
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT ticker FROM analyst_reports WHERE archived = TRUE")
+                    archived_set = {r[0] for r in cur.fetchall()}
+            except Exception:
+                pass
+        md_files = [f for f in md_files if f.name.replace("_DGA_Report.md", "").upper() not in archived_set]
         if not md_files:
             return
         print(f"[analyst_reports] hydrating {len(md_files)} report(s) to DB…")
