@@ -3818,9 +3818,15 @@ def get_quote(ticker: str):
     Applies the alias map before fetching so BRKB→BRK-B etc. resolve
     correctly. The original symbol is preserved in the response.
     """
-    original = ticker.strip().upper().rstrip("*")
+    original  = ticker.strip().upper().rstrip("*")
     yahoo_sym = _resolve_ticker_alias(original)   # e.g. BRKB → BRK-B
-    snapshot = analyst.fetch_market_snapshot(yahoo_sym)
+    snapshot  = analyst.fetch_market_snapshot(yahoo_sym)
+    # If Yahoo returned no price, try Tiingo before giving up
+    if snapshot.get("price") is None:
+        t = _tiingo_single(yahoo_sym)
+        if t.get("price") is not None:
+            snapshot = {**snapshot, "price": t["price"], "pct_change": t.get("pct_change")}
+            print(f"[quote] {original}: Yahoo miss → Tiingo hit")
     return {"ticker": original, **snapshot}
 
 
@@ -4823,6 +4829,54 @@ def start_reports_scan(background_tasks: BackgroundTasks):
 _batch_quote_cache: dict = {}   # { frozenset(syms): (result_dict, ts) }
 _BATCH_QUOTE_TTL = 600          # seconds
 
+# ── Tiingo fallback price source ──────────────────────────────────────────────
+# Used when Yahoo returns no data (rate-limited or delisted warning).
+# Free tier: real-time IEX prices for US equities, up to 500 req/hr.
+# Set TIINGO_API_KEY env var in Railway to enable.
+# Register free at https://www.tiingo.com/
+def _tiingo_batch(syms: list[str]) -> dict[str, dict]:
+    """Fetch {sym: {price, pct_change}} from Tiingo IEX for the given symbols.
+
+    Returns an empty dict if TIINGO_API_KEY is not set or the request fails.
+    Tiingo uses the same ticker format as Yahoo for most US equities,
+    but prefers lowercase. Symbols are upper-cased in the response map.
+    """
+    key = os.environ.get("TIINGO_API_KEY", "").strip()
+    if not key or not syms:
+        return {}
+    try:
+        import requests as _rq
+        tickers_param = ",".join(s.lower() for s in syms)
+        resp = _rq.get(
+            "https://api.tiingo.com/iex",
+            params={"tickers": tickers_param, "token": key},
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        if not resp.ok:
+            print(f"[tiingo] HTTP {resp.status_code}: {resp.text[:120]}")
+            return {}
+        rows = resp.json()
+        out: dict[str, dict] = {}
+        for row in rows:
+            sym = (row.get("ticker") or "").upper()
+            last       = row.get("last") or row.get("tngoLast")
+            prev_close = row.get("prevClose")
+            if last is None:
+                continue
+            pct = ((last - prev_close) / prev_close * 100) if prev_close else None
+            out[sym] = {"price": float(last), "pct_change": pct}
+        return out
+    except Exception as _e:
+        print(f"[tiingo] batch failed: {_e}")
+        return {}
+
+
+def _tiingo_single(sym: str) -> dict:
+    """Fetch one ticker from Tiingo. Returns {} on miss."""
+    result = _tiingo_batch([sym])
+    return result.get(sym.upper(), {})
+
 @app.get("/api/quotes")
 def batch_quotes(tickers: str = ""):
     """Return live prices + day-change % for a comma-separated list of tickers.
@@ -4891,6 +4945,15 @@ def batch_quotes(tickers: str = ""):
     except Exception as _e:
         print(f"[batch_quotes] yf.download failed: {_e}")
         result = {s: {"price": None, "pct_change": None} for s in originals}
+
+    # Tiingo fallback — fill in any tickers Yahoo returned None for
+    missing = [orig for orig, v in result.items() if v.get("price") is None]
+    if missing:
+        tiingo_data = _tiingo_batch(missing)
+        for orig in missing:
+            if orig in tiingo_data:
+                result[orig] = tiingo_data[orig]
+                print(f"[quotes] {orig}: Yahoo miss → Tiingo hit")
 
     _batch_quote_cache[cache_key] = (result, time.time())
     return result
