@@ -135,6 +135,44 @@ _TICKER_IGNORE: dict[str, str] = {
     # Bonds: handled by _is_bond_cusip() at fetch time; listed here only as docs
 }
 
+# ── Scan exclusion list ───────────────────────────────────────────────────────
+# Tickers skipped by ALL scan endpoints (/api/scan, /api/scan/reports, single-ticker).
+# Reasons:
+#   alias    — symbol maps to a different Yahoo symbol; scanner would fail/waste time
+#   etf      — ETF with no meaningful analyst coverage
+#   preferred — preferred stock; use the common share instead
+_SCAN_EXCLUDE: dict[str, str] = {
+    # Alias mismatches — Yahoo uses a different symbol; price fetch handles this but
+    # the scan (which uses the raw ticker string) would stall or return garbage.
+    "BRKB":   "alias",   # Yahoo: BRK-B — use BRKB only for price, not scan
+    # ETFs
+    "SRLN":   "etf",
+    "BKLN":   "etf",
+    # Preferred stocks — Fannie Mae / Freddie Mac; use FNMA / FMCC commons instead
+    "FNMAP":  "preferred",
+    "FMCCS":  "preferred",
+    "FMCCN":  "preferred",
+    "FMCKI":  "preferred",
+    "FMCCM":  "preferred",
+    "FMCKM":  "preferred",
+    "FMCCJ":  "preferred",
+    # Other preferred stocks
+    "FLGPRA": "preferred",
+    "NLYPRF": "preferred",
+}
+
+def _filter_scan_tickers(tickers: list[str]) -> list[str]:
+    """Remove tickers that should not be scanned (aliases, ETFs, preferreds).
+    Also strips any trailing '*' Fidelity adds to restricted symbols."""
+    out = []
+    for t in tickers:
+        clean = t.strip().upper().rstrip("*")
+        if clean in _SCAN_EXCLUDE:
+            print(f"[scan-filter] skipping {clean} ({_SCAN_EXCLUDE[clean]})")
+            continue
+        out.append(clean)
+    return out
+
 
 def _is_bond_cusip(sym: str) -> bool:
     """Return True if sym looks like a CUSIP/bond identifier rather than an equity.
@@ -4329,6 +4367,45 @@ def _extract_summary_cached(md_file: Path) -> dict:
     return summary
 
 
+@app.delete("/api/reports/{ticker}")
+def delete_report(ticker: str):
+    """Delete a saved report: removes the DB row and any local .md/.docx/.pptx files."""
+    ticker = ticker.strip().upper()
+    deleted_db = False
+    deleted_files = []
+
+    # Remove from PostgreSQL
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM analyst_reports WHERE ticker = %s", (ticker,))
+            deleted_db = True
+        except Exception as _e:
+            print(f"[delete_report] DB delete failed for {ticker}: {_e}")
+
+    # Remove local files
+    folder = analyst.STOCKS_FOLDER
+    for suffix in ("_DGA_Report.md", "_DGA_Report.docx", "_DGA_Presentation.pptx"):
+        p = folder / f"{ticker}{suffix}"
+        if p.exists():
+            try:
+                p.unlink()
+                deleted_files.append(suffix)
+            except Exception as _e:
+                print(f"[delete_report] could not delete {p.name}: {_e}")
+
+    # Also remove from kv_store scan pulse so it doesn't appear in Market Pulse
+    try:
+        pulse = _kv_get("scan.pulse") or {}
+        if ticker in pulse:
+            pulse.pop(ticker)
+            _kv_put("scan.pulse", pulse)
+    except Exception:
+        pass
+
+    return {"ok": True, "ticker": ticker, "deleted_db": deleted_db, "deleted_files": deleted_files}
+
+
 @app.get("/api/reports")
 def list_reports():
     """Return all tickers that have saved reports.
@@ -4578,6 +4655,16 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
             _sjobs[job_id]["results"] = final["results"]
             _sjobs[job_id]["scanned_at"] = final["scanned_at"]
             _sjobs[job_id]["tickers_done"] = list(final["results"].keys())
+        # Merge new results into the persistent kv_store blob so Market Pulse
+        # retains results for tickers NOT in this scan (per-ticker persistence).
+        try:
+            existing = _kv_get("scan.pulse") or {}
+            merged = dict(existing)
+            for tk, res in final["results"].items():
+                merged[tk] = dict(res, _scanned_at=final["scanned_at"])
+            _kv_put("scan.pulse", merged)
+        except Exception as _ke:
+            print(f"[scan] kv persist failed (non-fatal): {_ke}")
     except BaseException as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         print(f"\n❌ Scan job {job_id} CRASHED:\n{tb}", flush=True)
@@ -4593,7 +4680,7 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
 @app.post("/api/scan")
 def start_scan(background_tasks: BackgroundTasks):
     """Kick off a live-search news scan for all watchlist tickers."""
-    tickers = analyst.load_watchlist()
+    tickers = _filter_scan_tickers(analyst.load_watchlist())
     if not tickers:
         raise HTTPException(status_code=422, detail="Watchlist is empty — add tickers first")
 
@@ -4616,7 +4703,25 @@ def start_scan(background_tasks: BackgroundTasks):
 
 @app.get("/api/scan/latest")
 def get_latest_scan():
-    """Return the most-recently-completed scan (persisted to disk)."""
+    """Return the merged per-ticker scan pulse (persists across deploys).
+
+    Primary source: kv_store 'scan.pulse' dict (per-ticker, survives redeploys).
+    Each ticker entry keeps its own _scanned_at so results persist until that
+    specific ticker is re-scanned.
+    Fallback: legacy scan_results.json on disk.
+    """
+    # Primary: kv_store merged pulse
+    pulse = _kv_get("scan.pulse")
+    if pulse and isinstance(pulse, dict):
+        # Find newest individual scan timestamp for display
+        timestamps = [v.get("_scanned_at") for v in pulse.values() if isinstance(v, dict) and v.get("_scanned_at")]
+        scanned_at = max(timestamps) if timestamps else None
+        return {
+            "exists": True,
+            "scanned_at": scanned_at,
+            "results": pulse,
+        }
+    # Fallback: legacy disk file
     path = analyst.SCAN_RESULTS_FILE
     if not path.exists():
         return {"exists": False}
@@ -4648,9 +4753,11 @@ class _TickerScanReq(BaseModel):
 @app.post("/api/scan/ticker")
 def start_ticker_scan(body: _TickerScanReq, background_tasks: BackgroundTasks):
     """Kick off a live-search scan for a single ticker.  Returns a scan job."""
-    ticker = (body.ticker or "").strip().upper().replace("$", "")
+    ticker = (body.ticker or "").strip().upper().replace("$", "").rstrip("*")
     if not ticker:
         raise HTTPException(status_code=422, detail="ticker is required")
+    if ticker in _SCAN_EXCLUDE:
+        raise HTTPException(status_code=422, detail=f"{ticker} is excluded from scans ({_SCAN_EXCLUDE[ticker]})")
 
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -4685,6 +4792,7 @@ def start_reports_scan(background_tasks: BackgroundTasks):
         # Filesystem fallback
         tickers = [p.name.replace("_DGA_Report.md", "")
                    for p in analyst.STOCKS_FOLDER.glob("*_DGA_Report.md")]
+    tickers = _filter_scan_tickers(tickers)
     if not tickers:
         raise HTTPException(status_code=422, detail="No saved reports to scan")
 

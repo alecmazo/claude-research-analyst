@@ -1734,7 +1734,12 @@
         return (
           '<tr data-ticker="' + rep.ticker + '">' +
           '<td>' +
-            '<span class="rep-tk">' + rep.ticker + '</span>' +
+            '<span style="display:inline-flex;align-items:center;gap:5px;">' +
+              '<span class="rep-tk">' + rep.ticker + '</span>' +
+              '<button data-rep-delete="' + rep.ticker + '" title="Remove report" ' +
+                'style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:12px;line-height:1;color:var(--dim);opacity:0.6;" ' +
+                'onclick="event.stopPropagation();">×</button>' +
+            '</span>' +
             (rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : '') +
             (rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : '') +
             '<div class="rep-date">' + dateStr + '</div>' +
@@ -1752,9 +1757,27 @@
         );
       }).join('');
 
-      // Click row → open inline report viewer
+      // Click row → open inline report viewer (ignore clicks on the × button)
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
-        tr.addEventListener('click', () => openReport(tr.getAttribute('data-ticker')));
+        tr.addEventListener('click', (e) => {
+          if (e.target.closest('[data-rep-delete]')) return;
+          openReport(tr.getAttribute('data-ticker'));
+        });
+      });
+
+      // × delete buttons
+      tbody.querySelectorAll('[data-rep-delete]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-rep-delete');
+          if (!confirm('Remove ' + tk + ' from Saved Reports?')) return;
+          try {
+            await window.dgaFetch('/api/reports/' + encodeURIComponent(tk), { method: 'DELETE' });
+            loadReports();
+          } catch(err) {
+            console.warn('[delete-report]', err);
+          }
+        });
       });
 
       // Wire per-row scan buttons
