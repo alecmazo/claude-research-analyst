@@ -1342,6 +1342,89 @@
         </div>
       </section>
 
+      <!-- Automation Schedule -->
+      <section class="panel" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">Automation Schedule</span>
+          <span class="panel-badge">Pacific Time</span>
+        </header>
+        <div style="padding:16px 14px;">
+
+          <!-- toggle + time row helper styles (scoped inline) -->
+          <style>
+            .auto-row {
+              display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+              padding: 10px 0; border-bottom:1px solid var(--panel-edge);
+            }
+            .auto-row:last-child { border-bottom:none; }
+            .auto-label {
+              flex:1; min-width:160px;
+            }
+            .auto-label strong {
+              display:block; font-size:12px; font-weight:700; color:#0f172a;
+            }
+            .auto-label span {
+              font-size:10px; color:var(--dim);
+            }
+            /* pill toggle switch */
+            .auto-toggle { position:relative; display:inline-flex; align-items:center; cursor:pointer; }
+            .auto-toggle input { opacity:0; width:0; height:0; position:absolute; }
+            .auto-slider {
+              width:38px; height:20px; background:#cbd5e1; border-radius:10px;
+              transition:background .2s; position:relative; flex-shrink:0;
+            }
+            .auto-slider::after {
+              content:''; position:absolute; top:3px; left:3px;
+              width:14px; height:14px; border-radius:50%;
+              background:#fff; transition:transform .2s;
+            }
+            .auto-toggle input:checked + .auto-slider { background:var(--blue); }
+            .auto-toggle input:checked + .auto-slider::after { transform:translateX(18px); }
+            .auto-time-input {
+              width:80px; padding:5px 8px; border:1px solid var(--panel-edge);
+              border-radius:6px; font-size:12px; color:#0f172a;
+              background:#fff; cursor:pointer;
+            }
+            .auto-time-input:focus { border-color:var(--blue); outline:none; }
+            .auto-next { font-size:10px; color:var(--dim); min-width:90px; }
+          </style>
+
+          <!-- Daily Brief row -->
+          <div class="auto-row">
+            <div class="auto-label">
+              <strong>📰 Daily Brief</strong>
+              <span>Morning market summary — populates Today's Movers</span>
+            </div>
+            <label class="auto-toggle" title="Enable / disable">
+              <input type="checkbox" id="auto-brief-enabled" checked>
+              <span class="auto-slider"></span>
+            </label>
+            <input type="time" id="auto-brief-time" class="auto-time-input" value="08:00">
+            <span class="auto-next" id="auto-brief-next">—</span>
+          </div>
+
+          <!-- Market Pulse row -->
+          <div class="auto-row">
+            <div class="auto-label">
+              <strong>⚡ Market Pulse Scan</strong>
+              <span>Scans all saved report tickers — merges into Market Pulse</span>
+            </div>
+            <label class="auto-toggle" title="Enable / disable">
+              <input type="checkbox" id="auto-pulse-enabled" checked>
+              <span class="auto-slider"></span>
+            </label>
+            <input type="time" id="auto-pulse-time" class="auto-time-input" value="08:15">
+            <span class="auto-next" id="auto-pulse-next">—</span>
+          </div>
+
+          <!-- Save button -->
+          <div style="margin-top:14px; display:flex; align-items:center; gap:12px;">
+            <button id="auto-save-btn" class="tab-btn">Save Schedule</button>
+            <span id="auto-save-msg" style="font-size:11px; color:var(--dim);"></span>
+          </div>
+        </div>
+      </section>
+
       <!-- Archived Reports -->
       <section class="panel" style="grid-column:1/-1;">
         <header class="panel-head">
@@ -4637,7 +4720,94 @@
   // ══════════════════════════════════════════════════════════════
   // SETTINGS TAB
   // ══════════════════════════════════════════════════════════════
-  async function loadSettingsTab() { loadLPRoster(); loadBuildInfo(); }
+  async function loadSettingsTab() {
+    loadLPRoster();
+    loadBuildInfo();
+    loadAutomationSettings();
+  }
+
+  // ── Automation Schedule ───────────────────────────────────────────────────
+  async function loadAutomationSettings() {
+    try {
+      const r = await window.dgaFetch('/api/automation/settings');
+      if (!r.ok) return;
+      const s = await r.json();
+
+      // Daily Brief
+      const briefCfg = s.daily_brief || {};
+      const $briefOn  = document.getElementById('auto-brief-enabled');
+      const $briefT   = document.getElementById('auto-brief-time');
+      const $briefNxt = document.getElementById('auto-brief-next');
+      if ($briefOn) $briefOn.checked = briefCfg.enabled !== false;
+      if ($briefT)  $briefT.value = _fmtTime(briefCfg.hour ?? 8, briefCfg.minute ?? 0);
+      if ($briefNxt) $briefNxt.textContent = _fmtNext(briefCfg);
+
+      // Market Pulse
+      const pulseCfg = s.market_pulse || {};
+      const $pulseOn  = document.getElementById('auto-pulse-enabled');
+      const $pulseT   = document.getElementById('auto-pulse-time');
+      const $pulseNxt = document.getElementById('auto-pulse-next');
+      if ($pulseOn) $pulseOn.checked = pulseCfg.enabled !== false;
+      if ($pulseT)  $pulseT.value = _fmtTime(pulseCfg.hour ?? 8, pulseCfg.minute ?? 15);
+      if ($pulseNxt) $pulseNxt.textContent = _fmtNext(pulseCfg);
+    } catch(e) { console.warn('[automation]', e); }
+  }
+
+  function _fmtTime(h, m) {
+    return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  }
+
+  function _fmtNext(cfg) {
+    if (!cfg.enabled) return '🔴 Off';
+    const secs = cfg.next_run_secs;
+    if (secs == null) return '—';
+    const h = Math.floor(secs / 3600);
+    const min = Math.floor((secs % 3600) / 60);
+    if (h === 0) return `▶ in ${min}m`;
+    return `▶ in ${h}h ${min}m`;
+  }
+
+  document.getElementById('auto-save-btn')?.addEventListener('click', async () => {
+    const $btn = document.getElementById('auto-save-btn');
+    const $msg = document.getElementById('auto-save-msg');
+    $btn.disabled = true; $btn.textContent = 'Saving…';
+
+    const briefTime  = (document.getElementById('auto-brief-time')?.value  || '08:00').split(':');
+    const pulseTime  = (document.getElementById('auto-pulse-time')?.value  || '08:15').split(':');
+
+    const body = {
+      daily_brief: {
+        enabled: document.getElementById('auto-brief-enabled')?.checked ?? true,
+        hour:    parseInt(briefTime[0], 10),
+        minute:  parseInt(briefTime[1], 10),
+      },
+      market_pulse: {
+        enabled: document.getElementById('auto-pulse-enabled')?.checked ?? true,
+        hour:    parseInt(pulseTime[0], 10),
+        minute:  parseInt(pulseTime[1], 10),
+      },
+    };
+
+    try {
+      const r = await window.dgaFetch('/api/automation/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const s = await r.json();
+      // Refresh next-run labels from server response
+      const $briefNxt = document.getElementById('auto-brief-next');
+      const $pulseNxt = document.getElementById('auto-pulse-next');
+      if ($briefNxt) $briefNxt.textContent = _fmtNext(s.daily_brief  || {});
+      if ($pulseNxt) $pulseNxt.textContent = _fmtNext(s.market_pulse || {});
+      if ($msg) { $msg.textContent = '✅ Saved'; setTimeout(() => { if($msg) $msg.textContent=''; }, 3000); }
+    } catch(e) {
+      if ($msg) $msg.textContent = '❌ ' + e.message;
+    } finally {
+      $btn.disabled = false; $btn.textContent = 'Save Schedule';
+    }
+  });
 
   // Toggle Add LP form
   document.getElementById('lp-add-toggle-btn')?.addEventListener('click', () => {

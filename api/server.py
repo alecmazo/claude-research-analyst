@@ -5773,23 +5773,85 @@ threading.Thread(target=_hydrate_all, daemon=True, name="hydrate-all").start()
 # Start the daily snapshot worker (runs once per day after market close)
 analyst._start_tracker_snapshot_worker()
 
-# ── Auto-schedule daily brief at 08:00 Pacific every morning ────────────────
+# ── Automation settings (stored in kv_store) ─────────────────────────────────
+_DEFAULT_AUTOMATION: dict = {
+    "daily_brief":  {"enabled": True,  "hour": 8, "minute": 0},
+    "market_pulse": {"enabled": True,  "hour": 8, "minute": 15},
+}
+
+def _get_automation_settings() -> dict:
+    saved = _kv_get("automation.settings") or {}
+    result = {}
+    for job, defaults in _DEFAULT_AUTOMATION.items():
+        result[job] = {**defaults, **(saved.get(job) or {})}
+    return result
+
+def _secs_until(hour: int, minute: int, pacific_offset) -> float:
+    """Seconds until the next occurrence of HH:MM Pacific."""
+    from datetime import timezone, timedelta
+    now = datetime.now(timezone(pacific_offset))
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+@app.get("/api/automation/settings")
+def get_automation_settings_endpoint():
+    from datetime import timezone, timedelta
+    PACIFIC_OFFSET = timedelta(hours=-7)
+    settings = _get_automation_settings()
+    now_pac = datetime.now(timezone(PACIFIC_OFFSET))
+    # Annotate each job with seconds_until_next so the UI can show "next in Xh"
+    for job, cfg in settings.items():
+        if cfg["enabled"]:
+            secs = _secs_until(cfg["hour"], cfg["minute"], PACIFIC_OFFSET)
+            cfg["next_run_secs"] = round(secs)
+        else:
+            cfg["next_run_secs"] = None
+    return settings
+
+@app.post("/api/automation/settings")
+async def save_automation_settings_endpoint(request: Request):
+    body = await request.json()
+    current = _get_automation_settings()
+    for job in ("daily_brief", "market_pulse"):
+        if job in body and isinstance(body[job], dict):
+            patch = body[job]
+            if "enabled" in patch:
+                current[job]["enabled"] = bool(patch["enabled"])
+            if "hour" in patch:
+                current[job]["hour"] = max(0, min(23, int(patch["hour"])))
+            if "minute" in patch:
+                current[job]["minute"] = max(0, min(59, int(patch["minute"])))
+    _kv_put("automation.settings", current)
+    print(f"[automation] settings updated: {current}")
+    return current
+
+
+# ── Auto-schedule daily brief every morning (time from automation.settings) ───
 def _auto_daily_brief_worker() -> None:
-    """Daemon thread: fires run_daily_brief() every day at 08:00 US/Pacific."""
+    """Daemon thread: fires run_daily_brief() daily at the configured Pacific time."""
     import time as _time
     from datetime import timezone, timedelta
     PACIFIC_OFFSET = timedelta(hours=-7)  # PDT; -8 in PST (close enough for scheduling)
     while True:
         try:
-            now_pacific = datetime.now(timezone(PACIFIC_OFFSET))
-            # Seconds until next 08:00 Pacific
-            target = now_pacific.replace(hour=8, minute=0, second=0, microsecond=0)
-            if now_pacific >= target:
-                target = target + timedelta(days=1)
-            wait_secs = (target - now_pacific).total_seconds()
-            print(f"[daily-brief-scheduler] next run at 08:00 Pacific — sleeping {wait_secs/3600:.1f}h")
+            cfg = _get_automation_settings().get("daily_brief", _DEFAULT_AUTOMATION["daily_brief"])
+            if not cfg.get("enabled", True):
+                # Disabled — sleep 1h then re-check in case user re-enables
+                print("[daily-brief-scheduler] disabled — sleeping 1h")
+                _time.sleep(3600)
+                continue
+            h, m = cfg["hour"], cfg["minute"]
+            wait_secs = _secs_until(h, m, PACIFIC_OFFSET)
+            print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
             _time.sleep(wait_secs)
-            print("[daily-brief-scheduler] 08:00 Pacific — running daily brief…")
+            # Re-check enabled after waking (user may have disabled while sleeping)
+            cfg2 = _get_automation_settings().get("daily_brief", {})
+            if not cfg2.get("enabled", True):
+                print("[daily-brief-scheduler] disabled after wake — skipping")
+                continue
+            print(f"[daily-brief-scheduler] {h:02d}:{m:02d} Pacific — running daily brief…")
             analyst.run_daily_brief()
             # Persist to kv_store so the UI picks it up
             try:
@@ -5807,22 +5869,28 @@ def _auto_daily_brief_worker() -> None:
 
 threading.Thread(target=_auto_daily_brief_worker, daemon=True, name="daily-brief-scheduler").start()
 
-# ── Auto-scan all saved reports into Market Pulse at 08:15 Pacific ───────────
+# ── Auto-scan all saved reports into Market Pulse (time from automation.settings)
 def _auto_market_pulse_worker() -> None:
-    """Daemon: scans all saved-report tickers at 08:15 Pacific, merging into scan.pulse."""
+    """Daemon: scans all saved-report tickers at the configured Pacific time."""
     import time as _time
     from datetime import timezone, timedelta
     PACIFIC_OFFSET = timedelta(hours=-7)
     while True:
         try:
-            now_pac = datetime.now(timezone(PACIFIC_OFFSET))
-            target  = now_pac.replace(hour=8, minute=15, second=0, microsecond=0)
-            if now_pac >= target:
-                target = target + timedelta(days=1)
-            wait_secs = (target - now_pac).total_seconds()
-            print(f"[pulse-scheduler] next run at 08:15 Pacific — sleeping {wait_secs/3600:.1f}h")
+            cfg = _get_automation_settings().get("market_pulse", _DEFAULT_AUTOMATION["market_pulse"])
+            if not cfg.get("enabled", True):
+                print("[pulse-scheduler] disabled — sleeping 1h")
+                _time.sleep(3600)
+                continue
+            h, m = cfg["hour"], cfg["minute"]
+            wait_secs = _secs_until(h, m, PACIFIC_OFFSET)
+            print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
             _time.sleep(wait_secs)
-            print("[pulse-scheduler] 08:15 Pacific — running market pulse scan on saved reports…")
+            cfg2 = _get_automation_settings().get("market_pulse", {})
+            if not cfg2.get("enabled", True):
+                print("[pulse-scheduler] disabled after wake — skipping")
+                continue
+            print(f"[pulse-scheduler] {h:02d}:{m:02d} Pacific — running market pulse scan on saved reports…")
             # Collect tickers from DB
             tickers = []
             if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
