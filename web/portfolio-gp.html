@@ -5415,20 +5415,12 @@
     if (m) m.style.display = 'none';
     document.body.style.overflow = '';
   }
-  // EVENT DELEGATION — modal HTML is below this script in the document,
-  // so direct getElementById calls return null at script time. Listen on
-  // document so we catch clicks no matter when the modal renders.
+  // Fund detail close + backdrop (report modal handles its own events inline)
   document.addEventListener('click', (e) => {
-    if (e.target.id === 'rm-close' || e.target.closest('#rm-close')) {
-      closeReportModal();
-      return;
-    }
     if (e.target.id === 'fdm-close' || e.target.closest('#fdm-close')) {
       closeFundDetailModal();
       return;
     }
-    // Backdrop clicks
-    if (e.target.id === 'report-modal') closeReportModal();
     if (e.target.id === 'fund-detail-modal') closeFundDetailModal();
   });
   document.addEventListener('keydown', (e) => {
@@ -5450,44 +5442,66 @@
     }).catch(e => alert('Download failed: ' + e.message));
   }
 
+  function closeReportModal() {
+    const existing = document.getElementById('report-modal');
+    if (existing) existing.remove();
+    document.body.style.overflow = '';
+  }
+
   async function openReport(ticker) {
     if (!ticker) return;
-    const modal    = document.getElementById('report-modal');
-    const tkEl     = document.getElementById('rm-ticker');
-    const dateEl   = document.getElementById('rm-date');
-    const body     = document.getElementById('rm-body');
-    const gammaBtn = document.getElementById('rm-gamma-btn');
-    const docxBtn  = document.getElementById('rm-docx-btn');
-    const pptxBtn  = document.getElementById('rm-pptx-btn');
-    if (!modal) { openGuruFocus(ticker); return; }
 
-    // Show modal with loading state
-    tkEl.textContent  = ticker;
-    dateEl.textContent = '';
-    body.innerHTML    = '<div class="tab-loading"><span class="spin">↻</span> Loading report…</div>';
-    gammaBtn.style.display = 'none';
-    docxBtn.style.display  = 'none';
-    pptxBtn.style.display  = 'none';
-    // Clear stale onclick handlers
-    docxBtn.onclick = null;
-    pptxBtn.onclick = null;
-    modal.style.display    = 'flex';
+    // Remove any existing report overlay (re-open clean)
+    closeReportModal();
+
+    // ── Build overlay + dialog dynamically (same pattern as _openPulseDetail) ──
+    const maxBtnId = 'rm-max-btn-' + Date.now();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'report-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;';
+
+    overlay.innerHTML = `
+      <div class="dga-dialog">
+        <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
+          <span id="rm-ticker" style="font-size:15px;font-weight:800;color:#0f172a;letter-spacing:0.8px;">${ticker}</span>
+          <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
+               style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
+            <button id="rm-docx-btn"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ DOCX</button>
+            <button id="rm-pptx-btn"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
+            <button id="${maxBtnId}" class="dga-max-btn" title="Expand / restore">⤢</button>
+            <button id="rm-close"
+              style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);color:#475569;border-radius:5px;padding:3px 12px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
+          </div>
+        </div>
+        <div id="rm-body" class="md-body dga-dialog-body" style="padding:18px 22px;">
+          <div class="tab-loading"><span class="spin">↻</span> Loading report…</div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
     document.body.style.overflow = 'hidden';
-    // Init drag + maximize once (guard with flag)
-    if (!modal._dgaResizable) {
-      modal._dgaResizable = true;
-      const dlg    = modal.querySelector('.dga-dialog');
-      const handle = modal.querySelector('.dga-dialog-handle');
-      const maxBtn = modal.querySelector('#rm-max-btn');
-      if (dlg && handle) _initDragModal(dlg, handle);
-      if (dlg && maxBtn) maxBtn.addEventListener('click', () => _toggleMaxDialog(dlg, maxBtn));
-    }
-    // Reset position to center each open
-    const dlg = modal.querySelector('.dga-dialog');
-    if (dlg) {
-      dlg.classList.remove('dga-maximized');
-      dlg.style.cssText = ''; // clear any leftover drag position
-    }
+
+    // Wire close + backdrop click
+    overlay.querySelector('#rm-close').addEventListener('click', closeReportModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeReportModal(); });
+
+    // Wire drag + maximize
+    const dlg    = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    const maxBtn = overlay.querySelector('#' + maxBtnId);
+    if (dlg && handle) _initDragModal(dlg, handle);
+    if (dlg && maxBtn) maxBtn.addEventListener('click', () => _toggleMaxDialog(dlg, maxBtn));
+
+    const dateEl   = overlay.querySelector('#rm-date');
+    const body     = overlay.querySelector('#rm-body');
+    const gammaBtn = overlay.querySelector('#rm-gamma-btn');
+    const docxBtn  = overlay.querySelector('#rm-docx-btn');
+    const pptxBtn  = overlay.querySelector('#rm-pptx-btn');
 
     try {
       const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker));
@@ -6161,30 +6175,6 @@
 })();
 </script>
 
-<!-- ── Report Viewer Modal ─────────────────────────────────── -->
-<!-- Report viewer — draggable + resizable dialog -->
-<div id="report-modal" style="display:none;position:fixed;inset:0;background:rgba(0,10,20,0.72);z-index:200;align-items:center;justify-content:center;">
-  <div class="dga-dialog">
-    <!-- Handle: drag this bar to reposition -->
-    <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
-      <span id="rm-ticker" style="font-size:15px;font-weight:800;color:#0f172a;letter-spacing:0.8px;"></span>
-      <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
-      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
-           style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
-        <button id="rm-docx-btn"
-           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ DOCX</button>
-        <button id="rm-pptx-btn"
-           style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
-        <!-- Maximize / restore -->
-        <button id="rm-max-btn" class="dga-max-btn" title="Expand / restore">⤢</button>
-        <button id="rm-close"
-          style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);color:#475569;border-radius:5px;padding:3px 12px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
-      </div>
-    </div>
-    <div id="rm-body" class="md-body dga-dialog-body" style="padding:18px 22px;"></div>
-  </div>
-</div>
 
 </body>
 </html>
