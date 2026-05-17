@@ -638,6 +638,37 @@
   /* Card body — position rows */
   .gp-acct-body { overflow: hidden; }
 
+  /* ── GP positions Save View toolbar ───────────────────────────── */
+  #gp-pos-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+    padding: 6px 12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 9px;
+  }
+  #gp-pos-toolbar-hint {
+    flex: 1;
+    font-size: 10px; color: rgba(255,255,255,0.30);
+    letter-spacing: 0.3px;
+  }
+  #gp-pos-saved-flash {
+    font-size: 10px; font-weight: 700; color: #4ade80;
+    letter-spacing: 0.5px; opacity: 0;
+    transition: opacity .2s;
+  }
+  #gp-pos-saved-flash.show { opacity: 1; }
+  .gp-pos-save-btn {
+    background: transparent;
+    border: 1px solid rgba(91,184,212,0.40);
+    color: #5BB8D4;
+    padding: 4px 13px; border-radius: 6px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+    text-transform: uppercase; cursor: pointer;
+    transition: background .13s, border-color .13s;
+  }
+  .gp-pos-save-btn:hover { background: rgba(91,184,212,0.12); border-color: rgba(91,184,212,0.7); }
+
   /* Individual position rows */
   .gp-wl-row {
     display: flex; align-items: center; gap: 10px;
@@ -1037,6 +1068,13 @@
           <div id="gp-wl-ts" class="gp-wl-ts">updating…</div>
         </div>
       </div>
+    </div>
+
+    <!-- Save View toolbar -->
+    <div id="gp-pos-toolbar">
+      <span id="gp-pos-toolbar-hint">Drag cards to reorder · click header to collapse</span>
+      <span id="gp-pos-saved-flash">✓ View saved</span>
+      <button class="gp-pos-save-btn" id="gp-pos-save-btn">💾 Save View</button>
     </div>
 
     <!-- Per-account cards — draggable to reorder, click header to collapse -->
@@ -2688,20 +2726,39 @@
       }
     });
 
-    // Build a card per account — preserve any existing collapse state
+    // Load saved config from localStorage
+    let _gpSavedCfg = null;
+    try {
+      const raw = localStorage.getItem('gp_positions_view_config_v1');
+      if (raw) _gpSavedCfg = JSON.parse(raw);
+    } catch (_) {}
+    const _gpSavedOrder     = (_gpSavedCfg && _gpSavedCfg.order)      ? _gpSavedCfg.order      : null;
+    const _gpSavedCollapsed = (_gpSavedCfg && _gpSavedCfg.collapsed)   ? _gpSavedCfg.collapsed  : {};
+
+    // Apply saved order: saved groups first (filtered to known), then new ones appended
+    const knownGroups = new Set(groupOrder);
+    const orderedGroups = _gpSavedOrder
+      ? [ ...(_gpSavedOrder.filter(g => knownGroups.has(g))),
+          ...(groupOrder.filter(g => !_gpSavedOrder.includes(g))) ]
+      : groupOrder;
+
+    // Build a card per account — merge: saved collapse state takes priority over in-session state
     const prevCollapsed = {};
     grid.querySelectorAll('.gp-acct-card[data-acct]').forEach(function (c) {
       prevCollapsed[c.dataset.acct] = c.classList.contains('collapsed');
     });
 
     grid.innerHTML = '';
-    groupOrder.forEach(function (grp) {
+    orderedGroups.forEach(function (grp) {
       const g = groups[grp];
       const nav    = g.navSum > 0 ? fmtUSD(g.navSum) : '—';
       const chgAbs = g.dayValid ? g.daySum : null;
       const chgCls = chgAbs == null ? '' : chgAbs >= 0 ? 'up' : 'dn';
       const chgTxt = chgAbs == null ? '' : (chgAbs >= 0 ? '+' : '') + fmtUSD(chgAbs);
-      const wasCollapsed = prevCollapsed[grp] || false;
+      // Saved config takes priority; fall back to in-session state; default open
+      const wasCollapsed = grp in _gpSavedCollapsed
+        ? _gpSavedCollapsed[grp]
+        : (prevCollapsed[grp] || false);
 
       // ── Card header ──
       const card = document.createElement('div');
@@ -2715,7 +2772,13 @@
         + '<span class="gp-acct-hdr-nav">' + nav + '</span>'
         + (chgTxt ? '<span class="gp-acct-hdr-chg ' + chgCls + '">' + chgTxt + '</span>' : '')
         + '<span class="gp-acct-chevron">▾</span>';
-      hdr.addEventListener('click', function () { card.classList.toggle('collapsed'); });
+      hdr.addEventListener('click', function () {
+        card.classList.toggle('collapsed');
+        // Track live collapse state so Save View captures it
+        if (window._gpPosCollapsedMap) {
+          window._gpPosCollapsedMap[grp] = card.classList.contains('collapsed');
+        }
+      });
       card.appendChild(hdr);
 
       // ── Card body — position rows ──
@@ -2784,12 +2847,44 @@
       grid.appendChild(card);
     });
 
+    // ── Initialize live collapse map from rendered cards ──────────
+    window._gpPosCollapsedMap = {};
+    grid.querySelectorAll('.gp-acct-card[data-acct]').forEach(function (c) {
+      window._gpPosCollapsedMap[c.dataset.acct] = c.classList.contains('collapsed');
+    });
+
+    // ── Save View helper ──────────────────────────────────────────
+    function _gpGetCurrentOrder() {
+      return Array.from(grid.querySelectorAll('.gp-acct-card[data-acct]'))
+        .map(function (c) { return c.dataset.acct; });
+    }
+    function _gpSaveView() {
+      var cfg = {
+        order:     _gpGetCurrentOrder(),
+        collapsed: Object.assign({}, window._gpPosCollapsedMap),
+      };
+      try { localStorage.setItem('gp_positions_view_config_v1', JSON.stringify(cfg)); } catch (_) {}
+      var flash = document.getElementById('gp-pos-saved-flash');
+      if (flash) {
+        flash.classList.add('show');
+        setTimeout(function () { flash.classList.remove('show'); }, 2000);
+      }
+    }
+    // Wire Save View button
+    var saveBtn = document.getElementById('gp-pos-save-btn');
+    if (saveBtn) {
+      // Re-wire (remove old listener by cloning node, then add fresh one)
+      var newSaveBtn = saveBtn.cloneNode(true);
+      saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+      newSaveBtn.addEventListener('click', _gpSaveView);
+    }
+
     // ── Drag-to-reorder between cards (snap to grid) ───────────
-    _initCardDrag(grid);
+    _initCardDrag(grid, _gpSaveView);
   }
 
   // HTML5 drag-and-drop reorder — cards snap to grid positions
-  function _initCardDrag(grid) {
+  function _initCardDrag(grid, onDrop) {
     var dragSrc = null;
     grid.querySelectorAll('.gp-acct-card').forEach(function (card) {
       card.addEventListener('dragstart', function (e) {
@@ -2825,6 +2920,18 @@
           grid.insertBefore(dragSrc, card.nextSibling);
         } else {
           grid.insertBefore(dragSrc, card);
+        }
+        // Flash the Save View button to hint user should save
+        var saveBtn = document.getElementById('gp-pos-save-btn');
+        if (saveBtn) {
+          saveBtn.style.borderColor = '#5BB8D4';
+          saveBtn.style.color = '#fff';
+          saveBtn.style.background = 'rgba(91,184,212,0.18)';
+          setTimeout(function () {
+            saveBtn.style.borderColor = '';
+            saveBtn.style.color = '';
+            saveBtn.style.background = '';
+          }, 1800);
         }
       });
     });
