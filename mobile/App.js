@@ -63,7 +63,7 @@ function FundStack() {
   );
 }
 
-// ── GP navigator: full 7-tab access ─────────────────────────────────────────
+// ── GP navigator: Positions first, no Tracker tab ────────────────────────────
 function GPTabs() {
   return (
     <Tab.Navigator
@@ -74,14 +74,13 @@ function GPTabs() {
       <Tab.Screen name="Research"     component={HomeStack} />
       <Tab.Screen name="Intelligence" component={IntelligenceStack} />
       <Tab.Screen name="Scan"         component={ScanScreen} />
-      <Tab.Screen name="Portfolio"    component={TrackerStack} />
       <Tab.Screen name="Fund"         component={FundStack} />
       <Tab.Screen name="Settings"     component={SettingsScreen} />
     </Tab.Navigator>
   );
 }
 
-// ── LP navigator: scoped to live positions + performance + read-only research ──
+// ── LP navigator: Positions first, no Research tab ───────────────────────────
 function LPTabs({ onLogout }) {
   return (
     <Tab.Navigator
@@ -92,7 +91,6 @@ function LPTabs({ onLogout }) {
       <Tab.Screen name="Performance">
         {() => <LPPerformanceScreen onLogout={onLogout} />}
       </Tab.Screen>
-      <Tab.Screen name="Research" component={HomeStack} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );
