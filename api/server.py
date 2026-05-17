@@ -10996,6 +10996,1052 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
 
 
 # ---------------------------------------------------------------------------
+# Quarterly LP Report System
+# ---------------------------------------------------------------------------
+
+def _parse_report_scenarios(ticker: str) -> dict:
+    """Parse a DGA Research Report markdown file and extract scenario/risk data.
+
+    Returns a dict with keys:
+        rating, price_target, implied_return, summary,
+        bull, base, bear, expected_value_price, top_risk
+    where bull/base/bear are dicts: {prob, price, upside, assumption}.
+    Any field that fails to parse is returned as None rather than raising.
+    """
+    result: dict = {
+        "rating": None,
+        "price_target": None,
+        "implied_return": None,
+        "summary": None,
+        "bull": None,
+        "base": None,
+        "bear": None,
+        "expected_value_price": None,
+        "top_risk": None,
+    }
+    try:
+        md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+        if not md_path.exists():
+            return result
+        text = md_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+    except Exception:
+        return result
+
+    # ── Rating ───────────────────────────────────────────────────────────────
+    try:
+        _rating_pat = re.compile(
+            r'\*\*Rating:\*\*\s*(BUY|HOLD|SELL)', re.IGNORECASE)
+        for ln in lines[:20]:
+            m = _rating_pat.search(ln)
+            if m:
+                result["rating"] = m.group(1).upper()
+                break
+    except Exception:
+        pass
+
+    # ── 12-Month Price Target ─────────────────────────────────────────────────
+    try:
+        _pt_pat = re.compile(
+            r'12[- ]?Month Price Target[:\*\s]*\$?([\d,]+(?:\.\d+)?)', re.IGNORECASE)
+        for ln in lines[:20]:
+            m = _pt_pat.search(ln)
+            if m:
+                result["price_target"] = float(m.group(1).replace(",", ""))
+                break
+    except Exception:
+        pass
+
+    # ── Implied Return ────────────────────────────────────────────────────────
+    try:
+        _ir_pat = re.compile(
+            r'Implied Return[:\*\s]*([+-]?\d+(?:\.\d+)?%)', re.IGNORECASE)
+        for ln in lines[:20]:
+            m = _ir_pat.search(ln)
+            if m:
+                result["implied_return"] = m.group(1)
+                break
+    except Exception:
+        pass
+
+    # ── 30-Second Pitch (first 2 sentences) ───────────────────────────────────
+    try:
+        pitch_idx = None
+        for i, ln in enumerate(lines):
+            if "30-Second Pitch" in ln or "30 Second Pitch" in ln:
+                pitch_idx = i
+                break
+        if pitch_idx is not None:
+            # Collect non-empty lines after the header
+            pitch_lines = []
+            for ln in lines[pitch_idx + 1:pitch_idx + 8]:
+                stripped = ln.strip().strip('"').strip('"').strip('"')
+                if stripped:
+                    pitch_lines.append(stripped)
+                if len(pitch_lines) >= 2:
+                    break
+            if pitch_lines:
+                combined = " ".join(pitch_lines)
+                # Split into sentences and take first 2
+                sentence_pat = re.compile(r'(?<=[.!?])\s+')
+                sentences = sentence_pat.split(combined)
+                result["summary"] = " ".join(sentences[:2]).strip()
+    except Exception:
+        pass
+
+    # ── Scenario Table (SECTION 8) ─────────────────────────────────────────────
+    try:
+        sec8_idx = None
+        for i, ln in enumerate(lines):
+            if "SECTION 8" in ln and "RISK" in ln.upper():
+                sec8_idx = i
+                break
+
+        if sec8_idx is not None:
+            # Scan forward for the table rows
+            _scenario_block = lines[sec8_idx:sec8_idx + 30]
+            _bull = _base = _bear = _ev = None
+            for ln in _scenario_block:
+                # Skip separator/header lines
+                if ln.startswith("|---") or "Scenario" in ln:
+                    continue
+                _parse_scenario_row = lambda lnx, label: None
+                cells = [c.strip() for c in ln.split("|") if c.strip()]
+                if len(cells) < 4:
+                    continue
+                label_cell = cells[0].strip("*").strip()
+                if label_cell.lower().startswith("bull"):
+                    _bull = {
+                        "prob":       cells[1] if len(cells) > 1 else None,
+                        "price":      cells[2] if len(cells) > 2 else None,
+                        "upside":     cells[3] if len(cells) > 3 else None,
+                        "assumption": cells[4] if len(cells) > 4 else None,
+                    }
+                elif label_cell.lower().startswith("base"):
+                    _base = {
+                        "prob":       cells[1] if len(cells) > 1 else None,
+                        "price":      cells[2] if len(cells) > 2 else None,
+                        "upside":     cells[3] if len(cells) > 3 else None,
+                        "assumption": cells[4] if len(cells) > 4 else None,
+                    }
+                elif label_cell.lower().startswith("bear"):
+                    _bear = {
+                        "prob":       cells[1] if len(cells) > 1 else None,
+                        "price":      cells[2] if len(cells) > 2 else None,
+                        "upside":     cells[3] if len(cells) > 3 else None,
+                        "assumption": cells[4] if len(cells) > 4 else None,
+                    }
+                elif "expected value" in label_cell.lower():
+                    # Expected value row: | **Expected Value** | — | **$309** | **+16.2%** | ...
+                    try:
+                        ev_price_str = cells[2].strip("*").replace("$", "").replace(",", "")
+                        result["expected_value_price"] = float(ev_price_str)
+                    except Exception:
+                        pass
+            result["bull"]  = _bull
+            result["base"]  = _base
+            result["bear"]  = _bear
+    except Exception:
+        pass
+
+    # ── Top Risk (SECTION 9, first data row of risk table) ────────────────────
+    try:
+        sec9_idx = None
+        for i, ln in enumerate(lines):
+            if "SECTION 9" in ln:
+                sec9_idx = i
+                break
+        if sec9_idx is not None:
+            header_seen = False
+            for ln in lines[sec9_idx:sec9_idx + 30]:
+                if "|---" in ln:
+                    header_seen = True
+                    continue
+                if not header_seen:
+                    continue
+                cells = [c.strip() for c in ln.split("|") if c.strip()]
+                if len(cells) >= 2:
+                    # Risk table columns: # | Risk | Probability | Impact | ...
+                    # First non-separator data row — take "Risk" column (index 1)
+                    result["top_risk"] = cells[1]
+                    break
+    except Exception:
+        pass
+
+    return result
+
+
+def _get_spy_benchmark(quarter: str) -> dict:
+    """Fetch SPY YTD and QTD returns. Returns {"label", "ytd_pct", "qtd_pct"}.
+    All values are None if yfinance is unavailable or fails.
+    """
+    out = {"label": "S&P 500", "ytd_pct": None, "qtd_pct": None}
+    if not _YFINANCE_OK:
+        return out
+    try:
+        now = datetime.utcnow()
+        year = now.year
+
+        # Determine quarter start from the 'quarter' param (e.g. "Q2 2026")
+        _q_match = re.match(r'Q(\d)\s+(\d{4})', (quarter or "").strip())
+        if _q_match:
+            q_num   = int(_q_match.group(1))
+            q_year  = int(_q_match.group(2))
+            q_start_month = {1: 1, 2: 4, 3: 7, 4: 10}.get(q_num, 1)
+        else:
+            # Fall back to current quarter
+            q_num         = (now.month - 1) // 3 + 1
+            q_year        = now.year
+            q_start_month = {1: 1, 2: 4, 3: 7, 4: 10}.get(q_num, 1)
+
+        import datetime as _dt
+        jan1      = _dt.date(year, 1, 1)
+        q_start   = _dt.date(q_year, q_start_month, 1)
+
+        spy = yf.Ticker("SPY")
+
+        def _pct_change(start_date: _dt.date, end_date: _dt.date) -> float | None:
+            # Pull a few extra days back to catch market holidays at start
+            fetch_start = (start_date - _dt.timedelta(days=5)).isoformat()
+            fetch_end   = end_date.isoformat()
+            hist = spy.history(start=fetch_start, end=fetch_end)
+            if hist is None or hist.empty:
+                return None
+            prices_series = hist["Close"]
+            # First close ON or AFTER start_date
+            filtered = prices_series[prices_series.index.date >= start_date]
+            if filtered.empty:
+                return None
+            first_price = float(filtered.iloc[0])
+            last_price  = float(prices_series.iloc[-1])
+            if first_price == 0:
+                return None
+            return round((last_price - first_price) / first_price * 100, 2)
+
+        today = now.date() if hasattr(now, 'date') else _dt.date.today()
+        out["ytd_pct"] = _pct_change(jan1, today)
+        out["qtd_pct"] = _pct_change(q_start, today)
+    except Exception as _e:
+        print(f"[quarterly-report] benchmark fetch failed: {_e}")
+    return out
+
+
+def _current_quarter_label() -> str:
+    """Return e.g. 'Q2 2026' for the current UTC date."""
+    now = datetime.utcnow()
+    q   = (now.month - 1) // 3 + 1
+    return f"Q{q} {now.year}"
+
+
+def _quarter_end_date(quarter: str) -> str:
+    """Return the last day of the quarter, e.g. 'Q2 2026' → '2026-06-30'."""
+    m = re.match(r'Q(\d)\s+(\d{4})', quarter.strip())
+    if not m:
+        return datetime.utcnow().strftime("%Y-%m-%d")
+    q, yr = int(m.group(1)), int(m.group(2))
+    end = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}.get(q, "12-31")
+    return f"{yr}-{end}"
+
+
+@app.get("/api/v2/gp/fund/{fund_id}/quarterly-report-data")
+async def gp_quarterly_report_data(
+    request: Request,
+    fund_id: str,
+    quarter: str = None,
+):
+    """GP-only: assemble all data needed to render a quarterly LP report."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+
+    quarter = (quarter or "").strip() or _current_quarter_label()
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # ── Fund metadata ─────────────────────────────────────────────────
+            fid = _resolve_fund_id(cur, fund_id)
+            cur.execute("""
+                SELECT id, name, short_name, fund_type,
+                       inception_date, mgmt_fee_pct, carry_pct, hurdle_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund_row = cur.fetchone()
+            if not fund_row:
+                raise HTTPException(404, f"Fund {fund_id!r} not found")
+
+            # Latest NAV snapshot
+            nav_val   = None
+            ytd_pct   = None
+            try:
+                cur.execute("""
+                    SELECT nav, ytd_pct FROM managed_account_ytd_cache
+                     WHERE fund_id = %s
+                """, (fid,))
+                cache_row = cur.fetchone()
+                if cache_row:
+                    nav_val = float(cache_row["nav"] or 0) or None
+                    ytd_pct = float(cache_row["ytd_pct"] or 0) or None
+            except Exception:
+                pass
+            if nav_val is None:
+                try:
+                    cur.execute("""
+                        SELECT net_nav FROM nav_snapshots
+                         WHERE fund_id = %s ORDER BY as_of_date DESC LIMIT 1
+                    """, (fid,))
+                    nrow = cur.fetchone()
+                    if nrow:
+                        nav_val = float(nrow["net_nav"] or 0) or None
+                except Exception:
+                    pass
+
+            fund_out = {
+                "id":             str(fund_row["id"]),
+                "name":           fund_row["name"],
+                "short_name":     fund_row["short_name"],
+                "fund_type":      fund_row["fund_type"],
+                "inception_date": str(fund_row["inception_date"])[:10] if fund_row["inception_date"] else None,
+                "mgmt_fee_pct":   float(fund_row["mgmt_fee_pct"] or 0),
+                "carry_pct":      float(fund_row["carry_pct"] or 0),
+                "hurdle_pct":     float(fund_row["hurdle_pct"] or 0),
+                "nav":            nav_val,
+                "ytd_pct":        ytd_pct,
+            }
+
+            # ── Positions (mirrors fund_positions logic) ───────────────────────
+            cur.execute("""
+                SELECT
+                    s.symbol, s.name,
+                    SUM(tl.quantity)                                  AS total_qty,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)
+                        / NULLIF(SUM(tl.quantity), 0)                 AS avg_cost,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)         AS total_cost
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.id, s.symbol, s.name
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, (fid,))
+            rows = cur.fetchall()
+
+            symbols  = [r["symbol"] for r in rows if r["symbol"]]
+            prices   = _fetch_prices(symbols) if symbols else {}
+            total_mkt = sum(
+                float(r["total_qty"]) * prices[r["symbol"]]
+                for r in rows
+                if r["symbol"] and prices.get(r["symbol"])
+            )
+
+            positions = []
+            for r in rows:
+                sym      = r["symbol"]
+                qty      = float(r["total_qty"])
+                avg_cost = float(r["avg_cost"] or 0)
+                tot_cost = float(r["total_cost"] or 0)
+                last_p   = prices.get(sym)
+                mkt_val  = round(qty * last_p, 2) if last_p else None
+                unrlzd   = round(mkt_val - tot_cost, 2) if mkt_val is not None else None
+                unrlzd_pct = (
+                    round((mkt_val - tot_cost) / tot_cost * 100, 2)
+                    if (mkt_val is not None and tot_cost)
+                    else None
+                )
+                mkt_wt   = (
+                    round(mkt_val / total_mkt * 100, 2)
+                    if (mkt_val and total_mkt)
+                    else None
+                )
+                research = _parse_report_scenarios(sym)
+                positions.append({
+                    "symbol":               sym,
+                    "name":                 r["name"],
+                    "total_qty":            qty,
+                    "avg_cost":             avg_cost,
+                    "total_cost":           tot_cost,
+                    "last_price":           round(last_p, 4) if last_p else None,
+                    "market_value":         mkt_val,
+                    "unrealized_gain":      unrlzd,
+                    "unrealized_gain_pct":  unrlzd_pct,
+                    "market_weight_pct":    mkt_wt,
+                    "research":             research,
+                })
+
+            # ── Portfolio Expected Value upside ────────────────────────────────
+            ev_weighted_sum = 0.0
+            ev_weight_total = 0.0
+            for pos in positions:
+                ev_price = (pos["research"] or {}).get("expected_value_price")
+                last_p   = pos["last_price"]
+                wt       = pos["market_weight_pct"]
+                if ev_price and last_p and wt and last_p > 0:
+                    upside = (ev_price - last_p) / last_p * 100
+                    ev_weighted_sum  += upside * wt
+                    ev_weight_total  += wt
+            portfolio_ev_upside = (
+                round(ev_weighted_sum / ev_weight_total, 2)
+                if ev_weight_total > 0
+                else None
+            )
+
+            # ── LP list from auth_v2 overlay ───────────────────────────────────
+            lps_out = []
+            try:
+                all_users = auth_v2_mod.list_users()
+                for u in all_users:
+                    memberships = u.get("fund_memberships") or {}
+                    # fund_memberships keys are fund names or fund_ids
+                    # Check by fund id string match
+                    fund_match = any(
+                        str(k) == str(fid) or str(k) == str(fund_row["id"])
+                        or str(k).upper() == str(fund_row.get("short_name", "")).upper()
+                        or str(k) == str(fund_row.get("name", ""))
+                        for k in memberships.keys()
+                    )
+                    if fund_match:
+                        lps_out.append({
+                            "lp_id": u.get("lp_id") or u.get("id"),
+                            "name":  u.get("name"),
+                            "email": u.get("email"),
+                        })
+            except Exception as _le:
+                print(f"[quarterly-report] list_users failed: {_le}")
+
+    finally:
+        conn.close()
+
+    # ── Benchmark (outside DB transaction) ────────────────────────────────────
+    benchmark = _get_spy_benchmark(quarter)
+
+    return {
+        "fund":                              fund_out,
+        "quarter":                           quarter,
+        "as_of_date":                        _quarter_end_date(quarter),
+        "benchmark":                         benchmark,
+        "positions":                         positions,
+        "portfolio_expected_value_upside_pct": portfolio_ev_upside,
+        "lps":                               lps_out,
+    }
+
+
+def _render_quarterly_report_html(
+    data: dict,
+    gp_letter: str,
+    lp_name: str,
+    lp_nav: float | None,
+) -> str:
+    """Render a complete standalone HTML quarterly LP report.
+
+    Designed for both email (inline CSS, table layout) and web browser.
+    Max width 700px, centered. Navy (#0A1628) / blue (#5BB8D4) brand colors.
+    """
+    fund   = data.get("fund", {})
+    quarter = data.get("quarter", "")
+    as_of  = data.get("as_of_date", "")
+    bench  = data.get("benchmark", {})
+    positions = data.get("positions", [])
+    ev_upside = data.get("portfolio_expected_value_upside_pct")
+
+    display_nav = lp_nav if lp_nav is not None else fund.get("nav")
+    ytd_pct     = fund.get("ytd_pct")
+    spy_ytd     = bench.get("ytd_pct")
+    spy_qtd     = bench.get("qtd_pct")
+    mgmt_fee_pct = float(fund.get("mgmt_fee_pct") or 0.02)
+    carry_pct    = float(fund.get("carry_pct") or 0.25)
+    hurdle_pct   = float(fund.get("hurdle_pct") or 0.08)
+
+    def _fmt_money(v, decimals=0):
+        if v is None:
+            return "—"
+        return f"${v:,.{decimals}f}"
+
+    def _fmt_pct(v, plus=True):
+        if v is None:
+            return "—"
+        sign = "+" if (plus and v >= 0) else ""
+        return f"{sign}{v:.2f}%"
+
+    def _color_pct(v):
+        if v is None:
+            return "#555"
+        return "#1a7a4a" if v >= 0 else "#c0392b"
+
+    def _rating_color(r):
+        return {"BUY": "#1a7a4a", "HOLD": "#c07a00", "SELL": "#c0392b"}.get(
+            (r or "").upper(), "#555")
+
+    # ── Fee box ───────────────────────────────────────────────────────────────
+    annual_mgmt_fee = None
+    if display_nav:
+        annual_mgmt_fee = display_nav * mgmt_fee_pct
+    hurdle_exceeded = (ytd_pct is not None and ytd_pct > hurdle_pct * 100)
+    carry_note = (
+        f"Carry accruing at {carry_pct*100:.0f}%"
+        if hurdle_exceeded
+        else "Below hurdle — no carry accruing"
+    )
+
+    # ── GP Letter paragraphs ──────────────────────────────────────────────────
+    letter_html = "".join(
+        f"<p style='margin:0 0 12px 0;line-height:1.65;'>{para.strip()}</p>"
+        for para in re.split(r"\n\n+", (gp_letter or "").strip())
+        if para.strip()
+    )
+
+    # ── Holdings table rows ───────────────────────────────────────────────────
+    holdings_rows = ""
+    for pos in positions:
+        sym    = pos.get("symbol", "")
+        name   = pos.get("name", "")
+        wt     = pos.get("market_weight_pct")
+        avg    = pos.get("avg_cost")
+        cur_p  = pos.get("last_price")
+        unrlzd = pos.get("unrealized_gain_pct")
+        res    = pos.get("research") or {}
+        rating = res.get("rating")
+        pt     = res.get("price_target")
+        ir     = res.get("implied_return")
+
+        unrlzd_color = _color_pct(unrlzd)
+        rating_color = _rating_color(rating)
+
+        holdings_rows += f"""
+        <tr style='border-bottom:1px solid #e8ecf0;'>
+          <td style='padding:8px 10px;font-weight:600;color:#0A1628;'>{sym}</td>
+          <td style='padding:8px 10px;font-size:12px;color:#444;'>{(name or '')[:30]}</td>
+          <td style='padding:8px 10px;text-align:right;'>{_fmt_pct(wt, plus=False) if wt is not None else '—'}</td>
+          <td style='padding:8px 10px;text-align:right;'>{_fmt_money(avg, 2) if avg else '—'}</td>
+          <td style='padding:8px 10px;text-align:right;'>{_fmt_money(cur_p, 2) if cur_p else '—'}</td>
+          <td style='padding:8px 10px;text-align:right;color:{unrlzd_color};font-weight:600;'>{_fmt_pct(unrlzd) if unrlzd is not None else '—'}</td>
+          <td style='padding:8px 10px;text-align:center;'>
+            <span style='background:{rating_color};color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:700;'>{rating or '—'}</span>
+          </td>
+          <td style='padding:8px 10px;text-align:right;'>{_fmt_money(pt, 0) if pt else '—'}</td>
+          <td style='padding:8px 10px;text-align:right;color:{_rating_color(rating) if rating == "BUY" else "#555"};'>{ir or '—'}</td>
+        </tr>"""
+
+    # ── Position spotlight cards ──────────────────────────────────────────────
+    spotlight_cards = ""
+    top_positions = sorted(
+        [p for p in positions if p.get("research") and p["research"].get("summary")],
+        key=lambda x: x.get("market_weight_pct") or 0,
+        reverse=True,
+    )[:8]
+
+    for pos in top_positions:
+        sym  = pos.get("symbol", "")
+        name = pos.get("name", sym)
+        res  = pos.get("research") or {}
+        bull = res.get("bull") or {}
+        base = res.get("base") or {}
+        bear = res.get("bear") or {}
+        top_risk = res.get("top_risk") or "—"
+
+        def _scenario_row(label, d, bg):
+            if not d:
+                return ""
+            return (
+                f"<tr style='background:{bg};'>"
+                f"<td style='padding:5px 8px;font-weight:600;font-size:12px;'>{label}</td>"
+                f"<td style='padding:5px 8px;text-align:center;font-size:12px;'>{d.get('prob','—')}</td>"
+                f"<td style='padding:5px 8px;text-align:right;font-size:12px;'>{d.get('price','—')}</td>"
+                f"<td style='padding:5px 8px;text-align:right;font-size:12px;'>{d.get('upside','—')}</td>"
+                f"<td style='padding:5px 8px;font-size:11px;color:#555;'>{(d.get('assumption') or '')[:60]}</td>"
+                f"</tr>"
+            )
+
+        scenario_table = f"""
+        <table width='100%' cellpadding='0' cellspacing='0' style='border-collapse:collapse;margin-top:8px;border:1px solid #e0e6ed;border-radius:4px;overflow:hidden;'>
+          <thead>
+            <tr style='background:#0A1628;color:#fff;'>
+              <th style='padding:5px 8px;text-align:left;font-size:11px;'>Scenario</th>
+              <th style='padding:5px 8px;text-align:center;font-size:11px;'>Prob</th>
+              <th style='padding:5px 8px;text-align:right;font-size:11px;'>Target</th>
+              <th style='padding:5px 8px;text-align:right;font-size:11px;'>Upside</th>
+              <th style='padding:5px 8px;text-align:left;font-size:11px;'>Key Assumption</th>
+            </tr>
+          </thead>
+          <tbody>
+            {_scenario_row('Bull', bull, '#f0faf5')}
+            {_scenario_row('Base', base, '#fff')}
+            {_scenario_row('Bear', bear, '#fff8f8')}
+          </tbody>
+        </table>"""
+
+        rating       = res.get("rating") or "—"
+        rating_color = _rating_color(rating)
+        pt_str       = _fmt_money(res.get("price_target"), 0) if res.get("price_target") else "—"
+        ir_str       = res.get("implied_return") or "—"
+
+        spotlight_cards += f"""
+        <table width='100%' cellpadding='0' cellspacing='0'
+               style='margin-bottom:16px;border:1px solid #d8e4ed;border-radius:6px;overflow:hidden;'>
+          <tr style='background:#f4f8fb;'>
+            <td style='padding:12px 16px;'>
+              <table width='100%' cellpadding='0' cellspacing='0'>
+                <tr>
+                  <td>
+                    <span style='font-size:15px;font-weight:700;color:#0A1628;'>{sym}</span>
+                    <span style='font-size:12px;color:#666;margin-left:8px;'>{(name or '')[:40]}</span>
+                  </td>
+                  <td style='text-align:right;'>
+                    <span style='background:{rating_color};color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;'>{rating}</span>
+                    <span style='margin-left:8px;font-size:12px;color:#333;'>PT {pt_str}</span>
+                    <span style='margin-left:6px;font-size:12px;color:{rating_color};font-weight:600;'>{ir_str}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style='padding:12px 16px;'>
+              <p style='margin:0 0 10px 0;font-size:13px;line-height:1.55;color:#333;'>{res.get('summary') or ''}</p>
+              {scenario_table}
+              <p style='margin:10px 0 0 0;font-size:12px;color:#777;'>
+                <strong>Top Risk:</strong> {top_risk}
+              </p>
+            </td>
+          </tr>
+        </table>"""
+
+    # ── Scorecard metric boxes ────────────────────────────────────────────────
+    def _metric_box(label, value, sub=None, color="#0A1628"):
+        sub_html = f"<div style='font-size:11px;color:#aac;margin-top:3px;'>{sub}</div>" if sub else ""
+        return f"""
+        <td style='padding:0 8px 0 0;width:25%;'>
+          <table width='100%' cellpadding='0' cellspacing='0'
+                 style='background:#132040;border-radius:6px;text-align:center;padding:0;'>
+            <tr><td style='padding:14px 8px;'>
+              <div style='font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#7ab0cc;margin-bottom:6px;'>{label}</div>
+              <div style='font-size:22px;font-weight:700;color:#fff;'>{value}</div>
+              {sub_html}
+            </td></tr>
+          </table>
+        </td>"""
+
+    spy_ytd_str = f"vs S&P {_fmt_pct(spy_ytd)}" if spy_ytd is not None else ""
+    ev_str      = _fmt_pct(ev_upside) if ev_upside is not None else "—"
+
+    scorecard_html = f"""
+    <table width='100%' cellpadding='0' cellspacing='0' style='margin-bottom:24px;'>
+      <tr>
+        {_metric_box("Portfolio Value",    _fmt_money(display_nav))}
+        {_metric_box("YTD Return",         _fmt_pct(ytd_pct),       spy_ytd_str)}
+        {_metric_box("QTD Return",         _fmt_pct(spy_qtd),       "S&amp;P 500 QTD")}
+        {_metric_box("EV Upside",          ev_str,                  "Weighted avg EV")}
+      </tr>
+    </table>"""
+
+    # ── Fee summary ───────────────────────────────────────────────────────────
+    fee_html = f"""
+    <table width='100%' cellpadding='0' cellspacing='0'
+           style='background:#f8f9fb;border:1px solid #dde4ec;border-radius:6px;margin-bottom:24px;'>
+      <tr>
+        <td style='padding:16px 20px;'>
+          <div style='font-size:13px;font-weight:700;color:#0A1628;margin-bottom:10px;'>Fee Summary</div>
+          <table width='100%' cellpadding='0' cellspacing='0' style='font-size:13px;'>
+            <tr>
+              <td style='padding:4px 0;color:#555;'>Management Fee (annualized)</td>
+              <td style='text-align:right;color:#0A1628;font-weight:600;'>
+                {mgmt_fee_pct*100:.1f}% ≈ {_fmt_money(annual_mgmt_fee)}
+              </td>
+            </tr>
+            <tr>
+              <td style='padding:4px 0;color:#555;'>Hurdle Rate</td>
+              <td style='text-align:right;color:#0A1628;font-weight:600;'>{hurdle_pct*100:.1f}%</td>
+            </tr>
+            <tr>
+              <td style='padding:4px 0;color:#555;'>Carry</td>
+              <td style='text-align:right;font-weight:600;color:{"#1a7a4a" if hurdle_exceeded else "#c07a00"};'>{carry_note}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>"""
+
+    # ── EV summary box ────────────────────────────────────────────────────────
+    ev_coverage = sum(
+        1 for p in positions
+        if (p.get("research") or {}).get("expected_value_price")
+    )
+    ev_summary_html = f"""
+    <table width='100%' cellpadding='0' cellspacing='0'
+           style='background:#eaf4fb;border:1px solid #b0d8ec;border-radius:6px;margin-bottom:24px;'>
+      <tr>
+        <td style='padding:16px 20px;'>
+          <div style='font-size:13px;font-weight:700;color:#0A1628;margin-bottom:6px;'>
+            Portfolio Expected Value Analysis
+          </div>
+          <div style='font-size:13px;color:#333;line-height:1.55;'>
+            Weighted average upside to analyst Expected Value (probability-weighted bull/base/bear):
+            <strong style='color:{"#1a7a4a" if (ev_upside or 0) >= 0 else "#c0392b"};'>{ev_str}</strong>
+            across <strong>{ev_coverage}</strong> position{'' if ev_coverage == 1 else 's'} with research coverage
+            (out of {len(positions)} total positions).
+          </div>
+        </td>
+      </tr>
+    </table>"""
+
+    # ── Full HTML document ────────────────────────────────────────────────────
+    fund_name  = fund.get("name", "DGA Capital Fund")
+    today_str  = datetime.utcnow().strftime("%B %d, %Y")
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{fund_name} — {quarter} Investor Report</title>
+</head>
+<body style="margin:0;padding:0;background:#f0f3f7;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f3f7;padding:24px 0;">
+<tr><td align="center">
+<table width="700" cellpadding="0" cellspacing="0" style="max-width:700px;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+
+  <!-- HEADER -->
+  <tr style="background:#0A1628;">
+    <td style="padding:24px 28px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td>
+            <img src="/branding/dga_logo_small.png" alt="DGA Capital" height="36"
+                 style="display:block;margin-bottom:10px;"
+                 onerror="this.style.display='none'">
+            <div style="font-size:18px;font-weight:700;color:#fff;">{fund_name}</div>
+            <div style="font-size:13px;color:#5BB8D4;margin-top:2px;">{quarter} Investor Report</div>
+          </td>
+          <td style="text-align:right;vertical-align:top;">
+            <div style="display:inline-block;background:#c0392b;color:#fff;font-size:10px;
+                        font-weight:800;letter-spacing:1.5px;padding:4px 9px;border-radius:3px;
+                        text-transform:uppercase;">CONFIDENTIAL</div>
+            <div style="font-size:12px;color:#7ab0cc;margin-top:10px;">Prepared for:</div>
+            <div style="font-size:14px;color:#fff;font-weight:600;">{lp_name or 'Investor'}</div>
+            <div style="font-size:12px;color:#7ab0cc;margin-top:4px;">{today_str}</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- BLUE ACCENT STRIPE -->
+  <tr><td style="height:4px;background:linear-gradient(90deg,#5BB8D4,#0A1628);"></td></tr>
+
+  <!-- BODY -->
+  <tr>
+    <td style="padding:28px;">
+
+      <!-- Performance Scorecard -->
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                  color:#5BB8D4;margin-bottom:12px;">Performance Scorecard</div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="background:#0A1628;border-radius:8px;padding:16px;margin-bottom:28px;">
+        <tr><td style="padding:16px;">
+          {scorecard_html}
+        </td></tr>
+      </table>
+
+      <!-- GP Letter -->
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                  color:#5BB8D4;margin-bottom:12px;">Letter from DGA Capital Management</div>
+      <div style="font-size:14px;color:#222;line-height:1.7;margin-bottom:8px;">
+        Dear {lp_name or 'Investor'},
+      </div>
+      <div style="font-size:14px;color:#333;margin-bottom:4px;">
+        {letter_html}
+      </div>
+      <div style="font-size:14px;color:#333;margin-bottom:28px;font-style:italic;">
+        — DGA Capital Management
+      </div>
+
+      <!-- Holdings Table -->
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                  color:#5BB8D4;margin-bottom:12px;">Portfolio Holdings</div>
+      <div style="overflow-x:auto;margin-bottom:28px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse;font-size:13px;min-width:600px;">
+          <thead>
+            <tr style="background:#0A1628;color:#fff;">
+              <th style="padding:9px 10px;text-align:left;">Ticker</th>
+              <th style="padding:9px 10px;text-align:left;">Company</th>
+              <th style="padding:9px 10px;text-align:right;">Weight</th>
+              <th style="padding:9px 10px;text-align:right;">Avg Cost</th>
+              <th style="padding:9px 10px;text-align:right;">Current</th>
+              <th style="padding:9px 10px;text-align:right;">Unrlzd Gain</th>
+              <th style="padding:9px 10px;text-align:center;">Rating</th>
+              <th style="padding:9px 10px;text-align:right;">12M Target</th>
+              <th style="padding:9px 10px;text-align:right;">Upside</th>
+            </tr>
+          </thead>
+          <tbody>
+            {holdings_rows}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Portfolio EV Summary -->
+      {ev_summary_html}
+
+      <!-- Position Spotlights -->
+      {'<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#5BB8D4;margin-bottom:14px;">Position Spotlights</div>' + spotlight_cards if spotlight_cards else ''}
+
+      <!-- Fee Summary -->
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                  color:#5BB8D4;margin-bottom:12px;">Fee Summary</div>
+      {fee_html}
+
+      <!-- Disclaimer -->
+      <div style="font-size:11px;color:#999;line-height:1.6;border-top:1px solid #e8ecf0;
+                  padding-top:16px;margin-top:8px;">
+        <strong>Important Disclosures:</strong>
+        This report is prepared solely for the named investor and is CONFIDENTIAL. It is based on
+        information believed to be reliable but not guaranteed. Past performance is not indicative
+        of future results. This report does not constitute investment advice, a solicitation, or an
+        offer to buy or sell any security. Portfolio holdings, valuations, and returns are as of the
+        date indicated and are subject to change without notice. DGA Capital Management, LP is a
+        registered investment adviser. Please refer to the fund's Limited Partnership Agreement and
+        related offering documents for complete terms and risk disclosures.
+        Report generated {today_str} UTC.
+      </div>
+
+    </td>
+  </tr>
+
+</table>
+</td></tr>
+</table>
+
+</body>
+</html>"""
+
+    return html
+
+
+class QuarterlyReportSendRequest(BaseModel):
+    fund_id:         str
+    quarter:         str
+    gp_letter:       str
+    lp_ids:          list
+    subject_override: str | None = None
+
+
+@app.post("/api/v2/gp/quarterly-report/send")
+async def gp_quarterly_report_send(
+    request: Request,
+    body: QuarterlyReportSendRequest,
+):
+    """GP-only: render and email the quarterly LP report to selected LPs."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+
+    gp_email = claims.get("email", "gp@dgacapital.com")
+
+    # ── Fetch report data ─────────────────────────────────────────────────────
+    # We call the data function directly (reuse its logic) rather than an
+    # internal HTTP call.
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, body.fund_id)
+            cur.execute("""
+                SELECT id, name, short_name, fund_type,
+                       inception_date, mgmt_fee_pct, carry_pct, hurdle_pct
+                  FROM funds WHERE id = %s
+            """, (fid,))
+            fund_row = cur.fetchone()
+            if not fund_row:
+                raise HTTPException(404, f"Fund {body.fund_id!r} not found")
+    finally:
+        conn.close()
+
+    # Reuse the data endpoint to get a full data dict
+    # We call the underlying helpers directly to avoid HTTP overhead.
+    class _FakeRequest:
+        state = type("S", (), {"auth_claims": claims})()
+
+    # Build data dict inline (same as gp_quarterly_report_data)
+    conn2 = _fund_conn()
+    try:
+        with conn2.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, body.fund_id)
+            nav_val = ytd_pct = None
+            try:
+                cur.execute(
+                    "SELECT nav, ytd_pct FROM managed_account_ytd_cache WHERE fund_id=%s",
+                    (fid,))
+                cr = cur.fetchone()
+                if cr:
+                    nav_val = float(cr["nav"] or 0) or None
+                    ytd_pct = float(cr["ytd_pct"] or 0) or None
+            except Exception:
+                pass
+            if nav_val is None:
+                try:
+                    cur.execute(
+                        "SELECT net_nav FROM nav_snapshots WHERE fund_id=%s ORDER BY as_of_date DESC LIMIT 1",
+                        (fid,))
+                    nr = cur.fetchone()
+                    if nr:
+                        nav_val = float(nr["net_nav"] or 0) or None
+                except Exception:
+                    pass
+
+            fund_out = {
+                "id":             str(fund_row["id"]),
+                "name":           fund_row["name"],
+                "short_name":     fund_row["short_name"],
+                "fund_type":      fund_row["fund_type"],
+                "inception_date": str(fund_row["inception_date"])[:10] if fund_row["inception_date"] else None,
+                "mgmt_fee_pct":   float(fund_row["mgmt_fee_pct"] or 0),
+                "carry_pct":      float(fund_row["carry_pct"] or 0),
+                "hurdle_pct":     float(fund_row["hurdle_pct"] or 0),
+                "nav":            nav_val,
+                "ytd_pct":        ytd_pct,
+            }
+
+            cur.execute("""
+                SELECT s.symbol, s.name,
+                    SUM(tl.quantity)                                      AS total_qty,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)
+                        / NULLIF(SUM(tl.quantity), 0)                     AS avg_cost,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)             AS total_cost
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                 GROUP BY s.id, s.symbol, s.name
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, (fid,))
+            rows = cur.fetchall()
+            symbols = [r["symbol"] for r in rows if r["symbol"]]
+            prices  = _fetch_prices(symbols) if symbols else {}
+            total_mkt = sum(
+                float(r["total_qty"]) * prices[r["symbol"]]
+                for r in rows
+                if r["symbol"] and prices.get(r["symbol"])
+            )
+            positions = []
+            for r in rows:
+                sym = r["symbol"]; qty = float(r["total_qty"])
+                avg = float(r["avg_cost"] or 0); cost = float(r["total_cost"] or 0)
+                lp  = prices.get(sym)
+                mv  = round(qty * lp, 2) if lp else None
+                un  = round(mv - cost, 2) if mv is not None else None
+                up  = round((mv - cost) / cost * 100, 2) if (mv and cost) else None
+                wt  = round(mv / total_mkt * 100, 2) if (mv and total_mkt) else None
+                positions.append({
+                    "symbol": sym, "name": r["name"], "total_qty": qty,
+                    "avg_cost": avg, "total_cost": cost,
+                    "last_price": round(lp, 4) if lp else None,
+                    "market_value": mv, "unrealized_gain": un,
+                    "unrealized_gain_pct": up, "market_weight_pct": wt,
+                    "research": _parse_report_scenarios(sym),
+                })
+
+            ev_ws = ev_wt = 0.0
+            for pos in positions:
+                ev_p = (pos["research"] or {}).get("expected_value_price")
+                lp   = pos["last_price"]; wt = pos["market_weight_pct"]
+                if ev_p and lp and wt and lp > 0:
+                    ev_ws += (ev_p - lp) / lp * 100 * wt; ev_wt += wt
+            portfolio_ev_upside = round(ev_ws / ev_wt, 2) if ev_wt > 0 else None
+
+            # LP info from auth_v2
+            all_users = []
+            try:
+                all_users = auth_v2_mod.list_users()
+            except Exception:
+                pass
+            lp_lookup: dict = {}
+            for u in all_users:
+                uid = u.get("lp_id") or u.get("id")
+                if uid:
+                    lp_lookup[str(uid)] = u
+
+    finally:
+        conn2.close()
+
+    benchmark = _get_spy_benchmark(body.quarter)
+    data = {
+        "fund":                              fund_out,
+        "quarter":                           body.quarter,
+        "as_of_date":                        _quarter_end_date(body.quarter),
+        "benchmark":                         benchmark,
+        "positions":                         positions,
+        "portfolio_expected_value_upside_pct": portfolio_ev_upside,
+    }
+
+    fund_name = fund_out.get("name", "DGA Capital Fund")
+    subject   = (
+        body.subject_override
+        or f"DGA Capital — {body.quarter} Investor Report: {fund_name}"
+    )
+
+    # ── Send to each LP ───────────────────────────────────────────────────────
+    sent_count = 0
+    failed     = []
+    errors: dict = {}
+
+    for lp_id in body.lp_ids:
+        lp_user = lp_lookup.get(str(lp_id))
+        if not lp_user:
+            failed.append(lp_id)
+            errors[lp_id] = "LP not found in auth_v2"
+            continue
+
+        lp_name  = lp_user.get("name") or "Investor"
+        lp_email = lp_user.get("email")
+        if not lp_email:
+            failed.append(lp_id)
+            errors[lp_id] = "LP has no email address"
+            continue
+
+        # Attempt to resolve LP NAV from fund_memberships
+        lp_nav = None
+        try:
+            memberships = lp_user.get("fund_memberships") or {}
+            for k, v in memberships.items():
+                if (str(k) == str(fid)
+                        or str(k) == fund_out.get("short_name", "")
+                        or str(k) == fund_out.get("name", "")):
+                    if isinstance(v, dict):
+                        stake = v.get("stake_pct") or v.get("commitment_pct")
+                        if stake and fund_out.get("nav"):
+                            lp_nav = float(stake) * float(fund_out["nav"])
+                    break
+        except Exception:
+            pass
+
+        try:
+            html_body = _render_quarterly_report_html(
+                data, body.gp_letter, lp_name, lp_nav)
+            result = _send_simple_email(lp_email, subject, html_body)
+            if result.get("ok"):
+                sent_count += 1
+            else:
+                failed.append(lp_id)
+                errors[lp_id] = result.get("error", "send failed")
+        except Exception as e:
+            failed.append(lp_id)
+            errors[lp_id] = str(e)
+
+    # ── Audit log ─────────────────────────────────────────────────────────────
+    _audit(
+        action="quarterly_report_sent",
+        user=gp_email,
+        ip="",
+        ok=(sent_count > 0),
+        detail=f"{sent_count} LPs for {body.fund_id} {body.quarter}",
+    )
+
+    return {
+        "sent":   sent_count,
+        "failed": failed,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
 

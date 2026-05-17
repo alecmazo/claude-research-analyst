@@ -490,6 +490,7 @@
     <span class="topbar-link active" data-tab="performance">Performance</span>
     <span class="topbar-link" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="documents">Documents</span>
+    <span class="topbar-link" data-tab="lp-reports" id="nav-lp-reports-link">Reports</span>
     <span class="topbar-link" data-tab="account" id="nav-account-link" style="display:none;">⚙ Account</span>
     <span class="status-dot" title="API online"></span>
   </nav>
@@ -630,6 +631,44 @@
 
 
 <!-- ══════════════════════════════════════════════════════════════ -->
+<!-- LP REPORTS TAB                                                 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="tab-lp-reports" class="tab-panel">
+  <div class="lp-tab-shell">
+
+    <!-- heading card -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Quarterly Reports</span>
+        <span class="card-badge" id="lp-rpt-badge" style="display:none;"></span>
+      </div>
+
+      <!-- Loading state -->
+      <div id="lp-rpt-loading" style="padding:18px 0;text-align:center;display:none;">
+        <div style="font-size:11px;color:var(--mid);">Loading your portfolio overview…</div>
+      </div>
+
+      <!-- Placeholder before first load -->
+      <div id="lp-rpt-placeholder">
+        <div style="padding:32px 0 20px;text-align:center;">
+          <div style="font-size:44px;margin-bottom:14px;">📊</div>
+          <div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:10px;">Quarterly Investor Reports</div>
+          <div style="font-size:12px;color:var(--mid);line-height:1.7;max-width:500px;margin:0 auto;">
+            Your quarterly reports from DGA Capital will appear here. Reports are delivered each quarter covering your portfolio performance, holdings analysis, and GP commentary.<br><br>
+            Each report is personalized to your account and includes detailed position-level analysis, scenario projections, and a letter from your GP.
+          </div>
+        </div>
+      </div>
+
+      <!-- Dynamic content: per-fund snapshot cards -->
+      <div id="lp-rpt-content" style="display:none;"></div>
+    </div>
+
+  </div>
+</div><!-- #tab-lp-reports -->
+
+
+<!-- ══════════════════════════════════════════════════════════════ -->
 <!-- ACCOUNT TAB                                                    -->
 <!-- ══════════════════════════════════════════════════════════════ -->
 <div id="tab-account" class="tab-panel">
@@ -716,9 +755,10 @@
 
   // ── Tab routing ─────────────────────────────────────────────────
   const TAB_LOADERS = {
-    research:  () => loadResearchTab(),
-    documents: () => { /* static — nothing to load */ },
-    account:   () => _initAccountTab(),
+    research:   () => loadResearchTab(),
+    documents:  () => { /* static — nothing to load */ },
+    'lp-reports': () => loadLpReportsTab(),
+    account:    () => _initAccountTab(),
   };
 
   // ── Account tab ─────────────────────────────────────────────────
@@ -2409,6 +2449,151 @@ function drawLpAllTimeChart(pts, fid, bLabel, showBench = true) {
     tooltip.style.top  = (Math.max(0, cy - ttH / 2)) + 'px';
   };
   canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// ════════════════════════════════════════════════════════════════
+// LP REPORTS TAB
+// ════════════════════════════════════════════════════════════════
+
+async function loadLpReportsTab() {
+  const loading   = document.getElementById('lp-rpt-loading');
+  const placeholder = document.getElementById('lp-rpt-placeholder');
+  const content   = document.getElementById('lp-rpt-content');
+  const badge     = document.getElementById('lp-rpt-badge');
+
+  if (!loading || !content) return;
+
+  loading.style.display   = 'block';
+  placeholder.style.display = 'none';
+  content.style.display   = 'none';
+
+  function fmtPct(v) {
+    if (v == null) return '—';
+    const pct = (v * 100).toFixed(1);
+    return (v >= 0 ? '+' : '') + pct + '%';
+  }
+  function fmtUSD(v) {
+    if (v == null) return '—';
+    if (Math.abs(v) >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+    if (Math.abs(v) >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (Math.abs(v) >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + v.toFixed(0);
+  }
+  function fmtX(v) { return v != null ? v.toFixed(2) + 'x' : '—'; }
+  function escH(s) {
+    return String(s || '').replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Get current quarter label
+  function currentQuarter() {
+    const now = new Date();
+    const q = Math.floor(now.getMonth() / 3) + 1;
+    return `Q${q} ${now.getFullYear()}`;
+  }
+
+  try {
+    const r = await window.dgaFetch('/api/v2/lp/me/overview');
+    if (!r.ok) throw new Error('overview ' + r.status);
+    const overview = await r.json();
+    const funds = overview.funds || [];
+
+    if (funds.length === 0) {
+      loading.style.display = 'none';
+      placeholder.style.display = 'block';
+      placeholder.innerHTML = `
+        <div style="padding:32px 0 20px;text-align:center;">
+          <div style="font-size:44px;margin-bottom:14px;">📊</div>
+          <div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:10px;">No Funds Yet</div>
+          <div style="font-size:12px;color:var(--mid);line-height:1.7;max-width:400px;margin:0 auto;">
+            You are not yet associated with any funds. Contact your GP to be added.
+          </div>
+        </div>`;
+      return;
+    }
+
+    const quarter = currentQuarter();
+    let html = '';
+    let anyLoaded = false;
+
+    // Fetch report data for each fund in parallel
+    const results = await Promise.allSettled(
+      funds.map(f =>
+        window.dgaFetch(
+          `/api/v2/gp/fund/${encodeURIComponent(f.fund_id)}/quarterly-report-data?quarter=${encodeURIComponent(quarter)}`
+        ).then(res => res.ok ? res.json() : null).catch(() => null)
+      )
+    );
+
+    funds.forEach((f, i) => {
+      const data = results[i].status === 'fulfilled' ? results[i].value : null;
+      const fund = (data && data.fund) ? data.fund : {};
+      const positions = (data && data.positions) ? data.positions : [];
+
+      const ytd = fund.ytd_return ?? f.ytd_return ?? null;
+      const nav = fund.nav ?? f.nav ?? null;
+      const tvpi = fund.tvpi ?? null;
+
+      if (data) anyLoaded = true;
+
+      html += `
+        <div style="border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:14px;background:var(--offwhite);">
+
+          <!-- Fund header row -->
+          <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+            <div style="font-size:15px;font-weight:800;color:var(--ink);">${escH(f.fund_name || f.fund_id)}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--blue);letter-spacing:1px;text-transform:uppercase;background:rgba(91,184,212,0.10);border:1px solid rgba(91,184,212,0.25);border-radius:5px;padding:2px 8px;">${escH(quarter)}</div>
+          </div>
+
+          <!-- Metrics row -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;margin-bottom:14px;">
+            <div style="background:white;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+              <div style="font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;">NAV</div>
+              <div style="font-size:16px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;">${fmtUSD(nav)}</div>
+            </div>
+            <div style="background:white;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+              <div style="font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;">YTD Return</div>
+              <div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;color:${ytd != null ? (ytd >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--ink)'};">${fmtPct(ytd)}</div>
+            </div>
+            <div style="background:white;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+              <div style="font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;">TVPI</div>
+              <div style="font-size:16px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;">${fmtX(tvpi)}</div>
+            </div>
+            <div style="background:white;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+              <div style="font-size:9px;font-weight:800;color:var(--mid);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;">Positions</div>
+              <div style="font-size:16px;font-weight:800;color:var(--ink);">${positions.length}</div>
+            </div>
+          </div>
+
+          <!-- Report availability notice -->
+          <div style="font-size:11px;color:var(--dim);background:white;border:1px solid var(--line);border-radius:7px;padding:10px 14px;line-height:1.6;">
+            ${data
+              ? `<span style="color:var(--green);font-weight:700;">✓</span> Portfolio data loaded for ${escH(quarter)}. Your GP will send the formal quarterly report to your email when it is published.`
+              : `<span style="color:var(--amber);font-weight:700;">○</span> Report data for ${escH(quarter)} is not yet available. Your GP will email you when the quarterly report is published.`
+            }
+          </div>
+
+        </div>
+      `;
+    });
+
+    if (badge) {
+      badge.style.display = '';
+      badge.textContent = quarter;
+    }
+
+    loading.style.display = 'none';
+    content.innerHTML = html;
+    content.style.display = 'block';
+
+  } catch (e) {
+    loading.style.display = 'none';
+    placeholder.style.display = 'block';
+    placeholder.innerHTML = `
+      <div style="padding:24px;text-align:center;">
+        <div style="font-size:12px;color:var(--red);">Error loading reports: ${e.message}</div>
+      </div>`;
+  }
 }
 </script>
 

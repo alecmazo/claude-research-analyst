@@ -892,6 +892,7 @@
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
+    <span class="topbar-link" data-tab="reports">📋 Reports</span>
     <span class="status-dot" title="API online"></span>
   </nav>
 </header>
@@ -1309,6 +1310,81 @@
 </div><!-- #tab-acct-detail -->
 
 
+<!-- ══ REPORTS TAB ═════════════════════════════════════════════ -->
+<div id="tab-reports" class="tab-panel">
+  <div class="wide-shell">
+
+    <!-- toolbar -->
+    <div class="tab-toolbar">
+      <h2>Quarterly Investor Reports</h2>
+      <button class="tab-btn" id="rpt-new-btn" onclick="resetReportsForm()">+ New Report</button>
+    </div>
+
+    <!-- composer card -->
+    <section class="panel" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">Compose Report</span>
+        <span class="panel-badge" id="rpt-badge">Draft</span>
+      </header>
+      <div style="padding:20px 22px;display:grid;gap:18px;">
+
+        <!-- Step 1 + 2: fund & quarter on one row -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--blue);text-transform:uppercase;margin-bottom:6px;">Step 1 — Fund</div>
+            <select id="rpt-fund-sel" onchange="onRptFundChange()"
+              style="width:100%;height:36px;border:1px solid var(--panel-edge);border-radius:7px;padding:0 10px;font-size:13px;color:#1e293b;background:var(--navy-mid);outline:none;cursor:pointer;">
+              <option value="">— select fund —</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--blue);text-transform:uppercase;margin-bottom:6px;">Step 2 — Quarter</div>
+            <select id="rpt-quarter-sel" onchange="onRptFundChange()"
+              style="width:100%;height:36px;border:1px solid var(--panel-edge);border-radius:7px;padding:0 10px;font-size:13px;color:#1e293b;background:var(--navy-mid);outline:none;cursor:pointer;">
+            </select>
+          </div>
+        </div>
+
+        <!-- Step 3: GP Letter -->
+        <div>
+          <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--blue);text-transform:uppercase;margin-bottom:6px;">Step 3 — GP Letter</div>
+          <textarea id="rpt-gp-letter" rows="8"
+            placeholder="Dear Partners,&#10;&#10;During [Quarter], the portfolio delivered [performance] driven by [key themes]. Our largest contributors were [positions], while [headwinds] created some pressure on returns.&#10;&#10;Looking ahead to [next quarter], we remain focused on [strategy]. Our pipeline includes [opportunities], and we continue to monitor [risks] closely.&#10;&#10;We are grateful for your continued trust and partnership.&#10;&#10;Warm regards,&#10;[Your Name]&#10;DGA Capital"
+            style="width:100%;border:1px solid var(--panel-edge);border-radius:7px;padding:10px 12px;font-size:12px;font-family:inherit;line-height:1.6;color:#1e293b;background:var(--navy-mid);outline:none;resize:vertical;transition:border-color .15s;"
+            onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--panel-edge)'"></textarea>
+          <div style="text-align:right;font-size:10px;color:var(--dim);margin-top:4px;">
+            <span id="rpt-char-count">0</span> characters (min 50)
+          </div>
+        </div>
+
+        <!-- Step 4: Recipients -->
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+            <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--blue);text-transform:uppercase;">Step 4 — Recipients</div>
+            <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--mid);cursor:pointer;">
+              <input type="checkbox" id="rpt-select-all" onchange="toggleAllLPs(this.checked)"> Select All
+            </label>
+            <span id="rpt-lp-count" style="font-size:10px;color:var(--dim);margin-left:auto;"></span>
+          </div>
+          <div id="rpt-lp-list" style="min-height:60px;border:1px solid var(--panel-edge);border-radius:7px;padding:10px 12px;background:#fafbfc;">
+            <div style="color:var(--dim);font-size:11px;font-style:italic;">Select a fund above to load LPs…</div>
+          </div>
+        </div>
+
+        <!-- Action row -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--panel-edge);">
+          <button class="tab-btn secondary" onclick="previewQuarterlyReport()">👁 Preview Report</button>
+          <button class="tab-btn" id="rpt-send-btn" onclick="sendQuarterlyReport()">📨 Send to Selected LPs</button>
+          <div id="rpt-status" style="font-size:12px;margin-left:8px;min-height:18px;"></div>
+        </div>
+
+      </div>
+    </section>
+
+  </div>
+</div><!-- #tab-reports -->
+
+
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
@@ -1703,6 +1779,7 @@
     tracker:  () => loadTrackerTab(),
     fund:     () => loadFundTab(),
     settings: () => loadSettingsTab(),
+    reports:  () => loadReportsTab(),
   };
 
   function showTab(name) {
@@ -4824,6 +4901,453 @@
     loadBuildInfo();
     loadAutomationSettings();
     _wireEmailDiag();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // REPORTS TAB
+  // ══════════════════════════════════════════════════════════════
+
+  // Generate last 6 quarters (current + 5 back)
+  function _generateQuarters() {
+    const now = new Date();
+    const curQ = Math.floor(now.getMonth() / 3) + 1;
+    const curY = now.getFullYear();
+    const quarters = [];
+    let q = curQ, y = curY;
+    for (let i = 0; i < 6; i++) {
+      quarters.push(`Q${q} ${y}`);
+      q--;
+      if (q < 1) { q = 4; y--; }
+    }
+    return quarters;
+  }
+
+  // State for the reports tab
+  let _rptData = null;     // last loaded report data
+  let _rptLoading = false;
+
+  async function loadReportsTab() {
+    // Populate quarter dropdown
+    const qSel = document.getElementById('rpt-quarter-sel');
+    if (qSel) {
+      const quarters = _generateQuarters();
+      qSel.innerHTML = quarters.map(q => `<option value="${q}">${q}</option>`).join('');
+    }
+
+    // Wire char counter
+    const ta = document.getElementById('rpt-gp-letter');
+    if (ta) {
+      ta.addEventListener('input', () => {
+        const cc = document.getElementById('rpt-char-count');
+        if (cc) cc.textContent = ta.value.length;
+      });
+    }
+
+    // Populate fund dropdown from overview
+    const fSel = document.getElementById('rpt-fund-sel');
+    if (!fSel) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/overview');
+      if (!r.ok) throw new Error('overview ' + r.status);
+      const d = await r.json();
+      const funds = d.funds || [];
+      fSel.innerHTML = '<option value="">— select fund —</option>' +
+        funds.map(f => `<option value="${f.fund_id}">${f.fund_name || f.fund_id}</option>`).join('');
+    } catch (e) {
+      fSel.innerHTML = '<option value="">Could not load funds</option>';
+    }
+  }
+
+  function resetReportsForm() {
+    const fSel = document.getElementById('rpt-fund-sel');
+    if (fSel) fSel.value = '';
+    const ta = document.getElementById('rpt-gp-letter');
+    if (ta) { ta.value = ''; }
+    const cc = document.getElementById('rpt-char-count');
+    if (cc) cc.textContent = '0';
+    document.getElementById('rpt-lp-list').innerHTML =
+      '<div style="color:var(--dim);font-size:11px;font-style:italic;">Select a fund above to load LPs…</div>';
+    document.getElementById('rpt-lp-count').textContent = '';
+    document.getElementById('rpt-status').textContent = '';
+    document.getElementById('rpt-select-all').checked = false;
+    _rptData = null;
+  }
+
+  async function onRptFundChange() {
+    const fundId = document.getElementById('rpt-fund-sel')?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    if (!fundId || !quarter) return;
+    const lpList = document.getElementById('rpt-lp-list');
+    const lpCount = document.getElementById('rpt-lp-count');
+    lpList.innerHTML = '<div style="color:var(--dim);font-size:11px;">Loading LPs…</div>';
+    lpCount.textContent = '';
+    _rptData = null;
+    try {
+      const r = await window.dgaFetch(
+        `/api/v2/gp/fund/${encodeURIComponent(fundId)}/quarterly-report-data?quarter=${encodeURIComponent(quarter)}`
+      );
+      if (!r.ok) throw new Error('report-data ' + r.status);
+      _rptData = await r.json();
+      const lps = _rptData.lps || [];
+      const positions = _rptData.positions || [];
+      if (lps.length === 0) {
+        lpList.innerHTML = '<div style="color:var(--dim);font-size:11px;font-style:italic;">No LPs found for this fund.</div>';
+      } else {
+        lpList.innerHTML = lps.map(lp => `
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--panel-edge);cursor:pointer;">
+            <input type="checkbox" class="rpt-lp-chk" value="${lp.lp_id}" checked>
+            <span style="font-size:12px;font-weight:700;color:#1e293b;">${lp.name || lp.lp_id}</span>
+            <span style="font-size:11px;color:var(--mid);">&lt;${lp.email || ''}&gt;</span>
+          </label>
+        `).join('');
+        document.getElementById('rpt-select-all').checked = true;
+      }
+      lpCount.textContent = `${positions.length} positions · ${lps.length} LPs loaded`;
+    } catch (e) {
+      lpList.innerHTML = `<div style="color:var(--red);font-size:11px;">Error: ${e.message}</div>`;
+    }
+  }
+
+  function toggleAllLPs(checked) {
+    document.querySelectorAll('.rpt-lp-chk').forEach(cb => cb.checked = checked);
+  }
+
+  function _getSelectedLpIds() {
+    return [...document.querySelectorAll('.rpt-lp-chk:checked')].map(cb => cb.value);
+  }
+
+  async function previewQuarterlyReport() {
+    const fundId  = document.getElementById('rpt-fund-sel')?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    const gpLetter = document.getElementById('rpt-gp-letter')?.value || '';
+    const status   = document.getElementById('rpt-status');
+
+    if (!fundId)  { status.style.color='var(--red)'; status.textContent='⚠ Select a fund first.'; return; }
+    if (gpLetter.trim().length < 10) { status.style.color='var(--red)'; status.textContent='⚠ Add a GP letter before previewing.'; return; }
+    status.style.color='var(--mid)'; status.textContent='Fetching data…';
+
+    let data = _rptData;
+    if (!data || data.fund?.id !== fundId) {
+      try {
+        const r = await window.dgaFetch(
+          `/api/v2/gp/fund/${encodeURIComponent(fundId)}/quarterly-report-data?quarter=${encodeURIComponent(quarter)}`
+        );
+        if (!r.ok) throw new Error(await r.text());
+        data = await r.json();
+        _rptData = data;
+      } catch (e) {
+        status.style.color='var(--red)'; status.textContent='Error: ' + e.message; return;
+      }
+    }
+    status.style.color='var(--mid)'; status.textContent='Building preview…';
+
+    const fund  = data.fund  || {};
+    const bench = data.benchmark || {};
+    const positions = (data.positions || []).slice().sort((a,b)=>(b.market_weight_pct||0)-(a.market_weight_pct||0));
+    const lps   = data.lps  || [];
+    const evUpside = data.portfolio_expected_value_upside_pct;
+
+    // ── Formatters ──────────────────────────────────────────────
+    const _esc = s => String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const _usd = v => { if(v==null)return'—'; const n=Number(v); if(Math.abs(n)>=1e9)return'$'+(n/1e9).toFixed(2)+'B'; if(Math.abs(n)>=1e6)return'$'+(n/1e6).toFixed(2)+'M'; if(Math.abs(n)>=1e3)return'$'+(n/1e3).toFixed(1)+'K'; return'$'+n.toFixed(0); };
+    const _pct = (v,dec=1) => { if(v==null)return'—'; const n=Number(v); return(n>=0?'+':'')+n.toFixed(dec)+'%'; };
+    const _px  = v => v!=null ? '$'+Number(v).toFixed(2) : '—';
+    const _clr = v => Number(v||0)>=0?'#16a34a':'#dc2626';
+    const _ratingBadge = r => {
+      if(!r) return '';
+      const colors={'BUY':'background:#dcfce7;color:#15803d','HOLD':'background:#fef9c3;color:#854d0e','SELL':'background:#fee2e2;color:#991b1b'};
+      const st = colors[r.toUpperCase()] || 'background:#f1f5f9;color:#64748b';
+      return `<span style="font-size:9px;font-weight:800;padding:2px 8px;border-radius:4px;letter-spacing:0.5px;${st}">${_esc(r.toUpperCase())}</span>`;
+    };
+
+    // ── Cover / Scorecard ────────────────────────────────────────
+    const ytdColor  = _clr(fund.ytd_pct);
+    const evColor   = _clr(evUpside);
+    const benchDiff = (fund.ytd_pct!=null && bench.ytd_pct!=null) ? (fund.ytd_pct - bench.ytd_pct) : null;
+
+    const scorecardHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;">
+        <tr>
+          ${[
+            ['Portfolio NAV', _usd(fund.nav), '#fff', '#5BB8D4'],
+            ['YTD Return', _pct(fund.ytd_pct), '#fff', ytdColor],
+            ['vs S&amp;P 500 YTD', benchDiff!=null ? _pct(benchDiff)+' alpha' : (bench.ytd_pct!=null?'S&amp;P '+_pct(bench.ytd_pct):'—'), '#fff', _clr(benchDiff)],
+            ['Portfolio EV Upside', evUpside!=null?_pct(evUpside):'—', '#fff', evColor],
+          ].map(([lbl,val,bg,vc])=>`
+            <td width="25%" style="padding:0 6px 0 0;">
+              <div style="background:rgba(255,255,255,0.09);border:1px solid rgba(255,255,255,0.18);border-radius:10px;padding:14px 16px;">
+                <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.55);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">${lbl}</div>
+                <div style="font-size:20px;font-weight:800;color:${vc};font-variant-numeric:tabular-nums;">${val}</div>
+              </div>
+            </td>`).join('')}
+        </tr>
+      </table>`;
+
+    // ── Holdings table ───────────────────────────────────────────
+    const holdingsHtml = positions.map(p => {
+      const r = p.research || {};
+      const wt = p.market_weight_pct!=null ? p.market_weight_pct.toFixed(1)+'%' : '—';
+      const unG = p.unrealized_gain;
+      const unP = p.unrealized_gain_pct;
+      return `
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:9px 10px;font-weight:800;color:#0A1628;font-size:13px;white-space:nowrap;">${_esc(p.symbol)}</td>
+          <td style="padding:9px 10px;font-size:11px;color:#64748b;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(p.name||'')}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_usd(p.market_value)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:600;">${wt}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.avg_cost)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.last_price)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:700;color:${_clr(unG)};">${unG!=null?_usd(unG)+' ('+_pct(unP)+'  )':'—'}</td>
+          <td style="padding:9px 10px;text-align:center;">${_ratingBadge(r.rating)}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;">${r.price_target?_px(r.price_target):'—'}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:700;color:${_clr(parseFloat(r.implied_return)||0)};">${r.implied_return||'—'}</td>
+        </tr>`;
+    }).join('');
+
+    // ── Position spotlight cards ─────────────────────────────────
+    const spotlightHtml = positions.filter(p=>p.research?.summary).slice(0,8).map(p => {
+      const r = p.research;
+      const scenarios = [
+        r.bull && {label:'Bull Case',color:'#15803d',bg:'#dcfce7',sc:r.bull},
+        r.base && {label:'Base Case',color:'#0A1628',bg:'#e2e8f0',sc:r.base},
+        r.bear && {label:'Bear Case',color:'#991b1b',bg:'#fee2e2',sc:r.bear},
+      ].filter(Boolean);
+
+      const scenTableHtml = scenarios.length ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;border-collapse:collapse;font-size:11px;">
+          <tr style="background:#f8fafc;">
+            <th style="padding:5px 8px;text-align:left;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Scenario</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Prob.</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Target</th>
+            <th style="padding:5px 8px;text-align:right;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Upside</th>
+            <th style="padding:5px 8px;text-align:left;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Key Assumption</th>
+          </tr>
+          ${scenarios.map(({label,color,bg,sc})=>`
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:6px 8px;font-weight:700;color:${color};background:${bg};white-space:nowrap;">${label}</td>
+            <td style="padding:6px 8px;text-align:right;color:#64748b;">${sc.prob||'—'}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;">${sc.price?_px(sc.price):'—'}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:700;color:${_clr(parseFloat(sc.upside)||0)};">${sc.upside||'—'}</td>
+            <td style="padding:6px 8px;font-size:10px;color:#64748b;">${_esc((sc.assumption||'').slice(0,80))}${(sc.assumption||'').length>80?'…':''}</td>
+          </tr>`).join('')}
+          ${r.expected_value_price ? `
+          <tr style="background:#f0f9ff;">
+            <td style="padding:6px 8px;font-weight:800;color:#0c4a6e;" colspan="2">Expected Value (prob.-weighted)</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:800;color:#0c4a6e;">${_px(r.expected_value_price)}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:800;color:${_clr((r.expected_value_price-p.last_price)/p.last_price*100)};">${p.last_price?_pct((r.expected_value_price-p.last_price)/p.last_price*100):'—'}</td>
+            <td></td>
+          </tr>` : ''}
+        </table>` : '';
+
+      const riskHtml = r.top_risk ? `<div style="margin-top:10px;padding:8px 12px;background:#fff7ed;border-left:3px solid #f59e0b;font-size:11px;color:#78350f;"><strong>Top Risk:</strong> ${_esc(r.top_risk)}</div>` : '';
+
+      return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px 20px;margin-bottom:16px;page-break-inside:avoid;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+          <span style="font-size:17px;font-weight:800;color:#0A1628;">${_esc(p.symbol)}</span>
+          <span style="font-size:12px;color:#64748b;flex:1;">${_esc(p.name||'')}</span>
+          ${_ratingBadge(r.rating)}
+          <span style="font-size:12px;font-weight:700;color:#64748b;">${p.market_weight_pct!=null?p.market_weight_pct.toFixed(1)+'% wt':''}</span>
+          <span style="font-size:12px;font-weight:700;color:${_clr(p.unrealized_gain)};">${p.unrealized_gain!=null?(_usd(p.unrealized_gain)+' unrealized'):''}</span>
+        </div>
+        <div style="font-size:12px;color:#334155;line-height:1.7;">${_esc(r.summary)}</div>
+        ${scenTableHtml}${riskHtml}
+      </div>`;
+    }).join('');
+
+    // ── EV summary ───────────────────────────────────────────────
+    const coverageCount = positions.filter(p=>p.research?.expected_value_price).length;
+    const evSummaryHtml = evUpside != null ? `
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:180px;">
+          <div style="font-size:10px;font-weight:800;color:#0284c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;">Portfolio Expected Value</div>
+          <div style="font-size:28px;font-weight:800;color:${_clr(evUpside)};font-variant-numeric:tabular-nums;">${_pct(evUpside)}</div>
+          <div style="font-size:11px;color:#0369a1;margin-top:2px;">Probability-weighted upside · ${coverageCount} of ${positions.length} positions with DGA research coverage</div>
+        </div>
+        <div style="font-size:11px;color:#0369a1;line-height:1.6;max-width:320px;">Expected value is computed from Bull/Base/Bear scenarios across all positions with DGA Capital research coverage, weighted by portfolio allocation.</div>
+      </div>` : '';
+
+    // ── Fee summary ──────────────────────────────────────────────
+    const mgmtFeeAnnual = fund.nav && fund.mgmt_fee_pct ? fund.nav * fund.mgmt_fee_pct : null;
+    const hurdle = fund.hurdle_pct ? fund.hurdle_pct * 100 : null;
+    const carryStatus = fund.ytd_pct!=null && hurdle!=null
+      ? (fund.ytd_pct > hurdle
+          ? `✅ Carry accruing at ${(fund.carry_pct*100).toFixed(1)}% above ${hurdle.toFixed(1)}% hurdle`
+          : `⏳ Below ${hurdle.toFixed(1)}% hurdle — no carry accruing (YTD ${_pct(fund.ytd_pct)})`)
+      : '—';
+    const feeSummaryHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Management Fee (annualized)</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.mgmt_fee_pct?(fund.mgmt_fee_pct*100).toFixed(2)+'% p.a.':''} ${mgmtFeeAnnual?'(≈'+_usd(mgmtFeeAnnual)+' on current NAV)':''}</td></tr>
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Carried Interest Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.carry_pct?(fund.carry_pct*100).toFixed(0)+'%':''}</td></tr>
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Hurdle Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${hurdle!=null?hurdle.toFixed(1)+'% per annum':'—'}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b;">Carry Status</td><td style="padding:8px 0;text-align:right;font-weight:600;">${_esc(carryStatus)}</td></tr>
+      </table>`;
+
+    // ── Assemble full HTML ───────────────────────────────────────
+    const gpLetterHtml = gpLetter.split(/\n\n+/).map(p=>`<p style="margin-bottom:14px;">${_esc(p).replace(/\n/g,'<br>')}</p>`).join('');
+    const dateStr = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+
+    const previewHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${_esc(quarter)} Investor Report — ${_esc(fund.name||fundId)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;background:#eef2f7;color:#334155;font-size:13px;line-height:1.5}
+  .page{max-width:860px;margin:36px auto 60px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(10,22,40,0.18)}
+  .rpt-header{background:linear-gradient(140deg,#0A1628 0%,#132040 60%,#0e2245 100%);padding:40px 44px 36px;color:#fff;position:relative}
+  .rpt-confidential{position:absolute;top:16px;right:20px;font-size:9px;font-weight:800;letter-spacing:1.5px;color:rgba(255,255,255,0.4);text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);padding:3px 9px;border-radius:4px}
+  .rpt-preview-badge{display:inline-block;background:rgba(245,158,11,0.20);border:1px solid rgba(245,158,11,0.5);color:#f59e0b;font-size:10px;font-weight:800;padding:3px 10px;border-radius:6px;letter-spacing:1px;text-transform:uppercase;margin-top:20px}
+  .section{padding:28px 44px;border-bottom:1px solid #e8edf4}
+  .section:last-child{border-bottom:none}
+  .sec-label{font-size:10px;font-weight:800;color:#5BB8D4;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .sec-label::after{content:'';flex:1;height:1px;background:linear-gradient(to right,rgba(91,184,212,0.3),transparent)}
+  .gp-letter{font-size:13px;line-height:1.8;color:#1e293b}
+  .gp-letter p:last-child{margin-bottom:0}
+  .gp-sign{margin-top:20px;font-size:13px;font-weight:700;color:#0A1628}
+  table{width:100%;border-collapse:collapse}
+  th{font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:8px 10px;border-bottom:2px solid #e2e8f0;text-align:left;white-space:nowrap}
+  tbody tr:hover td{background:rgba(91,184,212,0.03)}
+  .footer{background:#f8fafc;padding:20px 44px;font-size:10px;color:#94a3b8;line-height:1.75;border-top:1px solid #e2e8f0}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── HEADER ── -->
+  <div class="rpt-header">
+    <div class="rpt-confidential">Confidential</div>
+    <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">${_esc(quarter)} · Quarterly Investor Report</div>
+    <div style="font-size:26px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px;">${_esc(fund.name||fundId)}</div>
+    <div style="font-size:12px;color:rgba(255,255,255,0.50);">DGA Capital Management · Prepared ${_esc(dateStr)}</div>
+    ${scorecardHtml}
+    <div class="rpt-preview-badge">⚠ PREVIEW — NOT YET SENT</div>
+  </div>
+
+  <!-- ── GP LETTER ── -->
+  <div class="section">
+    <div class="sec-label">Letter to Partners</div>
+    <div class="gp-letter">${gpLetterHtml}</div>
+    <div class="gp-sign">— DGA Capital Management</div>
+  </div>
+
+  <!-- ── HOLDINGS TABLE ── -->
+  ${positions.length ? `
+  <div class="section">
+    <div class="sec-label">Portfolio Holdings</div>
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>Ticker</th><th>Company</th>
+        <th style="text-align:right;">Mkt Value</th>
+        <th style="text-align:right;">Wt %</th>
+        <th style="text-align:right;">Avg Cost</th>
+        <th style="text-align:right;">Last Px</th>
+        <th style="text-align:right;">Unrealized</th>
+        <th style="text-align:center;">Rating</th>
+        <th style="text-align:right;">12M Target</th>
+        <th style="text-align:right;">Upside</th>
+      </tr></thead>
+      <tbody>${holdingsHtml}</tbody>
+    </table>
+    </div>
+    <div style="margin-top:10px;font-size:10px;color:#94a3b8;">Prices as of ${_esc(dateStr)}. Ratings and targets from DGA Capital research.</div>
+  </div>` : ''}
+
+  <!-- ── EXPECTED VALUE ── -->
+  ${evSummaryHtml ? `
+  <div class="section">
+    <div class="sec-label">Portfolio Expected Value Analysis</div>
+    ${evSummaryHtml}
+  </div>` : ''}
+
+  <!-- ── POSITION SPOTLIGHTS ── -->
+  ${spotlightHtml ? `
+  <div class="section">
+    <div class="sec-label">Position Commentary &amp; Scenario Analysis</div>
+    ${spotlightHtml}
+  </div>` : ''}
+
+  <!-- ── FEE SUMMARY ── -->
+  <div class="section">
+    <div class="sec-label">Fee &amp; Carry Summary</div>
+    ${feeSummaryHtml}
+  </div>
+
+  <!-- ── LP NOTE ── -->
+  ${lps.length ? `
+  <div class="section" style="background:#f8fafc;">
+    <div style="font-size:11px;color:#64748b;line-height:1.6;">
+      <strong style="color:#0A1628;">When sent, this report will be personalized for:</strong><br>
+      ${lps.map(l=>_esc(l.name||l.lp_id)+' &lt;'+_esc(l.email||'')+'&gt;').join(' · ')}
+    </div>
+  </div>` : ''}
+
+  <!-- ── FOOTER ── -->
+  <div class="footer">
+    <strong style="color:#64748b;">Important Disclosures:</strong> This quarterly report is prepared by DGA Capital Management and is intended solely for the named limited partner(s). All information is confidential and may not be redistributed or disclosed to any third party without prior written consent of DGA Capital. Past performance is not indicative of future results. Nothing contained herein constitutes investment advice, an offer to sell, or a solicitation to buy any security. All figures are unaudited and subject to adjustment. Scenario analyses and price targets represent DGA Capital's estimates and are inherently subject to uncertainty.
+  </div>
+
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([previewHtml], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const win  = window.open(url, '_blank');
+    if (!win) { status.style.color='var(--red)'; status.textContent='Pop-up blocked — allow pop-ups for this site.'; return; }
+    status.style.color='var(--green)'; status.textContent='✅ Preview opened in new tab.';
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  async function sendQuarterlyReport() {
+    const fundId = document.getElementById('rpt-fund-sel')?.value;
+    const quarter = document.getElementById('rpt-quarter-sel')?.value;
+    const gpLetter = document.getElementById('rpt-gp-letter')?.value || '';
+    const lpIds = _getSelectedLpIds();
+    const status = document.getElementById('rpt-status');
+    const btn = document.getElementById('rpt-send-btn');
+
+    status.textContent = '';
+
+    if (!fundId) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select a fund.'; return; }
+    if (!quarter) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select a quarter.'; return; }
+    if (gpLetter.trim().length < 50) {
+      status.style.color = 'var(--red)';
+      status.textContent = `⚠ GP letter too short (${gpLetter.trim().length} chars — min 50).`;
+      return;
+    }
+    if (lpIds.length === 0) { status.style.color = 'var(--red)'; status.textContent = '⚠ Select at least one LP.'; return; }
+
+    const confirmed = confirm(
+      `Send ${quarter} report to ${lpIds.length} LP${lpIds.length !== 1 ? 's' : ''}?\n\nThis will email each LP their personalized report.`
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    status.style.color = 'var(--mid)'; status.textContent = `Sending to ${lpIds.length} LP${lpIds.length !== 1 ? 's' : ''}…`;
+
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/quarterly-report/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fund_id: fundId, quarter, gp_letter: gpLetter, lp_ids: lpIds }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ detail: r.statusText }));
+        throw new Error(err.detail || r.status);
+      }
+      const d = await r.json().catch(() => ({}));
+      status.style.color = 'var(--green)';
+      status.textContent = `✅ Report sent to ${lpIds.length} LP${lpIds.length !== 1 ? 's' : ''}${d.message ? ' — ' + d.message : ''}.`;
+      document.getElementById('rpt-badge').textContent = 'Sent';
+    } catch (e) {
+      status.style.color = 'var(--red)'; status.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // ── Email Diagnostics ────────────────────────────────────────────────────
