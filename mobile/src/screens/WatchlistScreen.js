@@ -16,10 +16,14 @@ import {
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { v2Fetch, getV2User } from '../api/client';
 import { colors } from '../components/theme';
+
+const VIEW_CONFIG_KEY = 'positions_view_config_v1';
 
 const AUTO_REFRESH_MS = 30_000;
 const NAVY     = '#0A1628';
@@ -117,23 +121,48 @@ function PositionRow({ item, onPress }) {
 
 // ── Collapsible account / fund section ───────────────────────────────────────
 
-function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow, defaultOpen = true, sourceType, stakePct }) {
-  const [open, setOpen] = useState(defaultOpen);
-
+function AccountSection({
+  title, positions, navSum, daySum, dayValid, onPressRow,
+  sourceType, stakePct,
+  // view-config props
+  open, onToggle,
+  editMode, onMoveUp, onMoveDown, canMoveUp, canMoveDown,
+}) {
   const isFund    = sourceType === 'lp_fund';
   const chgColor  = dayValid ? (daySum >= 0 ? '#4ade80' : '#f87171') : GREY;
   const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSD(daySum, true) : null;
-  // Show stake badge only for LP fund sections where stake < 100%
   const showStake = isFund && stakePct != null && stakePct < 99.99;
 
   return (
     <View style={styles.card}>
-      {/* Header — tap to collapse */}
+      {/* Header — tap to collapse, or reorder in edit mode */}
       <TouchableOpacity
         style={styles.cardHdr}
-        onPress={() => setOpen(v => !v)}
+        onPress={onToggle}
         activeOpacity={0.75}
       >
+        {/* Drag handle (edit mode only) */}
+        {editMode && (
+          <View style={styles.reorderHandle}>
+            <TouchableOpacity
+              onPress={onMoveUp}
+              disabled={!canMoveUp}
+              hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
+              style={[styles.reorderBtn, !canMoveUp && { opacity: 0.25 }]}
+            >
+              <Text style={styles.reorderArrow}>▲</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onMoveDown}
+              disabled={!canMoveDown}
+              hitSlop={{ top: 4, bottom: 8, left: 8, right: 8 }}
+              style={[styles.reorderBtn, !canMoveDown && { opacity: 0.25 }]}
+            >
+              <Text style={styles.reorderArrow}>▼</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.cardHdrLeft}>
           <Text style={styles.cardName} numberOfLines={1}>{title}</Text>
           {showStake && (
@@ -163,7 +192,8 @@ function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function WatchlistScreen({ navigation }) {
-  const [groups,       setGroups]       = useState([]);
+  // ── Data ──────────────────────────────────────────────────────────────────
+  const [groupMap,     setGroupMap]     = useState({});   // key → group data
   const [totalValue,   setTotalValue]   = useState(null);
   const [fundStakes,   setFundStakes]   = useState(null);
   const [managedNav,   setManagedNav]   = useState(null);
@@ -172,9 +202,20 @@ export default function WatchlistScreen({ navigation }) {
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
   const [error,        setError]        = useState(null);
+
+  // ── View config (persisted) ───────────────────────────────────────────────
+  const [orderedKeys,  setOrderedKeys]  = useState([]);   // display order
+  const [openMap,      setOpenMap]      = useState({});   // key → bool
+  const [editMode,     setEditMode]     = useState(false);
+  const [saveFlash,    setSaveFlash]    = useState(false);// brief "Saved!" feedback
+
+  // ── Impersonation ─────────────────────────────────────────────────────────
   const [impersonated, setImpersonated] = useState(false);
   const [impName,      setImpName]      = useState('');
   const timerRef                        = useRef(null);
+
+  // Computed ordered group list
+  const groups = orderedKeys.map(k => groupMap[k]).filter(Boolean);
 
   // Check if this is an admin impersonation session
   useEffect(() => {
@@ -186,18 +227,62 @@ export default function WatchlistScreen({ navigation }) {
     }).catch(() => {});
   }, []);
 
+  // ── Load saved view config from AsyncStorage ──────────────────────────────
+  const loadViewConfig = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(VIEW_CONFIG_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }, []);
+
+  const saveViewConfig = useCallback(async (keys, opens) => {
+    try {
+      await AsyncStorage.setItem(VIEW_CONFIG_KEY, JSON.stringify({
+        orderedKeys: keys,
+        openMap:     opens,
+      }));
+    } catch {}
+  }, []);
+
+  // ── Save View button handler ──────────────────────────────────────────────
+  const handleSaveView = useCallback(async () => {
+    await saveViewConfig(orderedKeys, openMap);
+    setEditMode(false);
+    setSaveFlash(true);
+    setTimeout(() => setSaveFlash(false), 2000);
+  }, [orderedKeys, openMap, saveViewConfig]);
+
+  // ── Reorder: move a key up or down ───────────────────────────────────────
+  const moveGroup = useCallback((idx, dir) => {
+    setOrderedKeys(prev => {
+      const next = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  }, []);
+
+  // ── Toggle open/closed ────────────────────────────────────────────────────
+  const toggleOpen = useCallback((key) => {
+    setOpenMap(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
   const fetchPositions = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
-    else if (!groups.length) setLoading(true);
+    else if (!orderedKeys.length) setLoading(true);
     setError(null);
 
     try {
-      const resp = await v2Fetch('/api/v2/lp/me/positions');
+      const [resp, savedConfig] = await Promise.all([
+        v2Fetch('/api/v2/lp/me/positions'),
+        loadViewConfig(),
+      ]);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data  = await resp.json();
-      const pos   = (data.positions || []).sort((a, b) =>
+      const data = await resp.json();
+      const pos  = (data.positions || []).sort((a, b) =>
         (b.market_weight_pct || 0) - (a.market_weight_pct || 0)
       );
 
@@ -215,12 +300,14 @@ export default function WatchlistScreen({ navigation }) {
       });
       setDayChange({ abs: totalAbs, pct: totalPrev ? (totalAbs / totalPrev) * 100 : 0 });
 
-      // Group by fund_id (unique per account/fund) — fall back to account_name
-      const map = {}, order = [];
+      // Build group map keyed by fund_id / account_name
+      const map = {};
+      const defaultOrder = [];
       pos.forEach(p => {
         const key = p.fund_id || p.account_name || 'My Account';
         if (!map[key]) {
           map[key] = {
+            key,
             title:      p.account_name || 'My Account',
             sourceType: p.source_type  || 'managed_account',
             stakePct:   p.stake_pct    ?? 100,
@@ -229,7 +316,7 @@ export default function WatchlistScreen({ navigation }) {
             daySum:     0,
             dayValid:   false,
           };
-          order.push(key);
+          defaultOrder.push(key);
         }
         map[key].positions.push(p);
         if (p.market_value)   map[key].navSum += p.market_value;
@@ -239,16 +326,32 @@ export default function WatchlistScreen({ navigation }) {
         }
       });
 
-      // Compute fund stakes vs managed account NAV breakdown
-      const built = order.map(key => map[key]);
+      // Apply saved order: saved keys first (if still present), new keys appended
+      const savedKeys = savedConfig?.orderedKeys || [];
+      const knownKeys = new Set(Object.keys(map));
+      const ordered = [
+        ...savedKeys.filter(k => knownKeys.has(k)),
+        ...defaultOrder.filter(k => !savedKeys.includes(k)),
+      ];
+
+      // Apply saved open/close state; default = open for any unsaved key
+      const savedOpen = savedConfig?.openMap || {};
+      const opens = {};
+      ordered.forEach(k => {
+        opens[k] = k in savedOpen ? savedOpen[k] : true;
+      });
+
+      // Compute breakdown totals
       let fundTotal = 0, acctTotal = 0;
-      built.forEach(grp => {
+      Object.values(map).forEach(grp => {
         if (grp.sourceType === 'lp_fund') fundTotal += grp.navSum;
         else                              acctTotal += grp.navSum;
       });
       setFundStakes(fundTotal > 0 ? fundTotal : null);
       setManagedNav(acctTotal > 0 ? acctTotal : null);
-      setGroups(built);
+      setGroupMap(map);
+      setOrderedKeys(ordered);
+      setOpenMap(prev => ({ ...opens, ...prev })); // keep any in-session toggles
 
     } catch (e) {
       setError(e.message || 'Failed to load positions');
@@ -256,7 +359,7 @@ export default function WatchlistScreen({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [groups.length]);
+  }, [loadViewConfig, orderedKeys.length]);
 
   // ── Auto-refresh ──────────────────────────────────────────────────────────
 
@@ -318,6 +421,8 @@ export default function WatchlistScreen({ navigation }) {
       </View>
     );
   }
+
+  const hasMultipleGroups = groups.length > 1;
 
   // ── Main render ────────────────────────────────────────────────────────────
 
@@ -390,19 +495,53 @@ export default function WatchlistScreen({ navigation }) {
         )}
       </View>
 
+      {/* ── View config toolbar ── */}
+      {groups.length > 0 && (
+        <View style={styles.toolbar}>
+          {editMode ? (
+            <>
+              <Text style={styles.toolbarHint}>↑↓ to reorder · tap headers to collapse</Text>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveView} activeOpacity={0.75}>
+                <Text style={styles.saveBtnText}>💾  Save View</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              {saveFlash
+                ? <Text style={styles.savedFlash}>✓ View saved</Text>
+                : <Text style={styles.toolbarHint}>Tap sections to expand · hold to reorder</Text>
+              }
+              <TouchableOpacity
+                style={styles.editBtn}
+                onPress={() => setEditMode(true)}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.editBtnText}>Edit Layout</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
+
       {/* ── Per-account collapsible cards ── */}
       {groups.map((grp, i) => (
         <AccountSection
-          key={grp.title + i}
+          key={grp.key}
           title={grp.title}
           positions={grp.positions}
           navSum={grp.navSum}
           daySum={grp.daySum}
           dayValid={grp.dayValid}
           onPressRow={handleRowPress}
-          defaultOpen={true}
           sourceType={grp.sourceType}
           stakePct={grp.stakePct}
+          open={openMap[grp.key] !== false}
+          onToggle={() => toggleOpen(grp.key)}
+          editMode={editMode}
+          onMoveUp={() => moveGroup(i, -1)}
+          onMoveDown={() => moveGroup(i, 1)}
+          canMoveUp={i > 0}
+          canMoveDown={i < groups.length - 1}
         />
       ))}
 
@@ -525,6 +664,72 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
     letterSpacing: -0.3,
+  },
+
+  // ── View config toolbar ──
+  toolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    marginBottom: 6,
+    gap: 8,
+  },
+  toolbarHint: {
+    flex: 1,
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.28)',
+    letterSpacing: 0.2,
+  },
+  savedFlash: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4ade80',
+    letterSpacing: 0.3,
+  },
+  editBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(91,184,212,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(91,184,212,0.30)',
+  },
+  editBtnText: {
+    color: BLUE,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  saveBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: BLUE,
+  },
+  saveBtnText: {
+    color: '#0A1628',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+
+  // ── Reorder handles (edit mode) ──
+  reorderHandle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
+    gap: 0,
+  },
+  reorderBtn: {
+    padding: 2,
+  },
+  reorderArrow: {
+    color: BLUE,
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 13,
   },
 
   // ── Account card ──
