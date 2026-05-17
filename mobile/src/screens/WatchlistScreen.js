@@ -115,15 +115,16 @@ function PositionRow({ item, onPress }) {
   );
 }
 
-// ── Collapsible account section ───────────────────────────────────────────────
+// ── Collapsible account / fund section ───────────────────────────────────────
 
-function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow, defaultOpen = true }) {
+function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow, defaultOpen = true, sourceType, stakePct }) {
   const [open, setOpen] = useState(defaultOpen);
 
-  const chgColor = dayValid ? (daySum >= 0 ? '#4ade80' : '#f87171') : GREY;
-  const chgTxt   = dayValid
-    ? (daySum >= 0 ? '+' : '') + fmtUSD(daySum, true)
-    : null;
+  const isFund    = sourceType === 'lp_fund';
+  const chgColor  = dayValid ? (daySum >= 0 ? '#4ade80' : '#f87171') : GREY;
+  const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSD(daySum, true) : null;
+  // Show stake badge only for LP fund sections where stake < 100%
+  const showStake = isFund && stakePct != null && stakePct < 99.99;
 
   return (
     <View style={styles.card}>
@@ -133,7 +134,12 @@ function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow
         onPress={() => setOpen(v => !v)}
         activeOpacity={0.75}
       >
-        <Text style={styles.cardName} numberOfLines={1}>{title}</Text>
+        <View style={styles.cardHdrLeft}>
+          <Text style={styles.cardName} numberOfLines={1}>{title}</Text>
+          {showStake && (
+            <Text style={styles.stakeBadge}>{stakePct.toFixed(2)}% STAKE</Text>
+          )}
+        </View>
         <Text style={styles.cardNav}>{fmtUSD(navSum, true)}</Text>
         {chgTxt ? (
           <Text style={[styles.cardChg, { color: chgColor }]}>{chgTxt}</Text>
@@ -195,22 +201,30 @@ export default function WatchlistScreen({ navigation }) {
       });
       setDayChange({ abs: totalAbs, pct: totalPrev ? (totalAbs / totalPrev) * 100 : 0 });
 
-      // Group by account_name
+      // Group by fund_id (unique per account/fund) — fall back to account_name
       const map = {}, order = [];
       pos.forEach(p => {
-        const acct = p.account_name || 'My Account';
-        if (!map[acct]) {
-          map[acct] = { positions: [], navSum: 0, daySum: 0, dayValid: false };
-          order.push(acct);
+        const key = p.fund_id || p.account_name || 'My Account';
+        if (!map[key]) {
+          map[key] = {
+            title:      p.account_name || 'My Account',
+            sourceType: p.source_type  || 'managed_account',
+            stakePct:   p.stake_pct    ?? 100,
+            positions:  [],
+            navSum:     0,
+            daySum:     0,
+            dayValid:   false,
+          };
+          order.push(key);
         }
-        map[acct].positions.push(p);
-        if (p.market_value)   map[acct].navSum += p.market_value;
+        map[key].positions.push(p);
+        if (p.market_value)   map[key].navSum += p.market_value;
         if (p.day_change_abs != null && p.total_qty != null) {
-          map[acct].daySum  += p.day_change_abs * p.total_qty;
-          map[acct].dayValid = true;
+          map[key].daySum  += p.day_change_abs * p.total_qty;
+          map[key].dayValid = true;
         }
       });
-      setGroups(order.map(acct => ({ title: acct, ...map[acct] })));
+      setGroups(order.map(key => map[key]));
 
     } catch (e) {
       setError(e.message || 'Failed to load positions');
@@ -320,7 +334,7 @@ export default function WatchlistScreen({ navigation }) {
       {/* ── Per-account collapsible cards ── */}
       {groups.map((grp, i) => (
         <AccountSection
-          key={grp.title}
+          key={grp.title + i}
           title={grp.title}
           positions={grp.positions}
           navSum={grp.navSum}
@@ -328,6 +342,8 @@ export default function WatchlistScreen({ navigation }) {
           dayValid={grp.dayValid}
           onPressRow={handleRowPress}
           defaultOpen={true}
+          sourceType={grp.sourceType}
+          stakePct={grp.stakePct}
         />
       ))}
 
@@ -407,12 +423,24 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(255,255,255,0.07)',
     gap: 8,
   },
-  cardName: {
+  cardHdrLeft: {
     flex: 1,
+    justifyContent: 'center',
+    gap: 3,
+  },
+  cardName: {
     color: 'rgba(255,255,255,0.55)',
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  stakeBadge: {
+    alignSelf: 'flex-start',
+    fontSize: 9,
+    fontWeight: '800',
+    color: BLUE,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   cardNav: {

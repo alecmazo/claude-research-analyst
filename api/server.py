@@ -2423,18 +2423,22 @@ def lp_me_overview(request: Request):
 
 @app.get("/api/v2/lp/me/positions")
 def lp_me_positions(request: Request):
-    """LP: return ALL open positions across the LP's managed accounts with
-    live price, day-change %, unrealized gain — the data powering the
-    watchlist view on mobile and web.
+    """Return ALL open positions across the user's managed accounts AND
+    LP fund stakes, with live price, day-change %, and unrealized gain.
 
-    managed_account_ids in the JWT claims are short names like "ANAT-IRA".
-    We match them against funds.short_name (case-insensitive) to get fund_ids,
-    then query tax_lots exactly like /api/fund/positions does.
+    LP users see their prorated share of each fund position (qty × stake_pct).
+    GP / admin users see full positions across every fund and managed account.
+
+    Response fields per position:
+      source_type  — 'managed_account' | 'lp_fund'
+      stake_pct    — LP ownership % (100.0 for managed accounts, actual % for funds)
+      total_qty    — already prorated for LP users
+      market_value — already prorated for LP users
     """
     claims = _claims_or_401(request)
-    # GP / admin → show all managed account positions (no filter)
-    is_privileged = claims.get("role") in ("gp", "admin")
-    acct_ids: list = claims.get("managed_account_ids") or []
+    is_privileged     = claims.get("role") in ("gp", "admin")
+    acct_ids: list    = claims.get("managed_account_ids") or []
+    fund_memberships: dict = claims.get("fund_memberships", {}) or {}
 
     if not _PSYCOPG2_OK:
         return {"positions": [], "total_market_value": None, "account_count": 0}
@@ -2442,35 +2446,68 @@ def lp_me_positions(request: Request):
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+
+            # ── 1. Managed accounts ───────────────────────────────────────────
             if is_privileged:
-                # GP: all managed accounts
                 cur.execute("""
                     SELECT id, name, short_name
                       FROM funds
                      WHERE fund_type = 'managed_account' AND status != 'closed'
                 """)
-            else:
-                if not acct_ids:
-                    return {"positions": [], "total_market_value": 0, "account_count": 0}
-                # LP: match managed_account_ids against short_name (flex case)
-                placeholders = ",".join(["%s"] * len(acct_ids))
-                cur.execute(f"""
+                managed_rows = [dict(r, source_type="managed_account", stake_pct=100.0)
+                                for r in cur.fetchall()]
+            elif acct_ids:
+                cur.execute("""
                     SELECT id, name, short_name
                       FROM funds
                      WHERE fund_type = 'managed_account'
                        AND (UPPER(short_name) = ANY(%s) OR UPPER(name) = ANY(%s))
-                """, (
-                    [a.upper() for a in acct_ids],
-                    [a.upper() for a in acct_ids],
-                ))
-            fund_rows = cur.fetchall()
-            fund_map  = {str(f["id"]): (f["name"], f["short_name"]) for f in fund_rows}
-            fund_ids  = list(fund_map.keys())
+                """, ([a.upper() for a in acct_ids], [a.upper() for a in acct_ids]))
+                managed_rows = [dict(r, source_type="managed_account", stake_pct=100.0)
+                                for r in cur.fetchall()]
+            else:
+                managed_rows = []
 
-            if not fund_ids:
+            # ── 2. LP fund stakes ─────────────────────────────────────────────
+            if is_privileged:
+                cur.execute("""
+                    SELECT id, name, short_name
+                      FROM funds
+                     WHERE fund_type = 'lp_fund' AND status != 'closed'
+                """)
+                lp_fund_rows = [dict(r, source_type="lp_fund", stake_pct=100.0)
+                                for r in cur.fetchall()]
+            elif fund_memberships:
+                names_lower = [n.lower() for n in fund_memberships.keys()]
+                cur.execute("""
+                    SELECT id, name, short_name
+                      FROM funds
+                     WHERE fund_type = 'lp_fund' AND LOWER(name) = ANY(%s)
+                """, (names_lower,))
+                lp_fund_rows = []
+                for f in cur.fetchall():
+                    # Resolve stake_pct from fund_memberships (flexible key lookup)
+                    m = (fund_memberships.get(f["name"])
+                         or fund_memberships.get(f["name"].upper())
+                         or fund_memberships.get(f["name"].lower())
+                         or {})
+                    if isinstance(m, dict):
+                        stake = float(m.get("stake_pct") or m.get("commitment_pct") or 0)
+                    else:
+                        stake = float(m or 0)
+                    lp_fund_rows.append(dict(f, source_type="lp_fund", stake_pct=stake))
+            else:
+                lp_fund_rows = []
+
+            all_fund_rows = managed_rows + lp_fund_rows
+            if not all_fund_rows:
                 return {"positions": [], "total_market_value": 0, "account_count": 0}
 
-            # Pull all open tax-lots across those funds
+            # fund_id (str) → fund info dict
+            fund_map = {str(f["id"]): f for f in all_fund_rows}
+            fund_db_ids = [f["id"] for f in all_fund_rows]
+
+            # ── 3. Pull all open tax-lots across every qualifying fund ─────────
             cur.execute("""
                 SELECT
                     s.symbol, s.name,
@@ -2485,14 +2522,14 @@ def lp_me_positions(request: Request):
                  WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
                  GROUP BY s.id, s.symbol, s.name, tl.fund_id
                  ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
-            """, ([f["id"] for f in fund_rows],))
+            """, (fund_db_ids,))
             rows = cur.fetchall()
 
     finally:
         conn.close()
 
     if not rows:
-        return {"positions": [], "total_market_value": 0, "account_count": len(fund_ids)}
+        return {"positions": [], "total_market_value": 0, "account_count": len(fund_map)}
 
     symbols = list({r["symbol"] for r in rows if r["symbol"]})
     quotes  = batch_quotes(",".join(symbols)) if symbols else {}
@@ -2500,49 +2537,59 @@ def lp_me_positions(request: Request):
     total_mkt = 0.0
     result    = []
     for r in rows:
-        sym      = r["symbol"]
-        qty      = float(r["total_qty"])
-        avg_cost = float(r["avg_cost"] or 0)
-        tot_cost = float(r["total_cost"] or 0)
+        sym   = r["symbol"]
+        fid   = r["fund_id"]
+        finfo = fund_map.get(fid, {})
+
+        # LP stake fraction (1.0 for managed accounts or GP; actual % for LP funds)
+        stake_frac = float(finfo.get("stake_pct") or 100.0) / 100.0
+
+        # Prorated quantities and cost
+        full_qty  = float(r["total_qty"])
+        full_cost = float(r["total_cost"] or 0)
+        avg_cost  = float(r["avg_cost"]   or 0)
+        qty       = round(full_qty  * stake_frac, 6)
+        tot_cost  = round(full_cost * stake_frac, 2)
+
         q        = quotes.get(sym) or {}
         last_p   = q.get("price")
         pct_chg  = q.get("pct_change")
         mkt_val  = round(qty * last_p, 2) if last_p else None
         if mkt_val:
             total_mkt += mkt_val
-        fid      = r["fund_id"]
-        fname, fshort = fund_map.get(fid, ("", ""))
+
         result.append({
-            "symbol":            sym,
-            "name":              r["name"] or sym,
-            "fund_id":           fid,
-            "account_name":      fname,
-            "account_short":     fshort,
-            "total_qty":         qty,
-            "avg_cost":          avg_cost,
-            "total_cost":        tot_cost,
-            "last_price":        round(last_p, 4) if last_p else None,
-            "day_change_pct":    round(pct_chg, 3) if pct_chg is not None else None,
-            "day_change_abs":    round(last_p * pct_chg / 100, 2) if (last_p and pct_chg is not None) else None,
-            "market_value":      mkt_val,
-            "unrealized_gain":   round(mkt_val - tot_cost, 2) if mkt_val else None,
+            "symbol":              sym,
+            "name":                r["name"] or sym,
+            "fund_id":             fid,
+            "account_name":        finfo.get("name", ""),
+            "account_short":       finfo.get("short_name", ""),
+            "source_type":         finfo.get("source_type", "managed_account"),
+            "stake_pct":           round(float(finfo.get("stake_pct") or 100.0), 4),
+            "total_qty":           qty,
+            "avg_cost":            avg_cost,
+            "total_cost":          tot_cost,
+            "last_price":          round(last_p, 4) if last_p else None,
+            "day_change_pct":      round(pct_chg, 3) if pct_chg is not None else None,
+            "day_change_abs":      round(last_p * pct_chg / 100, 2) if (last_p and pct_chg is not None) else None,
+            "market_value":        mkt_val,
+            "unrealized_gain":     round(mkt_val - tot_cost, 2) if mkt_val else None,
             "unrealized_gain_pct": round((mkt_val - tot_cost) / tot_cost * 100, 2) if (mkt_val and tot_cost) else None,
-            "first_acquired":    str(r["first_acquired"])[:10] if r["first_acquired"] else None,
+            "first_acquired":      str(r["first_acquired"])[:10] if r["first_acquired"] else None,
         })
 
-    # Add portfolio weights
+    # Portfolio weight based on LP-prorated totals
     if total_mkt > 0:
         for item in result:
-            if item["market_value"]:
-                item["market_weight_pct"] = round(item["market_value"] / total_mkt * 100, 2)
-            else:
-                item["market_weight_pct"] = None
+            item["market_weight_pct"] = (
+                round(item["market_value"] / total_mkt * 100, 2) if item["market_value"] else None
+            )
 
     return {
-        "positions":           result,
-        "total_market_value":  round(total_mkt, 2),
-        "account_count":       len(fund_ids),
-        "as_of":               datetime.utcnow().strftime("%H:%M UTC"),
+        "positions":          result,
+        "total_market_value": round(total_mkt, 2),
+        "account_count":      len(fund_map),
+        "as_of":              datetime.utcnow().strftime("%H:%M UTC"),
     }
 
 
