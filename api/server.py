@@ -110,9 +110,13 @@ try:
 except ImportError:
     _REPORTLAB_OK = False
 
-# ── Live-price cache  (TTL: 15 min) ──────────────────────────────────────────
-_price_cache: dict = {}  # { symbol: (price, fetched_at) }
-_PRICE_CACHE_TTL = 900   # seconds
+# ── Unified live-quote cache (TTL: 10 min) ────────────────────────────────────
+# Shared by _fetch_prices() and batch_quotes() — any endpoint that fetches price
+# data for a ticker warms the cache for ALL other endpoints.  No duplicate
+# yfinance HTTP requests for the same symbol within _QUOTE_TTL seconds.
+# Format: { symbol: {"price": float|None, "pct_change": float|None, "_ts": float} }
+_QUOTE_CACHE: dict = {}
+_QUOTE_TTL = 600   # seconds (10 min)
 
 # Cache for information_schema column checks (avoid slow system-table hits per request)
 _col_exists_cache: dict = {}   # { "table.column": bool }
@@ -234,177 +238,43 @@ def _resolve_ticker_alias(sym: str) -> str:
 
 
 def _fetch_prices(symbols: list) -> dict:
-    """Return {symbol: last_price} for the given list, using a 15-min cache.
+    """Return {symbol: last_price | None} for the given list.
 
-    Uses yf.download() to batch-fetch all uncached symbols in a single HTTP
-    request instead of one Ticker() call per symbol. Falls back to per-ticker
-    fast_info for any symbol the batch download misses (e.g. preferred stocks
-    with non-standard tickers).
-
-    Special handling:
-      • Money-market funds (SPAXX etc.) → always $1.00
-      • Ignored tickers (EM50 etc.)     → skipped (None returned)
-      • Bond CUSIPs (start with digit)  → skipped (caller uses cost basis)
-      • Ticker aliases (BRKB → BRK-B)   → remapped before Yahoo call
+    Special cases (money-market funds → $1.00, bond CUSIPs → None, ignored
+    tickers → None) are handled here.  Actual yfinance fetching is fully
+    delegated to batch_quotes() so both functions share the unified per-ticker
+    _QUOTE_CACHE — no duplicate Yahoo HTTP requests for the same ticker within
+    _QUOTE_TTL seconds regardless of which endpoint requested it first.
     """
-    if not _YFINANCE_OK or not symbols:
+    if not symbols:
         return {}
-    now   = time.time()
-    out   = {}
-    # Each entry: (original_sym, clean_sym, yahoo_sym)
-    fetch: list[tuple[str, str, str]] = []
 
     MM_FUNDS = ('SPAXX', 'FDRXX', 'SPRXX', 'FZFXX', 'FZDXX')
+    out: dict = {}
+    need: list = []
 
     for sym in symbols:
         clean = sym.rstrip('*')
-
-        # ── Completely skip ignored symbols (portfolio names, etc.) ───────────
         if _ticker_should_ignore(clean):
-            # Return None so callers fall back to cost basis; do NOT cache —
-            # so the ignore rule can be updated at runtime without a restart.
             out[sym] = None
             continue
-
-        # ── Bond CUSIPs — first char is a digit after stripping '$' ──────────
         if _is_bond_cusip(clean):
-            # No Yahoo call; caller uses cost basis. Cache as None with a long
-            # TTL so we never emit a "possibly delisted" warning for bonds.
-            _price_cache[clean] = (None, now)
             out[sym] = None
             continue
-
-        # ── Money-market: always $1 ───────────────────────────────────────────
         if any(mm in clean.upper() for mm in MM_FUNDS):
-            _price_cache[clean] = (1.0, now)
             out[sym] = 1.0
             continue
+        need.append(sym)
 
-        # ── Apply alias map before cache lookup ───────────────────────────────
-        yahoo_sym = _resolve_ticker_alias(clean)   # e.g. BRKB → BRK-B
-
-        # Cache lookup uses the original clean sym as key (consistent with write)
-        if clean in _price_cache:
-            p, ts = _price_cache[clean]
-            if now - ts < _PRICE_CACHE_TTL:
-                out[sym] = p
-                continue
-
-        fetch.append((sym, clean, yahoo_sym))
-
-    if not fetch:
-        return out
-
-    # ── Batch download (one HTTP request for all uncached symbols) ───────────
-    # Deduplicate by yahoo_sym (the symbol we'll actually query).
-    seen_yahoo: set[str] = set()
-    yahoo_to_clean: dict[str, str] = {}  # yahoo_sym → clean_sym
-    query_list: list[str] = []
-    for _, clean, yahoo in fetch:
-        if yahoo not in seen_yahoo:
-            seen_yahoo.add(yahoo)
-            yahoo_to_clean[yahoo] = clean
-            query_list.append(yahoo)
-
-    def _normalize_preferred(sym: str) -> str:
-        """Map preferred-stock variants to Yahoo format (BACPRL → BAC-PL)."""
-        import re as _r
-        m = _r.match(r'^([A-Z]{1,4})PR([A-Z])$', sym)
-        if m:
-            return m.group(1) + '-P' + m.group(2)
-        return sym
-
-    # Apply preferred-stock normalization on top of alias resolution.
-    final_query: list[str] = [_normalize_preferred(s) for s in query_list]
-    # Track mapping from final query sym back to clean sym.
-    final_to_clean: dict[str, str] = {
-        fq: yahoo_to_clean[q]
-        for fq, q in zip(final_query, query_list)
-    }
-
-    def _yf_batch(query_syms: list) -> dict:
-        """One yf.download call for a list of symbols. Returns
-        {symbol: last_price>0}. Never raises — failures map to empty dict.
-
-        Uses PER-COLUMN last-non-NaN lookup so illiquid tickers that didn't
-        trade on the most recent market day still resolve to their last
-        actual close. (yf.download fills no-trade days with NaN; taking
-        the last row globally would miss any ticker that's quiet today.)
-        Period is "5d" so weekends + holidays + a couple of no-trade days
-        in a row still produce a price."""
-        prices: dict = {}
-        if not query_syms:
-            return prices
-        try:
-            data = yf.download(
-                " ".join(query_syms),
-                period="5d",
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
-        except Exception:
-            return prices
-        if data is None or getattr(data, "empty", True):
-            return prices
-        close = data["Close"] if "Close" in data.columns else data.get("close")
-        if close is None or getattr(close, "empty", True):
-            return prices
-
-        # Multi-ticker DataFrame: each column is a ticker.
-        # Single-ticker Series: one column of dates -> close.
-        if hasattr(close, "columns"):
-            for col in close.columns:
-                try:
-                    s = close[col].dropna()
-                    if s.empty:
-                        continue
-                    p = float(s.iloc[-1])
-                    if p > 0:
-                        prices[str(col)] = p
-                except Exception:
-                    pass
-        else:
-            try:
-                s = close.dropna()
-                if not s.empty:
-                    p = float(s.iloc[-1])
-                    if p > 0 and query_syms:
-                        prices[query_syms[0]] = p
-            except Exception:
-                pass
-        return prices
-
-    # ── Pass 1: batch with alias-resolved + preferred-normalized symbols ──────
-    batch_prices: dict = _yf_batch(final_query)
-
-    # ── Pass 2: BATCH retry with class-share dash-variants for anything still
-    # missing (e.g. if BRKB didn't resolve via alias — fallback regex).
-    # One additional HTTP request — never per-ticker loops.
-    import re as _re_var
-    variant_map: dict = {}   # {variant_sym: final_query_sym}
-    for fq in final_query:
-        if batch_prices.get(fq):
-            continue
-        m = _re_var.match(r'^([A-Z]{2,4})([A-Z])$', fq)
-        if not m:
-            continue
-        variant = f"{m.group(1)}-{m.group(2)}"
-        variant_map[variant] = fq
-    if variant_map:
-        variant_prices = _yf_batch(list(variant_map.keys()))
-        for variant, p in variant_prices.items():
-            orig_fq = variant_map.get(variant)
-            if orig_fq and p:
-                batch_prices[orig_fq] = p
-
-    # ── Map results back to caller-supplied symbols ───────────────────────────
-    for orig_sym, clean, yahoo in fetch:
-        final = _normalize_preferred(yahoo)
-        price = batch_prices.get(final) or batch_prices.get(yahoo)
-        # Cache under the clean sym so next call within TTL is instant.
-        _price_cache[clean] = (price, now)
-        out[orig_sym] = price
+    if need and _YFINANCE_OK:
+        raw = batch_quotes(",".join(s.rstrip('*') for s in need))
+        for sym in need:
+            clean = sym.rstrip('*')
+            q = raw.get(clean) or {}
+            out[sym] = q.get("price")
+    else:
+        for sym in need:
+            out[sym] = None
 
     return out
 
@@ -2068,26 +1938,20 @@ def watchlist_get(request: Request):
     _watchlist_migrate_legacy_once()
     tickers = _wl_get_db(lp_id)
 
-    # Enrich with live quotes so the UI doesn't need a second call.
-    # Uses the same 15-min price cache as the rest of the app.
     quotes: dict[str, dict] = {}
     if tickers:
-        prices_now = _fetch_prices(tickers)
-        if yf is not None:
-            for tk in tickers:
-                last = prices_now.get(tk)
-                prev = None
-                try:
-                    t = yf.Ticker(tk)
-                    fi = t.fast_info
-                    prev = float(fi.previous_close) if fi.previous_close is not None else None
-                except Exception:
-                    pass
-                pct = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
-                quotes[tk] = {"price": last, "prev": prev, "pct": pct}
-        else:
-            for tk in tickers:
-                quotes[tk] = {"price": None, "prev": None, "pct": None}
+        # batch_quotes() uses the unified per-ticker _QUOTE_CACHE — if the
+        # user's positions were already fetched by /api/v2/lp/me/positions
+        # or /api/fund/positions this session, most tickers are cache-hits
+        # (zero yfinance HTTP requests).  No per-ticker fast_info loops.
+        raw = batch_quotes(",".join(tickers))
+        for tk in tickers:
+            q = raw.get(tk) or {}
+            quotes[tk] = {
+                "price": q.get("price"),
+                "prev":  None,
+                "pct":   q.get("pct_change"),
+            }
 
     return {"tickers": tickers, "quotes": quotes}
 
@@ -5213,10 +5077,10 @@ def start_reports_scan(background_tasks: BackgroundTasks):
     return _sjobs[job_id]
 
 
-# Cache for batch quote results (TTL: 10 min) — avoids re-hitting Yahoo on
-# every page load when the saved-reports table re-renders.
-_batch_quote_cache: dict = {}   # { frozenset(syms): (result_dict, ts) }
-_BATCH_QUOTE_TTL = 600          # seconds
+# Batch-quote and per-ticker-price cache are now unified in _QUOTE_CACHE above.
+# (Previously _batch_quote_cache cached per frozenset(syms); now each symbol
+# is cached individually so any call that fetches AAPL warms the cache for
+# every other endpoint that later needs AAPL within _QUOTE_TTL seconds.)
 
 # ── Tiingo fallback price source ──────────────────────────────────────────────
 # Used when Yahoo returns no data (rate-limited or delisted warning).
@@ -5268,64 +5132,63 @@ def _tiingo_single(sym: str) -> dict:
 
 @app.get("/api/quotes")
 def batch_quotes(tickers: str = ""):
-    """Return live prices + day-change % for a comma-separated list of tickers.
+    """Return {symbol: {price, pct_change}} for a comma-separated ticker list.
 
-    Uses a single yf.download() batch call (one HTTP request to Yahoo) instead
-    of N individual fast_info calls, so the saved-reports table never triggers
-    a rate-limit regardless of how many rows it has.
+    Uses a single yf.download() batch call for all cache-MISS tickers, then
+    stores results per-ticker in the unified _QUOTE_CACHE.  Subsequent calls
+    for any subset of already-fetched symbols are served from cache at zero
+    cost — including calls from _fetch_prices() which now delegates here.
 
-    Alias map is applied before the download (BRKB→BRK-B etc.) and the
-    original symbol is used as the response key so the UI maps back cleanly.
-    Results are cached for 10 minutes server-side.
+    Period "5d" covers weekends, holidays, and illiquid tickers that may not
+    have traded on the most recent market day.
     """
     originals = [t.strip().upper().rstrip("*") for t in tickers.split(",") if t.strip()][:100]
     if not originals:
         return {}
 
-    # Pre-filter: skip tickers in the exclusion dict (preferred stocks, ETFs,
-    # alias mismatches) — they generate Yahoo 404 / "possibly delisted" spam.
-    # Return null placeholders for them so the UI shows "—" gracefully.
-    excluded = {s for s in originals if s in _SCAN_EXCLUDE}
-    originals = [s for s in originals if s not in _SCAN_EXCLUDE]
+    excluded  = {s for s in originals if s in _SCAN_EXCLUDE}
+    to_lookup = [s for s in originals if s not in _SCAN_EXCLUDE]
     null_row: dict = {"price": None, "pct_change": None}
 
-    if not originals:
-        return {s: null_row for s in excluded}
+    result: dict = {s: null_row for s in excluded}
 
-    # Check cache first (keyed on the sorted symbol set)
-    cache_key = frozenset(originals)
-    hit = _batch_quote_cache.get(cache_key)
-    if hit:
-        cached_result, ts = hit
-        if (time.time() - ts) < _BATCH_QUOTE_TTL:
-            return cached_result
+    # ── Per-ticker cache check ────────────────────────────────────────────────
+    now    = time.time()
+    misses: list = []
+    for sym in to_lookup:
+        entry = _QUOTE_CACHE.get(sym)
+        if entry and (now - entry["_ts"]) < _QUOTE_TTL:
+            result[sym] = {"price": entry["price"], "pct_change": entry["pct_change"]}
+        else:
+            misses.append(sym)
+
+    if not misses:
+        return result
 
     if not _YFINANCE_OK:
-        return {s: {"price": None, "pct_change": None} for s in originals}
+        for s in misses:
+            result[s] = null_row
+            _QUOTE_CACHE[s] = {**null_row, "_ts": now}
+        return result
 
-    # Apply alias map: build yahoo_sym→original mapping
-    alias_map: dict[str, str] = {}   # yahoo_sym → original
-    yahoo_syms: list[str] = []
-    for orig in originals:
+    # ── Apply alias map for misses only ──────────────────────────────────────
+    alias_map: dict = {}   # yahoo_sym → original
+    yahoo_syms: list = []
+    for orig in misses:
         ysym = _resolve_ticker_alias(orig)
         alias_map[ysym] = orig
         yahoo_syms.append(ysym)
 
-    result: dict[str, dict] = {}
+    fetched: dict = {}
     try:
         import yfinance as _yf
-        import pandas as _pd
-        data = _yf.download(yahoo_syms, period="2d", auto_adjust=True,
+        data = _yf.download(yahoo_syms, period="5d", auto_adjust=True,
                             progress=False, group_by="ticker")
 
         def _extract(ysym: str) -> tuple:
-            """Return (price, pct_change) for a single yahoo symbol."""
+            """Return (price, pct_change) from last two close prices."""
             try:
-                if len(yahoo_syms) == 1:
-                    # Single-ticker download returns flat DataFrame
-                    closes = data["Close"].dropna()
-                else:
-                    closes = data[ysym]["Close"].dropna()
+                closes = data["Close"].dropna() if len(yahoo_syms) == 1 else data[ysym]["Close"].dropna()
                 if len(closes) >= 2:
                     price = float(closes.iloc[-1])
                     prev  = float(closes.iloc[-2])
@@ -5339,26 +5202,30 @@ def batch_quotes(tickers: str = ""):
 
         for ysym, orig in alias_map.items():
             price, pct = _extract(ysym)
-            result[orig] = {"price": price, "pct_change": pct}
+            fetched[orig] = {"price": price, "pct_change": pct}
 
     except Exception as _e:
         print(f"[batch_quotes] yf.download failed: {_e}")
-        result = {s: {"price": None, "pct_change": None} for s in originals}
+        fetched = {s: {"price": None, "pct_change": None} for s in misses}
 
-    # Tiingo fallback — fill in any tickers Yahoo returned None for
-    missing = [orig for orig, v in result.items() if v.get("price") is None]
-    if missing:
-        tiingo_data = _tiingo_batch(missing)
-        for orig in missing:
+    # ── Tiingo fallback for any Yahoo misses ──────────────────────────────────
+    still_missing = [orig for orig, v in fetched.items() if v.get("price") is None]
+    if still_missing:
+        tiingo_data = _tiingo_batch(still_missing)
+        for orig in still_missing:
             if orig in tiingo_data:
-                result[orig] = tiingo_data[orig]
+                fetched[orig] = tiingo_data[orig]
                 print(f"[quotes] {orig}: Yahoo miss → Tiingo hit")
 
-    # Merge excluded tickers back as null placeholders
-    for s in excluded:
-        result[s] = null_row
+    # ── Store per-ticker in unified cache and merge into result ───────────────
+    ts_now = time.time()
+    for sym, q in fetched.items():
+        _QUOTE_CACHE[sym] = {**q, "_ts": ts_now}
+        result[sym] = q
+    for sym in misses:
+        if sym not in result:
+            result[sym] = null_row
 
-    _batch_quote_cache[cache_key] = (result, time.time())
     return result
 
 
@@ -7620,8 +7487,8 @@ async def add_ticker_alias(body: TickerAliasRequest, request: Request):
     if not src or not tgt:
         raise HTTPException(status_code=422, detail="source and target required")
     _TICKER_ALIASES[src] = tgt
-    # Also flush the price cache for this symbol so it re-resolves immediately.
-    _price_cache.pop(src, None)
+    # Flush unified quote cache for this symbol so it re-resolves immediately.
+    _QUOTE_CACHE.pop(src, None)
     print(f"[ticker-map] alias added: {src} → {tgt}")
     return {"ok": True, "alias": {src: tgt}}
 
@@ -7633,7 +7500,7 @@ async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
     if not sym:
         raise HTTPException(status_code=422, detail="ticker required")
     _TICKER_IGNORE[sym] = body.reason
-    _price_cache.pop(sym, None)
+    _QUOTE_CACHE.pop(sym, None)
     print(f"[ticker-map] ignore added: {sym} ({body.reason})")
     return {"ok": True, "ignored": sym, "reason": body.reason}
 
