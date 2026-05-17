@@ -233,10 +233,11 @@ export async function clearFundToken() {
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
 async function request(path, options = {}, _isRetry = false) {
-  const [base, token] = await Promise.all([getBaseUrl(), getToken()]);
+  const [base, token, v2Token] = await Promise.all([getBaseUrl(), getToken(), getV2Token()]);
   const url = `${base}${path}`;
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (token) headers['x-auth-token'] = token;
+  if (token)   headers['x-auth-token']    = token;
+  if (v2Token) headers['x-auth-v2-token'] = v2Token;  // piggyback v2 JWT so server sees demo_mode claims
 
   const resp = await fetch(url, { ...options, headers });
 

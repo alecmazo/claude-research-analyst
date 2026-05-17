@@ -7053,8 +7053,11 @@ async def fund_list(request: Request, fund_type: str = None):
     N-sequential-query loops.
     """
     _require_fund_token(request)
-    # 25s response cache — fund list is identical for any caller
-    resp_cache_key = ("fund_list", "fund", str(fund_type or "all"))
+    # Check for demo_mode in JWT claims (mobile piggbacks x-auth-v2-token alongside x-fund-token)
+    _fund_claims  = getattr(request.state, 'auth_claims', None) or {}
+    _is_demo      = bool(_fund_claims.get("demo_mode"))
+    # 25s response cache — split by demo vs normal so anonymized data isn't served to real admins
+    resp_cache_key = ("fund_list", "fund", str(fund_type or "all"), "demo" if _is_demo else "live")
     _cached = _user_cache_get(resp_cache_key)
     if _cached is not None:
         return _cached
@@ -7326,6 +7329,16 @@ async def fund_list(request: Request, fund_type: str = None):
                     "ytd_pos_pct":    ytd_pos_pct,          # positions-based, matches Fidelity
                     "market_nav":     round(market_nav_val, 2) if market_nav_val > 0 else None,
                 })
+            # Demo mode: anonymise managed-account names (fund names stay as-is)
+            if _is_demo:
+                ma_ids = [f["id"] for f in result if f.get("fund_type") == "managed_account"]
+                label_map = _build_acct_label_map(ma_ids)
+                for f in result:
+                    if f.get("fund_type") == "managed_account":
+                        label = label_map.get(str(f["id"]), "Acct —")
+                        f["name"]       = label
+                        f["short_name"] = label
+
             print(f"[perf] fund_list ({fund_type or 'all'}) {time.time()-_t0:.2f}s ({len(result)} funds)")
             _user_cache_put(resp_cache_key, result)
             return result
@@ -7519,6 +7532,8 @@ async def fund_overview(request: Request, fund_id: str = None):
 @app.get("/api/fund/lps")
 async def fund_lps(request: Request, fund_id: str = None):
     _require_fund_token(request)
+    _fund_lps_claims = getattr(request.state, 'auth_claims', None) or {}
+    _is_demo = bool(_fund_lps_claims.get("demo_mode"))
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -7544,13 +7559,13 @@ async def fund_lps(request: Request, fund_id: str = None):
             total_committed = sum(float(r["commitment"]) for r in rows) or 0
 
             result = []
-            for r in rows:
+            for i, r in enumerate(rows):
                 commitment = float(r["commitment"])
                 share      = (commitment / total_committed) if total_committed > 0 else 0.0
                 cur_val    = round(market_nav * share, 2)
                 result.append({
                     "id":           str(r["id"]),
-                    "legal_name":   r["legal_name"],
+                    "legal_name":   _demo_label(i) if _is_demo else r["legal_name"],
                     "entity_type":  r["entity_type"],
                     "onboarded_at": str(r["onboarded_at"]) if r["onboarded_at"] else None,
                     "commitment":   commitment,
