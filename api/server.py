@@ -164,7 +164,9 @@ def _invalidate_user_cache(user_id: str | None = None):
 
 _TICKER_ALIASES: dict[str, str] = {
     # Berkshire Hathaway class B
-    "BRKB":  "BRK-B",
+    "BRKB":   "BRK-B",
+    # Annaly Capital preferred F  (Fidelity: NLYPRF, Yahoo: NLY-PF)
+    "NLYPRF": "NLY-PF",
     # Add more as needed — key = as-imported, value = Yahoo symbol
 }
 
