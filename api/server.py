@@ -1278,7 +1278,10 @@ def auth_v2_login(req: AuthV2LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     _rl_clear(email)
-    _audit("login", result.get("email", email), ip, True)
+    if result.get("impersonated"):
+        _audit("login", result.get("email", email), ip, True, "impersonated_by_admin")
+    else:
+        _audit("login", result.get("email", email), ip, True)
     return result
 
 

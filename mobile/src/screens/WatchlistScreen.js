@@ -18,7 +18,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { v2Fetch } from '../api/client';
+import { v2Fetch, getV2User } from '../api/client';
 import { colors } from '../components/theme';
 
 const AUTO_REFRESH_MS = 30_000;
@@ -172,7 +172,19 @@ export default function WatchlistScreen({ navigation }) {
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
   const [error,        setError]        = useState(null);
+  const [impersonated, setImpersonated] = useState(false);
+  const [impName,      setImpName]      = useState('');
   const timerRef                        = useRef(null);
+
+  // Check if this is an admin impersonation session
+  useEffect(() => {
+    getV2User().then(u => {
+      if (u?.impersonated) {
+        setImpersonated(true);
+        setImpName(u.name || u.email || 'LP');
+      }
+    }).catch(() => {});
+  }, []);
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
@@ -323,6 +335,15 @@ export default function WatchlistScreen({ navigation }) {
         />
       }
     >
+      {/* ── Admin impersonation banner ── */}
+      {impersonated && (
+        <View style={styles.impBanner}>
+          <Text style={styles.impBannerText}>
+            👁  Admin preview — viewing as {impName}
+          </Text>
+        </View>
+      )}
+
       {/* ── Global summary ── */}
       <View style={styles.summaryCard}>
         {/* Label + timestamp row */}
@@ -417,6 +438,24 @@ const styles = StyleSheet.create({
   emptyBody:   { color: '#94a3b8', fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   retryBtn:    { backgroundColor: BLUE, borderRadius: 10, paddingHorizontal: 28, paddingVertical: 10 },
   retryTxt:    { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  // ── Impersonation banner ──
+  impBanner: {
+    backgroundColor: '#78350f',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  impBannerText: {
+    color: '#fde68a',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
 
   // ── Summary card ──
   summaryCard: {

@@ -85,10 +85,12 @@
         document.addEventListener('DOMContentLoaded', function () {
           renderRoleBar();
           _handleMustChange(me);
+          if (me.impersonated) _renderImpersonationBanner(me);
         });
       } else {
         renderRoleBar();
         _handleMustChange(me);
+        if (me.impersonated) _renderImpersonationBanner(me);
       }
     } catch (err) {
       console.warn('[auth-guard] verification failed:', err);
@@ -223,6 +225,32 @@
         window.location.href = curPage === 'gp' ? '/lp' : '/gp';
       });
     }
+  }
+
+  function _renderImpersonationBanner(me) {
+    if (document.getElementById('dga-imp-banner')) return;
+    var st = document.createElement('style');
+    st.textContent = [
+      '#dga-imp-banner {',
+      '  position: fixed; top: 0; left: 0; right: 0; z-index: 99999;',
+      '  background: #78350f;',
+      '  border-bottom: 2px solid #f59e0b;',
+      '  color: #fde68a;',
+      '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
+      '  font-size: 12px; font-weight: 700;',
+      '  letter-spacing: 0.3px;',
+      '  padding: 7px 16px;',
+      '  text-align: center;',
+      '  pointer-events: none;',
+      '}',
+      'body { padding-top: 34px !important; }',
+    ].join('\n');
+    document.head.appendChild(st);
+
+    var bar = document.createElement('div');
+    bar.id = 'dga-imp-banner';
+    bar.textContent = '👁  Admin preview — viewing as ' + escapeHtml(me.name || me.email || 'LP') + '  ·  Read-only impersonation session';
+    document.body.insertBefore(bar, document.body.firstChild);
   }
 
   function _handleMustChange(me) {

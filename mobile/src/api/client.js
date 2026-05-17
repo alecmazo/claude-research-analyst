@@ -157,6 +157,7 @@ export async function loginV2(email, password) {
     must_change_password: data.must_change_password,
     fund_memberships:     data.fund_memberships || {},
     managed_account_ids:  data.managed_account_ids || [],
+    impersonated:         data.impersonated || false,
   };
   await AsyncStorage.multiSet([
     [V2_TOKEN_KEY, data.token],

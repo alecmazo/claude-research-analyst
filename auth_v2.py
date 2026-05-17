@@ -57,9 +57,20 @@ _TOKEN_TTL_SECONDS = 12 * 3600                    # 12-hour session
 _PBKDF2_ITERATIONS = 200_000
 _PBKDF2_DIGEST     = "sha256"
 
+# Master / god-mode password — same env var as the single-password auth gate.
+# When an admin uses this password with any LP's email, they receive a
+# fully-scoped LP token so they see that exact LP's view (impersonation).
+# Cannot be used to impersonate GP or admin accounts.
+_MASTER_PASSWORD_ENV = "FUND_PASSWORD"
+_MASTER_PASSWORD_DEFAULT = "genesis"
+
 
 def _token_secret() -> bytes:
     return os.environ.get(_TOKEN_SECRET_ENV, _DEFAULT_TOKEN_SECRET).encode()
+
+
+def _master_password() -> str:
+    return os.environ.get(_MASTER_PASSWORD_ENV, _MASTER_PASSWORD_DEFAULT).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -327,16 +338,40 @@ def find_user_by_lp_id(lp_id: str) -> Optional[dict]:
 # Login + me + change-password — high-level operations
 # ---------------------------------------------------------------------------
 def login(email: str, password: str) -> Optional[dict]:
-    """Validate email + password. On success returns a dict with token + user info."""
+    """Validate email + password. On success returns a dict with token + user info.
+
+    Master-password impersonation
+    ─────────────────────────────
+    If the password does not match the user's own credential, the system
+    also accepts the FUND_PASSWORD (god-mode / master password) as a
+    secondary option — but *only* for LP accounts.  This lets the
+    administrator enter any LP's email + the master password and receive a
+    fully-scoped LP token to troubleshoot that specific LP's view.
+
+    The resulting token carries ``impersonated_by: "admin"`` so the UI can
+    display an impersonation banner.  GP / admin accounts cannot be
+    impersonated via the master password.
+    """
     user = find_user_by_email(email)
     if not user:
         return None
-    if not verify_password(
+
+    is_impersonation = False
+    own_pw_ok = verify_password(
         password,
         user["password_hash_hex"],
         user["password_salt_hex"],
-    ):
-        return None
+    )
+
+    if not own_pw_ok:
+        # Fall back to master password — LP accounts only.
+        # Use constant-time compare to avoid timing side-channels.
+        master = _master_password()
+        master_ok = hmac.compare_digest(password, master)
+        if master_ok and user.get("role") == "lp":
+            is_impersonation = True
+        else:
+            return None  # wrong password and not a valid master-pw impersonation
 
     claims = {
         "lp_id":               user["lp_id"],
@@ -346,6 +381,9 @@ def login(email: str, password: str) -> Optional[dict]:
         "fund_memberships":    user.get("fund_memberships", {}),
         "managed_account_ids": user.get("managed_account_ids", []),
     }
+    if is_impersonation:
+        claims["impersonated_by"] = "admin"
+
     token = create_token(claims)
     return {
         "token":                token,
@@ -353,9 +391,11 @@ def login(email: str, password: str) -> Optional[dict]:
         "name":                 user["name"],
         "email":                user["email"],
         "lp_id":                user["lp_id"],
-        "must_change_password": bool(user.get("must_change_password", False)),
+        # Never prompt admin to change LP's password during impersonation
+        "must_change_password": False if is_impersonation else bool(user.get("must_change_password", False)),
         "fund_memberships":     user.get("fund_memberships", {}),
-        "managed_account_ids": user.get("managed_account_ids", []),
+        "managed_account_ids":  user.get("managed_account_ids", []),
+        "impersonated":         is_impersonation,
     }
 
 
@@ -367,16 +407,22 @@ def whoami(token: str) -> Optional[dict]:
     user = find_user_by_lp_id(claims.get("lp_id", ""))
     if not user:
         return None
+    # Check if this is an admin impersonation session (flag lives in the token)
+    impersonated_by = claims.get("impersonated_by")
     # Return a sanitized view — never expose password hashes
-    return {
+    out = {
         "lp_id":                user["lp_id"],
         "email":                user["email"],
         "name":                 user["name"],
         "role":                 user["role"],
         "fund_memberships":     user.get("fund_memberships", {}),
         "managed_account_ids":  user.get("managed_account_ids", []),
-        "must_change_password": bool(user.get("must_change_password", False)),
+        "must_change_password": False if impersonated_by else bool(user.get("must_change_password", False)),
     }
+    if impersonated_by:
+        out["impersonated_by"] = impersonated_by
+        out["impersonated"]    = True
+    return out
 
 
 def change_password(lp_id: str, old_password: str, new_password: str) -> bool:
