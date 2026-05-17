@@ -163,14 +163,16 @@ function AccountSection({ title, positions, navSum, daySum, dayValid, onPressRow
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function WatchlistScreen({ navigation }) {
-  const [groups,      setGroups]      = useState([]);
-  const [totalValue,  setTotalValue]  = useState(null);
-  const [dayChange,   setDayChange]   = useState({ abs: null, pct: null });
-  const [updatedAt,   setUpdatedAt]   = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
-  const [error,       setError]       = useState(null);
-  const timerRef                      = useRef(null);
+  const [groups,       setGroups]       = useState([]);
+  const [totalValue,   setTotalValue]   = useState(null);
+  const [fundStakes,   setFundStakes]   = useState(null);
+  const [managedNav,   setManagedNav]   = useState(null);
+  const [dayChange,    setDayChange]    = useState({ abs: null, pct: null });
+  const [updatedAt,    setUpdatedAt]    = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
+  const [error,        setError]        = useState(null);
+  const timerRef                        = useRef(null);
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
@@ -224,7 +226,17 @@ export default function WatchlistScreen({ navigation }) {
           map[key].dayValid = true;
         }
       });
-      setGroups(order.map(key => map[key]));
+
+      // Compute fund stakes vs managed account NAV breakdown
+      const built = order.map(key => map[key]);
+      let fundTotal = 0, acctTotal = 0;
+      built.forEach(grp => {
+        if (grp.sourceType === 'lp_fund') fundTotal += grp.navSum;
+        else                              acctTotal += grp.navSum;
+      });
+      setFundStakes(fundTotal > 0 ? fundTotal : null);
+      setManagedNav(acctTotal > 0 ? acctTotal : null);
+      setGroups(built);
 
     } catch (e) {
       setError(e.message || 'Failed to load positions');
@@ -313,22 +325,48 @@ export default function WatchlistScreen({ navigation }) {
     >
       {/* ── Global summary ── */}
       <View style={styles.summaryCard}>
-        <View style={styles.summaryRow}>
-          <View>
-            <Text style={styles.totalValue}>
-              {totalValue != null ? fmtUSD(totalValue) : '—'}
-            </Text>
-            {dayAbsTxt && (
-              <Text style={[styles.dayChange, { color: dayColor }]}>
-                {dayAbsTxt}{dayPctTxt ? '  ·  ' + dayPctTxt : ''}
-              </Text>
-            )}
-          </View>
+        {/* Label + timestamp row */}
+        <View style={styles.summaryTopRow}>
+          <Text style={styles.summaryEyebrow}>YOUR TOTAL PORTFOLIO</Text>
           <View style={styles.summaryRight}>
             <Text style={styles.liveLabel}>LIVE PRICES</Text>
             {updatedAt ? <Text style={styles.updatedAt}>{updatedAt}</Text> : null}
           </View>
         </View>
+
+        {/* Big total */}
+        <Text style={styles.totalValue}>
+          {totalValue != null ? fmtUSD(totalValue) : '—'}
+        </Text>
+        {dayAbsTxt && (
+          <Text style={[styles.dayChange, { color: dayColor }]}>
+            {dayAbsTxt}{dayPctTxt ? '  ·  ' + dayPctTxt : ''}
+          </Text>
+        )}
+
+        {/* Breakdown tiles — only when we have both/either */}
+        {(fundStakes != null || managedNav != null) && (
+          <>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryTiles}>
+              {fundStakes != null && (
+                <View style={styles.summaryTile}>
+                  <Text style={styles.tileLabel}>FUND STAKES</Text>
+                  <Text style={styles.tileValue}>{fmtUSD(fundStakes)}</Text>
+                </View>
+              )}
+              {fundStakes != null && managedNav != null && (
+                <View style={styles.tileSep} />
+              )}
+              {managedNav != null && (
+                <View style={styles.summaryTile}>
+                  <Text style={styles.tileLabel}>MANAGED ACCT NAV</Text>
+                  <Text style={styles.tileValue}>{fmtUSD(managedNav)}</Text>
+                </View>
+              )}
+            </View>
+          </>
+        )}
       </View>
 
       {/* ── Per-account collapsible cards ── */}
@@ -387,10 +425,18 @@ const styles = StyleSheet.create({
     padding: 18,
     marginBottom: 10,
   },
-  summaryRow: {
+  summaryTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  summaryEyebrow: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: BLUE,
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
   },
   totalValue: {
     color: '#fff',
@@ -406,6 +452,41 @@ const styles = StyleSheet.create({
   summaryRight: { alignItems: 'flex-end' },
   liveLabel:   { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase', marginBottom: 2 },
   updatedAt:   { fontSize: 11, color: 'rgba(255,255,255,0.28)' },
+
+  // Breakdown tiles
+  summaryDivider: {
+    height: 1,
+    backgroundColor: 'rgba(91,184,212,0.18)',
+    marginTop: 14,
+    marginBottom: 14,
+  },
+  summaryTiles: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  summaryTile: {
+    flex: 1,
+  },
+  tileSep: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(91,184,212,0.18)',
+    marginHorizontal: 16,
+  },
+  tileLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: BLUE,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  tileValue: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: -0.3,
+  },
 
   // ── Account card ──
   card: {
