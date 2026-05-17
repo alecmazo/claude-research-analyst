@@ -2543,11 +2543,40 @@ def lp_me_positions(request: Request):
                         print(f"[positions] tot_comm lookup failed: {_e}")
                         conn.rollback()
 
+                    # Batch: latest annual snapshot → GP carry fraction per fund
+                    # carry_factor = 1 − (gp_equity_end / end_nav)
+                    # Mirrors the overview endpoint's gp_accrued_carry calculation
+                    # so live-portfolio values are net of carry, matching the dashboard.
+                    carry_factor_by_fid: dict = {}
+                    try:
+                        cur.execute("""
+                            SELECT DISTINCT ON (fund_id) fund_id::text,
+                                   gp_equity_end, end_nav
+                              FROM fund_annual_snapshots
+                             WHERE fund_id = ANY(%s)
+                             ORDER BY fund_id, year DESC
+                        """, (fund_ids_pg,))
+                        for row in cur.fetchall():
+                            gp_eq = float(row["gp_equity_end"] or 0)
+                            e_nav = float(row["end_nav"] or 0)
+                            carry_factor_by_fid[row["fund_id"]] = (
+                                (1.0 - gp_eq / e_nav) if e_nav > 0 else 1.0
+                            )
+                    except Exception as _e:
+                        print(f"[positions] carry_factor lookup failed: {_e}")
+                        conn.rollback()
+
                     for f in raw_lp_funds:
-                        fid_str  = str(f["id"])
-                        lp_comm  = lp_comm_by_fid.get(fid_str, 0.0)
-                        tot_comm = tot_comm_by_fid.get(fid_str, 0.0)
-                        stake_pct = (lp_comm / tot_comm * 100.0) if (tot_comm > 0 and lp_comm > 0) else 0.0
+                        fid_str      = str(f["id"])
+                        lp_comm      = lp_comm_by_fid.get(fid_str, 0.0)
+                        tot_comm     = tot_comm_by_fid.get(fid_str, 0.0)
+                        carry_factor = carry_factor_by_fid.get(fid_str, 1.0)
+                        # Carry-adjusted stake: raw ownership % × (1 − GP carry fraction)
+                        # Ensures live portfolio totals match the dashboard's net-of-carry values
+                        stake_pct = (
+                            lp_comm / tot_comm * 100.0 * carry_factor
+                            if (tot_comm > 0 and lp_comm > 0) else 0.0
+                        )
                         lp_fund_rows.append(dict(f, source_type="lp_fund", stake_pct=stake_pct))
             else:
                 lp_fund_rows = []
