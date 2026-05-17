@@ -572,6 +572,72 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
+  /* ── GP LIVE POSITIONS WATCHLIST ─────────────────────────────── */
+  #gp-positions-panel {
+    background: var(--navy);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 32px rgba(10,22,40,0.22);
+    margin-bottom: 20px;
+  }
+  .gp-wl-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .gp-wl-header-left {}
+  .gp-wl-total { font-size: 28px; font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .gp-wl-day   { font-size: 13px; font-weight: 700; margin-top: 3px; }
+  .gp-wl-header-right { text-align: right; }
+  .gp-wl-badge { font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(255,255,255,0.35); margin-bottom: 4px; }
+  .gp-wl-ts    { font-size: 11px; color: rgba(255,255,255,0.30); }
+
+  /* Group header rows */
+  .gp-wl-group-hdr {
+    padding: 8px 24px 5px;
+    font-size: 9px; font-weight: 800; letter-spacing: 1.2px;
+    text-transform: uppercase; color: rgba(255,255,255,0.30);
+    background: rgba(255,255,255,0.025);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  /* Individual position rows */
+  .gp-wl-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 24px;
+    border-bottom: 0.5px solid rgba(255,255,255,0.06);
+    cursor: pointer; transition: background .12s;
+  }
+  .gp-wl-row:last-child { border-bottom: none; }
+  .gp-wl-row:hover { background: rgba(255,255,255,0.04); }
+  .gp-wl-left { flex: 1; min-width: 0; }
+  .gp-wl-ticker { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
+  .gp-wl-name   { font-size: 11px; color: rgba(255,255,255,0.38); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+  .gp-wl-wt     { font-size: 10px; color: rgba(255,255,255,0.22); margin-top: 2px; }
+  .gp-wl-shares { font-size: 11px; color: rgba(255,255,255,0.28); margin-top: 1px; }
+  .gp-wl-price  { font-size: 15px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; text-align: right; min-width: 80px; }
+  .gp-wl-gain   { font-size: 10px; color: rgba(255,255,255,0.32); text-align: right; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .gp-wl-pill {
+    min-width: 90px; padding: 6px 10px; border-radius: 8px;
+    text-align: center;
+  }
+  .gp-wl-pill.up { background: #16A34A; }
+  .gp-wl-pill.dn { background: #DC2626; }
+  .gp-wl-pill.nc { background: rgba(255,255,255,0.08); }
+  .gp-wl-pill-abs { font-size: 12px; font-weight: 800; color: #fff; line-height: 1.2; }
+  .gp-wl-pill-pct { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.2; }
+
+  /* Summary footer */
+  .gp-wl-footer {
+    display: flex; gap: 24px; align-items: center; flex-wrap: wrap;
+    padding: 14px 24px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.018);
+  }
+  .gp-wl-stat { text-align: center; }
+  .gp-wl-stat-val { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+  .gp-wl-stat-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: rgba(255,255,255,0.30); margin-top: 2px; }
+
   /* Full-width single-column layout for non-Research tabs */
   .wide-shell {
     max-width: 1400px; margin: 0 auto; padding: 14px;
@@ -888,7 +954,8 @@
   </div>
 
   <nav class="topbar-right">
-    <span class="topbar-link active" data-tab="research">Research</span>
+    <span class="topbar-link active" data-tab="positions">📊 Positions</span>
+    <span class="topbar-link" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
@@ -908,7 +975,55 @@
 <!-- TAB PANELS                                                 -->
 <!-- ══════════════════════════════════════════════════════════ -->
 
-<div id="tab-research" class="tab-panel active">
+<!-- ══ POSITIONS TAB ══════════════════════════════════════════════ -->
+<div id="tab-positions" class="tab-panel active">
+  <div class="wide-shell">
+
+    <!-- Live Watchlist Panel -->
+    <div id="gp-positions-panel">
+      <div class="gp-wl-header">
+        <div class="gp-wl-header-left">
+          <div id="gp-wl-total" class="gp-wl-total">Loading…</div>
+          <div id="gp-wl-day"   class="gp-wl-day"></div>
+        </div>
+        <div class="gp-wl-header-right">
+          <div class="gp-wl-badge">LIVE PRICES</div>
+          <div id="gp-wl-ts" class="gp-wl-ts">updating…</div>
+        </div>
+      </div>
+      <div id="gp-wl-rows">
+        <div class="gp-wl-row" style="opacity:0.4;">
+          <div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">Loading positions…</div></div>
+        </div>
+      </div>
+      <div class="gp-wl-footer" id="gp-wl-footer" style="display:none;">
+        <div class="gp-wl-stat">
+          <div class="gp-wl-stat-val" id="gp-wl-stat-count">—</div>
+          <div class="gp-wl-stat-lbl">Positions</div>
+        </div>
+        <div class="gp-wl-stat">
+          <div class="gp-wl-stat-val" id="gp-wl-stat-accts">—</div>
+          <div class="gp-wl-stat-lbl">Accounts</div>
+        </div>
+        <div class="gp-wl-stat">
+          <div class="gp-wl-stat-val" id="gp-wl-stat-gainers">—</div>
+          <div class="gp-wl-stat-lbl">Up Today</div>
+        </div>
+        <div class="gp-wl-stat">
+          <div class="gp-wl-stat-val" id="gp-wl-stat-losers">—</div>
+          <div class="gp-wl-stat-lbl">Down Today</div>
+        </div>
+        <div class="gp-wl-stat" style="margin-left:auto;">
+          <div class="gp-wl-stat-val" id="gp-wl-stat-gain" style="color:rgba(255,255,255,0.5);">—</div>
+          <div class="gp-wl-stat-lbl">Total Unrealized</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div><!-- #tab-positions -->
+
+<div id="tab-research" class="tab-panel">
 <!-- ── MAIN GRID ─────────────────────────────────────────────── -->
 <main class="shell">
 
@@ -1775,6 +1890,7 @@
   // TAB ROUTING
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
+    positions: () => loadGPPositions(),
     ideas:    () => loadIdeasTab(),
     tracker:  () => loadTrackerTab(),
     fund:     () => loadFundTab(),
@@ -2434,6 +2550,181 @@
           </tbody>
         </table>`;
     } catch { el.innerHTML = '<div class="tab-error">Could not load paper portfolios.</div>'; }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // POSITIONS TAB — live GP watchlist
+  // ══════════════════════════════════════════════════════════════
+  var _gpPosTimer = null;
+
+  async function loadGPPositions() {
+    await _refreshGPPositions();
+    // Auto-refresh every 30 seconds while positions tab is active
+    if (_gpPosTimer) clearInterval(_gpPosTimer);
+    _gpPosTimer = setInterval(function () {
+      if (document.getElementById('tab-positions')?.classList.contains('active')) {
+        _refreshGPPositions();
+      }
+    }, 30000);
+  }
+
+  async function _refreshGPPositions() {
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/positions');
+      if (!r.ok) throw new Error('positions ' + r.status);
+      const data = await r.json();
+      _renderGPWatchlist(data);
+    } catch (e) {
+      console.warn('[gp-positions]', e);
+      document.getElementById('gp-wl-rows').innerHTML =
+        '<div class="gp-wl-row" style="opacity:0.5;"><div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">Could not load positions</div></div></div>';
+    }
+  }
+
+  function _renderGPWatchlist(data) {
+    const positions = (data.positions || []).sort(function (a, b) {
+      return (b.market_weight_pct || 0) - (a.market_weight_pct || 0);
+    });
+
+    // ── Header totals ──────────────────────────────────────────
+    const totalEl = document.getElementById('gp-wl-total');
+    const dayEl   = document.getElementById('gp-wl-day');
+    const tsEl    = document.getElementById('gp-wl-ts');
+
+    const totalMV = data.total_market_value || 0;
+    if (totalEl) totalEl.textContent = totalMV > 0 ? fmtUSD(totalMV) : '—';
+
+    // Aggregate day change (day_change_abs is per-share × total_qty)
+    let dayChangeAbs = 0, validDay = false;
+    positions.forEach(function (p) {
+      if (p.day_change_abs != null && p.total_qty != null) {
+        dayChangeAbs += p.day_change_abs * p.total_qty;
+        validDay = true;
+      }
+    });
+    if (dayEl) {
+      if (validDay) {
+        const sign = dayChangeAbs >= 0 ? '+' : '';
+        const pct  = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
+        dayEl.textContent = sign + fmtUSD(dayChangeAbs) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%) today';
+        dayEl.style.color = dayChangeAbs >= 0 ? '#4ade80' : '#f87171';
+      } else {
+        dayEl.textContent = '';
+      }
+    }
+    if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // ── Footer stats ───────────────────────────────────────────
+    const footer = document.getElementById('gp-wl-footer');
+    if (footer) footer.style.display = positions.length ? 'flex' : 'none';
+    const statCount   = document.getElementById('gp-wl-stat-count');
+    const statAccts   = document.getElementById('gp-wl-stat-accts');
+    const statGainers = document.getElementById('gp-wl-stat-gainers');
+    const statLosers  = document.getElementById('gp-wl-stat-losers');
+    const statGain    = document.getElementById('gp-wl-stat-gain');
+    if (statCount)   statCount.textContent   = positions.length;
+    if (statAccts)   statAccts.textContent   = data.account_count || '—';
+    const gainers = positions.filter(function (p) { return (p.day_change_pct || 0) > 0; }).length;
+    const losers  = positions.filter(function (p) { return (p.day_change_pct || 0) < 0; }).length;
+    if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#4ade80' : '#fff'; }
+    if (statLosers)  { statLosers.textContent  = losers;  statLosers.style.color  = losers  > 0 ? '#f87171' : '#fff'; }
+    // Total unrealized gain
+    let totalUnreal = 0, hasUnreal = false;
+    positions.forEach(function (p) {
+      if (p.unrealized_gain != null) { totalUnreal += p.unrealized_gain; hasUnreal = true; }
+    });
+    if (statGain) {
+      if (hasUnreal) {
+        const sign = totalUnreal >= 0 ? '+' : '';
+        statGain.textContent = sign + fmtUSD(totalUnreal);
+        statGain.style.color = totalUnreal >= 0 ? '#4ade80' : '#f87171';
+      } else {
+        statGain.textContent = '—';
+        statGain.style.color = 'rgba(255,255,255,0.4)';
+      }
+    }
+
+    // ── Rows (grouped by account) ──────────────────────────────
+    const rowsEl = document.getElementById('gp-wl-rows');
+    if (!rowsEl) return;
+    if (!positions.length) {
+      rowsEl.innerHTML = '<div class="gp-wl-row" style="opacity:0.5;"><div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">No open positions found</div></div></div>';
+      return;
+    }
+
+    // Group by account_name
+    const groups = {};
+    const groupOrder = [];
+    positions.forEach(function (p) {
+      const grp = p.account_name || p.fund_name || 'Portfolio';
+      if (!groups[grp]) { groups[grp] = []; groupOrder.push(grp); }
+      groups[grp].push(p);
+    });
+
+    let html = '';
+    groupOrder.forEach(function (grp) {
+      const grpPositions = groups[grp];
+      html += '<div class="gp-wl-group-hdr">' + _esc(grp) + ' &nbsp;·&nbsp; ' + grpPositions.length + ' position' + (grpPositions.length !== 1 ? 's' : '') + '</div>';
+      grpPositions.forEach(function (p) {
+        // Day change pill
+        const pct = p.day_change_pct;
+        const abs = p.day_change_abs;
+        let pillClass = 'nc', absStr = '—', pctStr = '';
+        if (pct != null) {
+          pillClass = pct > 0 ? 'up' : pct < 0 ? 'dn' : 'nc';
+          absStr = (abs != null ? ((abs >= 0 ? '+' : '') + '$' + Math.abs(abs).toFixed(2)) : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%');
+          pctStr = pct != null ? ((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%') : '';
+        }
+        const wt = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : null;
+        const px = p.last_price != null ? '$' + Number(p.last_price).toFixed(2) : '—';
+        const shares = (p.total_qty || p.quantity) != null ? Number(p.total_qty || p.quantity).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' sh' : '';
+        // Unrealized gain for this position
+        let gainTxt = '';
+        if (p.unrealized_gain != null) {
+          const g = p.unrealized_gain;
+          const gPct = p.unrealized_gain_pct;
+          gainTxt = (g >= 0 ? '+' : '') + '$' + Math.abs(g).toFixed(0);
+          if (gPct != null) gainTxt += ' (' + (gPct >= 0 ? '+' : '') + gPct.toFixed(1) + '%)';
+        }
+        html += '<div class="gp-wl-row" data-ticker="' + _esc(p.symbol) + '">'
+          + '<div class="gp-wl-left">'
+          +   '<div class="gp-wl-ticker">' + _esc(p.symbol) + '</div>'
+          +   '<div class="gp-wl-name">'   + _esc(p.name || p.symbol) + '</div>'
+          +   (wt ? '<div class="gp-wl-wt">' + wt + ' of account</div>' : '')
+          +   (shares ? '<div class="gp-wl-shares">' + shares + '</div>' : '')
+          + '</div>'
+          + '<div style="text-align:right;">'
+          +   '<div class="gp-wl-price">' + px + '</div>'
+          +   (gainTxt ? '<div class="gp-wl-gain" style="color:' + (p.unrealized_gain >= 0 ? '#4ade80' : '#f87171') + ';">' + gainTxt + '</div>' : '')
+          + '</div>'
+          + '<div class="gp-wl-pill ' + pillClass + '">'
+          +   '<div class="gp-wl-pill-abs">' + absStr + '</div>'
+          +   (pctStr ? '<div class="gp-wl-pill-pct">' + pctStr + '</div>' : '')
+          + '</div>'
+          + '</div>';
+      });
+    });
+    rowsEl.innerHTML = html;
+
+    // Click row → open research report or Yahoo Finance
+    rowsEl.querySelectorAll('.gp-wl-row[data-ticker]').forEach(function (row) {
+      row.addEventListener('click', function () {
+        const ticker = row.dataset.ticker;
+        if (!ticker) return;
+        // Try to run a research pull on this ticker in Research tab
+        if (typeof showTab === 'function') {
+          showTab('research');
+          var heroInput = document.getElementById('hero-ticker');
+          var heroBtn   = document.getElementById('hero-run-btn');
+          if (heroInput && heroBtn) {
+            heroInput.value = ticker;
+            setTimeout(function () { heroBtn.click(); }, 200);
+            return;
+          }
+        }
+        window.open('https://finance.yahoo.com/quote/' + encodeURIComponent(ticker), '_blank');
+      });
+    });
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -6564,6 +6855,8 @@
   loadTrendingTickers();
   loadGPMarketPulse();
   loadMiniScanChips();
+  // Load positions tab immediately — it's the default active tab
+  loadGPPositions();
 
   // ── Archived Reports (Settings tab) ───────────────────────────────────────
   async function loadArchivedReports() {

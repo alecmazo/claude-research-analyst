@@ -23,10 +23,21 @@ import { haptics } from '../design/haptics';
 const LABEL_OVERRIDE = {
   Intelligence: 'Ideas',
   Portfolio:    'Tracker',
+  Positions:    'Positions',
 };
 
 // ── Icon config per route name ────────────────────────────────────────────────
 const TAB_CONFIG = {
+  Positions: {
+    // Trending bars — live watchlist / positions
+    inactive: { family: 'mci', name: 'finance' },
+    active:   { family: 'mci', name: 'finance' },
+  },
+  Performance: {
+    // Chart line — LP performance overview
+    inactive: { family: 'mci', name: 'chart-line' },
+    active:   { family: 'mci', name: 'chart-line' },
+  },
   Research: {
     // Filled area stock-chart — looks like a premium financial chart
     inactive: { family: 'mci', name: 'chart-areaspline-variant' },

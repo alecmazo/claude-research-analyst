@@ -18,6 +18,7 @@ import SettingsScreen         from './src/screens/SettingsScreen';
 import FundScreen             from './src/screens/FundScreen';
 import LoginScreen            from './src/screens/LoginScreen';
 import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
+import WatchlistScreen        from './src/screens/WatchlistScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
 import { whoamiV2, getV2User } from './src/api/client';
@@ -62,13 +63,14 @@ function FundStack() {
   );
 }
 
-// ── GP navigator: full 6-tab access ─────────────────────────────────────────
+// ── GP navigator: full 7-tab access ─────────────────────────────────────────
 function GPTabs() {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
+      <Tab.Screen name="Positions"    component={WatchlistScreen} />
       <Tab.Screen name="Research"     component={HomeStack} />
       <Tab.Screen name="Intelligence" component={IntelligenceStack} />
       <Tab.Screen name="Scan"         component={ScanScreen} />
@@ -79,13 +81,14 @@ function GPTabs() {
   );
 }
 
-// ── LP navigator: scoped to the LP's own performance + read-only research ──
+// ── LP navigator: scoped to live positions + performance + read-only research ──
 function LPTabs({ onLogout }) {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
+      <Tab.Screen name="Positions" component={WatchlistScreen} />
       <Tab.Screen name="Performance">
         {() => <LPPerformanceScreen onLogout={onLogout} />}
       </Tab.Screen>

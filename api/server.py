@@ -2552,6 +2552,135 @@ def lp_me_overview(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# v2 LP — Live position watchlist (managed accounts + fund positions)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v2/lp/me/positions")
+def lp_me_positions(request: Request):
+    """LP: return ALL open positions across the LP's managed accounts with
+    live price, day-change %, unrealized gain — the data powering the
+    watchlist view on mobile and web.
+
+    managed_account_ids in the JWT claims are short names like "ANAT-IRA".
+    We match them against funds.short_name (case-insensitive) to get fund_ids,
+    then query tax_lots exactly like /api/fund/positions does.
+    """
+    claims = _claims_or_401(request)
+    # GP / admin → show all managed account positions (no filter)
+    is_privileged = claims.get("role") in ("gp", "admin")
+    acct_ids: list = claims.get("managed_account_ids") or []
+
+    if not _PSYCOPG2_OK:
+        return {"positions": [], "total_market_value": None, "account_count": 0}
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            if is_privileged:
+                # GP: all managed accounts
+                cur.execute("""
+                    SELECT id, name, short_name
+                      FROM funds
+                     WHERE fund_type = 'managed_account' AND status != 'closed'
+                """)
+            else:
+                if not acct_ids:
+                    return {"positions": [], "total_market_value": 0, "account_count": 0}
+                # LP: match managed_account_ids against short_name (flex case)
+                placeholders = ",".join(["%s"] * len(acct_ids))
+                cur.execute(f"""
+                    SELECT id, name, short_name
+                      FROM funds
+                     WHERE fund_type = 'managed_account'
+                       AND (UPPER(short_name) = ANY(%s) OR UPPER(name) = ANY(%s))
+                """, (
+                    [a.upper() for a in acct_ids],
+                    [a.upper() for a in acct_ids],
+                ))
+            fund_rows = cur.fetchall()
+            fund_map  = {str(f["id"]): (f["name"], f["short_name"]) for f in fund_rows}
+            fund_ids  = list(fund_map.keys())
+
+            if not fund_ids:
+                return {"positions": [], "total_market_value": 0, "account_count": 0}
+
+            # Pull all open tax-lots across those funds
+            cur.execute("""
+                SELECT
+                    s.symbol, s.name,
+                    tl.fund_id::text                              AS fund_id,
+                    SUM(tl.quantity)                              AS total_qty,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)
+                        / NULLIF(SUM(tl.quantity), 0)             AS avg_cost,
+                    SUM(tl.quantity * tl.cost_basis_per_unit)     AS total_cost,
+                    MIN(tl.acquired_at)                           AS first_acquired
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id = ANY(%s) AND tl.closed_at IS NULL
+                 GROUP BY s.id, s.symbol, s.name, tl.fund_id
+                 ORDER BY SUM(tl.quantity * tl.cost_basis_per_unit) DESC
+            """, ([f["id"] for f in fund_rows],))
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"positions": [], "total_market_value": 0, "account_count": len(fund_ids)}
+
+    symbols = list({r["symbol"] for r in rows if r["symbol"]})
+    quotes  = batch_quotes(",".join(symbols)) if symbols else {}
+
+    total_mkt = 0.0
+    result    = []
+    for r in rows:
+        sym      = r["symbol"]
+        qty      = float(r["total_qty"])
+        avg_cost = float(r["avg_cost"] or 0)
+        tot_cost = float(r["total_cost"] or 0)
+        q        = quotes.get(sym) or {}
+        last_p   = q.get("price")
+        pct_chg  = q.get("pct_change")
+        mkt_val  = round(qty * last_p, 2) if last_p else None
+        if mkt_val:
+            total_mkt += mkt_val
+        fid      = r["fund_id"]
+        fname, fshort = fund_map.get(fid, ("", ""))
+        result.append({
+            "symbol":            sym,
+            "name":              r["name"] or sym,
+            "fund_id":           fid,
+            "account_name":      fname,
+            "account_short":     fshort,
+            "total_qty":         qty,
+            "avg_cost":          avg_cost,
+            "total_cost":        tot_cost,
+            "last_price":        round(last_p, 4) if last_p else None,
+            "day_change_pct":    round(pct_chg, 3) if pct_chg is not None else None,
+            "day_change_abs":    round(last_p * pct_chg / 100, 2) if (last_p and pct_chg is not None) else None,
+            "market_value":      mkt_val,
+            "unrealized_gain":   round(mkt_val - tot_cost, 2) if mkt_val else None,
+            "unrealized_gain_pct": round((mkt_val - tot_cost) / tot_cost * 100, 2) if (mkt_val and tot_cost) else None,
+            "first_acquired":    str(r["first_acquired"])[:10] if r["first_acquired"] else None,
+        })
+
+    # Add portfolio weights
+    if total_mkt > 0:
+        for item in result:
+            if item["market_value"]:
+                item["market_weight_pct"] = round(item["market_value"] / total_mkt * 100, 2)
+            else:
+                item["market_weight_pct"] = None
+
+    return {
+        "positions":           result,
+        "total_market_value":  round(total_mkt, 2),
+        "account_count":       len(fund_ids),
+        "as_of":               datetime.utcnow().strftime("%H:%M UTC"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # v2 LP — Aggregated portfolio history (annual + live YTD endpoint)
 # ---------------------------------------------------------------------------
 
@@ -7304,9 +7433,9 @@ async def fund_positions(request: Request, fund_id: str = None):
             rows = cur.fetchall()
             total_cost = sum(float(r["total_cost"]) for r in rows) or 1
 
-            # Fetch live prices for all symbols
+            # Fetch live prices + day-change % via batch_quotes (cached 10 min)
             symbols = [r["symbol"] for r in rows if r["symbol"]]
-            prices  = _fetch_prices(symbols)
+            quotes  = batch_quotes(",".join(symbols)) if symbols else {}
 
             result = []
             total_mkt = 0.0
@@ -7315,23 +7444,28 @@ async def fund_positions(request: Request, fund_id: str = None):
                 qty       = float(r["total_qty"])
                 avg_cost  = float(r["avg_cost"])
                 tot_cost  = float(r["total_cost"])
-                last_p    = prices.get(sym)
-                mkt_val   = (qty * last_p) if last_p else None
+                q         = quotes.get(sym) or {}
+                last_p    = q.get("price") if isinstance(q, dict) else (q if isinstance(q, (int, float)) else None)
+                pct_chg   = q.get("pct_change") if isinstance(q, dict) else None
+                mkt_val   = round(qty * last_p, 2) if last_p else None
                 if mkt_val:
                     total_mkt += mkt_val
                 result.append({
-                    "symbol":        sym,
-                    "name":          r["name"],
-                    "issuer":        r["issuer"],
-                    "lot_count":     r["lot_count"],
-                    "total_qty":     qty,
-                    "avg_cost":      avg_cost,
-                    "total_cost":    tot_cost,
-                    "last_price":    round(last_p, 4) if last_p else None,
-                    "market_value":  round(mkt_val, 2) if mkt_val else None,
+                    "symbol":          sym,
+                    "name":            r["name"],
+                    "issuer":          r["issuer"],
+                    "lot_count":       r["lot_count"],
+                    "total_qty":       qty,
+                    "avg_cost":        avg_cost,
+                    "total_cost":      tot_cost,
+                    "last_price":      round(last_p, 4) if last_p else None,
+                    "day_change_pct":  round(pct_chg, 3) if pct_chg is not None else None,
+                    "day_change_abs":  round(last_p * pct_chg / 100, 2) if (last_p and pct_chg is not None) else None,
+                    "market_value":    mkt_val,
                     "unrealized_gain": round(mkt_val - tot_cost, 2) if mkt_val else None,
-                    "weight_pct":    tot_cost / total_cost * 100,
-                    "first_acquired":str(r["first_acquired"])[:10] if r["first_acquired"] else None,
+                    "unrealized_gain_pct": round((mkt_val - tot_cost) / tot_cost * 100, 2) if (mkt_val and tot_cost) else None,
+                    "weight_pct":      tot_cost / total_cost * 100,
+                    "first_acquired":  str(r["first_acquired"])[:10] if r["first_acquired"] else None,
                 })
 
             # Patch market-based weight_pct if we have prices

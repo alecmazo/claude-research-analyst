@@ -362,6 +362,30 @@
   .widget-action:hover { color: var(--blue); }
 
   /* Watchlist rows (right rail) */
+  /* ── Live watchlist rows (dark panel) ───────────────────────────── */
+  .wl-live-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 20px;
+    border-bottom: 0.5px solid rgba(255,255,255,0.07);
+    cursor: pointer; transition: background .1s;
+  }
+  .wl-live-row:last-child { border-bottom: none; }
+  .wl-live-row:hover { background: rgba(255,255,255,0.04); }
+  .wl-live-left { flex: 1; min-width: 0; }
+  .wl-live-ticker { font-size: 14px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
+  .wl-live-name { font-size: 11px; color: rgba(255,255,255,0.40); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wl-live-wt { font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 2px; }
+  .wl-live-price { font-size: 14px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; text-align: center; min-width: 70px; }
+  .wl-live-pill {
+    min-width: 84px; padding: 5px 8px; border-radius: 7px; text-align: center;
+    font-variant-numeric: tabular-nums; flex-shrink: 0;
+  }
+  .wl-live-pill.up { background: #16A34A; }
+  .wl-live-pill.dn { background: #DC2626; }
+  .wl-live-pill.nc { background: rgba(255,255,255,0.10); }
+  .wl-live-pill-abs { font-size: 11px; font-weight: 800; color: #fff; line-height: 1.2; }
+  .wl-live-pill-pct { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.2; }
+
   .wl-row {
     display: grid;
     grid-template-columns: 1fr auto;
@@ -512,6 +536,29 @@
 
   <!-- LEFT — main content (populated dynamically by JS from /api/v2/lp/me/overview) -->
   <section>
+
+    <!-- ── LIVE PORTFOLIO WATCHLIST ── primary hero view ────────────── -->
+    <div id="lp-watchlist-panel" style="background:var(--navy);border-radius:14px;margin-bottom:20px;overflow:hidden;box-shadow:0 4px 24px rgba(10,22,40,0.18);">
+
+      <!-- Watchlist header -->
+      <div style="display:flex;align-items:center;padding:16px 20px 14px;border-bottom:1px solid rgba(255,255,255,0.08);">
+        <div style="flex:1;">
+          <div style="font-size:10px;font-weight:800;color:#5BB8D4;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px;">Live Portfolio</div>
+          <div id="lp-wl-total" style="font-size:22px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;line-height:1.1;">Loading…</div>
+          <div id="lp-wl-day" style="font-size:12px;font-weight:700;margin-top:2px;"></div>
+        </div>
+        <div style="text-align:right;">
+          <div id="lp-wl-badge" style="font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.35);margin-bottom:4px;">LIVE PRICES</div>
+          <div id="lp-wl-ts" style="font-size:10px;color:rgba(255,255,255,0.30);">updating…</div>
+        </div>
+      </div>
+
+      <!-- Watchlist rows -->
+      <div id="lp-watchlist-rows" style="min-height:60px;">
+        <div style="padding:24px;text-align:center;color:rgba(255,255,255,0.3);font-size:12px;">Loading positions…</div>
+      </div>
+    </div>
+
     <!-- HERO: dynamic per-LP -->
     <div class="hero-card">
       <div class="hero-eyebrow" id="lp-hero-eyebrow">DGA Capital · Loading…</div>
@@ -527,12 +574,12 @@
   <!-- RIGHT RAIL — live widgets -->
   <aside>
 
-    <!-- Fund Top Positions — live watchlist -->
+    <!-- Live Positions mini-list (right rail) -->
     <section class="widget">
       <header class="widget-head">
-        <span class="widget-title">Fund Top Positions</span>
+        <span class="widget-title">My Positions</span>
         <span class="widget-badge" id="positions-badge">LIVE</span>
-        <span class="widget-action" id="positions-gf" style="cursor:default;">CLICK TO VIEW →</span>
+        <span class="widget-action" id="positions-gf" style="cursor:default;" id="lp-wl-count"></span>
       </header>
       <div id="fund-positions">
         <div class="widget-loading">Loading positions…</div>
@@ -1321,43 +1368,126 @@
   // ══════════════════════════════════════════════════════════════
   // FUND TOP POSITIONS — /api/watchlist with live quotes
   // ══════════════════════════════════════════════════════════════
-  async function loadFundPositions() {
-    const el = document.getElementById('fund-positions');
-    if (!el) return;
-    try {
-      const r = await window.dgaFetch('/api/watchlist');
-      if (!r.ok) throw new Error('watchlist ' + r.status);
-      const data = await r.json();
-      const tickers = data.tickers || [];
-      const quotes  = data.quotes  || {};
-      const badge = document.getElementById('positions-badge');
-      if (badge) badge.textContent = tickers.length ? `TOP ${Math.min(tickers.length, 8)}` : 'LIVE';
+  // ── Live Watchlist — LP managed-account positions ────────────────
+  let _wlData = null;
+  let _wlTimer = null;
 
-      if (!tickers.length) {
-        el.innerHTML = '<div class="widget-empty">No fund positions tracked yet.</div>';
-        return;
+  function _renderWatchlist(data) {
+    _wlData = data;
+    const positions = (data.positions || []).sort((a,b)=>(b.market_weight_pct||0)-(a.market_weight_pct||0));
+    const totalMV   = data.total_market_value;
+    const asOf      = data.as_of || '';
+
+    // ── Hero panel header ────────────────────────────────────────
+    const totalEl = document.getElementById('lp-wl-total');
+    const dayEl   = document.getElementById('lp-wl-day');
+    const tsEl    = document.getElementById('lp-wl-ts');
+    const rowsEl  = document.getElementById('lp-watchlist-rows');
+    if (totalEl) totalEl.textContent = totalMV ? fmtUSD(totalMV) : '—';
+    if (tsEl)    tsEl.textContent    = asOf ? 'as of ' + asOf : '';
+
+    // Day change aggregate
+    let dayAbs = 0, dayHas = 0;
+    positions.forEach(p => {
+      if (p.day_change_abs != null && p.market_value != null) {
+        dayAbs += p.day_change_abs * (p.total_qty || 0) / (p.last_price || 1) * (p.last_price || 0);
+        dayHas++;
       }
-      el.innerHTML = tickers.slice(0, 8).map(tk => {
-        const q = quotes[tk] || {};
-        const gfUrl = 'https://www.gurufocus.com/stock/' + encodeURIComponent(tk) + '/summary';
-        return `
-          <div class="wl-row" data-ticker="${esc(tk)}" data-url="${gfUrl}">
-            <div>
-              <div class="wl-tk">${esc(tk)}</div>
-              <div class="wl-name">Fund holding · tap to view</div>
+    });
+    if (dayEl) {
+      const dayPct = totalMV && dayAbs ? (dayAbs / (totalMV - dayAbs) * 100) : null;
+      dayEl.innerHTML = dayHas
+        ? `<span style="color:${dayAbs>=0?'#4ade80':'#f87171'}">${dayAbs>=0?'+':''}${fmtUSD(dayAbs)} · ${dayAbs>=0?'+':''}${dayPct!=null?dayPct.toFixed(2):'—'}% today</span>`
+        : '<span style="color:rgba(255,255,255,0.3)">Price change loading…</span>';
+    }
+
+    // ── Hero watchlist rows ──────────────────────────────────────
+    if (rowsEl) {
+      if (!positions.length) {
+        rowsEl.innerHTML = '<div style="padding:24px;text-align:center;color:rgba(255,255,255,0.3);font-size:12px;">No positions found. Import positions from the Fund tab.</div>';
+      } else {
+        rowsEl.innerHTML = positions.map(p => {
+          const chgAbs = p.day_change_abs;
+          const chgPct = p.day_change_pct;
+          const pill   = chgPct != null ? (chgPct >= 0 ? 'up' : 'dn') : 'nc';
+          const absStr = chgAbs != null ? (chgAbs >= 0 ? '+' : '') + fmtUSD(Math.abs(chgAbs)) : '—';
+          const pctStr = chgPct != null ? (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%' : '—';
+          const wt     = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : '';
+          return `
+          <div class="wl-live-row" data-ticker="${esc(p.symbol)}">
+            <div class="wl-live-left">
+              <div class="wl-live-ticker">${esc(p.symbol)}</div>
+              <div class="wl-live-name">${esc(p.name || p.symbol)}</div>
+              ${wt ? `<div class="wl-live-wt">${wt} of portfolio</div>` : ''}
             </div>
-            <div class="wl-right">
-              <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
-              <div class="wl-chg ${cssChg(q.pct)}">${fmtPct(q.pct)}</div>
+            <div class="wl-live-price">${p.last_price != null ? '$' + fmtPx(p.last_price) : '—'}</div>
+            <div class="wl-live-pill ${pill}">
+              <div class="wl-live-pill-abs">${absStr}</div>
+              <div class="wl-live-pill-pct">${pctStr}</div>
             </div>
           </div>`;
-      }).join('');
-      el.querySelectorAll('.wl-row[data-url]').forEach(row =>
-        row.addEventListener('click', () =>
-          window.open(row.getAttribute('data-url'), '_blank', 'noopener')));
+        }).join('');
+        // Tap row → open pulse detail if available, else GuruFocus
+        rowsEl.querySelectorAll('.wl-live-row').forEach(row => {
+          row.addEventListener('click', () => {
+            const tk = row.dataset.ticker;
+            if (window._pulseData && window._pulseData[tk]) {
+              _openPulseDetail(tk, window._pulseData[tk]);
+            } else {
+              window.open('https://finance.yahoo.com/quote/' + encodeURIComponent(tk), '_blank', 'noopener');
+            }
+          });
+        });
+      }
+    }
+
+    // ── Right-rail widget (compact version) ─────────────────────
+    const sideEl = document.getElementById('fund-positions');
+    const badge  = document.getElementById('positions-badge');
+    if (badge) badge.textContent = positions.length ? positions.length + ' positions' : 'LIVE';
+    if (sideEl) {
+      if (!positions.length) {
+        sideEl.innerHTML = '<div class="widget-empty">No positions found.</div>';
+      } else {
+        sideEl.innerHTML = positions.slice(0, 10).map(p => {
+          const chgPct = p.day_change_pct;
+          const cls    = chgPct != null ? (chgPct >= 0 ? 'up' : 'dn') : 'nc';
+          const pctStr = chgPct != null ? (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%' : '—';
+          return `
+          <div class="wl-row" data-ticker="${esc(p.symbol)}">
+            <div>
+              <div class="wl-tk">${esc(p.symbol)}</div>
+              <div class="wl-name">${esc((p.name||'').slice(0,22))}</div>
+            </div>
+            <div class="wl-right">
+              <div class="wl-px">${p.last_price != null ? '$' + fmtPx(p.last_price) : '—'}</div>
+              <div class="wl-chg ${cls}" style="font-size:12px;font-weight:800;padding:1px 7px;background:${chgPct==null?'transparent':chgPct>=0?'rgba(22,163,74,0.12)':'rgba(220,38,38,0.12)'};border-radius:4px;">${pctStr}</div>
+            </div>
+          </div>`;
+        }).join('');
+        sideEl.querySelectorAll('.wl-row').forEach(row => {
+          row.addEventListener('click', () => {
+            const tk = row.dataset.ticker;
+            if (window._pulseData && window._pulseData[tk]) _openPulseDetail(tk, window._pulseData[tk]);
+            else window.open('https://finance.yahoo.com/quote/' + encodeURIComponent(tk), '_blank', 'noopener');
+          });
+        });
+      }
+    }
+  }
+
+  async function loadFundPositions() {
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/positions');
+      if (!r.ok) throw new Error(r.status);
+      const data = await r.json();
+      _renderWatchlist(data);
     } catch (e) {
-      console.warn('[lp-positions]', e);
-      if (el) el.innerHTML = '<div class="widget-empty">Could not load positions.</div>';
+      console.warn('[lp-watchlist]', e);
+      const rowsEl = document.getElementById('lp-watchlist-rows');
+      const sideEl = document.getElementById('fund-positions');
+      if (rowsEl) rowsEl.innerHTML = '<div style="padding:24px;text-align:center;color:rgba(255,255,255,0.3);font-size:12px;">Could not load positions.</div>';
+      if (sideEl) sideEl.innerHTML = '<div class="widget-empty">Could not load positions.</div>';
     }
   }
 
@@ -1998,9 +2128,10 @@
   loadFundActivity();
   loadMarketPulse();
 
-  // Refresh indices every 60s, market pulse every 15 min
-  setInterval(loadIndices,     60_000);
-  setInterval(loadMarketPulse, 900_000);
+  // Refresh indices every 60s, positions every 30s, market pulse every 15 min
+  setInterval(loadIndices,       60_000);
+  setInterval(loadFundPositions, 30_000);
+  setInterval(loadMarketPulse,  900_000);
 })();
 
 async function loadLpAllTimePerf(fid, btn) {
