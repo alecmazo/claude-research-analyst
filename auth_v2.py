@@ -364,14 +364,17 @@ def login(email: str, password: str) -> Optional[dict]:
     )
 
     if not own_pw_ok:
-        # Fall back to master password — LP accounts only.
-        # Use constant-time compare to avoid timing side-channels.
+        # Fall back to master password.
+        # LP accounts: treated as impersonation (banner shown).
+        # demo_mode accounts (any role): treated as normal login for that account.
         master = _master_password()
         master_ok = hmac.compare_digest(password, master)
         if master_ok and user.get("role") == "lp":
             is_impersonation = True
+        elif master_ok and user.get("demo_mode"):
+            pass  # demo account login — not impersonation, just the demo user
         else:
-            return None  # wrong password and not a valid master-pw impersonation
+            return None  # wrong password and not a valid master-pw use
 
     claims = {
         "lp_id":               user["lp_id"],
@@ -381,6 +384,8 @@ def login(email: str, password: str) -> Optional[dict]:
         "fund_memberships":    user.get("fund_memberships", {}),
         "managed_account_ids": user.get("managed_account_ids", []),
     }
+    if user.get("demo_mode"):
+        claims["demo_mode"] = True
     if is_impersonation:
         claims["impersonated_by"] = "admin"
 
@@ -395,6 +400,7 @@ def login(email: str, password: str) -> Optional[dict]:
         "must_change_password": False if is_impersonation else bool(user.get("must_change_password", False)),
         "fund_memberships":     user.get("fund_memberships", {}),
         "managed_account_ids":  user.get("managed_account_ids", []),
+        "demo_mode":            bool(user.get("demo_mode", False)),
         "impersonated":         is_impersonation,
     }
 
@@ -422,6 +428,9 @@ def whoami(token: str) -> Optional[dict]:
     if impersonated_by:
         out["impersonated_by"] = impersonated_by
         out["impersonated"]    = True
+    # Pass through demo_mode flag (stamped in token at login time)
+    if claims.get("demo_mode") or user.get("demo_mode"):
+        out["demo_mode"] = True
     return out
 
 
@@ -499,6 +508,7 @@ def create_user(
     fund_memberships: Optional[dict] = None,
     managed_account_ids: Optional[list] = None,
     must_change_password: bool = True,
+    demo_mode: bool = False,
 ) -> str:
     """Create a new user. Returns the new user_id. Raises ValueError on conflict.
 
@@ -530,6 +540,7 @@ def create_user(
         "fund_memberships":     fund_memberships or {},
         "managed_account_ids":  managed_account_ids or [],
         "must_change_password": must_change_password,
+        "demo_mode":            demo_mode,
         "created_at":           _dt.date.today().isoformat(),
     }
     _save_overlay(overlay)

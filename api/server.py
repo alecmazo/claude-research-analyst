@@ -67,6 +67,56 @@ def _audit(action: str, user: str, ip: str, ok: bool, detail: str = ""):
     except Exception:
         pass
 
+# ── Demo-mode LP anonymisation ────────────────────────────────────────────
+_GREEK_LABELS = [
+    "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta",
+    "Iota", "Kappa", "Lambda", "Mu", "Nu", "Xi", "Omicron", "Pi",
+    "Rho", "Sigma", "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega",
+]
+
+def _demo_label(idx: int) -> str:
+    """Return 'LP Alpha', 'LP Beta', …, 'LP Alpha 2', … deterministically."""
+    cycle = idx % len(_GREEK_LABELS)
+    generation = idx // len(_GREEK_LABELS)
+    suffix = f" {generation + 1}" if generation > 0 else ""
+    return f"LP {_GREEK_LABELS[cycle]}{suffix}"
+
+def _anonymize_users_for_demo(users: list[dict]) -> list[dict]:
+    """Replace LP names/emails with deterministic anonymous labels.
+
+    Only anonymises lp-role accounts. Admins/GPs keep their names
+    (the demo account itself and the GP are visible as-is).
+    Sort is by lp_id for determinism across reloads.
+    """
+    lp_users = sorted([u for u in users if u.get("role") == "lp"], key=lambda u: u.get("lp_id", ""))
+    label_map = {u["lp_id"]: _demo_label(i) for i, u in enumerate(lp_users)}
+    out = []
+    for u in users:
+        u2 = dict(u)
+        if u2.get("role") == "lp":
+            label = label_map.get(u2["lp_id"], "LP —")
+            u2["name"]  = label
+            u2["email"] = "—"
+            # Keep fund_memberships keys (fund names) but blank the alias values
+            u2["fund_memberships"] = {k: "" for k in (u2.get("fund_memberships") or {})}
+        out.append(u2)
+    return out
+
+def _anonymize_lp_roster_for_demo(lps: list[dict]) -> list[dict]:
+    """Anonymise the per-fund LP roster (legal_name, primary_email fields).
+
+    lps is the raw DB list from the fund detail endpoint.
+    Sort deterministically by 'id'.
+    """
+    sorted_lps = sorted(lps, key=lambda l: str(l.get("id", "")))
+    out = []
+    for i, lp in enumerate(sorted_lps):
+        lp2 = dict(lp)
+        lp2["legal_name"]    = _demo_label(i)
+        lp2["primary_email"] = "—"
+        out.append(lp2)
+    return out
+
 # ── Global NaN / Inf guard ───────────────────────────────────────────────────
 # Monkey-patch starlette's JSONResponse.render so that NaN/Inf floats
 # (common from yfinance when a stock has no data) are silently converted to
@@ -1342,7 +1392,10 @@ def admin_lp_list(request: Request):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP role required")
-    return {"users": auth_v2_mod.list_users()}
+    users = auth_v2_mod.list_users()
+    if claims.get("demo_mode"):
+        users = _anonymize_users_for_demo(users)
+    return {"users": users}
 
 
 @app.post("/api/v2/admin/lp/set-password")
@@ -1356,6 +1409,8 @@ def admin_lp_set_password(request: Request, body: LPSetPasswordRequest):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP role required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
 
     lp_id = (body.lp_id or "").strip()
     if not lp_id:
@@ -1405,6 +1460,8 @@ def admin_lp_create(request: Request, body: LPCreateRequest):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
     try:
         lp_id = auth_v2_mod.create_user(
             email=body.email,
@@ -1422,6 +1479,7 @@ class AdminCreateRequest(BaseModel):
     email: str
     name: str
     password: str
+    demo_mode: bool = False
 
 
 @app.post("/api/auth/v2/admin/create")
@@ -1430,6 +1488,8 @@ def admin_user_create(request: Request, body: AdminCreateRequest):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
     try:
         user_id = auth_v2_mod.create_user(
             email=body.email,
@@ -1437,8 +1497,9 @@ def admin_user_create(request: Request, body: AdminCreateRequest):
             password=body.password,
             role="admin",
             must_change_password=False,
+            demo_mode=body.demo_mode,
         )
-        return {"ok": True, "user_id": user_id, "email": body.email, "name": body.name, "role": "admin"}
+        return {"ok": True, "user_id": user_id, "email": body.email, "name": body.name, "role": "admin", "demo_mode": body.demo_mode}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1449,6 +1510,8 @@ def user_delete(request: Request, lp_id: str):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
     if claims.get("lp_id") == lp_id:
         raise HTTPException(400, "Cannot delete your own account")
     ok = auth_v2_mod.delete_user(lp_id)
@@ -1463,6 +1526,8 @@ def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
     ok = auth_v2_mod.update_assignments(
         lp_id=body.lp_id,
         fund_memberships=body.fund_memberships,
@@ -3043,6 +3108,10 @@ def gp_fund_detail(fund_id: str, request: Request):
             lps = [dict(r) for r in cur.fetchall()]
             for lp in lps:
                 lp["commitment_amount"] = float(lp["commitment_amount"] or 0)
+
+            # Anonymise LP identities for demo accounts
+            if claims.get("demo_mode"):
+                lps = _anonymize_lp_roster_for_demo(lps)
 
             # Most recent NAV
             cur.execute("""

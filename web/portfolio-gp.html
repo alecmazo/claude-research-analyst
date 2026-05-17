@@ -1778,6 +1778,12 @@
               <button id="admin-new-save-btn" class="tab-btn" style="width:100%;height:34px;background:linear-gradient(135deg,#c9a84c,#a88a3a);color:#0A1628;border:none;">Create Admin</button>
               <div id="admin-new-msg" style="font-size:10px;min-height:14px;"></div>
             </div>
+            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-top:4px;">
+              <input type="checkbox" id="admin-new-demo" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+              <label for="admin-new-demo" style="font-size:11px;color:var(--dim);cursor:pointer;">
+                <strong>Demo Mode</strong> — anonymises LP identities; read-only access to admin write operations
+              </label>
+            </div>
           </div>
         </div>
         <div id="admin-roster" style="padding:12px 14px;font-size:11px;color:var(--dim);">Loading…</div>
@@ -6063,7 +6069,7 @@
       const r = await window.dgaFetch('/api/auth/v2/admin/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password: pw }),
+        body: JSON.stringify({ name, email, password: pw, demo_mode: document.getElementById('admin-new-demo')?.checked || false }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || r.status);
@@ -6092,20 +6098,69 @@
       const admins = (d.users || []).filter(u => u.role === 'admin');
       if (!admins.length) { el.textContent = 'No admin accounts yet.'; return; }
       el.innerHTML = admins.map(u => `
-        <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--panel-edge);">
-          <span style="font-size:12px;font-weight:700;color:#0f172a;">${_esc(u.name)}</span>
-          <span style="font-size:10px;color:var(--dim);">${_esc(u.email)}</span>
-          <span style="margin-left:auto;font-size:9px;font-weight:800;letter-spacing:1px;
-                       background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);
-                       padding:2px 7px;border-radius:4px;flex-shrink:0;">⚡ ADMIN</span>
-          <button onclick="_deleteUser('${_esc(u.lp_id)}','${_esc(u.name)}')"
-            style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);
-                   color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;
-                   font-weight:800;letter-spacing:0.8px;cursor:pointer;
-                   transition:background .15s,border-color .15s;"
-            onmouseover="this.style.background='rgba(220,38,38,0.08)'"
-            onmouseout="this.style.background='transparent'">REMOVE</button>
+        <div style="border-bottom:1px solid var(--panel-edge);">
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;">
+            <span style="font-size:12px;font-weight:700;color:#0f172a;">${_esc(u.name)}</span>
+            <span style="font-size:10px;color:var(--dim);">${_esc(u.email)}</span>
+            ${u.demo_mode ? '<span style="font-size:9px;font-weight:800;padding:2px 7px;border-radius:4px;background:rgba(91,184,212,0.12);color:var(--blue);border:1px solid rgba(91,184,212,0.3);flex-shrink:0;">🎭 DEMO</span>' : ''}
+            <span style="margin-left:auto;font-size:9px;font-weight:800;letter-spacing:1px;
+                         background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);
+                         padding:2px 7px;border-radius:4px;flex-shrink:0;">⚡ ADMIN</span>
+            <button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;"
+              data-admin-pw-expand="${_esc(u.lp_id)}">Reset PW ▾</button>
+            <button onclick="_deleteUser('${_esc(u.lp_id)}','${_esc(u.name)}')"
+              style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);
+                     color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;
+                     font-weight:800;letter-spacing:0.8px;cursor:pointer;
+                     transition:background .15s,border-color .15s;"
+              onmouseover="this.style.background='rgba(220,38,38,0.08)'"
+              onmouseout="this.style.background='transparent'">REMOVE</button>
+          </div>
+          <div id="admin-pw-panel-${_esc(u.lp_id)}" style="display:none;padding:12px 18px 14px;background:#fafbfc;border-top:1px solid var(--panel-edge);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">New Password:</span>
+              <input type="password" placeholder="New password (≥8 chars)" id="admin-pw-input-${_esc(u.lp_id)}"
+                style="width:200px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <button class="tab-btn sm" style="height:32px;padding:0 16px;" data-admin-pw-save="${_esc(u.lp_id)}">Set Password</button>
+              <span id="admin-pw-msg-${_esc(u.lp_id)}" style="font-size:11px;"></span>
+            </div>
+          </div>
         </div>`).join('');
+
+      // Wire admin expand/collapse for reset PW
+      el.querySelectorAll('[data-admin-pw-expand]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const lpId = btn.dataset.adminPwExpand;
+          const panel = document.getElementById('admin-pw-panel-' + lpId);
+          const open = panel.style.display === 'none';
+          panel.style.display = open ? 'block' : 'none';
+          btn.textContent = open ? 'Reset PW ▴' : 'Reset PW ▾';
+        });
+      });
+
+      // Wire admin password save buttons
+      el.querySelectorAll('[data-admin-pw-save]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId  = btn.dataset.adminPwSave;
+          const input = document.getElementById('admin-pw-input-' + lpId);
+          const msg   = document.getElementById('admin-pw-msg-' + lpId);
+          const pw    = input?.value?.trim();
+          if (!pw || pw.length < 8) { msg.style.color='var(--red)'; msg.textContent='≥ 8 characters required.'; return; }
+          btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+          try {
+            const r = await window.dgaFetch('/api/v2/admin/lp/set-password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lp_id: lpId, new_password: pw, must_change: false }),
+            });
+            if (!r.ok) throw new Error((await r.json()).detail || r.status);
+            msg.style.color = 'var(--green)'; msg.textContent = '✅ Password updated.';
+            if (input) input.value = '';
+          } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + e.message; }
+          btn.disabled = false; btn.textContent = 'Set Password';
+        });
+      });
+
     } catch { el.textContent = 'Error loading admin roster.'; }
   }
 
@@ -6125,6 +6180,41 @@
   }
 
   function _esc(s) { return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+  // Show demo mode banner if applicable
+  if (window.DGA_USER && window.DGA_USER.demo_mode) {
+    _renderDemoBanner();
+  }
+  // Also hook after DOMContentLoaded in case DGA_USER isn't set yet
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.DGA_USER && window.DGA_USER.demo_mode) _renderDemoBanner();
+  });
+
+  function _renderDemoBanner() {
+    if (document.getElementById('dga-demo-banner')) return;
+    const st = document.createElement('style');
+    st.textContent = [
+      '#dga-demo-banner {',
+      '  position: fixed; top: 0; left: 0; right: 0; z-index: 99998;',
+      '  background: #1e3a5f;',
+      '  border-bottom: 2px solid #5BB8D4;',
+      '  color: #bae6fd;',
+      '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
+      '  font-size: 12px; font-weight: 700;',
+      '  letter-spacing: 0.3px;',
+      '  padding: 7px 16px;',
+      '  text-align: center;',
+      '  pointer-events: none;',
+      '}',
+      'body { padding-top: 34px !important; }',
+    ].join('\n');
+    document.head.appendChild(st);
+    const bar = document.createElement('div');
+    bar.id = 'dga-demo-banner';
+    bar.textContent = '🎭  Demo Mode — Investor identities are anonymised · Real fund performance · Read-only';
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
+
   _loadAdminRoster();
 
   // Cache of all funds/accounts for assignment panels
@@ -6176,7 +6266,12 @@
               ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(0,0,0,0.05);color:var(--mid)'}">${u.role.toUpperCase()}</span>
             ${u.must_change_password ? '<span style="font-size:9px;font-weight:800;color:#92400e;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);border-radius:4px;padding:2px 7px;flex-shrink:0;letter-spacing:0.5px;">TEMP PW</span>' : ''}
             <div style="font-size:10px;color:var(--mid);flex-shrink:0;">${assignSummary}</div>
-            ${isLP ? `<button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>` : ''}
+            ${isLP ? `
+              <button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>
+              <button style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;font-weight:800;letter-spacing:0.8px;cursor:pointer;transition:background .15s,border-color .15s;"
+                onmouseover="this.style.background='rgba(220,38,38,0.08)'" onmouseout="this.style.background='transparent'"
+                data-lp-delete="${u.lp_id}" data-lp-name="${_esc(u.name)}">✕ Remove</button>
+            ` : ''}
           </div>
           ${isLP ? `
           <div id="lp-panel-${u.lp_id}" style="display:none;padding:16px 18px 14px;background:#f8fafc;border-bottom:1px solid var(--panel-edge);">
@@ -6237,6 +6332,24 @@
           const open  = panel.style.display === 'none';
           panel.style.display = open ? 'block' : 'none';
           btn.textContent = open ? 'Close ▴' : 'Edit ▾';
+        });
+      });
+
+      // Wire LP delete buttons
+      el.querySelectorAll('[data-lp-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId = btn.dataset.lpDelete;
+          const name = btn.dataset.lpName;
+          if (!confirm(`Remove LP account for "${name}"?\n\nThis will permanently delete their login. Their commitment data in the fund remains. This cannot be undone.`)) return;
+          try {
+            const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}));
+              alert('Could not remove: ' + (d.detail || r.status));
+              return;
+            }
+            loadLPRoster();
+          } catch (e) { alert('Error: ' + e.message); }
         });
       });
 
