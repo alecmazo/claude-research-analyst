@@ -5146,11 +5146,13 @@ def batch_quotes(tickers: str = ""):
     if not originals:
         return {}
 
-    excluded  = {s for s in originals if s in _SCAN_EXCLUDE}
-    to_lookup = [s for s in originals if s not in _SCAN_EXCLUDE]
+    # NOTE: _SCAN_EXCLUDE is intentionally NOT applied here — batch_quotes() is
+    # a price-only function. Tickers excluded from AI scanning (preferred stocks,
+    # ETFs, alias mismatches) still have real prices and must appear in the live
+    # portfolio watchlist.  Scan-level filtering lives in _filter_scan_tickers().
+    to_lookup = originals
     null_row: dict = {"price": None, "pct_change": None}
-
-    result: dict = {s: null_row for s in excluded}
+    result: dict = {}
 
     # ── Per-ticker cache check ────────────────────────────────────────────────
     now    = time.time()
@@ -5182,13 +5184,31 @@ def batch_quotes(tickers: str = ""):
     fetched: dict = {}
     try:
         import yfinance as _yf
-        data = _yf.download(yahoo_syms, period="5d", auto_adjust=True,
+        # period="1mo" ensures we capture illiquid OTC preferreds (Freddie/Fannie)
+        # that may only trade a few times per week.  dropna() in _extract always
+        # returns the most-recent available close, so stale days don't matter.
+        data = _yf.download(yahoo_syms, period="1mo", auto_adjust=True,
                             progress=False, group_by="ticker")
 
         def _extract(ysym: str) -> tuple:
-            """Return (price, pct_change) from last two close prices."""
+            """Return (price, pct_change) from the last two available close prices.
+
+            Handles both single-ticker (flat columns) and multi-ticker
+            (nested MultiIndex) yfinance download shapes.  dropna() removes
+            days with no data so illiquid preferreds fall back to their last
+            actual trade date automatically.
+            """
             try:
-                closes = data["Close"].dropna() if len(yahoo_syms) == 1 else data[ysym]["Close"].dropna()
+                # Single-ticker download → flat columns ("Close", "Open", …)
+                if len(yahoo_syms) == 1:
+                    closes = data["Close"].dropna()
+                else:
+                    # Multi-ticker → try (ticker, "Close") MultiIndex first,
+                    # then fall back to data[ysym]["Close"] for older yfinance.
+                    try:
+                        closes = data[(ysym, "Close")].dropna()
+                    except KeyError:
+                        closes = data[ysym]["Close"].dropna()
                 if len(closes) >= 2:
                     price = float(closes.iloc[-1])
                     prev  = float(closes.iloc[-2])
@@ -5196,13 +5216,15 @@ def batch_quotes(tickers: str = ""):
                     return price, pct
                 elif len(closes) == 1:
                     return float(closes.iloc[-1]), None
-            except Exception:
-                pass
+            except Exception as _ex:
+                print(f"[batch_quotes] _extract({ysym}): {_ex}")
             return None, None
 
         for ysym, orig in alias_map.items():
             price, pct = _extract(ysym)
             fetched[orig] = {"price": price, "pct_change": pct}
+            if price is not None:
+                print(f"[batch_quotes] {orig}({ysym}): ${price:.4f}  {pct:+.2f}%" if pct is not None else f"[batch_quotes] {orig}({ysym}): ${price:.4f}  pct=n/a")
 
     except Exception as _e:
         print(f"[batch_quotes] yf.download failed: {_e}")
