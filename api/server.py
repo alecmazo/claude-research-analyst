@@ -117,6 +117,21 @@ def _anonymize_lp_roster_for_demo(lps: list[dict]) -> list[dict]:
         out.append(lp2)
     return out
 
+def _acct_demo_label(idx: int) -> str:
+    """Return 'Acct Alpha', 'Acct Beta', … for managed accounts."""
+    cycle = idx % len(_GREEK_LABELS)
+    generation = idx // len(_GREEK_LABELS)
+    suffix = f" {generation + 1}" if generation > 0 else ""
+    return f"Acct {_GREEK_LABELS[cycle]}{suffix}"
+
+def _build_acct_label_map(fund_ids: list) -> dict:
+    """Build a deterministic {fund_id: label} map for managed accounts.
+
+    Sorted by fund_id string for stability across reloads.
+    """
+    sorted_ids = sorted([str(fid) for fid in fund_ids])
+    return {fid: _acct_demo_label(i) for i, fid in enumerate(sorted_ids)}
+
 # ── Global NaN / Inf guard ───────────────────────────────────────────────────
 # Monkey-patch starlette's JSONResponse.render so that NaN/Inf floats
 # (common from yfinance when a stock has no data) are silently converted to
@@ -2478,6 +2493,15 @@ def lp_me_overview(request: Request):
     except Exception as exc:
         out["warnings"].append(f"DB query failed: {str(exc)[:200]}")
 
+    # Demo mode: anonymise managed-account names in the overview
+    if claims.get("demo_mode") and out.get("managed_accounts"):
+        ma_ids = [a["fund_id"] for a in out["managed_accounts"]]
+        label_map = _build_acct_label_map(ma_ids)
+        for a in out["managed_accounts"]:
+            label = label_map.get(str(a["fund_id"]), "Acct —")
+            a["account_name"] = label
+            a["short_name"]   = label
+
     # Cache for the next ~25s (per-user). Mutating endpoints flush this via
     # _invalidate_user_cache(user_id) so freshly-imported data shows up.
     if not out.get("warnings"):
@@ -2736,6 +2760,16 @@ def lp_me_positions(request: Request):
             item["market_weight_pct"] = (
                 round(item["market_value"] / total_mkt * 100, 2) if item["market_value"] else None
             )
+
+    # Demo mode: anonymise managed-account names (fund names stay visible)
+    if claims.get("demo_mode"):
+        ma_ids = [item["fund_id"] for item in result if item.get("source_type") == "managed_account"]
+        label_map = _build_acct_label_map(ma_ids)
+        for item in result:
+            if item.get("source_type") == "managed_account":
+                label = label_map.get(str(item["fund_id"]), "Acct —")
+                item["account_name"]  = label
+                item["account_short"] = label
 
     return {
         "positions":          result,
