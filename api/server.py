@@ -3367,6 +3367,77 @@ def gp_ensure_fund(request: Request, body: EnsureFundRequest):
 
 
 # ---------------------------------------------------------------------------
+# v2 GP — Rename a fund / managed account
+# ---------------------------------------------------------------------------
+
+class FundRenameRequest(BaseModel):
+    name:       str
+    short_name: str
+
+@app.patch("/api/v2/gp/fund/{fund_id}/rename")
+def gp_fund_rename(fund_id: str, request: Request, body: FundRenameRequest):
+    """GP-only: update the display name and short code of any fund or managed account.
+
+    Invalidates all per-user caches so positions, overview, and fund-list
+    endpoints immediately return the new name without requiring a redeploy.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(403, "Demo accounts cannot rename funds")
+    if not _PSYCOPG2_OK:
+        raise HTTPException(503, "psycopg2 not available")
+
+    new_name  = body.name.strip()
+    new_short = body.short_name.strip().upper()
+    if not new_name or not new_short:
+        raise HTTPException(400, "name and short_name are required")
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Verify fund exists
+            cur.execute("SELECT id, name, short_name, fund_type FROM funds WHERE id = %s", (fund_id,))
+            fund = cur.fetchone()
+            if not fund:
+                raise HTTPException(404, f"Fund {fund_id} not found")
+
+            # Check short_name uniqueness (exclude self)
+            cur.execute(
+                "SELECT id FROM funds WHERE short_name = %s AND id != %s",
+                (new_short, fund_id)
+            )
+            if cur.fetchone():
+                raise HTTPException(409, f"Short code '{new_short}' is already in use by another fund")
+
+            old_name  = fund["name"]
+            old_short = fund["short_name"]
+
+            cur.execute(
+                "UPDATE funds SET name = %s, short_name = %s WHERE id = %s",
+                (new_name, new_short, fund_id)
+            )
+            conn.commit()
+
+        # Flush all user + fund-list caches so renamed name is seen immediately
+        _invalidate_user_cache(None)
+
+        return {
+            "ok":         True,
+            "fund_id":    fund_id,
+            "old_name":   old_name,
+            "old_short":  old_short,
+            "new_name":   new_name,
+            "new_short":  new_short,
+            "fund_type":  fund["fund_type"],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {str(exc)[:200]}")
+
+
+# ---------------------------------------------------------------------------
 # v2 Admin — DESTRUCTIVE ops. Always GP-only, always with backup-first
 # safety. Used for one-off cleanup of duplicate / misclassified fund rows.
 # ---------------------------------------------------------------------------

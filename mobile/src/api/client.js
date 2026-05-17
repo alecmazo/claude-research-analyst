@@ -447,6 +447,15 @@ export const api = {
     const qs = fundType ? `?fund_type=${encodeURIComponent(fundType)}` : '';
     return request(`/api/fund/list${qs}`, { headers: { 'x-fund-token': ft } });
   },
+
+  renameFund: async (fundId, name, shortName) => {
+    const ft = await getFundToken();
+    return request(`/api/v2/gp/fund/${encodeURIComponent(fundId)}/rename`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, short_name: shortName }),
+      headers: { 'x-fund-token': ft },
+    });
+  },
   getYtdCache: async (fundId) => {
     const ft = await getFundToken();
     return request(`/api/fund/account/${encodeURIComponent(fundId)}/ytd-cache`,

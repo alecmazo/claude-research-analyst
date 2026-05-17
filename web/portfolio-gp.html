@@ -1796,7 +1796,35 @@
           <span class="panel-badge">GP ONLY</span>
         </header>
         <div style="padding:14px;">
-          <div style="font-size:11px;color:var(--dim);margin-bottom:14px;">Create a new LP fund or managed account. Use the Fund tab to set NAV and view LP detail after creation.</div>
+
+          <!-- ── Rename existing fund / account ── -->
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Rename Fund / Account</div>
+          <div style="display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(120px,1fr) auto;gap:10px;align-items:end;margin-bottom:18px;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SELECT</div>
+              <select id="rn-fund" class="settings-input" style="width:100%;">
+                <option value="">— choose fund or account —</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="rn-name" type="text" class="settings-input" placeholder="New full name" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <input id="rn-short" type="text" class="settings-input" placeholder="CODE" style="width:100%;text-transform:uppercase;" maxlength="12">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button id="rn-save-btn" class="tab-btn" style="width:100%;height:34px;">Rename</button>
+              <div id="rn-msg" style="font-size:11px;min-height:16px;"></div>
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid var(--panel-edge);margin-bottom:14px;">
+
+          <!-- ── Create new fund / account ── -->
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Create New Fund / Account</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:10px;">Use the Fund tab to set NAV and view LP detail after creation.</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
             <div>
               <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
@@ -5408,6 +5436,24 @@
     loadBuildInfo();
     loadAutomationSettings();
     _wireEmailDiag();
+    loadRenameDropdown();
+  }
+
+  // ── Populate the rename fund/account dropdown ──────────────────
+  async function loadRenameDropdown() {
+    const sel = document.getElementById('rn-fund');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lp/me/overview');
+      if (!r.ok) return;
+      const d = await r.json();
+      const all = [
+        ...(d.funds || []).map(f => ({ id: f.fund_id, name: f.fund_name, short: f.short_name, type: 'LP Fund' })),
+        ...(d.managed_accounts || []).map(a => ({ id: a.fund_id, name: a.account_name, short: a.short_name, type: 'Managed Acct' })),
+      ];
+      sel.innerHTML = '<option value="">— choose fund or account —</option>'
+        + all.map(f => `<option value="${f.id}" data-name="${_esc(f.name)}" data-short="${_esc(f.short)}">[${f.type}] ${_esc(f.name)} (${_esc(f.short)})</option>`).join('');
+    } catch {}
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -6499,6 +6545,55 @@
       msg.textContent = 'Error: ' + e.message;
     } finally {
       btn.disabled = false; btn.textContent = 'Create';
+    }
+  });
+
+  // ── Rename Fund / Account ─────────────────────────────────────
+  document.getElementById('rn-fund')?.addEventListener('change', function() {
+    const opt = this.options[this.selectedIndex];
+    document.getElementById('rn-name').value  = opt.dataset.name  || '';
+    document.getElementById('rn-short').value = opt.dataset.short || '';
+  });
+
+  document.getElementById('rn-save-btn')?.addEventListener('click', async () => {
+    const fundId = document.getElementById('rn-fund')?.value;
+    const name   = document.getElementById('rn-name')?.value?.trim();
+    const short  = document.getElementById('rn-short')?.value?.trim().toUpperCase();
+    const msg    = document.getElementById('rn-msg');
+    const btn    = document.getElementById('rn-save-btn');
+
+    if (!fundId) { msg.style.color='var(--red)'; msg.textContent='Select a fund or account first.'; return; }
+    if (!name)   { msg.style.color='var(--red)'; msg.textContent='Full name is required.'; return; }
+    if (!short || short.length < 2) { msg.style.color='var(--red)'; msg.textContent='Short code must be ≥ 2 characters.'; return; }
+
+    btn.disabled = true; btn.textContent = '…';
+    msg.textContent = '';
+    try {
+      const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(fundId)}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, short_name: short }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = `✅ Renamed to "${name}" (${short})`;
+      // Refresh dropdown so it shows the new names
+      await loadRenameDropdown();
+      // Pre-select the just-renamed fund and re-populate fields
+      const sel = document.getElementById('rn-fund');
+      if (sel) {
+        for (const opt of sel.options) { if (opt.value === fundId) { sel.value = fundId; break; } }
+      }
+      document.getElementById('rn-name').value  = name;
+      document.getElementById('rn-short').value = short;
+      // Refresh Funds tab if visible so cards update immediately
+      if (document.getElementById('tab-fund')?.classList.contains('active')) loadFundOverview();
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Rename';
     }
   });
 

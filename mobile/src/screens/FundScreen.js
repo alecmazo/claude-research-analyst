@@ -111,6 +111,43 @@ export default function FundScreen({ navigation }) {
   const [createAcctBusy,  setCreateAcctBusy]  = useState(false);
   const [createAcctStatus,setCreateAcctStatus]= useState(null);
 
+  // ── Rename fund / account state ──────────────────────────────────────────
+  const [renamingId,    setRenamingId]    = useState(null);   // fund id currently being renamed
+  const [renameNameVal, setRenameNameVal] = useState('');
+  const [renameShortVal,setRenameShortVal]= useState('');
+  const [renameBusy,    setRenameBusy]    = useState(false);
+  const [renameMsg,     setRenameMsg]     = useState(null);   // {ok, text}
+
+  const startRename = (item) => {
+    setRenamingId(item.id || item.fund_id);
+    setRenameNameVal(item.name || item.account_name || '');
+    setRenameShortVal(item.short_name || '');
+    setRenameMsg(null);
+  };
+  const cancelRename = () => { setRenamingId(null); setRenameMsg(null); };
+  const submitRename = async (fundId) => {
+    const newName  = renameNameVal.trim();
+    const newShort = renameShortVal.trim().toUpperCase();
+    if (!newName || !newShort) {
+      setRenameMsg({ ok: false, text: 'Name and short code are required.' });
+      return;
+    }
+    setRenameBusy(true);
+    setRenameMsg(null);
+    try {
+      const r = await api.renameFund(fundId, newName, newShort);
+      setRenameMsg({ ok: true, text: `✓ Renamed to "${newName}" (${newShort})` });
+      // Refresh both lists so the new name shows immediately
+      loadFundList();
+      loadManagedAccList(activeManagedAccId);
+      setTimeout(() => { setRenamingId(null); setRenameMsg(null); }, 1200);
+    } catch (e) {
+      setRenameMsg({ ok: false, text: e.message || 'Rename failed.' });
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
   // ── Fund import state ────────────────────────────────────────────────────
   const [importPosStatus,  setImportPosStatus]  = useState(null);  // {ok, msg}
   const [importCtStatus,   setImportCtStatus]   = useState(null);  // {ok, msg}
@@ -1066,46 +1103,97 @@ export default function FundScreen({ navigation }) {
           </View>
         ) : (
           managedAccList.map(acc => {
+            const accId = acc.id;
+            const isRenaming = renamingId === accId;
             let ytdVal = acc.ytd_pct ?? null;
             const ytdColor2 = (ytdVal ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
             return (
-              <TouchableOpacity
-                key={acc.id}
-                style={s.fundSummaryCard}
-                onPress={() => openAcctDetail(acc)}
-                activeOpacity={0.8}
-              >
-                <View style={s.fundSummaryHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.fundSummaryName}>{acc.name}</Text>
-                    <Text style={s.fundSummaryShort}>{acc.short_name}  ·  est. {(acc.inception_date || '').slice(0, 4)}</Text>
+              <View key={accId}>
+                <TouchableOpacity
+                  style={s.fundSummaryCard}
+                  onPress={() => { if (!isRenaming) openAcctDetail(acc); }}
+                  activeOpacity={0.8}
+                >
+                  <View style={s.fundSummaryHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.fundSummaryName}>{acc.name}</Text>
+                      <Text style={s.fundSummaryShort}>{acc.short_name}  ·  est. {(acc.inception_date || '').slice(0, 4)}</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => isRenaming ? cancelRename() : startRename(acc)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={s.renameIconBtn}
+                    >
+                      <Text style={s.renameIconText}>{isRenaming ? '✕' : '✎'}</Text>
+                    </TouchableOpacity>
+                    <View style={s.fundSummaryStatusBadge}>
+                      <Text style={s.fundSummaryStatusText}>ACTIVE</Text>
+                    </View>
                   </View>
-                  <View style={s.fundSummaryStatusBadge}>
-                    <Text style={s.fundSummaryStatusText}>ACTIVE</Text>
+                  <View style={s.fundSummaryMetrics}>
+                    <View style={s.fundSummaryMetric}>
+                      <Text style={s.fundSummaryMetricLabel}>VALUE</Text>
+                      <Text style={s.fundSummaryMetricValue}>{fmt$(acc.nav)}</Text>
+                    </View>
+                    <View style={s.fundSummaryMetric}>
+                      <Text style={s.fundSummaryMetricLabel}>YTD</Text>
+                      <Text style={[s.fundSummaryMetricValue, { color: ytdColor2 }]}>
+                        {ytdVal != null ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}%` : '—'}
+                      </Text>
+                    </View>
+                    <View style={s.fundSummaryMetric}>
+                      <Text style={s.fundSummaryMetricLabel}>POS</Text>
+                      <Text style={s.fundSummaryMetricValue}>{acc.position_count || 0}</Text>
+                    </View>
+                    <View style={s.fundSummaryMetric}>
+                      <Text style={s.fundSummaryMetricLabel}>FEE</Text>
+                      <Text style={s.fundSummaryMetricValue}>{((acc.mgmt_fee_pct || 0) * 100).toFixed(1)}%</Text>
+                    </View>
                   </View>
-                </View>
-                <View style={s.fundSummaryMetrics}>
-                  <View style={s.fundSummaryMetric}>
-                    <Text style={s.fundSummaryMetricLabel}>VALUE</Text>
-                    <Text style={s.fundSummaryMetricValue}>{fmt$(acc.nav)}</Text>
+                  {!isRenaming && <Text style={s.fundSummaryCTA}>View Details →</Text>}
+                </TouchableOpacity>
+                {isRenaming && (
+                  <View style={s.renameForm}>
+                    <Text style={s.renameFormTitle}>RENAME ACCOUNT</Text>
+                    <TextInput
+                      style={s.renameInput}
+                      value={renameNameVal}
+                      onChangeText={setRenameNameVal}
+                      placeholder="Full account name"
+                      placeholderTextColor="#3a5070"
+                      autoFocus
+                    />
+                    <TextInput
+                      style={s.renameInput}
+                      value={renameShortVal}
+                      onChangeText={v => setRenameShortVal(v.toUpperCase())}
+                      placeholder="SHORT-CODE"
+                      placeholderTextColor="#3a5070"
+                      maxLength={12}
+                      autoCapitalize="characters"
+                    />
+                    {renameMsg && (
+                      <Text style={{ color: renameMsg.ok ? '#4cc870' : '#e05a4e', fontSize: 12, marginBottom: 8 }}>
+                        {renameMsg.text}
+                      </Text>
+                    )}
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        style={[s.importBtn2, { flex: 1, backgroundColor: colors.primary }]}
+                        onPress={() => submitRename(accId)}
+                        disabled={renameBusy}
+                      >
+                        {renameBusy
+                          ? <ActivityIndicator color={colors.navy} size="small" />
+                          : <Text style={[s.importBtn2Text, { color: colors.navy }]}>Save</Text>}
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[s.importBtn2, { flex: 1 }]} onPress={cancelRename}>
+                        <Text style={s.importBtn2Text}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                  <View style={s.fundSummaryMetric}>
-                    <Text style={s.fundSummaryMetricLabel}>YTD</Text>
-                    <Text style={[s.fundSummaryMetricValue, { color: ytdColor2 }]}>
-                      {ytdVal != null ? `${ytdVal >= 0 ? '+' : ''}${ytdVal.toFixed(2)}%` : '—'}
-                    </Text>
-                  </View>
-                  <View style={s.fundSummaryMetric}>
-                    <Text style={s.fundSummaryMetricLabel}>POS</Text>
-                    <Text style={s.fundSummaryMetricValue}>{acc.position_count || 0}</Text>
-                  </View>
-                  <View style={s.fundSummaryMetric}>
-                    <Text style={s.fundSummaryMetricLabel}>FEE</Text>
-                    <Text style={s.fundSummaryMetricValue}>{((acc.mgmt_fee_pct || 0) * 100).toFixed(1)}%</Text>
-                  </View>
-                </View>
-                <Text style={s.fundSummaryCTA}>View Details →</Text>
-              </TouchableOpacity>
+                )}
+              </View>
             );
           })
         )}
@@ -1619,13 +1707,14 @@ export default function FundScreen({ navigation }) {
       >
         <Text style={s.fundListHint}>Select a fund to view details</Text>
         {fundList.map((fund) => {
+          const isRenaming = renamingId === fund.id;
           const gainColor = fund.total_gain >= 0 ? colors.primary : '#e05a4e';
           const statusColor = fund.status === 'active' ? '#4cc870' : '#6a8aaa';
           return (
+            <View key={fund.id}>
             <TouchableOpacity
-              key={fund.id}
               style={s.fundCard}
-              onPress={() => openFundDetail(fund)}
+              onPress={() => { if (!isRenaming) openFundDetail(fund); }}
               activeOpacity={0.82}
             >
               {/* Fund name + status badge */}
@@ -1634,6 +1723,13 @@ export default function FundScreen({ navigation }) {
                   <Text style={s.fundCardName} numberOfLines={1}>{fund.name}</Text>
                   <Text style={s.fundCardShort}>{fund.short_name}  ·  est. {fund.inception_date?.slice(0, 4)}</Text>
                 </View>
+                <TouchableOpacity
+                  onPress={() => isRenaming ? cancelRename() : startRename(fund)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={s.renameIconBtn}
+                >
+                  <Text style={s.renameIconText}>{isRenaming ? '✕' : '✎'}</Text>
+                </TouchableOpacity>
                 <View style={[s.fundStatusBadge, { borderColor: statusColor }]}>
                   <Text style={[s.fundStatusText, { color: statusColor }]}>
                     {(fund.status || 'active').toUpperCase()}
@@ -1666,10 +1762,54 @@ export default function FundScreen({ navigation }) {
               </View>
 
               {/* CTA */}
-              <View style={s.fundCardCta}>
-                <Text style={s.fundCardCtaText}>View Details →</Text>
-              </View>
+              {!isRenaming && (
+                <View style={s.fundCardCta}>
+                  <Text style={s.fundCardCtaText}>View Details →</Text>
+                </View>
+              )}
             </TouchableOpacity>
+            {isRenaming && (
+              <View style={s.renameForm}>
+                <Text style={s.renameFormTitle}>RENAME FUND</Text>
+                <TextInput
+                  style={s.renameInput}
+                  value={renameNameVal}
+                  onChangeText={setRenameNameVal}
+                  placeholder="Full fund name"
+                  placeholderTextColor="#3a5070"
+                  autoFocus
+                />
+                <TextInput
+                  style={s.renameInput}
+                  value={renameShortVal}
+                  onChangeText={v => setRenameShortVal(v.toUpperCase())}
+                  placeholder="SHORT-CODE"
+                  placeholderTextColor="#3a5070"
+                  maxLength={12}
+                  autoCapitalize="characters"
+                />
+                {renameMsg && (
+                  <Text style={{ color: renameMsg.ok ? '#4cc870' : '#e05a4e', fontSize: 12, marginBottom: 8 }}>
+                    {renameMsg.text}
+                  </Text>
+                )}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[s.importBtn2, { flex: 1, backgroundColor: colors.primary }]}
+                    onPress={() => submitRename(fund.id)}
+                    disabled={renameBusy}
+                  >
+                    {renameBusy
+                      ? <ActivityIndicator color={colors.navy} size="small" />
+                      : <Text style={[s.importBtn2Text, { color: colors.navy }]}>Save</Text>}
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.importBtn2, { flex: 1 }]} onPress={cancelRename}>
+                    <Text style={s.importBtn2Text}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+            </View>
           );
         })}
       </ScrollView>
@@ -1915,6 +2055,21 @@ const s = StyleSheet.create({
   // Full-width import button
   importBtn2:         { backgroundColor: 'rgba(201,168,76,0.08)', borderRadius: 8, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)', marginBottom: 8 },
   importBtn2Text:     { fontSize: 12, fontWeight: '700', color: colors.primary, letterSpacing: 0.5 },
+
+  // Rename inline form
+  renameIconBtn:   { padding: 6, marginRight: 6 },
+  renameIconText:  { fontSize: 15, color: '#5bb8d4', fontWeight: '700' },
+  renameForm: {
+    marginHorizontal: 12, marginTop: -6, marginBottom: 10,
+    backgroundColor: '#0a1928', borderRadius: 10, padding: 14,
+    borderWidth: 1, borderColor: 'rgba(91,184,212,0.3)',
+  },
+  renameFormTitle: { fontSize: 9, fontWeight: '800', color: '#5bb8d4', letterSpacing: 1.2, marginBottom: 10 },
+  renameInput: {
+    backgroundColor: '#081526', borderRadius: 8, borderWidth: 1,
+    borderColor: '#1e3a5a', paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 13, color: '#e8f0f8', marginBottom: 8,
+  },
 
   // Table card container
   fundTableCard:      { marginHorizontal: 12, backgroundColor: '#0e1e35', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(201,168,76,0.1)', overflow: 'hidden', marginBottom: 4 },
