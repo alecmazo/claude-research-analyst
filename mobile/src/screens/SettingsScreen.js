@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
 import {
   api, getBaseUrl, setBaseUrl, resetBaseUrlToProd,
-  getStoredPassword, login,
+  getStoredPassword, login, logoutV2,
 } from '../api/client';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
@@ -78,7 +78,7 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
 }
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
-export default function SettingsScreen() {
+export default function SettingsScreen({ onLogout }) {
   const [baseUrl, setBaseUrlState]      = useState('');
   const [password, setPassword]         = useState('');
   const [serverStatus, setServerStatus] = useState(null);
@@ -449,6 +449,32 @@ export default function SettingsScreen() {
           <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
         </View>
 
+        {/* ── Sign Out ── */}
+        <TouchableOpacity
+          style={styles.signOutBtn}
+          onPress={() =>
+            Alert.alert(
+              'Sign Out',
+              'You will need to log back in with your email and password.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Sign Out',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await logoutV2();
+                    onLogout?.();
+                  },
+                },
+              ]
+            )
+          }
+          activeOpacity={0.75}
+        >
+          <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </View>
   );
@@ -530,6 +556,27 @@ const styles = StyleSheet.create({
     paddingVertical: 8, marginTop: 8,
   },
   resetBtnText: { fontSize: 12, fontWeight: '600', color: colors.midGray, textDecorationLine: 'underline' },
+
+  // ── Sign Out ──
+  signOutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 32,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+  },
+  signOutText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#DC2626',
+    letterSpacing: 0.3,
+  },
 
   // ── Automation styles ──
   autoRow: {

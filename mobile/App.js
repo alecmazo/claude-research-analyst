@@ -21,7 +21,7 @@ import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
 import WatchlistScreen        from './src/screens/WatchlistScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
-import { whoamiV2, getV2User } from './src/api/client';
+import { whoamiV2, getV2User, logoutV2 } from './src/api/client';
 import { colors } from './src/design';
 
 const Stack = createNativeStackNavigator();
@@ -64,7 +64,7 @@ function FundStack() {
 }
 
 // ── GP navigator: Positions first, no Tracker tab ────────────────────────────
-function GPTabs() {
+function GPTabs({ onLogout }) {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -75,7 +75,9 @@ function GPTabs() {
       <Tab.Screen name="Intelligence" component={IntelligenceStack} />
       <Tab.Screen name="Scan"         component={ScanScreen} />
       <Tab.Screen name="Fund"         component={FundStack} />
-      <Tab.Screen name="Settings"     component={SettingsScreen} />
+      <Tab.Screen name="Settings">
+        {() => <SettingsScreen onLogout={onLogout} />}
+      </Tab.Screen>
     </Tab.Navigator>
   );
 }
@@ -91,7 +93,9 @@ function LPTabs({ onLogout }) {
       <Tab.Screen name="Performance">
         {() => <LPPerformanceScreen onLogout={onLogout} />}
       </Tab.Screen>
-      <Tab.Screen name="Settings" component={SettingsScreen} />
+      <Tab.Screen name="Settings">
+        {() => <SettingsScreen onLogout={onLogout} />}
+      </Tab.Screen>
     </Tab.Navigator>
   );
 }
@@ -131,7 +135,10 @@ export default function App() {
   }, [refreshAuth]);
 
   const handleLoggedIn = useCallback((user) => setAuthState(user), []);
-  const handleLogout   = useCallback(()      => setAuthState('login'), []);
+  const handleLogout   = useCallback(async () => {
+    await logoutV2();          // clear v2 token + cached user from AsyncStorage
+    setAuthState('login');
+  }, []);
 
   // ── Splash while we read AsyncStorage + verify ────────────────────────────
   if (authState === null) {
@@ -160,7 +167,7 @@ export default function App() {
     <NavigationContainer>
       <StatusBar style="light" />
       {isGPOrAdmin
-        ? <GPTabs />
+        ? <GPTabs onLogout={handleLogout} />
         : <LPTabs onLogout={handleLogout} />
       }
     </NavigationContainer>
