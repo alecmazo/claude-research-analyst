@@ -6702,13 +6702,26 @@ def _db_load_lp_overlay() -> dict:
 
 
 def _db_save_lp_overlay(overlay: dict) -> None:
-    """Upsert LP credential overlay into PostgreSQL."""
-    if not overlay:
-        return
+    """Sync LP credential overlay to PostgreSQL — upserts AND deletes orphaned rows.
+
+    Previously this was upsert-only, so deleted users survived in the DB and
+    were resurrected on the next load (DB wins in _load_overlay merge).
+    Now we delete any row whose lp_id is no longer in the overlay dict.
+    """
     try:
         conn = _fund_conn()
         try:
             with conn.cursor() as cur:
+                # Remove rows whose lp_id is no longer in the overlay
+                keep = list(overlay.keys())
+                if keep:
+                    cur.execute(
+                        "DELETE FROM lp_credentials_kv WHERE NOT (lp_id = ANY(%s))",
+                        (keep,)
+                    )
+                else:
+                    cur.execute("DELETE FROM lp_credentials_kv")
+                # Upsert remaining entries
                 for lp_id, data in overlay.items():
                     cur.execute("""
                         INSERT INTO lp_credentials_kv (lp_id, data_json, updated_at)
