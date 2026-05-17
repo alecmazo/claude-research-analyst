@@ -572,71 +572,97 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
-  /* ── GP LIVE POSITIONS WATCHLIST ─────────────────────────────── */
-  #gp-positions-panel {
+  /* ── GP LIVE POSITIONS — summary bar + card grid ─────────────── */
+
+  /* Top summary bar (total NAV + day change + stats) */
+  #gp-pos-summary {
     background: var(--navy);
-    border-radius: 16px;
-    overflow: hidden;
-    box-shadow: 0 4px 32px rgba(10,22,40,0.22);
-    margin-bottom: 20px;
+    border-radius: 14px;
+    padding: 18px 24px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(10,22,40,0.20);
+    display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px;
   }
-  .gp-wl-header {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    padding: 20px 24px 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-  }
-  .gp-wl-header-left {}
   .gp-wl-total { font-size: 28px; font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; line-height: 1.1; }
   .gp-wl-day   { font-size: 13px; font-weight: 700; margin-top: 3px; }
-  .gp-wl-header-right { text-align: right; }
   .gp-wl-badge { font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(255,255,255,0.35); margin-bottom: 4px; }
   .gp-wl-ts    { font-size: 11px; color: rgba(255,255,255,0.30); }
+  .gp-wl-stat  { text-align: center; }
+  .gp-wl-stat-val { font-size: 14px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+  .gp-wl-stat-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: rgba(255,255,255,0.30); margin-top: 2px; }
+  #gp-pos-stats { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
 
-  /* Group header rows */
-  .gp-wl-group-hdr {
-    padding: 8px 24px 5px;
-    font-size: 9px; font-weight: 800; letter-spacing: 1.2px;
-    text-transform: uppercase; color: rgba(255,255,255,0.30);
-    background: rgba(255,255,255,0.025);
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+  /* Card grid — accounts as snappable columns */
+  #gp-acct-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+    align-items: start;
   }
+
+  /* Per-account card */
+  .gp-acct-card {
+    background: var(--navy);
+    border-radius: 13px;
+    overflow: hidden;
+    box-shadow: 0 3px 18px rgba(10,22,40,0.22);
+    transition: box-shadow .15s, opacity .15s;
+    cursor: default;
+  }
+  .gp-acct-card[draggable="true"] { cursor: grab; }
+  .gp-acct-card[draggable="true"]:active { cursor: grabbing; }
+  .gp-acct-card.gp-drag-src  { opacity: 0.45; }
+  .gp-acct-card.gp-drag-over { box-shadow: 0 0 0 2px #5BB8D4, 0 3px 18px rgba(10,22,40,0.22); }
+
+  /* Card header — click to collapse */
+  .gp-acct-hdr {
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 16px 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    cursor: pointer; user-select: none;
+    transition: background .12s;
+  }
+  .gp-acct-hdr:hover { background: rgba(255,255,255,0.035); }
+  .gp-acct-hdr-name {
+    flex: 1; font-size: 11px; font-weight: 800; letter-spacing: 0.8px;
+    text-transform: uppercase; color: rgba(255,255,255,0.55);
+  }
+  .gp-acct-hdr-nav  { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+  .gp-acct-hdr-chg  { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .gp-acct-hdr-chg.up { color: #4ade80; }
+  .gp-acct-hdr-chg.dn { color: #f87171; }
+  .gp-acct-chevron  { font-size: 11px; color: rgba(255,255,255,0.30); transition: transform .18s; flex-shrink: 0; }
+  .gp-acct-card.collapsed .gp-acct-chevron { transform: rotate(-90deg); }
+  .gp-acct-card.collapsed .gp-acct-body   { display: none; }
+
+  /* Card body — position rows */
+  .gp-acct-body { overflow: hidden; }
 
   /* Individual position rows */
   .gp-wl-row {
-    display: flex; align-items: center; gap: 12px;
-    padding: 14px 24px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 16px;
     border-bottom: 0.5px solid rgba(255,255,255,0.06);
     cursor: pointer; transition: background .12s;
   }
   .gp-wl-row:last-child { border-bottom: none; }
   .gp-wl-row:hover { background: rgba(255,255,255,0.04); }
   .gp-wl-left { flex: 1; min-width: 0; }
-  .gp-wl-ticker { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
-  .gp-wl-name   { font-size: 11px; color: rgba(255,255,255,0.38); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
-  .gp-wl-wt     { font-size: 10px; color: rgba(255,255,255,0.22); margin-top: 2px; }
-  .gp-wl-shares { font-size: 11px; color: rgba(255,255,255,0.28); margin-top: 1px; }
-  .gp-wl-price  { font-size: 15px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; text-align: right; min-width: 80px; }
-  .gp-wl-gain   { font-size: 10px; color: rgba(255,255,255,0.32); text-align: right; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .gp-wl-ticker { font-size: 14px; font-weight: 800; color: #fff; letter-spacing: 0.4px; }
+  .gp-wl-name   { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gp-wl-wt     { font-size: 9px;  color: rgba(255,255,255,0.20); margin-top: 1px; }
+  .gp-wl-shares { font-size: 10px; color: rgba(255,255,255,0.25); }
+  .gp-wl-price  { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; text-align: right; min-width: 68px; }
+  .gp-wl-gain   { font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; margin-top: 1px; }
   .gp-wl-pill {
-    min-width: 90px; padding: 6px 10px; border-radius: 8px;
-    text-align: center;
+    min-width: 78px; padding: 5px 8px; border-radius: 7px;
+    text-align: center; flex-shrink: 0;
   }
   .gp-wl-pill.up { background: #16A34A; }
   .gp-wl-pill.dn { background: #DC2626; }
   .gp-wl-pill.nc { background: rgba(255,255,255,0.08); }
-  .gp-wl-pill-abs { font-size: 12px; font-weight: 800; color: #fff; line-height: 1.2; }
-  .gp-wl-pill-pct { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.2; }
-
-  /* Summary footer */
-  .gp-wl-footer {
-    display: flex; gap: 24px; align-items: center; flex-wrap: wrap;
-    padding: 14px 24px;
-    border-top: 1px solid rgba(255,255,255,0.07);
-    background: rgba(255,255,255,0.018);
-  }
-  .gp-wl-stat { text-align: center; }
-  .gp-wl-stat-val { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
-  .gp-wl-stat-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: rgba(255,255,255,0.30); margin-top: 2px; }
+  .gp-wl-pill-abs { font-size: 11px; font-weight: 800; color: #fff; line-height: 1.2; }
+  .gp-wl-pill-pct { font-size: 9px;  font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.2; }
 
   /* Full-width single-column layout for non-Research tabs */
   .wide-shell {
@@ -979,24 +1005,13 @@
 <div id="tab-positions" class="tab-panel active">
   <div class="wide-shell">
 
-    <!-- Live Watchlist Panel -->
-    <div id="gp-positions-panel">
-      <div class="gp-wl-header">
-        <div class="gp-wl-header-left">
-          <div id="gp-wl-total" class="gp-wl-total">Loading…</div>
-          <div id="gp-wl-day"   class="gp-wl-day"></div>
-        </div>
-        <div class="gp-wl-header-right">
-          <div class="gp-wl-badge">LIVE PRICES</div>
-          <div id="gp-wl-ts" class="gp-wl-ts">updating…</div>
-        </div>
+    <!-- Summary bar -->
+    <div id="gp-pos-summary">
+      <div>
+        <div id="gp-wl-total" class="gp-wl-total">Loading…</div>
+        <div id="gp-wl-day"   class="gp-wl-day"></div>
       </div>
-      <div id="gp-wl-rows">
-        <div class="gp-wl-row" style="opacity:0.4;">
-          <div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">Loading positions…</div></div>
-        </div>
-      </div>
-      <div class="gp-wl-footer" id="gp-wl-footer" style="display:none;">
+      <div id="gp-pos-stats">
         <div class="gp-wl-stat">
           <div class="gp-wl-stat-val" id="gp-wl-stat-count">—</div>
           <div class="gp-wl-stat-lbl">Positions</div>
@@ -1013,9 +1028,22 @@
           <div class="gp-wl-stat-val" id="gp-wl-stat-losers">—</div>
           <div class="gp-wl-stat-lbl">Down Today</div>
         </div>
-        <div class="gp-wl-stat" style="margin-left:auto;">
+        <div class="gp-wl-stat">
           <div class="gp-wl-stat-val" id="gp-wl-stat-gain" style="color:rgba(255,255,255,0.5);">—</div>
-          <div class="gp-wl-stat-lbl">Total Unrealized</div>
+          <div class="gp-wl-stat-lbl">Unrealized P&amp;L</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="gp-wl-badge">LIVE PRICES</div>
+          <div id="gp-wl-ts" class="gp-wl-ts">updating…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Per-account cards — draggable to reorder, click header to collapse -->
+    <div id="gp-acct-grid">
+      <div class="gp-acct-card">
+        <div class="gp-acct-hdr">
+          <span class="gp-acct-hdr-name" style="opacity:0.4;">Loading…</span>
         </div>
       </div>
     </div>
@@ -2586,12 +2614,11 @@
       return (b.market_weight_pct || 0) - (a.market_weight_pct || 0);
     });
 
-    // ── Header totals ──────────────────────────────────────────
+    // ── Summary bar ────────────────────────────────────────────
+    const totalMV = data.total_market_value || 0;
     const totalEl = document.getElementById('gp-wl-total');
     const dayEl   = document.getElementById('gp-wl-day');
     const tsEl    = document.getElementById('gp-wl-ts');
-
-    const totalMV = data.total_market_value || 0;
     if (totalEl) totalEl.textContent = totalMV > 0 ? fmtUSD(totalMV) : '—';
 
     // Aggregate day change (day_change_abs is per-share × total_qty)
@@ -2604,9 +2631,9 @@
     });
     if (dayEl) {
       if (validDay) {
-        const sign = dayChangeAbs >= 0 ? '+' : '';
-        const pct  = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
-        dayEl.textContent = sign + fmtUSD(dayChangeAbs) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%) today';
+        const pct = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
+        dayEl.textContent = (dayChangeAbs >= 0 ? '+' : '') + fmtUSD(dayChangeAbs)
+          + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%) today';
         dayEl.style.color = dayChangeAbs >= 0 ? '#4ade80' : '#f87171';
       } else {
         dayEl.textContent = '';
@@ -2614,29 +2641,24 @@
     }
     if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // ── Footer stats ───────────────────────────────────────────
-    const footer = document.getElementById('gp-wl-footer');
-    if (footer) footer.style.display = positions.length ? 'flex' : 'none';
     const statCount   = document.getElementById('gp-wl-stat-count');
     const statAccts   = document.getElementById('gp-wl-stat-accts');
     const statGainers = document.getElementById('gp-wl-stat-gainers');
     const statLosers  = document.getElementById('gp-wl-stat-losers');
     const statGain    = document.getElementById('gp-wl-stat-gain');
-    if (statCount)   statCount.textContent   = positions.length;
-    if (statAccts)   statAccts.textContent   = data.account_count || '—';
+    if (statCount)   statCount.textContent = positions.length;
+    if (statAccts)   statAccts.textContent = data.account_count || '—';
     const gainers = positions.filter(function (p) { return (p.day_change_pct || 0) > 0; }).length;
     const losers  = positions.filter(function (p) { return (p.day_change_pct || 0) < 0; }).length;
     if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#4ade80' : '#fff'; }
     if (statLosers)  { statLosers.textContent  = losers;  statLosers.style.color  = losers  > 0 ? '#f87171' : '#fff'; }
-    // Total unrealized gain
     let totalUnreal = 0, hasUnreal = false;
     positions.forEach(function (p) {
       if (p.unrealized_gain != null) { totalUnreal += p.unrealized_gain; hasUnreal = true; }
     });
     if (statGain) {
       if (hasUnreal) {
-        const sign = totalUnreal >= 0 ? '+' : '';
-        statGain.textContent = sign + fmtUSD(totalUnreal);
+        statGain.textContent = (totalUnreal >= 0 ? '+' : '') + fmtUSD(totalUnreal);
         statGain.style.color = totalUnreal >= 0 ? '#4ade80' : '#f87171';
       } else {
         statGain.textContent = '—';
@@ -2644,85 +2666,166 @@
       }
     }
 
-    // ── Rows (grouped by account) ──────────────────────────────
-    const rowsEl = document.getElementById('gp-wl-rows');
-    if (!rowsEl) return;
+    // ── Per-account cards ──────────────────────────────────────
+    const grid = document.getElementById('gp-acct-grid');
+    if (!grid) return;
+
     if (!positions.length) {
-      rowsEl.innerHTML = '<div class="gp-wl-row" style="opacity:0.5;"><div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">No open positions found</div></div></div>';
+      grid.innerHTML = '<div style="color:rgba(255,255,255,0.3);font-size:13px;padding:20px;">No open positions found.</div>';
       return;
     }
 
-    // Group by account_name
-    const groups = {};
-    const groupOrder = [];
+    // Group by account, preserving sort order within each group
+    const groups = {}, groupOrder = [];
     positions.forEach(function (p) {
       const grp = p.account_name || p.fund_name || 'Portfolio';
-      if (!groups[grp]) { groups[grp] = []; groupOrder.push(grp); }
-      groups[grp].push(p);
+      if (!groups[grp]) { groups[grp] = { positions: [], navSum: 0, daySum: 0, dayValid: false }; groupOrder.push(grp); }
+      groups[grp].positions.push(p);
+      if (p.market_value)   groups[grp].navSum += p.market_value;
+      if (p.day_change_abs != null && p.total_qty != null) {
+        groups[grp].daySum  += p.day_change_abs * p.total_qty;
+        groups[grp].dayValid = true;
+      }
     });
 
-    let html = '';
+    // Build a card per account — preserve any existing collapse state
+    const prevCollapsed = {};
+    grid.querySelectorAll('.gp-acct-card[data-acct]').forEach(function (c) {
+      prevCollapsed[c.dataset.acct] = c.classList.contains('collapsed');
+    });
+
+    grid.innerHTML = '';
     groupOrder.forEach(function (grp) {
-      const grpPositions = groups[grp];
-      html += '<div class="gp-wl-group-hdr">' + _esc(grp) + ' &nbsp;·&nbsp; ' + grpPositions.length + ' position' + (grpPositions.length !== 1 ? 's' : '') + '</div>';
-      grpPositions.forEach(function (p) {
-        // Day change pill
+      const g = groups[grp];
+      const nav    = g.navSum > 0 ? fmtUSD(g.navSum) : '—';
+      const chgAbs = g.dayValid ? g.daySum : null;
+      const chgCls = chgAbs == null ? '' : chgAbs >= 0 ? 'up' : 'dn';
+      const chgTxt = chgAbs == null ? '' : (chgAbs >= 0 ? '+' : '') + fmtUSD(chgAbs);
+      const wasCollapsed = prevCollapsed[grp] || false;
+
+      // ── Card header ──
+      const card = document.createElement('div');
+      card.className = 'gp-acct-card' + (wasCollapsed ? ' collapsed' : '');
+      card.dataset.acct = grp;
+      card.draggable = true;
+
+      const hdr = document.createElement('div');
+      hdr.className = 'gp-acct-hdr';
+      hdr.innerHTML = '<span class="gp-acct-hdr-name">' + _esc(grp) + '</span>'
+        + '<span class="gp-acct-hdr-nav">' + nav + '</span>'
+        + (chgTxt ? '<span class="gp-acct-hdr-chg ' + chgCls + '">' + chgTxt + '</span>' : '')
+        + '<span class="gp-acct-chevron">▾</span>';
+      hdr.addEventListener('click', function () { card.classList.toggle('collapsed'); });
+      card.appendChild(hdr);
+
+      // ── Card body — position rows ──
+      const body = document.createElement('div');
+      body.className = 'gp-acct-body';
+
+      g.positions.forEach(function (p) {
         const pct = p.day_change_pct;
         const abs = p.day_change_abs;
         let pillClass = 'nc', absStr = '—', pctStr = '';
         if (pct != null) {
           pillClass = pct > 0 ? 'up' : pct < 0 ? 'dn' : 'nc';
-          absStr = (abs != null ? ((abs >= 0 ? '+' : '') + '$' + Math.abs(abs).toFixed(2)) : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%');
-          pctStr = pct != null ? ((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%') : '';
+          const absVal = abs != null ? abs : null;
+          absStr = absVal != null ? ((absVal >= 0 ? '+$' : '-$') + Math.abs(absVal).toFixed(2)) : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+          pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
         }
-        const wt = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : null;
-        const px = p.last_price != null ? '$' + Number(p.last_price).toFixed(2) : '—';
-        const shares = (p.total_qty || p.quantity) != null ? Number(p.total_qty || p.quantity).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' sh' : '';
-        // Unrealized gain for this position
-        let gainTxt = '';
+        const wt  = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : null;
+        const px  = p.last_price != null ? '$' + Number(p.last_price).toFixed(2) : '—';
+        const qty = (p.total_qty || p.quantity);
+        const shares = qty != null ? Number(qty).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' sh' : '';
+        let gainTxt = '', gainColor = 'rgba(255,255,255,0.28)';
         if (p.unrealized_gain != null) {
-          const g = p.unrealized_gain;
-          const gPct = p.unrealized_gain_pct;
-          gainTxt = (g >= 0 ? '+' : '') + '$' + Math.abs(g).toFixed(0);
+          const g2 = p.unrealized_gain, gPct = p.unrealized_gain_pct;
+          gainTxt = (g2 >= 0 ? '+' : '') + '$' + Math.abs(g2).toFixed(0);
           if (gPct != null) gainTxt += ' (' + (gPct >= 0 ? '+' : '') + gPct.toFixed(1) + '%)';
+          gainColor = g2 >= 0 ? '#4ade80' : '#f87171';
         }
-        html += '<div class="gp-wl-row" data-ticker="' + _esc(p.symbol) + '">'
-          + '<div class="gp-wl-left">'
-          +   '<div class="gp-wl-ticker">' + _esc(p.symbol) + '</div>'
-          +   '<div class="gp-wl-name">'   + _esc(p.name || p.symbol) + '</div>'
-          +   (wt ? '<div class="gp-wl-wt">' + wt + ' of account</div>' : '')
-          +   (shares ? '<div class="gp-wl-shares">' + shares + '</div>' : '')
+
+        const row = document.createElement('div');
+        row.className = 'gp-wl-row';
+        row.dataset.ticker = p.symbol;
+        row.innerHTML = '<div class="gp-wl-left">'
+          + '<div class="gp-wl-ticker">' + _esc(p.symbol) + '</div>'
+          + '<div class="gp-wl-name">'   + _esc(p.name || p.symbol) + '</div>'
+          + (wt     ? '<div class="gp-wl-wt">'     + wt     + ' of acct</div>' : '')
+          + (shares ? '<div class="gp-wl-shares">'  + shares + '</div>' : '')
           + '</div>'
-          + '<div style="text-align:right;">'
-          +   '<div class="gp-wl-price">' + px + '</div>'
-          +   (gainTxt ? '<div class="gp-wl-gain" style="color:' + (p.unrealized_gain >= 0 ? '#4ade80' : '#f87171') + ';">' + gainTxt + '</div>' : '')
+          + '<div style="text-align:right;min-width:68px;">'
+          + '<div class="gp-wl-price">' + px + '</div>'
+          + (gainTxt ? '<div class="gp-wl-gain" style="color:' + gainColor + ';">' + gainTxt + '</div>' : '')
           + '</div>'
           + '<div class="gp-wl-pill ' + pillClass + '">'
-          +   '<div class="gp-wl-pill-abs">' + absStr + '</div>'
-          +   (pctStr ? '<div class="gp-wl-pill-pct">' + pctStr + '</div>' : '')
-          + '</div>'
+          + '<div class="gp-wl-pill-abs">' + absStr + '</div>'
+          + (pctStr ? '<div class="gp-wl-pill-pct">' + pctStr + '</div>' : '')
           + '</div>';
-      });
-    });
-    rowsEl.innerHTML = html;
 
-    // Click row → open research report or Yahoo Finance
-    rowsEl.querySelectorAll('.gp-wl-row[data-ticker]').forEach(function (row) {
-      row.addEventListener('click', function () {
-        const ticker = row.dataset.ticker;
-        if (!ticker) return;
-        // Try to run a research pull on this ticker in Research tab
-        if (typeof showTab === 'function') {
-          showTab('research');
-          var heroInput = document.getElementById('hero-ticker');
-          var heroBtn   = document.getElementById('hero-run-btn');
-          if (heroInput && heroBtn) {
-            heroInput.value = ticker;
-            setTimeout(function () { heroBtn.click(); }, 200);
-            return;
+        row.addEventListener('click', function () {
+          const tk = row.dataset.ticker;
+          if (!tk) return;
+          if (typeof showTab === 'function') {
+            showTab('research');
+            var heroInput = document.getElementById('hero-ticker');
+            var heroBtn   = document.getElementById('hero-run-btn');
+            if (heroInput && heroBtn) {
+              heroInput.value = tk;
+              setTimeout(function () { heroBtn.click(); }, 200);
+              return;
+            }
           }
+          window.open('https://finance.yahoo.com/quote/' + encodeURIComponent(tk), '_blank');
+        });
+        body.appendChild(row);
+      });
+
+      card.appendChild(body);
+      grid.appendChild(card);
+    });
+
+    // ── Drag-to-reorder between cards (snap to grid) ───────────
+    _initCardDrag(grid);
+  }
+
+  // HTML5 drag-and-drop reorder — cards snap to grid positions
+  function _initCardDrag(grid) {
+    var dragSrc = null;
+    grid.querySelectorAll('.gp-acct-card').forEach(function (card) {
+      card.addEventListener('dragstart', function (e) {
+        dragSrc = card;
+        card.classList.add('gp-drag-src');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', card.dataset.acct || '');
+      });
+      card.addEventListener('dragend', function () {
+        card.classList.remove('gp-drag-src');
+        grid.querySelectorAll('.gp-acct-card').forEach(function (c) {
+          c.classList.remove('gp-drag-over');
+        });
+        dragSrc = null;
+      });
+      card.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragSrc && card !== dragSrc) card.classList.add('gp-drag-over');
+      });
+      card.addEventListener('dragleave', function () {
+        card.classList.remove('gp-drag-over');
+      });
+      card.addEventListener('drop', function (e) {
+        e.preventDefault();
+        card.classList.remove('gp-drag-over');
+        if (!dragSrc || dragSrc === card) return;
+        // Insert dragSrc before or after card depending on position
+        var cards = Array.from(grid.querySelectorAll('.gp-acct-card'));
+        var srcIdx = cards.indexOf(dragSrc);
+        var dstIdx = cards.indexOf(card);
+        if (srcIdx < dstIdx) {
+          grid.insertBefore(dragSrc, card.nextSibling);
+        } else {
+          grid.insertBefore(dragSrc, card);
         }
-        window.open('https://finance.yahoo.com/quote/' + encodeURIComponent(ticker), '_blank');
       });
     });
   }
