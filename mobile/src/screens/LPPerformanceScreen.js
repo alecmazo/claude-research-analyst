@@ -414,7 +414,7 @@ function AnnualPerfTable({ fid }) {
 }
 
 /* ── Main screen ──────────────────────────────────────────────────── */
-export default function LPPerformanceScreen({ onLogout }) {
+export default function LPPerformanceScreen({ onLogout, isDemo, onSwitchToAdmin }) {
   const [data, setData]             = useState(null);
   const [me,   setMe]               = useState(null);
   const [loading, setLoading]       = useState(true);
@@ -489,6 +489,20 @@ export default function LPPerformanceScreen({ onLogout }) {
             <TouchableOpacity onPress={load} style={styles.retryBtn}>
               <Text style={styles.retryText}>RETRY</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Demo mode banner */}
+        {isDemo && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerText}>
+              🎭 Demo Mode · Investor identities anonymised · Read-only
+            </Text>
+            {onSwitchToAdmin && (
+              <TouchableOpacity style={styles.demoAdminBtn} onPress={onSwitchToAdmin} activeOpacity={0.8}>
+                <Text style={styles.demoAdminBtnText}>⚙️  Switch to Admin View</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -984,5 +998,35 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     lineHeight: 16,
     fontStyle: 'italic',
+  },
+
+  // ── Demo Mode ──
+  demoBanner: {
+    backgroundColor: '#1d4ed8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    gap: 10,
+    alignItems: 'center',
+  },
+  demoBannerText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textAlign: 'center',
+  },
+  demoAdminBtn: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 20,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  demoAdminBtnText: {
+    color: '#1d4ed8',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

@@ -78,7 +78,7 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
 }
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
-export default function SettingsScreen({ onLogout }) {
+export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitchToAdmin, isLpMode }) {
   const [baseUrl, setBaseUrlState]      = useState('');
   const [password, setPassword]         = useState('');
   const [serverStatus, setServerStatus] = useState(null);
@@ -246,6 +246,22 @@ export default function SettingsScreen({ onLogout }) {
     <View style={styles.wrapper}>
       <AppHeader title="Settings" />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+
+        {/* ── Demo Mode Banner + View Switch ── */}
+        {isDemo && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerText}>🎭 Demo Mode · Read-only · Investor identities anonymised</Text>
+            <TouchableOpacity
+              style={styles.demoSwitchBtn}
+              onPress={isLpMode ? onSwitchToAdmin : onSwitchToLP}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.demoSwitchBtnText}>
+                {isLpMode ? '⚙️  Switch to Admin View' : '👁  Switch to LP View'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* ── API Server ── */}
         <View style={styles.section}>
@@ -609,4 +625,33 @@ const styles = StyleSheet.create({
   autoSep: { height: 1, backgroundColor: colors.lightGray, marginVertical: 4 },
   autoSaveBtn: { marginTop: 16, justifyContent: 'center', height: 46 },
   autoSaveMsg: { fontSize: 12, color: colors.midGray, marginTop: 8, fontWeight: '600' },
+
+  // ── Demo Mode styles ──
+  demoBanner: {
+    backgroundColor: '#1d4ed8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    gap: 10,
+  },
+  demoBannerText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textAlign: 'center',
+  },
+  demoSwitchBtn: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  demoSwitchBtnText: {
+    color: '#1d4ed8',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
 });

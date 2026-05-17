@@ -64,7 +64,7 @@ function FundStack() {
 }
 
 // ── GP navigator: Positions first, no Tracker tab ────────────────────────────
-function GPTabs({ onLogout }) {
+function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -76,14 +76,14 @@ function GPTabs({ onLogout }) {
       <Tab.Screen name="Scan"         component={ScanScreen} />
       <Tab.Screen name="Fund"         component={FundStack} />
       <Tab.Screen name="Settings">
-        {() => <SettingsScreen onLogout={onLogout} />}
+        {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
 }
 
 // ── LP navigator: Positions first, no Research tab ───────────────────────────
-function LPTabs({ onLogout }) {
+function LPTabs({ onLogout, isDemo, onSwitchToAdmin }) {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -91,10 +91,10 @@ function LPTabs({ onLogout }) {
     >
       <Tab.Screen name="Positions" component={WatchlistScreen} />
       <Tab.Screen name="Performance">
-        {() => <LPPerformanceScreen onLogout={onLogout} />}
+        {() => <LPPerformanceScreen onLogout={onLogout} isDemo={isDemo} onSwitchToAdmin={onSwitchToAdmin} />}
       </Tab.Screen>
       <Tab.Screen name="Settings">
-        {() => <SettingsScreen onLogout={onLogout} />}
+        {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={null} isLpMode={true} onSwitchToAdmin={onSwitchToAdmin} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -117,6 +117,8 @@ async function checkForOtaUpdate() {
 export default function App() {
   // null = checking, 'login' = show login, otherwise the v2 user object
   const [authState, setAuthState] = useState(null);
+  // Demo admin can toggle between GP admin view and LP investor view
+  const [lpMode, setLpMode] = useState(false);
 
   // Reconcile auth on launch + whenever someone logs in/out
   const refreshAuth = useCallback(async () => {
@@ -134,9 +136,13 @@ export default function App() {
     refreshAuth();
   }, [refreshAuth]);
 
-  const handleLoggedIn = useCallback((user) => setAuthState(user), []);
-  const handleLogout   = useCallback(async () => {
+  const handleLoggedIn = useCallback((user) => {
+    setLpMode(false);   // always start in admin view after fresh login
+    setAuthState(user);
+  }, []);
+  const handleLogout = useCallback(async () => {
     await logoutV2();          // clear v2 token + cached user from AsyncStorage
+    setLpMode(false);
     setAuthState('login');
   }, []);
 
@@ -163,12 +169,14 @@ export default function App() {
   // ── Signed in → branch by role ───────────────────────────────────────────
   // Admin has full GP access (same tabs as GP)
   const isGPOrAdmin = authState.role === 'gp' || authState.role === 'admin';
+  const isDemo      = !!authState.demo_mode;
+
   return (
     <NavigationContainer>
       <StatusBar style="light" />
-      {isGPOrAdmin
-        ? <GPTabs onLogout={handleLogout} />
-        : <LPTabs onLogout={handleLogout} />
+      {isGPOrAdmin && !lpMode
+        ? <GPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToLP={() => setLpMode(true)} />
+        : <LPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToAdmin={isGPOrAdmin ? () => setLpMode(false) : null} />
       }
     </NavigationContainer>
   );
