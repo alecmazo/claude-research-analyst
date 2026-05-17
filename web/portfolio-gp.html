@@ -4251,6 +4251,8 @@
         '</tr>';
     }).join('');
 
+    const emailBtnId = 'reb-email-btn-' + fundId;
+    const emailMsgId = 'reb-email-msg-' + fundId;
     elResult.innerHTML =
       '<section class="panel" data-ac="1">' +
         '<details open>' +
@@ -4260,7 +4262,10 @@
               '<span class="panel-badge">' + (data.equity_count || data.rows.length) + ' equities</span>' +
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
-            '<span></span>' +
+            '<span style="display:flex;align-items:center;gap:6px;flex-shrink:0;" onclick="event.stopPropagation()">' +
+              '<span id="' + emailMsgId + '" style="font-size:10px;min-width:0;"></span>' +
+              '<button id="' + emailBtnId + '" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📨 Email Report</button>' +
+            '</span>' +
           '</summary>' +
           '<div style="padding:12px 14px 6px;">' +
           '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">' +
@@ -4297,7 +4302,41 @@
         '</details>' +
       '</section>';
 
-    // Email functionality disabled
+    // Wire the email button
+    const emailBtn = document.getElementById(emailBtnId);
+    const emailMsg = document.getElementById(emailMsgId);
+    if (emailBtn) {
+      emailBtn.addEventListener('click', async () => {
+        // Prompt for recipient — default to GP's own email
+        const defaultTo = (window.DGA_USER && window.DGA_USER.email) || '';
+        const to = prompt('Send rebalance report to:', defaultTo);
+        if (!to || !to.includes('@')) return;
+        emailBtn.disabled = true;
+        emailBtn.textContent = '⏳ Sending…';
+        if (emailMsg) emailMsg.textContent = '';
+        try {
+          const r = await window.dgaFetch(
+            '/api/v2/gp/fund/' + encodeURIComponent(fundId) + '/rebalance/email',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to }),
+            }
+          );
+          const d = await r.json();
+          if (d.ok) {
+            if (emailMsg) { emailMsg.style.color='var(--green)'; emailMsg.textContent = '✓ Sent to ' + to; }
+          } else {
+            if (emailMsg) { emailMsg.style.color='var(--red)'; emailMsg.textContent = '✗ ' + (d.error || r.status); }
+          }
+        } catch (e) {
+          if (emailMsg) { emailMsg.style.color='var(--red)'; emailMsg.textContent = '✗ ' + e.message; }
+        } finally {
+          emailBtn.disabled = false;
+          emailBtn.textContent = '📨 Email Report';
+        }
+      });
+    }
 
   }
 
