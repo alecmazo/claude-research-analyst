@@ -453,12 +453,14 @@ export default function LPPerformanceScreen({ onLogout }) {
     onLogout?.();
   };
 
-  const funds        = data?.funds            || [];
-  const accts        = data?.managed_accounts || [];
-  const firstName    = (me?.name || '').split(/\s+/)[0] || 'there';
-  const isEmpty      = funds.length === 0 && accts.length === 0;
-  const totalFundNav = funds.reduce((s, f) => s + (f.effective_nav || f.fund_nav || 0), 0);
-  const totalAcctNav = accts.reduce((s, a) => s + (a.nav || 0), 0);
+  const funds           = data?.funds            || [];
+  const accts           = data?.managed_accounts || [];
+  const firstName       = (me?.name || '').split(/\s+/)[0] || 'there';
+  const isEmpty         = funds.length === 0 && accts.length === 0;
+  // Use stake_value (LP's prorated net-of-carry share) — matches web hero card
+  const totalFundStakes = funds.reduce((s, f) => s + (f.stake_value || 0), 0);
+  const totalAcctNav    = accts.reduce((s, a) => s + (a.nav || 0), 0);
+  const totalPortfolio  = totalFundStakes + totalAcctNav;
 
   return (
     <View style={styles.container}>
@@ -512,20 +514,49 @@ export default function LPPerformanceScreen({ onLogout }) {
                     {funds.length > 0 && accts.length > 0 && ' + '}
                     {accts.length > 0 && `${accts.length} managed account${accts.length > 1 ? 's' : ''}`}
                   </Text>
-                  <View style={styles.heroTiles}>
-                    {funds.length > 0 && (
-                      <View style={styles.heroTile}>
-                        <Text style={styles.heroTileLabel}>FUND NAV (TOTAL)</Text>
-                        <Text style={styles.heroTileVal}>{totalFundNav ? fmtUSD(totalFundNav) : '—'}</Text>
-                      </View>
-                    )}
-                    {accts.length > 0 && (
-                      <View style={styles.heroTile}>
-                        <Text style={styles.heroTileLabel}>MANAGED ACCT NAV</Text>
-                        <Text style={styles.heroTileVal}>{totalAcctNav ? fmtUSD(totalAcctNav) : '—'}</Text>
-                      </View>
-                    )}
+
+                  {/* Total portfolio — big number */}
+                  <View style={styles.heroTotalRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.heroTotalLabel}>YOUR TOTAL PORTFOLIO</Text>
+                      <Text style={styles.heroTotalVal}>
+                        {totalPortfolio > 0 ? fmtUSD(totalPortfolio) : '—'}
+                      </Text>
+                      <Text style={styles.heroTotalSub}>
+                        equity stakes net of carry{accts.length ? ' + managed accounts' : ''}
+                      </Text>
+                    </View>
                   </View>
+
+                  {/* Breakdown tiles */}
+                  {(funds.length > 0 || accts.length > 0) && (
+                    <View style={styles.heroTiles}>
+                      {funds.length > 0 && (
+                        <View style={styles.heroTile}>
+                          <Text style={styles.heroTileLabel}>FUND STAKES (TOTAL)</Text>
+                          <Text style={styles.heroTileVal}>
+                            {totalFundStakes > 0 ? fmtUSD(totalFundStakes) : '—'}
+                          </Text>
+                          {funds.reduce((s, f) => s + (f.commitment || 0), 0) > 0 && (
+                            <Text style={styles.heroTileSub}>
+                              Commitment {fmtUSD(funds.reduce((s, f) => s + (f.commitment || 0), 0))}
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                      {accts.length > 0 && (
+                        <View style={styles.heroTile}>
+                          <Text style={styles.heroTileLabel}>MANAGED ACCT NAV</Text>
+                          <Text style={styles.heroTileVal}>
+                            {totalAcctNav > 0 ? fmtUSD(totalAcctNav) : '—'}
+                          </Text>
+                          <Text style={styles.heroTileSub}>
+                            {accts.length} managed account{accts.length !== 1 ? 's' : ''}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
                 </>
               )}
             </View>
@@ -542,40 +573,45 @@ export default function LPPerformanceScreen({ onLogout }) {
                     Your alias · <Text style={styles.cardAliasValue}>{f.lp_alias}</Text>
                   </Text>
                 )}
-                <View style={styles.cardStats}>
+                {/* YOUR CURRENT STAKE — top, emphasized, full width */}
+                <View style={styles.cardStatStake}>
+                  <Text style={styles.cardStatLabel}>YOUR CURRENT STAKE</Text>
+                  <Text style={styles.cardStatStakeVal}>
+                    {f.stake_value != null ? fmtUSD(f.stake_value) : '—'}
+                  </Text>
+                  <Text style={styles.cardStatSub}>
+                    {f.commitment && f.total_committed
+                      ? `${((f.commitment / f.total_committed) * 100).toFixed(1)}% of fund · `
+                      : ''}
+                    {f.market_nav ? 'Live market value · net of carry'
+                      : f.fund_nav ? 'Annual snapshot · net of carry'
+                      : 'Net of carry'}
+                  </Text>
+                </View>
+
+                {/* FUND NAV + COMMITMENT — second row, two columns */}
+                <View style={[styles.cardStats, { marginTop: 8 }]}>
                   <View style={styles.cardStat}>
-                    <Text style={styles.cardStatLabel}>FUND NAV</Text>
+                    <Text style={styles.cardStatLabel}>FUND NAV (TOTAL)</Text>
                     <Text style={styles.cardStatVal}>
                       {f.effective_nav != null ? fmtUSD(f.effective_nav)
                         : f.fund_nav != null ? fmtUSD(f.fund_nav) : '—'}
                     </Text>
                     <Text style={styles.cardStatSub}>
-                      {f.fund_nav > 0 && f.fund_nav_as_of ? `as of ${f.fund_nav_as_of}`
-                        : f.effective_nav ? 'Live from positions' : 'No snapshot yet'}
+                      {f.market_nav ? 'Live from positions'
+                        : f.fund_nav_as_of ? `as of ${f.fund_nav_as_of}`
+                        : 'No snapshot yet'}
                     </Text>
                   </View>
                   <View style={styles.cardStat}>
                     <Text style={styles.cardStatLabel}>YOUR COMMITMENT</Text>
                     <Text style={styles.cardStatVal}>{f.commitment ? fmtUSD(f.commitment) : '—'}</Text>
-                    <Text style={styles.cardStatSub}>{f.lp_count} LP{f.lp_count !== 1 ? 's' : ''} in fund</Text>
+                    <Text style={styles.cardStatSub}>
+                      {f.lp_count} LP{f.lp_count !== 1 ? 's' : ''} in fund
+                      {f.total_committed ? ` · ${fmtUSD(f.total_committed)} total raised` : ''}
+                    </Text>
                   </View>
                 </View>
-                {(f.gp_accrued_carry > 0 || f.lp_nav_after_carry != null) && (
-                  <View style={[styles.cardStats, { marginTop: 8 }]}>
-                    <View style={[styles.cardStat, { flex: 1 }]}>
-                      <Text style={styles.cardStatLabel}>GP CARRY</Text>
-                      <Text style={[styles.cardStatVal, { color: '#cc3333', fontSize: 13 }]}>
-                        {f.gp_accrued_carry ? fmtUSD(f.gp_accrued_carry) : '—'}
-                      </Text>
-                    </View>
-                    <View style={[styles.cardStat, { flex: 1 }]}>
-                      <Text style={styles.cardStatLabel}>LP DISTRIBUTABLE</Text>
-                      <Text style={[styles.cardStatVal, { color: '#1a7f40', fontSize: 13 }]}>
-                        {f.lp_nav_after_carry != null ? fmtUSD(f.lp_nav_after_carry) : '—'}
-                      </Text>
-                    </View>
-                  </View>
-                )}
                 <AnnualPerfTable key={f.fund_id + '-atp'} fid={f.fund_id} />
               </View>
             ))}
@@ -814,7 +850,38 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 14,
   },
-  heroTiles: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  // Hero total portfolio row
+  heroTotalRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 10,
+    marginBottom: 14,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(91,184,212,0.18)',
+  },
+  heroTotalLabel: {
+    color: colors.primary,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  heroTotalVal: {
+    color: '#fff',
+    fontSize: 30,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+    marginBottom: 3,
+  },
+  heroTotalSub: {
+    color: 'rgba(255,255,255,0.38)',
+    fontSize: 9,
+  },
+
+  heroTiles: { flexDirection: 'row', gap: 10, marginTop: 0 },
   heroTile: {
     flex: 1,
     backgroundColor: 'rgba(91,184,212,0.10)',
@@ -834,6 +901,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 4,
     fontVariant: ['tabular-nums'],
+  },
+  heroTileSub: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 9,
+    marginTop: 2,
   },
 
   card: {
@@ -886,6 +958,23 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   cardStatSub: { fontSize: 9, color: colors.midGray, marginTop: 2 },
+
+  // YOUR CURRENT STAKE — full-width highlighted tile at top of fund card
+  cardStatStake: {
+    backgroundColor: 'rgba(91,184,212,0.07)',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(91,184,212,0.22)',
+  },
+  cardStatStakeVal: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: colors.navy,
+    marginTop: 4,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.3,
+  },
 
   footnote: {
     fontSize: 11,
