@@ -2718,7 +2718,7 @@ def lp_me_portfolio_history(request: Request):
     funds_ov = overview.get("funds") or []
     accts_ov = overview.get("managed_accounts") or []
 
-    out = {"fund_stakes": [], "managed_acct_nav": [], "warnings": []}
+    out = {"fund_stakes": [], "managed_acct_nav": [], "total_portfolio": [], "warnings": []}
     if not _PSYCOPG2_OK or (not funds_ov and not accts_ov):
         return out
 
@@ -2907,6 +2907,27 @@ def lp_me_portfolio_history(request: Request):
 
     except Exception as exc:
         out["warnings"].append(f"history query failed: {str(exc)[:200]}")
+
+    # ── Build total_portfolio series: forward-fill + sum both sub-series ──────
+    # At each unique date across both series, the value = most-recent fund_stakes
+    # value at-or-before that date + most-recent managed_acct_nav at-or-before.
+    # This is what the "YOUR TOTAL PORTFOLIO" chart tile shows.
+    try:
+        fund_pts = sorted(out["fund_stakes"],    key=lambda p: p["date"])
+        acct_pts = sorted(out["managed_acct_nav"], key=lambda p: p["date"])
+        all_dates = sorted({p["date"] for p in fund_pts + acct_pts})
+        total_pts = []
+        for d in all_dates:
+            fv = next((p["value"] for p in reversed(fund_pts) if p["date"] <= d), 0.0)
+            av = next((p["value"] for p in reversed(acct_pts) if p["date"] <= d), 0.0)
+            is_cur = any(p.get("is_current") and p["date"] == d for p in fund_pts + acct_pts)
+            entry = {"date": d, "year": int(d[:4]), "value": round((fv or 0) + (av or 0), 2)}
+            if is_cur:
+                entry["is_current"] = True
+            total_pts.append(entry)
+        out["total_portfolio"] = total_pts
+    except Exception:
+        pass  # total_portfolio stays []
 
     if not out.get("warnings"):
         _user_cache_put(cache_key, out)

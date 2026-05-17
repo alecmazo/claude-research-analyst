@@ -945,7 +945,9 @@
       btn.style.color      = active ? '#0A1628' : 'rgba(255,255,255,0.55)';
     });
 
-    const label = series === 'fund_stakes' ? 'FUND STAKES · HISTORY' : 'MANAGED ACCT NAV · HISTORY';
+    const label = series === 'total_portfolio' ? 'TOTAL PORTFOLIO · HISTORY'
+                : series === 'fund_stakes'    ? 'FUND STAKES · HISTORY'
+                :                               'MANAGED ACCT NAV · HISTORY';
     document.getElementById('lp-ph-eyebrow').textContent = label;
 
     const $value = document.getElementById('lp-ph-value');
@@ -978,13 +980,28 @@
       $delta.style.color = 'rgba(255,255,255,0.55)';
     }
 
-    drawPortfolioHistoryChart($canvas, pts);
+    // For total_portfolio, build per-point breakdown so the chart can draw
+    // a stacked area (fund stakes layer + managed acct layer).
+    let subPts = null;
+    if (series === 'total_portfolio' && cache) {
+      const fundPts = (cache['fund_stakes']      || []).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+      const acctPts = (cache['managed_acct_nav'] || []).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+      subPts = pts.map(p => {
+        const fv = fundPts.filter(x => x.date <= p.date).pop()?.value || 0;
+        const av = acctPts.filter(x => x.date <= p.date).pop()?.value || 0;
+        return { date: p.date, fundV: fv, acctV: av };
+      });
+    }
+    drawPortfolioHistoryChart($canvas, pts, subPts);
     } catch (e) {
       console.warn('[lp-portfolio-history render]', e);
     }
   }
 
-  function drawPortfolioHistoryChart(canvas, pts) {
+  function drawPortfolioHistoryChart(canvas, pts, subPts) {
+    // subPts: optional secondary series for stacked-area (total_portfolio mode)
+    // subPts[i].fundV  = fund stakes value at pts[i].date
+    // subPts[i].acctV  = managed acct value at pts[i].date
     try {
     if (!canvas || !pts || !pts.length) return;
     const dpr  = window.devicePixelRatio || 1;
@@ -1041,7 +1058,78 @@
       ctx.restore();
     }
 
-    // Main line (gradient stroke, blue)
+    // ── Stacked-area fill (total_portfolio mode) ──────────────────────────────
+    if (subPts && subPts.length === pts.length) {
+      // Bottom layer: managed acct NAV (teal/green)
+      const gradAcct = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+      gradAcct.addColorStop(0, 'rgba(52,211,153,0.35)');
+      gradAcct.addColorStop(1, 'rgba(52,211,153,0.08)');
+      ctx.fillStyle = gradAcct;
+      ctx.beginPath();
+      subPts.forEach((p, i) => {
+        const x = xAt(i), y = yAt(p.acctV || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.lineTo(xAt(subPts.length - 1), padT + chartH);
+      ctx.lineTo(xAt(0), padT + chartH);
+      ctx.closePath(); ctx.fill();
+
+      // Top layer: fund stakes (blue), sits on top of acct
+      const gradFund = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+      gradFund.addColorStop(0, 'rgba(91,184,212,0.30)');
+      gradFund.addColorStop(1, 'rgba(91,184,212,0.04)');
+      ctx.fillStyle = gradFund;
+      ctx.beginPath();
+      // Upper edge: total (top of fund stakes band)
+      pts.forEach((p, i) => {
+        const x = xAt(i), y = yAt(p.value || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      // Lower edge: acct NAV bottom of fund stakes band, traced in reverse
+      for (let i = subPts.length - 1; i >= 0; i--) {
+        ctx.lineTo(xAt(i), yAt(subPts[i].acctV || 0));
+      }
+      ctx.closePath(); ctx.fill();
+
+      // Legend: small colored squares at bottom-left
+      const legendY = H - 6;
+      ctx.font = '9px -apple-system,sans-serif';
+      ctx.fillStyle = 'rgba(91,184,212,0.9)';
+      ctx.fillRect(padL, legendY - 7, 8, 7);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.textAlign = 'left';
+      ctx.fillText('Fund stakes', padL + 11, legendY);
+
+      ctx.fillStyle = 'rgba(52,211,153,0.9)';
+      ctx.fillRect(padL + 80, legendY - 7, 8, 7);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillText('Managed acct', padL + 91, legendY);
+    } else {
+      // Single-series fill (blue)
+      const grad = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+      grad.addColorStop(0, 'rgba(91,184,212,0.22)');
+      grad.addColorStop(1, 'rgba(91,184,212,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const x = xAt(i), y = yAt(p.value || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.lineTo(xAt(pts.length - 1), padT + chartH);
+      ctx.lineTo(xAt(0), padT + chartH);
+      ctx.closePath(); ctx.fill();
+
+      // X-axis: first and last date labels (single-series only)
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font      = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'left';
+      const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      ctx.fillText(fmtDate(pts[0].date), padL, H - 6);
+      ctx.textAlign = 'right';
+      ctx.fillText(fmtDate(pts[pts.length - 1].date), W - padR, H - 6);
+    }
+
+    // Main total line (always blue on top)
     ctx.lineWidth   = 2.2;
     ctx.lineJoin    = 'round';
     ctx.strokeStyle = '#5BB8D4';
@@ -1052,20 +1140,6 @@
     });
     ctx.stroke();
 
-    // Soft fill under the curve
-    const grad = ctx.createLinearGradient(0, padT, 0, padT + chartH);
-    grad.addColorStop(0, 'rgba(91,184,212,0.22)');
-    grad.addColorStop(1, 'rgba(91,184,212,0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    pts.forEach((p, i) => {
-      const x = xAt(i), y = yAt(p.value || 0);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.lineTo(xAt(pts.length - 1), padT + chartH);
-    ctx.lineTo(xAt(0), padT + chartH);
-    ctx.closePath(); ctx.fill();
-
     // Endpoint dot
     const lastX = xAt(pts.length - 1);
     const lastY = yAt(pts[pts.length - 1].value || 0);
@@ -1074,17 +1148,14 @@
     ctx.strokeStyle = 'rgba(10,22,40,0.9)';
     ctx.lineWidth = 1.5; ctx.stroke();
 
-    // X-axis: first and last date labels
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font      = '10px -apple-system,sans-serif';
-    ctx.textAlign = 'left';
-    const fmtDate = (d) => {
-      const dt = new Date(d);
-      return dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-    };
-    ctx.fillText(fmtDate(pts[0].date), padL, H - 6);
-    ctx.textAlign = 'right';
-    ctx.fillText(fmtDate(pts[pts.length - 1].date), W - padR, H - 6);
+    // X-axis date labels for stacked mode (drawn after legend, at right edge)
+    if (subPts && subPts.length === pts.length) {
+      const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font      = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(fmtDate(pts[pts.length - 1].date), W - padR, H - 6);
+    }
     } catch (e) {
       console.warn('[lp-portfolio-history draw]', e);
     }
@@ -1153,9 +1224,13 @@
 
     $stats.innerHTML = `
       <div style="display:flex;align-items:center;gap:0;margin-top:4px;">
-        <!-- Left: total portfolio -->
-        <div style="flex:0 0 auto;padding-right:20px;">
-          <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.3px;margin-bottom:5px;">YOUR TOTAL PORTFOLIO</div>
+        <!-- Left: total portfolio — clickable → combined chart -->
+        <div data-series="total_portfolio" role="button" tabindex="0"
+             style="flex:0 0 auto;padding-right:20px;cursor:pointer;border-radius:6px;padding:6px 10px;margin:-6px -10px;transition:background .12s;"
+             onmouseover="this.style.background='rgba(91,184,212,0.08)'" onmouseout="this.style.background='transparent'">
+          <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.3px;margin-bottom:5px;">
+            YOUR TOTAL PORTFOLIO <span style="font-size:8px;opacity:0.55;letter-spacing:0;">▾ chart</span>
+          </div>
           <div style="font-size:34px;font-weight:900;color:white;letter-spacing:-0.5px;line-height:1;" class="mono">${totalPortfolio > 0 ? fmtUSD(totalPortfolio) : '—'}</div>
           <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:5px;">equity stakes net of carry${acctCount ? ' + managed accounts' : ''}</div>
           <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:4px;letter-spacing:0.3px;">${me.role === 'gp' ? 'General Partner' : 'Limited Partner'} · ${esc(me.email)}</div>
