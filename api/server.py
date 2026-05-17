@@ -2478,24 +2478,77 @@ def lp_me_positions(request: Request):
                 lp_fund_rows = [dict(r, source_type="lp_fund", stake_pct=100.0)
                                 for r in cur.fetchall()]
             elif fund_memberships:
+                # fund_memberships = { fund_name: lp_legal_name_alias }
+                # The VALUE is the LP's legal name string used to match lps.legal_name,
+                # NOT a stake_pct.  We compute the LP's ownership fraction from the
+                # commitments table, exactly like the overview endpoint does.
                 names_lower = [n.lower() for n in fund_memberships.keys()]
                 cur.execute("""
                     SELECT id, name, short_name
                       FROM funds
                      WHERE fund_type = 'lp_fund' AND LOWER(name) = ANY(%s)
                 """, (names_lower,))
+                raw_lp_funds = cur.fetchall()
+
                 lp_fund_rows = []
-                for f in cur.fetchall():
-                    # Resolve stake_pct from fund_memberships (flexible key lookup)
-                    m = (fund_memberships.get(f["name"])
-                         or fund_memberships.get(f["name"].upper())
-                         or fund_memberships.get(f["name"].lower())
-                         or {})
-                    if isinstance(m, dict):
-                        stake = float(m.get("stake_pct") or m.get("commitment_pct") or 0)
-                    else:
-                        stake = float(m or 0)
-                    lp_fund_rows.append(dict(f, source_type="lp_fund", stake_pct=stake))
+                if raw_lp_funds:
+                    fund_ids_pg = [f["id"] for f in raw_lp_funds]
+
+                    # Build (fund_id, lp_alias) pairs for the batch commitment lookup
+                    pairs = []
+                    for f in raw_lp_funds:
+                        fname = f["name"]
+                        alias = (fund_memberships.get(fname)
+                                 or fund_memberships.get(fname.upper())
+                                 or fund_memberships.get(fname.lower()))
+                        if alias and isinstance(alias, str):
+                            pairs.append((str(f["id"]), alias.strip().lower()))
+
+                    # Batch: LP's own commitment per fund
+                    lp_comm_by_fid: dict = {}
+                    if pairs:
+                        try:
+                            import psycopg2.extras as _pgex
+                            _pgex.execute_values(cur, """
+                                SELECT l.fund_id::text,
+                                       COALESCE(SUM(c.commitment_amount), 0) AS lp_commitment
+                                  FROM commitments c
+                                  JOIN lps l ON l.id = c.lp_id
+                                  JOIN (VALUES %s) AS m(fid, alias)
+                                       ON l.fund_id::text = m.fid
+                                      AND LOWER(TRIM(l.legal_name)) = m.alias
+                                 WHERE c.superseded_by IS NULL
+                                 GROUP BY l.fund_id
+                            """, pairs)
+                            for row in cur.fetchall():
+                                lp_comm_by_fid[row["fund_id"]] = float(row["lp_commitment"] or 0)
+                        except Exception as _e:
+                            print(f"[positions] lp_comm lookup failed: {_e}")
+                            conn.rollback()
+
+                    # Batch: total committed capital for each fund
+                    tot_comm_by_fid: dict = {}
+                    try:
+                        cur.execute("""
+                            SELECT l.fund_id::text,
+                                   COALESCE(SUM(c.commitment_amount), 0) AS total_committed
+                              FROM commitments c
+                              JOIN lps l ON l.id = c.lp_id
+                             WHERE l.fund_id = ANY(%s) AND c.superseded_by IS NULL
+                             GROUP BY l.fund_id
+                        """, (fund_ids_pg,))
+                        for row in cur.fetchall():
+                            tot_comm_by_fid[row["fund_id"]] = float(row["total_committed"] or 0)
+                    except Exception as _e:
+                        print(f"[positions] tot_comm lookup failed: {_e}")
+                        conn.rollback()
+
+                    for f in raw_lp_funds:
+                        fid_str  = str(f["id"])
+                        lp_comm  = lp_comm_by_fid.get(fid_str, 0.0)
+                        tot_comm = tot_comm_by_fid.get(fid_str, 0.0)
+                        stake_pct = (lp_comm / tot_comm * 100.0) if (tot_comm > 0 and lp_comm > 0) else 0.0
+                        lp_fund_rows.append(dict(f, source_type="lp_fund", stake_pct=stake_pct))
             else:
                 lp_fund_rows = []
 
@@ -2542,7 +2595,9 @@ def lp_me_positions(request: Request):
         finfo = fund_map.get(fid, {})
 
         # LP stake fraction (1.0 for managed accounts or GP; actual % for LP funds)
-        stake_frac = float(finfo.get("stake_pct") or 100.0) / 100.0
+        # NOTE: must use `is not None` — float(0.0) or 100.0 = 100.0 in Python
+        raw_stake  = finfo.get("stake_pct")
+        stake_frac = float(raw_stake) / 100.0 if raw_stake is not None else 1.0
 
         # Prorated quantities and cost
         full_qty  = float(r["total_qty"])
