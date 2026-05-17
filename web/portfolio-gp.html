@@ -6108,7 +6108,7 @@
                          padding:2px 7px;border-radius:4px;flex-shrink:0;">⚡ ADMIN</span>
             <button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;"
               data-admin-pw-expand="${_esc(u.lp_id)}">Reset PW ▾</button>
-            <button onclick="_deleteUser('${_esc(u.lp_id)}','${_esc(u.name)}')"
+            <button data-admin-delete="${_esc(u.lp_id)}" data-admin-name="${_esc(u.name)}"
               style="flex-shrink:0;background:transparent;border:1px solid rgba(220,38,38,0.25);
                      color:#dc2626;border-radius:5px;padding:3px 10px;font-size:9px;
                      font-weight:800;letter-spacing:0.8px;cursor:pointer;
@@ -6126,6 +6126,24 @@
             </div>
           </div>
         </div>`).join('');
+
+      // Wire admin Remove buttons
+      el.querySelectorAll('[data-admin-delete]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const lpId = btn.dataset.adminDelete;
+          const name = btn.dataset.adminName;
+          if (!confirm(`Remove admin account for "${name}"?\n\nThis cannot be undone.`)) return;
+          try {
+            const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}));
+              alert('Could not remove: ' + (d.detail || r.status));
+              return;
+            }
+            _loadAdminRoster();
+          } catch (e) { alert('Error: ' + e.message); }
+        });
+      });
 
       // Wire admin expand/collapse for reset PW
       el.querySelectorAll('[data-admin-pw-expand]').forEach(btn => {
