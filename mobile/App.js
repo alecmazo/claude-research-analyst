@@ -172,7 +172,7 @@ export default function App() {
   const isDemo      = !!authState.demo_mode;
 
   return (
-    <NavigationContainer>
+    <NavigationContainer key={lpMode ? 'lp' : 'gp'}>
       <StatusBar style="light" />
       {isGPOrAdmin && !lpMode
         ? <GPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToLP={() => setLpMode(true)} />
