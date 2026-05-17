@@ -5149,52 +5149,56 @@
             <div style="flex:1;"></div>
             <span style="font-size:9px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;flex-shrink:0;
               ${u.role==='gp' ? 'background:rgba(91,184,212,0.2);color:var(--blue)' : 'background:rgba(0,0,0,0.05);color:var(--mid)'}">${u.role.toUpperCase()}</span>
-            ${u.must_change_password ? '<span style="font-size:9px;font-weight:700;color:var(--amber);flex-shrink:0;">PW RESET</span>' : ''}
+            ${u.must_change_password ? '<span style="font-size:9px;font-weight:800;color:#92400e;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);border-radius:4px;padding:2px 7px;flex-shrink:0;letter-spacing:0.5px;">TEMP PW</span>' : ''}
             <div style="font-size:10px;color:var(--mid);flex-shrink:0;">${assignSummary}</div>
             ${isLP ? `<button class="tab-btn sm secondary" style="font-size:9px;padding:0 9px;flex-shrink:0;" data-lp-expand="${u.lp_id}">Edit ▾</button>` : ''}
           </div>
           ${isLP ? `
-          <div id="lp-panel-${u.lp_id}" style="display:none;padding:14px;background:rgba(0,0,0,0.18);border-bottom:1px solid var(--panel-edge);">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:12px;">
+          <div id="lp-panel-${u.lp_id}" style="display:none;padding:16px 18px 14px;background:#f8fafc;border-bottom:1px solid var(--panel-edge);">
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:14px;">
 
               <!-- LP Funds -->
               <div>
-                <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:8px;">LP FUNDS</div>
+                <div style="font-size:9px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;">LP Funds</div>
                 ${funds.length ? funds.map(f => {
                   const alias = (u.fund_memberships || {})[f.fund_name] || '';
                   const checked = f.fund_name in (u.fund_memberships || {}) ? 'checked' : '';
                   return `
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
-                    <input type="checkbox" ${checked} data-fund-check="${f.fund_name}" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
-                    <span style="font-size:11px;color:#d0dae8;flex:1;">${f.fund_name}</span>
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;min-height:26px;">
+                    <input type="checkbox" ${checked} data-fund-check="${f.fund_name}"
+                      style="accent-color:var(--blue);width:15px;height:15px;flex-shrink:0;cursor:pointer;">
+                    <span style="font-size:12px;font-weight:600;color:#1e293b;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.fund_name}</span>
                     <input type="text" value="${alias}" placeholder="alias" data-fund-alias="${f.fund_name}"
-                      style="width:60px;height:22px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:10px;padding:0 6px;outline:none;">
+                      style="width:72px;height:26px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;flex-shrink:0;">
                   </div>`;
-                }).join('') : '<div style="font-size:11px;color:var(--dim);font-style:italic;">No LP funds created yet.</div>'}
+                }).join('') : '<div style="font-size:12px;color:var(--dim);font-style:italic;padding:4px 0;">No LP funds created yet.</div>'}
               </div>
 
               <!-- Managed Accounts -->
               <div>
-                <div style="font-size:9px;font-weight:800;color:var(--gold);letter-spacing:1px;margin-bottom:8px;">MANAGED ACCOUNTS</div>
+                <div style="font-size:9px;font-weight:800;color:#b45309;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;">Managed Accounts</div>
                 ${accts.length ? accts.map(a => {
                   const aname   = a.account_name || a.fund_name || '';
                   const checked = (u.managed_account_ids || []).includes(aname) ? 'checked' : '';
                   return `
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
-                    <input type="checkbox" ${checked} data-acct-check="${aname}" style="accent-color:var(--gold);width:14px;height:14px;cursor:pointer;">
-                    <span style="font-size:11px;color:#d0dae8;">${aname}</span>
-                    <span style="font-size:9px;color:var(--dim);">${a.short_name || ''}</span>
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;min-height:26px;">
+                    <input type="checkbox" ${checked} data-acct-check="${aname}"
+                      style="accent-color:#b45309;width:15px;height:15px;flex-shrink:0;cursor:pointer;">
+                    <span style="font-size:12px;font-weight:600;color:#1e293b;flex:1;">${aname}</span>
+                    ${a.short_name ? `<span style="font-size:10px;color:var(--mid);flex-shrink:0;">${a.short_name}</span>` : ''}
                   </div>`;
-                }).join('') : '<div style="font-size:11px;color:var(--dim);font-style:italic;">No managed accounts created yet.</div>'}
+                }).join('') : '<div style="font-size:12px;color:var(--dim);font-style:italic;padding:4px 0;">No managed accounts created yet.</div>'}
               </div>
             </div>
 
-            <!-- Password reset + Save row -->
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--panel-edge);">
-              <input type="text" placeholder="New password (optional)" data-lp-pw-input="${u.lp_id}"
-                style="width:180px;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:4px;color:#1e293b;font-size:11px;padding:0 9px;outline:none;">
-              <button class="tab-btn sm" style="font-size:9px;padding:0 12px;" data-lp-save="${u.lp_id}">Save Changes</button>
-              <span data-lp-save-msg="${u.lp_id}" style="font-size:10px;"></span>
+            <!-- Force-reset password + Save row -->
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--panel-edge);">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">Force Reset PW:</span>
+              <input type="password" placeholder="New temp password" data-lp-pw-input="${u.lp_id}"
+                style="width:180px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <button class="tab-btn sm" style="height:32px;padding:0 16px;font-size:11px;font-weight:700;" data-lp-save="${u.lp_id}">Save Changes</button>
+              <span data-lp-save-msg="${u.lp_id}" style="font-size:11px;"></span>
             </div>
           </div>` : ''}
         </div>`;

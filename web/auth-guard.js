@@ -80,11 +80,15 @@
         }
       }
 
-      // Once DOM is parsed, inject the role bar into the topbar
+      // Once DOM is parsed, inject the role bar + handle must_change prompt
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', renderRoleBar);
+        document.addEventListener('DOMContentLoaded', function () {
+          renderRoleBar();
+          _handleMustChange(me);
+        });
       } else {
         renderRoleBar();
+        _handleMustChange(me);
       }
     } catch (err) {
       console.warn('[auth-guard] verification failed:', err);
@@ -219,6 +223,15 @@
         window.location.href = curPage === 'gp' ? '/lp' : '/gp';
       });
     }
+  }
+
+  function _handleMustChange(me) {
+    // If the server flagged must_change_password and we're on the LP page,
+    // surface a non-blocking notification banner pointing to Account tab.
+    // The LP page's own init code handles the tab redirect.
+    if (!me.must_change_password) return;
+    if ((window.PAGE_ROLE || '') !== 'lp') return;
+    // LP page _checkMustChange() handles the tab switch — nothing more to do here.
   }
 
   function getInitials(name) {

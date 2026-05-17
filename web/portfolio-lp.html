@@ -490,6 +490,7 @@
     <span class="topbar-link active" data-tab="performance">Performance</span>
     <span class="topbar-link" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="documents">Documents</span>
+    <span class="topbar-link" data-tab="account" id="nav-account-link" style="display:none;">⚙ Account</span>
     <span class="status-dot" title="API online"></span>
   </nav>
 </header>
@@ -628,6 +629,60 @@
 </div><!-- #tab-documents -->
 
 
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ACCOUNT TAB                                                    -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="tab-account" class="tab-panel">
+  <div class="lp-tab-shell">
+    <div class="card" style="max-width:480px;">
+      <div class="card-head">
+        <span class="card-title">My Account</span>
+      </div>
+      <div style="padding:24px 28px;">
+
+        <!-- Profile display -->
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid var(--line);">
+          <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#5BB8D4,#3E9AB8);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:white;flex-shrink:0;" id="acct-initials">—</div>
+          <div>
+            <div id="acct-name" style="font-size:16px;font-weight:800;color:var(--ink);line-height:1.2;">—</div>
+            <div id="acct-email" style="font-size:12px;color:var(--mid);margin-top:2px;">—</div>
+          </div>
+        </div>
+
+        <!-- Change password -->
+        <div style="font-size:10px;font-weight:800;letter-spacing:1.2px;color:var(--blue-dark);text-transform:uppercase;margin-bottom:14px;">Change Password</div>
+
+        <div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.6;">
+          Your password is private — only you know it. Your GP cannot see your password,
+          only reset it to a temporary one if you're locked out.
+        </div>
+
+        <input id="lp-pw-old" type="password" placeholder="Current password"
+          style="width:100%;height:42px;border:1.5px solid var(--line);border-radius:8px;padding:0 14px;font-size:13px;color:var(--ink);background:white;outline:none;margin-bottom:10px;transition:border-color .15s;">
+        <input id="lp-pw-new" type="password" placeholder="New password (min 8 characters)"
+          style="width:100%;height:42px;border:1.5px solid var(--line);border-radius:8px;padding:0 14px;font-size:13px;color:var(--ink);background:white;outline:none;margin-bottom:10px;transition:border-color .15s;">
+        <input id="lp-pw-confirm" type="password" placeholder="Confirm new password"
+          style="width:100%;height:42px;border:1.5px solid var(--line);border-radius:8px;padding:0 14px;font-size:13px;color:var(--ink);background:white;outline:none;margin-bottom:14px;transition:border-color .15s;">
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button id="lp-pw-save"
+            style="height:40px;padding:0 22px;background:linear-gradient(180deg,#84CCE3,#5BB8D4 50%,#3E9AB8);color:#0A1628;border:none;border-radius:8px;font-size:12px;font-weight:800;letter-spacing:1px;cursor:pointer;box-shadow:0 2px 10px rgba(91,184,212,0.30);">
+            SAVE PASSWORD
+          </button>
+          <span id="lp-pw-msg" style="font-size:12px;font-weight:600;"></span>
+        </div>
+
+        <!-- Must-change banner (shown when GP set a temp password) -->
+        <div id="lp-must-change-banner" style="display:none;margin-top:20px;padding:12px 16px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:8px;">
+          <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:4px;">⚠ Please set a new password</div>
+          <div style="font-size:11px;color:#78350f;line-height:1.5;">Your GP set a temporary password for your account. Please choose a new private password above before continuing.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- #tab-account -->
+
+
 <script>
 // ════════════════════════════════════════════════════════════════════════
 // LP Portal — fully wired SPA
@@ -663,7 +718,73 @@
   const TAB_LOADERS = {
     research:  () => loadResearchTab(),
     documents: () => { /* static — nothing to load */ },
+    account:   () => _initAccountTab(),
   };
+
+  // ── Account tab ─────────────────────────────────────────────────
+  function _initAccountTab() {
+    const user = window.DGA_USER || {};
+    const nameEl    = document.getElementById('acct-name');
+    const emailEl   = document.getElementById('acct-email');
+    const initEl    = document.getElementById('acct-initials');
+    if (nameEl)  nameEl.textContent  = user.name  || '—';
+    if (emailEl) emailEl.textContent = user.email || '—';
+    if (initEl) {
+      const initials = (user.name || '').split(/\s+/).filter(Boolean)
+        .map(w => w[0].toUpperCase()).join('').slice(0, 2) || '?';
+      initEl.textContent = initials;
+    }
+    // Show must-change banner if GP set a temp password
+    const banner = document.getElementById('lp-must-change-banner');
+    if (banner) banner.style.display = user.must_change_password ? 'block' : 'none';
+  }
+
+  document.getElementById('lp-pw-save')?.addEventListener('click', async () => {
+    const oldEl = document.getElementById('lp-pw-old');
+    const newEl = document.getElementById('lp-pw-new');
+    const cfEl  = document.getElementById('lp-pw-confirm');
+    const msg   = document.getElementById('lp-pw-msg');
+    const btn   = document.getElementById('lp-pw-save');
+    const old = oldEl?.value || '';
+    const nw  = newEl?.value || '';
+    const cf  = cfEl?.value  || '';
+    msg.textContent = '';
+
+    if (!old || !nw || !cf) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'All fields are required.'; return;
+    }
+    if (nw !== cf) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'Passwords don\'t match.'; return;
+    }
+    if (nw.length < 8) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'Minimum 8 characters.'; return;
+    }
+
+    btn.disabled = true; btn.textContent = 'SAVING…';
+    try {
+      const r = await window.dgaFetch('/api/auth/v2/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: old, new_password: nw }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || r.status);
+      msg.style.color = 'var(--green)'; msg.textContent = '✅ Password updated successfully.';
+      oldEl.value = ''; newEl.value = ''; cfEl.value = '';
+      // Clear must_change_password flag in local cache
+      try {
+        const u = JSON.parse(localStorage.getItem('dga_v2_user') || '{}');
+        u.must_change_password = false;
+        localStorage.setItem('dga_v2_user', JSON.stringify(u));
+        if (window.DGA_USER) window.DGA_USER.must_change_password = false;
+      } catch (_) {}
+      const banner = document.getElementById('lp-must-change-banner');
+      if (banner) banner.style.display = 'none';
+    } catch (e) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'SAVE PASSWORD';
+    }
+  });
 
   function showTab(name) {
     document.querySelectorAll('.topbar-link[data-tab]').forEach(l =>
@@ -1817,6 +1938,18 @@
       body.innerHTML = `<p style="color:var(--red);">Could not load report for ${esc(ticker)}: ${esc(e.message)}</p>`;
     }
   }
+
+  // ── Show Account tab in nav (always visible for LP) ─────────
+  const _acctNavLink = document.getElementById('nav-account-link');
+  if (_acctNavLink) _acctNavLink.style.display = '';
+
+  // If GP set a temp password, redirect LP straight to Account tab to change it
+  (function _checkMustChange() {
+    const user = window.DGA_USER || {};
+    if (user.must_change_password) {
+      showTab('account');
+    }
+  })();
 
   // ── Init ─────────────────────────────────────────────────────
   loadOverview();

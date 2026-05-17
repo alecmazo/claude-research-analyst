@@ -30,6 +30,42 @@ import math
 from itertools import groupby
 import hashlib
 import hmac
+from collections import defaultdict
+
+# ── Login rate-limiting (in-memory, resets on restart) ──────────────────────
+_LOGIN_ATTEMPTS: dict = defaultdict(list)   # email → [epoch timestamps]
+_LOGIN_MAX       = 5        # max failures before lockout
+_LOGIN_WINDOW    = 900      # 15-minute sliding window (seconds)
+
+def _rl_allowed(email: str) -> bool:
+    """Return True if this email is NOT rate-limited."""
+    now = time.time()
+    _LOGIN_ATTEMPTS[email] = [t for t in _LOGIN_ATTEMPTS[email] if now - t < _LOGIN_WINDOW]
+    return len(_LOGIN_ATTEMPTS[email]) < _LOGIN_MAX
+
+def _rl_record_failure(email: str):
+    _LOGIN_ATTEMPTS[email].append(time.time())
+
+def _rl_clear(email: str):
+    _LOGIN_ATTEMPTS.pop(email, None)
+
+# ── Audit log ────────────────────────────────────────────────────────────────
+_AUDIT_PATH = Path(__file__).resolve().parent.parent / "audit.log"
+
+def _audit(action: str, user: str, ip: str, ok: bool, detail: str = ""):
+    entry = {
+        "ts":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "action": action,
+        "user":   user,
+        "ip":     ip,
+        "ok":     ok,
+        "detail": detail,
+    }
+    try:
+        with open(_AUDIT_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 # ── Global NaN / Inf guard ───────────────────────────────────────────────────
 # Monkey-patch starlette's JSONResponse.render so that NaN/Inf floats
@@ -1349,12 +1385,28 @@ class AuthV2ChangePasswordRequest(BaseModel):
 
 
 @app.post("/api/auth/v2/login")
-def auth_v2_login(req: AuthV2LoginRequest):
+def auth_v2_login(req: AuthV2LoginRequest, request: Request):
     """Per-user email + password login. Returns a signed JWT-style token
-    carrying role + scope (fund memberships, managed accounts)."""
-    result = auth_v2_mod.login(req.email.strip(), req.password)
+    carrying role + scope (fund memberships, managed accounts).
+    Rate-limited: 5 failures per email per 15 minutes → 429."""
+    email = req.email.strip().lower()
+    ip    = (request.client.host if request.client else "unknown")
+
+    if not _rl_allowed(email):
+        _audit("login", email, ip, False, "rate_limited")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Please wait 15 minutes and try again.",
+        )
+
+    result = auth_v2_mod.login(email, req.password)
     if not result:
+        _rl_record_failure(email)
+        _audit("login", email, ip, False, "bad_credentials")
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    _rl_clear(email)
+    _audit("login", result.get("email", email), ip, True)
     return result
 
 
@@ -1383,16 +1435,19 @@ def auth_v2_change_password(request: Request, body: AuthV2ChangePasswordRequest)
     claims = auth_v2_mod.verify_token(token)
     if not claims:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    ip = (request.client.host if request.client else "unknown")
     ok = auth_v2_mod.change_password(
         lp_id=claims["lp_id"],
         old_password=body.old_password,
         new_password=body.new_password,
     )
     if not ok:
+        _audit("change_password", claims.get("email", claims["lp_id"]), ip, False)
         raise HTTPException(
             status_code=400,
             detail="Could not change password — check old password and ensure new is ≥ 8 chars",
         )
+    _audit("change_password", claims.get("email", claims["lp_id"]), ip, True)
     return {"ok": True}
 
 
@@ -1443,6 +1498,9 @@ def admin_lp_set_password(request: Request, body: LPSetPasswordRequest):
         )
 
     user = auth_v2_mod.find_user_by_lp_id(lp_id)
+    actor_ip = "server"
+    _audit("gp_set_password", lp_id, actor_ip, True,
+           f"by gp; must_change={body.must_change}")
     return {
         "ok":    True,
         "lp_id": lp_id,
