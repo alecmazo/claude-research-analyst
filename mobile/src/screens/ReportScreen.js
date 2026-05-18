@@ -12,6 +12,13 @@ import {
   MarkdownTOC, TOCToggle, extractHeadings,
 } from '../design';
 
+// Convert AI citation syntax [[n]](url) → [n](url) so the markdown renderer
+// treats them as normal inline links instead of leaving them as literal text.
+function fixMd(md) {
+  if (!md) return md;
+  return md.replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)');
+}
+
 // Approximate vertical pixels per markdown line — used for TOC scroll.
 // Tuned by spot-checking real reports; anchors land within ~1 viewport
 // of the actual heading without any DOM-style measurement.
@@ -224,8 +231,14 @@ export default function ReportScreen({ route, navigation }) {
           />
         }
       >
-        <Markdown style={mdStylesReport}>
-          {report?.report_md || ''}
+        <Markdown
+          style={mdStylesReport}
+          onLinkPress={(url) => {
+            Linking.openURL(url).catch(() => {});
+            return false; // prevent default behaviour
+          }}
+        >
+          {fixMd(report?.report_md || '')}
         </Markdown>
       </ScrollView>
 

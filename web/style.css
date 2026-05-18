@@ -834,6 +834,13 @@ body {
   border-top: 1px solid var(--light-gray);
   margin: 20px 0;
 }
+.report-content a {
+  color: #1d6fbf;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.report-content a:hover { color: #145a9e; }
 
 /* ============ TAB BAR ============ */
 .tab-bar {

@@ -17,7 +17,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  ActivityIndicator, Alert, Platform,
+  ActivityIndicator, Alert, Platform, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -450,8 +450,11 @@ export default function IntelligenceScreen({ navigation }) {
             {renderTickerChips(result.tickers)}
 
             {/* Markdown body */}
-            <Markdown style={mdStyles}>
-              {result.markdown}
+            <Markdown
+              style={mdStyles}
+              onLinkPress={(url) => { Linking.openURL(url).catch(() => {}); return false; }}
+            >
+              {(result.markdown || '').replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)')}
             </Markdown>
           </View>
         ) : !(running || briefRunning) ? (

@@ -11,7 +11,7 @@
 // update localStorage and move on — an infinite reload is far worse than
 // a stale UI for the user (it blocks login entirely). Next fresh session
 // (new tab, hard quit) will retry the reload.
-const DGA_BUILD = 'ui66-20260511';
+const DGA_BUILD = 'ui67-20260518';
 
 // Console diagnostic helpers — open DevTools and run fundDiag() or fundListDiag()
 window.fundDiag = async function () {
@@ -89,6 +89,33 @@ window.fundListDiag = async function (fundType = 'lp_fund') {
 })();
 
 const API_BASE = window.location.origin;
+
+// ── Marked: open all links in a new tab + fix AI citation syntax ──────────
+(function configureMarked() {
+  const renderer = new marked.Renderer();
+  const _origLink = renderer.link.bind(renderer);
+  renderer.link = function (href, title, text) {
+    // marked v4+ passes an object as first arg; v2/v3 passes a string
+    const h = (href && typeof href === 'object') ? href.href : href;
+    const t = (href && typeof href === 'object') ? href.title : title;
+    const tx = (href && typeof href === 'object') ? href.text : text;
+    const html = _origLink(h, t, tx);
+    // Inject target="_blank" and rel="noopener noreferrer"
+    return html.replace('<a ', '<a target="_blank" rel="noopener noreferrer" ');
+  };
+  marked.use({ renderer });
+})();
+
+/**
+ * Pre-process report markdown before rendering.
+ * Converts AI citation syntax [[1]](url) → [1](url) so marked treats them
+ * as regular inline links instead of leaving them as literal text.
+ */
+function fixMd(md) {
+  if (!md) return md;
+  // [[n]](url) or [[label]](url) → [n](url)
+  return md.replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)');
+}
 
 // ---------- Auth ----------
 const TOKEN_KEY = 'dga_auth_token';
@@ -525,7 +552,7 @@ async function openReport(ticker) {
       document.getElementById('report-price').textContent = `$${Number(quote.price).toFixed(2)}`;
     }
     document.getElementById('report-generated').textContent = `Generated ${formatDateTime(report.generated_at)}`;
-    document.getElementById('report-content').innerHTML = marked.parse(report.report_md);
+    document.getElementById('report-content').innerHTML = marked.parse(fixMd(report.report_md));
   } catch (err) {
     document.getElementById('report-content').textContent = 'Error: ' + err.message;
   }
@@ -749,7 +776,7 @@ async function openPortfolioSummary() {
         `Generated ${formatDateTime(info.generated_at)}`;
     }
     document.getElementById('portfolio-summary-content').innerHTML =
-      marked.parse(info?.summary_md || '_No portfolio summary available yet._');
+      marked.parse(fixMd(info?.summary_md || '_No portfolio summary available yet._'));
   } catch (err) {
     document.getElementById('portfolio-summary-content').textContent =
       'Error loading portfolio summary: ' + err.message;
@@ -1360,7 +1387,7 @@ function renderScanPanel(ticker, result) {
 
   // Full detail — open the scan detail view.
   const mdHtml = result.ok && result.markdown
-    ? `<div class="report-content">${marked.parse(result.markdown)}</div>`
+    ? `<div class="report-content">${marked.parse(fixMd(result.markdown))}</div>`
     : `<div class="scan-error-label">${result.error || 'No data'}</div>`;
 
   panel.innerHTML = `
@@ -1740,7 +1767,7 @@ function renderIntelResult(data, kind = 'intel') {
 
   // Markdown body
   const mdEl = document.getElementById('intel-markdown');
-  mdEl.innerHTML = data.markdown ? marked.parse(data.markdown) : '<p>No content.</p>';
+  mdEl.innerHTML = data.markdown ? marked.parse(fixMd(data.markdown)) : '<p>No content.</p>';
 }
 
 function intelOpenTicker(ticker) {

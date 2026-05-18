@@ -61,6 +61,7 @@ export const mdStyles = {
     paddingHorizontal: 4,
     borderRadius: 3,
   },
+  link: { color: '#1d6fbf', textDecorationLine: 'underline' },
   table: { borderWidth: 1, borderColor: colors.lightGray, borderRadius: 4, marginVertical: 12 },
   thead: { backgroundColor: colors.navy },
   th:    { color: colors.white, fontWeight: '700', padding: 8, fontSize: 12 },

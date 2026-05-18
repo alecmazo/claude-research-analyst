@@ -6,7 +6,7 @@
  */
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity,
+  View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
@@ -97,8 +97,11 @@ export default function PortfolioSummaryScreen({ navigation }) {
           onScroll={handleScroll}
           scrollEventThrottle={64}
         >
-          <Markdown style={mdStyles}>
-            {info?.summary_md || '_No portfolio summary available yet._'}
+          <Markdown
+            style={mdStyles}
+            onLinkPress={(url) => { Linking.openURL(url).catch(() => {}); return false; }}
+          >
+            {(info?.summary_md || '_No portfolio summary available yet._').replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)')}
           </Markdown>
         </ScrollView>
       )}
