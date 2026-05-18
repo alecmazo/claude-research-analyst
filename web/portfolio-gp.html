@@ -740,6 +740,13 @@
     padding: 12px 14px; font-size: 12px; line-height: 1.65;
     color: #334155; max-height: 600px; overflow-y: auto;
   }
+  /* Inside the resizable dialog the body itself scrolls — remove the inner cap */
+  .dga-dialog-body .md-body,
+  .dga-dialog-body.md-body {
+    max-height: none !important;
+    overflow-y: visible !important;
+    padding: 0;  /* dialog body already has padding via inline style */
+  }
   .md-body h2 { font-size: 13px; font-weight: 800; color: var(--blue);
     letter-spacing: 0.5px; margin: 14px 0 6px; }
   .md-body h3 { font-size: 12px; font-weight: 800; color: #1e293b;
@@ -1945,6 +1952,11 @@
 
     // 3) Apply other markdown transforms
     let h = text
+      // Convert [[n]](url) AI citation syntax → [n](url) first
+      .replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)')
+      // Convert [text](url) → <a> with target=_blank
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       .replace(/^---+$/gm,'<hr>')
       .replace(/^#### (.+)$/gm,'<h4>$1</h4>')
       .replace(/^### (.+)$/gm,'<h3>$1</h3>')
