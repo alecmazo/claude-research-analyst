@@ -558,7 +558,10 @@ def _parse_fidelity_csv(content: str) -> list:
     pending_cash = 0.0
     reader2 = csv.DictReader(io.StringIO('\n'.join(lines[header_idx:])))
     for row2 in reader2:
-        if any('pending activity' in (v or '').lower() for v in row2.values()):
+        # row2.values() may include a list (extra columns beyond the header go to
+        # restkey=None as a list). Cast every value to str before .lower() so we
+        # don't crash on 'list' object has no attribute 'lower'.
+        if any('pending activity' in str(v or '').lower() for v in row2.values()):
             val = parse_dollar(row2.get('Current Value'))
             if val and val > 0:
                 pending_cash += val
@@ -717,6 +720,12 @@ def _parse_balance_history_csv(text: str) -> list:
             return_pct = round(net_income / denom * 100, 4)
         else:
             return_pct = 0.0
+
+        # Debug: flag months where return looks suspicious (> 30% in one month)
+        if abs(return_pct) > 30 and not skip:
+            print(f"[bal_hist] ⚠ suspicious {clean}: beg={beg} end={end} "
+                  f"mkt={mkt_chg} dep={deposits} wdr={withdrawals} "
+                  f"net_income={net_income:.2f} denom={denom:.2f} → {return_pct:.2f}%")
 
         records.append({
             'year':          year,
