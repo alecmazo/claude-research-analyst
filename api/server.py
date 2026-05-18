@@ -701,7 +701,22 @@ def _parse_balance_history_csv(text: str) -> list:
         is_transfer_in  = (beg < 100 and end > transfer_threshold)
         skip = is_transfer_out or is_transfer_in
 
-        return_pct = 0.0 if skip else ((net_income / denom * 100) if denom != 0 else 0.0)
+        if skip:
+            return_pct = 0.0
+        elif beg == 0.0:
+            # Inception / first-month-of-data: beginning balance was zero.
+            # Standard Modified Dietz denominator (0 + 0.5 × net_flow) is far
+            # too small relative to the actual invested capital, producing absurd
+            # returns (100 %+ for a single month).  Use the full net deposit as
+            # the denominator instead — equivalent to assuming all cash arrived
+            # at the start of the period, which is the correct assumption for a
+            # freshly-opened account.
+            safe_denom = net_flow if net_flow > 0 else (end if end > 0 else 0.0)
+            return_pct = round(net_income / safe_denom * 100, 4) if safe_denom else 0.0
+        elif denom != 0:
+            return_pct = round(net_income / denom * 100, 4)
+        else:
+            return_pct = 0.0
 
         records.append({
             'year':          year,
@@ -9833,9 +9848,13 @@ async def fund_account_ytd_run(
 
             # Also sync positions into tax_lots so the Positions panel is populated.
             # Ensure CoA exists (managed accounts created via v2 API may not have it).
+            _pos_sync_ok = False
+            _pos_sync_msg = "No positions file provided"
             try:
                 _seed_coa_for_fund(cur, fid)
                 positions_parsed = _parse_fidelity_csv(pos_text)
+                if not positions_parsed:
+                    _pos_sync_msg = "Positions CSV parsed 0 rows — check file format"
                 if positions_parsed:
                     # Ensure COA exists (backfill accounts created before seeding was wired)
                     _seed_coa_for_fund(cur, fid)
@@ -9914,8 +9933,11 @@ async def fund_account_ytd_run(
                                   float(p["quantity"]),
                                   float(p["avg_cost"]) if p["avg_cost"] else 0.0,
                                   txn_id))
+                        _pos_sync_ok  = True
+                        _pos_sync_msg = f"{len(positions_parsed)} positions synced to tax_lots"
             except Exception as _pos_exc:
                 # Non-fatal: YTD data was already saved; positions sync is best-effort
+                _pos_sync_msg = f"positions sync failed: {str(_pos_exc)[:200]}"
                 print(f"⚠️  positions sync failed for {fund_id}: {_pos_exc}")
 
             # If Bal.Detail (monthly_perf_file) was provided, also persist as
@@ -9937,6 +9959,8 @@ async def fund_account_ytd_run(
     finally:
         conn.close()
 
+    result["positions_sync_ok"]  = _pos_sync_ok
+    result["positions_sync_msg"] = _pos_sync_msg
     return result
 
 
