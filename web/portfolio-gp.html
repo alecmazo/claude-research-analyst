@@ -3967,7 +3967,14 @@
       const monthly = data.monthly;
       const annual  = data.annual;
       const annRets = annual.map(a => 1 + a.return_pct / 100);
-      const cagr = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/annRets.length)-1)*100 : null;
+      // Use actual data_months (not calendar-year count) so partial years
+      // (e.g. a 5-month current year or a mid-year inception) don't distort CAGR.
+      // This keeps the chart header in sync with the Annual Performance table.
+      const totalDataMonths = annual.reduce((s, a) => s + (a.data_months || 12), 0);
+      const totalDataYears  = Math.max(totalDataMonths / 12, 1/12);
+      const cagr = annRets.length ? (Math.pow(annRets.reduce((a,b)=>a*b,1), 1/totalDataYears)-1)*100 : null;
+      // Count only months with actual activity for the badge label
+      const activeMonths = monthly.filter(m => (m.end_balance || 0) > 0 || (m.deposits || 0) > 0).length;
       const annualRet = cagr != null ? (cagr>=0?'+':'')+cagr.toFixed(1)+'% CAGR' : annual.length + ' yrs';
 
       el.innerHTML = `
@@ -3975,7 +3982,7 @@
           <details open>
             <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
               <span class="panel-title">All-Time Performance</span>
-              <span class="panel-badge">${monthly.length} months · ${annualRet}</span>
+              <span class="panel-badge">${activeMonths} months · ${annualRet}</span>
               <div style="margin-left:auto;display:flex;gap:4px;">
                 <button class="tab-btn sm" data-atp-view="monthly" style="font-size:9px;padding:0 8px;">Monthly</button>
                 <button class="tab-btn sm secondary" data-atp-view="quarterly" style="font-size:9px;padding:0 8px;">Quarterly</button>
