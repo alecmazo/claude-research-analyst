@@ -9718,18 +9718,39 @@ async def fund_balance_history(fund_id: str, request: Request):
         cash_only_running += net
         p["cash_only_balance"] = round(cash_only_running, 2)
 
+    def _inception_beg(pts):
+        """Return the correct beginning balance for a group of monthly records.
+        For inception periods (first month has beg=0), use the gross deposits
+        from that first month as the starting capital — that is what the investor
+        committed to the account.  This prevents '—' in the BEG VALUE column and
+        enables a meaningful return calculation for the opening year/quarter."""
+        first_beg = float(pts[0].get("beg_balance") or 0)
+        if first_beg != 0:
+            return first_beg
+        # Inception: account opened this period — use initial deposit as proxy
+        first_dep = float(pts[0].get("deposits") or 0)
+        return round(first_dep, 2) if first_dep else 0.0
+
+    def _inception_month(pts):
+        """Return the calendar month number of the inception month when
+        beg_balance is 0 (i.e. the account did not start on Jan 1), else None."""
+        if float(pts[0].get("beg_balance") or 0) == 0 and float(pts[0].get("deposits") or 0) > 0:
+            return int(pts[0]["month"])
+        return None
+
     quarterly = []
     for (yr, q), grp in groupby(monthly, key=lambda r: (r["year"], (r["month"] - 1) // 3 + 1)):
         pts = list(grp)
         quarterly.append({
             "year": yr, "quarter": q,
             "label": f"Q{q} {yr}",
-            "beg_balance":       pts[0]["beg_balance"],
+            "beg_balance":       _inception_beg(pts),
             "end_balance":       pts[-1]["end_balance"],
             "cash_only_balance": pts[-1].get("cash_only_balance"),
             "deposits":          round(sum(float(p.get("deposits") or 0) for p in pts), 2),
             "withdrawals":       round(sum(float(p.get("withdrawals") or 0) for p in pts), 2),
             "return_pct":        chain_returns(pts),
+            "inception_month":   _inception_month(pts),
         })
 
     # Load fund display settings (benchmark choice set by GP)
@@ -9745,15 +9766,26 @@ async def fund_balance_history(fund_id: str, request: Request):
     # Manual overrides take precedence over Modified Dietz calculation
     manual_returns = _load_manual_annual_returns(fid)
 
+    _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
     annual = []
     for yr, grp in groupby(monthly, key=lambda r: r["year"]):
         pts = list(grp)
-        bmark_ret = bmark_annual.get(yr)
-        port_ret  = manual_returns.get(yr) if yr in manual_returns else chain_returns(pts)
+        bmark_ret   = bmark_annual.get(yr)
+        port_ret    = manual_returns.get(yr) if yr in manual_returns else chain_returns(pts)
+        inc_month   = _inception_month(pts)   # int 1-12 if inception year, else None
+        # Label: "2025 (Oct–Dec)" for partial inception years so the GP sees the true period
+        if inc_month and pts[-1]["month"] < 12:
+            span_label = f"{_MONTH_ABBR[inc_month-1]}–{_MONTH_ABBR[pts[-1]['month']-1]}"
+            year_label = f"{yr} ({span_label})"
+        elif inc_month:
+            year_label = f"{yr} ({_MONTH_ABBR[inc_month-1]}–Dec)"
+        else:
+            year_label = str(yr)
         annual.append({
             "year":                 yr,
-            "label":                str(yr),
-            "beg_balance":          pts[0]["beg_balance"],
+            "label":                year_label,
+            "beg_balance":          _inception_beg(pts),
             "end_balance":          pts[-1]["end_balance"],
             "cash_only_balance":    pts[-1].get("cash_only_balance"),
             "deposits":             round(sum(float(p.get("deposits") or 0) for p in pts), 2),
@@ -9762,6 +9794,8 @@ async def fund_balance_history(fund_id: str, request: Request):
             "benchmark_return_pct": bmark_ret,
             "alpha":                round(port_ret - bmark_ret, 2) if bmark_ret is not None else None,
             "return_source":        "manual" if yr in manual_returns else "computed",
+            "inception_month":      inc_month,   # None for full years
+            "data_months":          len([p for p in pts if not p.get("skip")]),  # actual months in this year
         })
 
     return {
