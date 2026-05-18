@@ -741,11 +741,17 @@
     color: #334155; max-height: 600px; overflow-y: auto;
   }
   /* Inside the resizable dialog the body itself scrolls — remove the inner cap */
-  .dga-dialog-body .md-body,
+  /* Outer dialog body (has both classes): keep its own scroll, just remove the 600px cap */
   .dga-dialog-body.md-body {
     max-height: none !important;
+    padding: 0;
+  }
+  /* Inner nested .md-body rendered by renderMd() inside the dialog body:
+     remove its cap + own scroll so only the outer container scrolls */
+  .dga-dialog-body .md-body {
+    max-height: none !important;
     overflow-y: visible !important;
-    padding: 0;  /* dialog body already has padding via inline style */
+    padding: 0;
   }
   .md-body h2 { font-size: 13px; font-weight: 800; color: var(--blue);
     letter-spacing: 0.5px; margin: 14px 0 6px; }
@@ -6635,8 +6641,8 @@
         resize: both;           /* native browser resize grip */
         min-width: 340px;
         min-height: 260px;
-        width: min(860px, 92vw);
-        height: min(82vh, 720px);
+        width: min(920px, 92vw);
+        height: 90vh;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
