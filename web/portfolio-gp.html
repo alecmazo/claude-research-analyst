@@ -2894,29 +2894,8 @@
       grid.appendChild(card);
     });
 
-    // ── Placeholder cards for accounts/funds with no positions yet ──
-    // Show every fund returned by the API even if it has 0 open lots.
-    const renderedGroups = new Set(orderedGroups);
-    (data.funds || []).forEach(function (f) {
-      const label = f.short_name || f.name;
-      if (!label || renderedGroups.has(label)) return; // already rendered or no name
-      const card = document.createElement('div');
-      card.className = 'gp-acct-card';
-      card.dataset.acct = label;
-      card.draggable = true;
-      card.innerHTML =
-        '<div class="gp-acct-hdr" style="cursor:default;">'
-        + '<span class="gp-acct-hdr-name">' + _esc(label) + '</span>'
-        + '<span class="gp-acct-hdr-nav" style="opacity:0.35;">—</span>'
-        + '</div>'
-        + '<div class="gp-acct-body" style="padding:12px 14px;color:rgba(255,255,255,0.35);font-size:11px;">'
-        + 'No positions synced yet — run YTD to populate'
-        + '</div>';
-      grid.appendChild(card);
-    });
-
     if (!grid.children.length) {
-      grid.innerHTML = '<div style="color:rgba(255,255,255,0.3);font-size:13px;padding:20px;">No accounts found.</div>';
+      grid.innerHTML = '<div style="color:rgba(255,255,255,0.3);font-size:13px;padding:20px;">No open positions found.</div>';
     }
 
     // ── Initialize live collapse map from rendered cards ──────────
