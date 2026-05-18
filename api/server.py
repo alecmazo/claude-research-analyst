@@ -2726,8 +2726,26 @@ def lp_me_positions(request: Request):
     finally:
         conn.close()
 
+    # Always include the full fund list so the frontend can render placeholder
+    # cards for managed accounts / funds that exist but have no positions yet.
+    all_funds_meta = [
+        {
+            "id":          str(f["id"]),
+            "name":        f.get("name") or f.get("short_name") or "",
+            "short_name":  f.get("short_name") or "",
+            "source_type": f.get("source_type", ""),
+        }
+        for f in fund_map.values()
+    ]
+
     if not rows:
-        return {"positions": [], "total_market_value": 0, "account_count": len(fund_map)}
+        return {
+            "positions":          [],
+            "total_market_value": 0,
+            "account_count":      len(fund_map),
+            "funds":              all_funds_meta,
+            "as_of":              datetime.utcnow().strftime("%H:%M UTC"),
+        }
 
     symbols = list({r["symbol"] for r in rows if r["symbol"]})
     quotes  = batch_quotes(",".join(symbols)) if symbols else {}
@@ -2799,6 +2817,7 @@ def lp_me_positions(request: Request):
         "positions":          result,
         "total_market_value": round(total_mkt, 2),
         "account_count":      len(fund_map),
+        "funds":              all_funds_meta,
         "as_of":              datetime.utcnow().strftime("%H:%M UTC"),
     }
 
