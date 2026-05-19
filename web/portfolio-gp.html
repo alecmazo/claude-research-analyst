@@ -5685,6 +5685,7 @@
     const positions = (data.positions || []).slice().sort((a,b)=>(b.market_weight_pct||0)-(a.market_weight_pct||0));
     const lps   = data.lps  || [];
     const evUpside = data.portfolio_expected_value_upside_pct;
+    const attribution = data.attribution || [];
 
     // ── Formatters ──────────────────────────────────────────────
     const _esc = s => String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -5829,6 +5830,57 @@
         <tr><td style="padding:8px 0;color:#64748b;">Carry Status</td><td style="padding:8px 0;text-align:right;font-weight:600;">${_esc(carryStatus)}</td></tr>
       </table>`;
 
+    // ── YTD Attribution bar chart ────────────────────────────────
+    const attrHtml = (() => {
+      if (!attribution.length) return '';
+      const maxAbs = Math.max(...attribution.map(a => Math.abs(a.contribution_pct)), 0.001);
+      const totalContrib = attribution.reduce((s,a) => s + a.contribution_pct, 0);
+      const rows = attribution.map(a => {
+        const pct   = a.contribution_pct;
+        const barW  = Math.round(Math.abs(pct) / maxAbs * 100);
+        const green = '#16a34a'; const red = '#dc2626';
+        const color = pct >= 0 ? green : red;
+        const bgBar = pct >= 0 ? 'rgba(22,163,74,0.13)' : 'rgba(220,38,38,0.10)';
+        const sign  = pct >= 0 ? '+' : '';
+        const tkRet = a.ticker_return_pct != null ? `${a.ticker_return_pct >= 0 ? '+' : ''}${a.ticker_return_pct.toFixed(1)}%` : '—';
+        const dg    = a.dollar_gain;
+        const dgStr = (dg >= 0 ? '+$' : '-$') + Math.abs(dg).toLocaleString('en-US',{maximumFractionDigits:0});
+        const soldBadge = a.sold ? `<span style="font-size:8px;font-weight:800;background:#f1f5f9;color:#94a3b8;border:1px solid #e2e8f0;border-radius:3px;padding:1px 5px;margin-left:5px;letter-spacing:0.5px;vertical-align:middle;">SOLD</span>` : '';
+        return `
+        <tr style="border-bottom:1px solid #f8fafc;">
+          <td style="padding:5px 10px 5px 0;white-space:nowrap;font-weight:700;font-size:12px;color:#0A1628;width:62px;">${_esc(a.ticker)}${soldBadge}</td>
+          <td style="padding:5px 8px;width:100%;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="flex:1;background:#f1f5f9;border-radius:4px;height:16px;overflow:hidden;position:relative;min-width:80px;">
+                <div style="width:${barW}%;height:100%;background:${bgBar};border-radius:4px;position:relative;">
+                  <div style="width:100%;height:100%;background:${color};opacity:0.7;border-radius:4px;"></div>
+                </div>
+              </div>
+              <span style="font-size:12px;font-weight:800;color:${color};width:52px;text-align:right;flex-shrink:0;">${sign}${pct.toFixed(2)}%</span>
+            </div>
+          </td>
+          <td style="padding:5px 0 5px 8px;text-align:right;font-size:11px;color:#64748b;white-space:nowrap;width:70px;">${tkRet} ret.</td>
+          <td style="padding:5px 0 5px 8px;text-align:right;font-size:11px;font-weight:600;color:${dg>=0?green:red};white-space:nowrap;width:78px;">${dgStr}</td>
+        </tr>`;
+      }).join('');
+      const sign0 = totalContrib >= 0 ? '+' : '';
+      return `
+      <div style="margin-bottom:6px;display:flex;align-items:baseline;gap:12px;">
+        <span style="font-size:12px;color:#64748b;">Total attributed:</span>
+        <span style="font-size:14px;font-weight:800;color:${totalContrib>=0?'#16a34a':'#dc2626'};">${sign0}${totalContrib.toFixed(2)}%</span>
+        <span style="font-size:11px;color:#94a3b8;">(contribution to portfolio return)</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 10px 6px 0;border-bottom:2px solid #e2e8f0;text-align:left;">Ticker</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 8px 6px;border-bottom:2px solid #e2e8f0;text-align:left;">Contribution to Return</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 0 6px 8px;border-bottom:2px solid #e2e8f0;text-align:right;">Stock Ret.</th>
+          <th style="font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;padding:4px 0 6px 8px;border-bottom:2px solid #e2e8f0;text-align:right;">Dollar P&amp;L</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    })();
+
     // ── Assemble full HTML ───────────────────────────────────────
     const gpLetterHtml = gpLetter.split(/\n\n+/).map(p=>`<p style="margin-bottom:14px;">${_esc(p).replace(/\n/g,'<br>')}</p>`).join('');
     const dateStr = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
@@ -5903,6 +5955,14 @@
     </table>
     </div>
     <div style="margin-top:10px;font-size:10px;color:#94a3b8;">Prices as of ${_esc(dateStr)}. Ratings and targets from DGA Capital research.</div>
+  </div>` : ''}
+
+  <!-- ── YTD ATTRIBUTION ── -->
+  ${attrHtml ? `
+  <div class="section">
+    <div class="sec-label">YTD Performance Attribution</div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:14px;">Contribution of each holding to total portfolio return — includes sold positions. Sorted by impact.</div>
+    ${attrHtml}
   </div>` : ''}
 
   <!-- ── EXPECTED VALUE ── -->

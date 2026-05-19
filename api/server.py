@@ -11934,18 +11934,41 @@ async def gp_quarterly_report_data(
             if not fund_row:
                 raise HTTPException(404, f"Fund {fund_id!r} not found")
 
-            # Latest NAV snapshot
-            nav_val   = None
-            ytd_pct   = None
+            # Latest NAV snapshot + YTD attribution
+            nav_val      = None
+            ytd_pct      = None
+            attribution  = []
             try:
                 cur.execute("""
-                    SELECT nav, ytd_pct FROM managed_account_ytd_cache
+                    SELECT nav, ytd_pct, result_json FROM managed_account_ytd_cache
                      WHERE fund_id = %s
                 """, (fid,))
                 cache_row = cur.fetchone()
                 if cache_row:
                     nav_val = float(cache_row["nav"] or 0) or None
                     ytd_pct = float(cache_row["ytd_pct"] or 0) or None
+                    if cache_row.get("result_json"):
+                        try:
+                            _rj = json.loads(cache_row["result_json"])
+                            raw_attr = _rj.get("attribution") or []
+                            for a in raw_attr:
+                                contrib = float(a.get("contribution_pct") or 0)
+                                ticker_ret = a.get("ticker_return_pct")
+                                end_shares = float(a.get("end_shares") or 0)
+                                attribution.append({
+                                    "ticker":           a.get("ticker", ""),
+                                    "contribution_pct": round(contrib, 4),
+                                    "ticker_return_pct": round(float(ticker_ret), 2) if ticker_ret is not None else None,
+                                    "dollar_gain":      round(float(a.get("dollar_gain") or 0), 2),
+                                    "end_shares":       round(end_shares, 4),
+                                    "jan1_price":       round(float(a.get("jan1_price") or 0), 4),
+                                    "end_price":        round(float(a.get("end_price") or 0), 4),
+                                    "sold":             end_shares == 0,
+                                })
+                            # Sort by contribution descending (biggest contributors first)
+                            attribution.sort(key=lambda x: x["contribution_pct"], reverse=True)
+                        except Exception as _ae:
+                            print(f"[quarterly-report] attribution parse failed: {_ae}")
             except Exception:
                 pass
             if nav_val is None:
@@ -12098,6 +12121,7 @@ async def gp_quarterly_report_data(
         "benchmark":                         benchmark,
         "positions":                         positions,
         "portfolio_expected_value_upside_pct": portfolio_ev_upside,
+        "attribution":                       attribution,
         "lps":                               lps_out,
     }
 
@@ -12391,6 +12415,61 @@ def _render_quarterly_report_html(
       </tr>
     </table>"""
 
+    # ── YTD Attribution section ───────────────────────────────────────────────
+    _attribution = data.get("attribution") or []
+    if _attribution:
+        _max_abs = max((abs(a.get("contribution_pct") or 0) for a in _attribution), default=0.001) or 0.001
+        _total_contrib = sum(a.get("contribution_pct") or 0 for a in _attribution)
+        _tc_sign = "+" if _total_contrib >= 0 else ""
+        _tc_color = "#1a7a4a" if _total_contrib >= 0 else "#c0392b"
+        _attr_rows = ""
+        for a in _attribution:
+            _pct    = float(a.get("contribution_pct") or 0)
+            _bar_w  = round(abs(_pct) / _max_abs * 100)
+            _color  = "#1a7a4a" if _pct >= 0 else "#c0392b"
+            _bg_bar = "rgba(22,163,74,0.15)" if _pct >= 0 else "rgba(220,38,38,0.12)"
+            _sign   = "+" if _pct >= 0 else ""
+            _tk_ret = a.get("ticker_return_pct")
+            _tk_str = (f"{'+' if _tk_ret>=0 else ''}{_tk_ret:.1f}%") if _tk_ret is not None else "—"
+            _dg     = float(a.get("dollar_gain") or 0)
+            _dg_str = f"{'+'if _dg>=0 else ''}\${abs(_dg):,.0f}"
+            _sold   = a.get("sold", False)
+            _sold_badge = "<span style='font-size:8px;font-weight:700;background:#f1f5f9;color:#94a3b8;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;margin-left:4px;'>SOLD</span>" if _sold else ""
+            _attr_rows += f"""
+            <tr style='border-bottom:1px solid #f8fafc;'>
+              <td style='padding:5px 10px 5px 0;white-space:nowrap;font-weight:700;font-size:11px;color:#0A1628;width:60px;'>{a.get('ticker','')}{_sold_badge}</td>
+              <td style='padding:5px 6px;width:auto;'>
+                <table width='100%' cellpadding='0' cellspacing='0'><tr>
+                  <td style='background:#f1f5f9;border-radius:4px;height:14px;width:100%;position:relative;'>
+                    <div style='width:{_bar_w}%;height:14px;background:{_bg_bar};border-radius:4px;display:block;'>&nbsp;</div>
+                  </td>
+                  <td style='padding-left:8px;white-space:nowrap;font-size:11px;font-weight:800;color:{_color};width:52px;text-align:right;'>{_sign}{_pct:.2f}%</td>
+                </tr></table>
+              </td>
+              <td style='padding:5px 0 5px 10px;text-align:right;font-size:10px;color:#64748b;white-space:nowrap;width:58px;'>{_tk_str}</td>
+              <td style='padding:5px 0 5px 10px;text-align:right;font-size:10px;font-weight:600;color:{_color};white-space:nowrap;width:72px;'>{_dg_str}</td>
+            </tr>"""
+        attribution_section_html = f"""
+      <!-- YTD Attribution -->
+      <div style='font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                  color:#5BB8D4;margin-bottom:8px;'>YTD Performance Attribution</div>
+      <div style='font-size:11px;color:#888;margin-bottom:12px;'>Contribution of each holding to total portfolio return — includes sold positions. Sorted by impact.</div>
+      <div style='margin-bottom:10px;'>
+        <span style='font-size:11px;color:#64748b;'>Total attributed: </span>
+        <span style='font-size:14px;font-weight:800;color:{_tc_color};'>{_tc_sign}{_total_contrib:.2f}%</span>
+      </div>
+      <table width='100%' cellpadding='0' cellspacing='0' style='border-collapse:collapse;margin-bottom:24px;'>
+        <thead><tr style='border-bottom:2px solid #e2e8f0;'>
+          <th style='padding:4px 10px 6px 0;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;text-align:left;'>Ticker</th>
+          <th style='padding:4px 6px 6px;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;text-align:left;'>Contribution to Return</th>
+          <th style='padding:4px 0 6px 10px;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;text-align:right;'>Stock Ret.</th>
+          <th style='padding:4px 0 6px 10px;font-size:9px;font-weight:800;color:#94a3b8;letter-spacing:0.8px;text-transform:uppercase;text-align:right;'>Dollar P&amp;L</th>
+        </tr></thead>
+        <tbody>{_attr_rows}</tbody>
+      </table>"""
+    else:
+        attribution_section_html = ""
+
     # ── Full HTML document ────────────────────────────────────────────────────
     fund_name  = fund.get("name", "DGA Capital Fund")
     today_str  = datetime.utcnow().strftime("%B %d, %Y")
@@ -12487,6 +12566,9 @@ def _render_quarterly_report_html(
           </tbody>
         </table>
       </div>
+
+      <!-- YTD Attribution -->
+      {attribution_section_html}
 
       <!-- Portfolio EV Summary -->
       {ev_summary_html}
