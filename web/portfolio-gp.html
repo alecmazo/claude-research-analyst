@@ -1024,8 +1024,8 @@
   </div>
 
   <nav class="topbar-right">
-    <span class="topbar-link active" data-tab="positions">📊 Positions</span>
-    <span class="topbar-link" data-tab="research">Research</span>
+    <span class="topbar-link active" data-tab="research">Research</span>
+    <span class="topbar-link" data-tab="positions">📊 Positions</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
@@ -2009,11 +2009,11 @@
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
-    ideas:    () => loadIdeasTab(),
-    tracker:  () => loadTrackerTab(),
-    fund:     () => loadFundTab(),
-    settings: () => loadSettingsTab(),
-    reports:  () => loadReportsTab(),
+    ideas:     () => loadIdeasTab(),
+    tracker:   () => loadTrackerTab(),
+    fund:      () => loadFundTab(),
+    settings:  () => loadSettingsTab(),
+    reports:   () => loadReportsTab(),
   };
 
   function showTab(name) {
@@ -7339,8 +7339,8 @@
   loadTrendingTickers();
   loadGPMarketPulse();
   loadMiniScanChips();
-  // Load positions tab immediately — it's the default active tab
-  loadGPPositions();
+  // Research is the default landing tab (positions is lazy-loaded on first click)
+  showTab('research');
 
   // ── Archived Reports (Settings tab) ───────────────────────────────────────
   async function loadArchivedReports() {
