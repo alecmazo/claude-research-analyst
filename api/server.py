@@ -8104,6 +8104,160 @@ def _send_simple_email(to_addr: str, subject: str, html_body: str) -> dict:
     return {"ok": False, "error": "No email transport configured (need RESEND_API_KEY or GMAIL_USER+GMAIL_APP_PASSWORD)"}
 
 
+def _render_report_pdf(html: str) -> bytes:
+    """Convert a report HTML string to PDF bytes using WeasyPrint."""
+    from weasyprint import HTML as _WP_HTML
+    return _WP_HTML(string=html).write_pdf()
+
+
+def _send_email_with_pdf_attachment(
+    to_addr: str,
+    subject: str,
+    text_html: str,
+    pdf_bytes: bytes,
+    pdf_filename: str = "quarterly_report.pdf",
+) -> dict:
+    """Send an email with a PDF file attached. Tries Resend then Gmail SMTP."""
+    import base64 as _b64
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    gmail_user = os.environ.get("GMAIL_USER", "")
+    gmail_pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+    if resend_key:
+        result = _send_via_resend_with_attachment(
+            to_addr, subject, text_html, pdf_bytes, pdf_filename)
+        if result["ok"]:
+            return result
+        print(f"[email] Resend attachment failed ({result.get('error')}), trying Gmail SMTP…")
+
+    if gmail_user and gmail_pwd:
+        return _send_via_gmail_with_attachment(
+            to_addr, subject, text_html, pdf_bytes, pdf_filename)
+
+    return {"ok": False, "error": "No email transport configured"}
+
+
+def _send_via_resend_with_attachment(
+    to_addr: str,
+    subject: str,
+    html_body: str,
+    pdf_bytes: bytes,
+    pdf_filename: str,
+) -> dict:
+    """Resend REST API — email with PDF attachment."""
+    import http.client, ssl, socket, base64 as _b64
+
+    resend_key  = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "") or "DGA Capital <reports@dgacapital.com>"
+    if not resend_key:
+        return {"ok": False, "error": "RESEND_API_KEY not set"}
+
+    payload = json.dumps({
+        "from":    resend_from,
+        "to":      [to_addr],
+        "subject": subject,
+        "html":    html_body,
+        "attachments": [{
+            "filename": pdf_filename,
+            "content":  _b64.b64encode(pdf_bytes).decode("ascii"),
+        }],
+    }).encode()
+
+    api_host = "api.resend.com"
+    try:
+        raw_sock, ipv4 = _force_ipv4_connect(api_host, 443)
+        ctx      = ssl.create_default_context()
+        ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=api_host)
+        conn     = http.client.HTTPSConnection(api_host, 443, timeout=30)
+        conn.sock = ssl_sock
+        conn.request("POST", "/emails", body=payload, headers={
+            "Authorization": f"Bearer {resend_key}",
+            "Content-Type":  "application/json",
+            "User-Agent":    "DGA-Capital-Server/1.0",
+            "Accept":        "application/json",
+        })
+        resp      = conn.getresponse()
+        resp_body = resp.read().decode("utf-8", "replace")
+        if resp.status >= 400:
+            return {"ok": False, "error": f"Resend HTTP {resp.status}: {resp_body[:300]}", "ipv4": ipv4}
+        return {"ok": True, "transport": "resend+pdf", "ipv4": ipv4, "sent_to": to_addr}
+    except OSError as e:
+        return {"ok": False, "error": f"Network error: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Resend attachment request failed: {e}"}
+
+
+def _send_via_gmail_with_attachment(
+    to_addr: str,
+    subject: str,
+    html_body: str,
+    pdf_bytes: bytes,
+    pdf_filename: str,
+) -> dict:
+    """Gmail SMTP — email with PDF attachment."""
+    import smtplib, ssl, socket
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    gmail_user = os.environ.get("GMAIL_USER", "")
+    gmail_pwd  = os.environ.get("GMAIL_APP_PASSWORD", "")
+    if not gmail_user or not gmail_pwd:
+        return {"ok": False, "error": "GMAIL_USER or GMAIL_APP_PASSWORD not set"}
+
+    from_addr = f"DGA Capital Reports <{gmail_user}>"
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"]    = from_addr
+    msg["To"]      = to_addr
+
+    # HTML body part
+    msg.attach(MIMEText(html_body, "html"))
+
+    # PDF attachment
+    part = MIMEBase("application", "pdf")
+    part.set_payload(pdf_bytes)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
+    msg.attach(part)
+
+    smtp_host = "smtp.gmail.com"
+    last_err  = None
+    for port, use_ssl in [(587, False), (465, True)]:
+        try:
+            raw_sock, ipv4 = _force_ipv4_connect(smtp_host, port)
+            ctx = ssl.create_default_context()
+            if use_ssl:
+                ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=smtp_host)
+                smtp = smtplib.SMTP_SSL.__new__(smtplib.SMTP_SSL)
+                smtplib.SMTP.__init__(smtp, timeout=30)
+                smtp.sock = ssl_sock
+                smtp.file = ssl_sock.makefile("rb")
+                smtp._tls_established = True
+                smtp.ehlo(smtp_host)
+            else:
+                smtp = smtplib.SMTP.__new__(smtplib.SMTP)
+                smtplib.SMTP.__init__(smtp, timeout=30)
+                smtp.sock = raw_sock
+                smtp.file = raw_sock.makefile("rb")
+                smtp.ehlo(smtp_host)
+                smtp.starttls(context=ctx)
+                smtp.ehlo(smtp_host)
+            smtp.login(gmail_user, gmail_pwd)
+            smtp.sendmail(gmail_user, [to_addr], msg.as_string())
+            smtp.quit()
+            return {"ok": True, "transport": f"gmail_smtp+pdf:{port}", "ipv4": ipv4, "sent_to": to_addr}
+        except smtplib.SMTPAuthenticationError as e:
+            return {"ok": False, "error": f"Gmail auth failed: {e}"}
+        except OSError as e:
+            last_err = f"port {port}: {e}"
+        except Exception as e:
+            last_err = f"port {port}: {e}"
+
+    return {"ok": False, "error": f"Gmail SMTP failed — {last_err}"}
+
+
 @app.get("/api/v2/gp/email-diag")
 async def email_diag(request: Request):
     """Diagnose email transport — checks Resend API key, verified domains, and SMTP config.
@@ -11874,21 +12028,35 @@ async def gp_quarterly_report_data(
                 else None
             )
 
-            # ── LP list from auth_v2 overlay ───────────────────────────────────
+            # ── LP / account holder list from auth_v2 overlay ─────────────────
             lps_out = []
+            _is_managed = str(fund_row.get("fund_type", "")) == "managed_account"
             try:
                 all_users = auth_v2_mod.list_users()
+                _fname     = str(fund_row.get("name", ""))
+                _fshort    = str(fund_row.get("short_name", "")).upper()
+                _fid_str   = str(fund_row["id"])
                 for u in all_users:
-                    memberships = u.get("fund_memberships") or {}
-                    # fund_memberships keys are fund names or fund_ids
-                    # Check by fund id string match
-                    fund_match = any(
-                        str(k) == str(fid) or str(k) == str(fund_row["id"])
-                        or str(k).upper() == str(fund_row.get("short_name", "")).upper()
-                        or str(k) == str(fund_row.get("name", ""))
-                        for k in memberships.keys()
-                    )
-                    if fund_match:
+                    if _is_managed:
+                        # Managed accounts: users assigned via managed_account_ids list
+                        acct_ids = u.get("managed_account_ids") or []
+                        acct_match = any(
+                            str(a) == _fname
+                            or str(a).upper() == _fshort
+                            or str(a) == _fid_str
+                            for a in acct_ids
+                        )
+                        matched = acct_match
+                    else:
+                        # LP funds: users assigned via fund_memberships dict keys
+                        memberships = u.get("fund_memberships") or {}
+                        matched = any(
+                            str(k) == _fid_str
+                            or str(k).upper() == _fshort
+                            or str(k) == _fname
+                            for k in memberships.keys()
+                        )
+                    if matched:
                         lps_out.append({
                             "lp_id": u.get("lp_id") or u.get("id"),
                             "name":  u.get("name"),
@@ -12503,9 +12671,35 @@ async def gp_quarterly_report_send(
             pass
 
         try:
-            html_body = _render_quarterly_report_html(
+            report_html = _render_quarterly_report_html(
                 data, body.gp_letter, lp_name, lp_nav)
-            result = _send_simple_email(lp_email, subject, html_body)
+
+            # Generate PDF attachment
+            pdf_bytes = _render_report_pdf(report_html)
+            safe_name = re.sub(r"[^A-Za-z0-9_\-]", "_", fund_name)
+            safe_qtr  = re.sub(r"[^A-Za-z0-9_\-]", "_", body.quarter)
+            pdf_filename = f"DGA_{safe_name}_{safe_qtr}_Report.pdf"
+
+            # Simple email body (report is in the PDF)
+            greeting_name = lp_name.split()[0] if lp_name else "Investor"
+            body_html = f"""
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1e293b;">
+  <div style="background:#0A1628;padding:24px 32px;">
+    <span style="color:#5BB8D4;font-size:20px;font-weight:800;letter-spacing:1px;">DGA CAPITAL</span>
+  </div>
+  <div style="padding:28px 32px;">
+    <p style="margin:0 0 16px;">Dear {lp_name},</p>
+    <p style="margin:0 0 16px;">Please find your <strong>{body.quarter} Investor Report</strong> for <strong>{fund_name}</strong> attached to this email as a PDF.</p>
+    <p style="margin:0 0 16px;">You can also view your account at any time by logging into the investor portal.</p>
+    <p style="margin:0;color:#64748b;font-size:12px;">If you have any questions, please reply directly to this email.</p>
+  </div>
+  <div style="background:#f8fafc;padding:14px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-size:11px;color:#94a3b8;">DGA Capital · This email and any attachments are confidential and intended solely for the addressee.</p>
+  </div>
+</div>"""
+
+            result = _send_email_with_pdf_attachment(
+                lp_email, subject, body_html, pdf_bytes, pdf_filename)
             if result.get("ok"):
                 sent_count += 1
             else:
