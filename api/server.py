@@ -12416,7 +12416,7 @@ def _render_quarterly_report_html(
           <td>
             <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">{quarter} Investor Report</div>
             <div style="display:flex;align-items:center;gap:14px;">
-              {f'<img src="{_logo_data_uri}" alt="DGA Capital" height="40" style="display:block;flex-shrink:0;">' if _logo_data_uri else '<span style="font-size:13px;font-weight:800;color:#5BB8D4;letter-spacing:2px;">DGA CAPITAL</span>'}
+              {f'<div style="background:#fff;border-radius:6px;padding:5px 10px;display:inline-block;line-height:0;"><img src="{_logo_data_uri}" alt="DGA Capital" height="34" style="display:block;"></div>' if _logo_data_uri else '<span style="font-size:13px;font-weight:800;color:#5BB8D4;letter-spacing:2px;">DGA CAPITAL</span>'}
               <div style="font-size:20px;font-weight:800;color:#fff;line-height:1.1;">{fund_name}</div>
             </div>
           </td>
