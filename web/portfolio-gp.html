@@ -5845,12 +5845,14 @@
   <!-- ── HEADER ── -->
   <div class="rpt-header">
     <div class="rpt-confidential">Confidential</div>
-    <img src="/branding/dga_logo_small.png" alt="DGA Capital" height="38"
-         style="display:block;margin-bottom:14px;"
-         onerror="this.style.display='none'">
-    <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">${_esc(quarter)} · Quarterly Investor Report</div>
-    <div style="font-size:26px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px;">${_esc(fund.name||fundId)}</div>
-    <div style="font-size:12px;color:rgba(255,255,255,0.50);">${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')} · Prepared ${_esc(dateStr)}</div>
+    <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">${_esc(quarter)} · Quarterly Investor Report</div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:6px;">
+      <img src="/branding/dga_logo_small.png" alt="DGA Capital" height="42"
+           style="display:block;flex-shrink:0;"
+           onerror="this.style.display='none'">
+      <div style="font-size:28px;font-weight:800;letter-spacing:-0.5px;line-height:1.1;">${_esc(fund.name||fundId)}</div>
+    </div>
+    <div style="font-size:12px;color:rgba(255,255,255,0.50);margin-bottom:0;">${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')} · Prepared ${_esc(dateStr)}</div>
     ${scorecardHtml}
     <div class="rpt-preview-badge">⚠ PREVIEW — NOT YET SENT</div>
   </div>

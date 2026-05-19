@@ -12414,9 +12414,11 @@ def _render_quarterly_report_html(
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
           <td>
-            {f'<img src="{_logo_data_uri}" alt="DGA Capital" height="40" style="display:block;margin-bottom:12px;">' if _logo_data_uri else '<div style="font-size:14px;font-weight:800;color:#5BB8D4;letter-spacing:2px;margin-bottom:12px;">DGA CAPITAL</div>'}
-            <div style="font-size:18px;font-weight:700;color:#fff;">{fund_name}</div>
-            <div style="font-size:13px;color:#5BB8D4;margin-top:2px;">{quarter} Investor Report</div>
+            <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">{quarter} Investor Report</div>
+            <div style="display:flex;align-items:center;gap:14px;">
+              {f'<img src="{_logo_data_uri}" alt="DGA Capital" height="40" style="display:block;flex-shrink:0;">' if _logo_data_uri else '<span style="font-size:13px;font-weight:800;color:#5BB8D4;letter-spacing:2px;">DGA CAPITAL</span>'}
+              <div style="font-size:20px;font-weight:800;color:#fff;line-height:1.1;">{fund_name}</div>
+            </div>
           </td>
           <td style="text-align:right;vertical-align:top;">
             <div style="display:inline-block;background:#c0392b;color:#fff;font-size:10px;
