@@ -587,6 +587,35 @@ def update_assignments(
     return True
 
 
+def update_email(lp_id: str, new_email: str) -> bool:
+    """Update the login email for an existing user.
+
+    Validates that:
+    - The user exists
+    - new_email is non-empty and valid-ish (contains @)
+    - new_email is not already taken by another account
+
+    Returns False if validation fails. Persists to overlay.
+    """
+    new_email = (new_email or "").strip().lower()
+    if not new_email or "@" not in new_email:
+        return False
+    user = find_user_by_lp_id(lp_id)
+    if not user:
+        return False
+    # Check for duplicate (allow same email = no-op update)
+    existing = find_user_by_email(new_email)
+    if existing and existing["lp_id"] != lp_id:
+        raise ValueError("Email already in use by another account")
+    overlay = _load_overlay()
+    overlay[lp_id] = {
+        **overlay.get(lp_id, {}),
+        "email": new_email,
+    }
+    _save_overlay(overlay)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Scope checks — used by data endpoints to filter LP-visible records.
 # ---------------------------------------------------------------------------

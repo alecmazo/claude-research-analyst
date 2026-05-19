@@ -6457,9 +6457,12 @@
               </div>
             </div>
 
-            <!-- Force-reset password + Save row -->
+            <!-- Email + Password + Save row -->
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--panel-edge);">
-              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">Force Reset PW:</span>
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;">Email:</span>
+              <input type="email" placeholder="${u.email}" value="${u.email}" data-lp-email-input="${u.lp_id}" data-lp-orig-email="${u.email}"
+                style="width:220px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
+              <span style="font-size:10px;font-weight:700;color:var(--mid);letter-spacing:0.5px;flex-shrink:0;margin-left:6px;">Force Reset PW:</span>
               <input type="password" placeholder="New temp password" data-lp-pw-input="${u.lp_id}"
                 style="width:180px;height:32px;background:white;border:1.5px solid var(--panel-edge);border-radius:6px;color:#1e293b;font-size:12px;padding:0 10px;outline:none;">
               <button class="tab-btn sm" style="height:32px;padding:0 16px;font-size:11px;font-weight:700;" data-lp-save="${u.lp_id}">Save Changes</button>
@@ -6521,6 +6524,11 @@
             if (cb.checked) ma.push(cb.dataset.acctCheck);
           });
 
+          // Optional email update
+          const emailInp  = panel.querySelector(`[data-lp-email-input="${lpId}"]`);
+          const newEmail  = emailInp?.value?.trim();
+          const origEmail = emailInp?.dataset?.lpOrigEmail || '';
+
           // Optional password reset
           const pwInp = el.querySelector(`[data-lp-pw-input="${lpId}"]`);
           const pw    = pwInp?.value?.trim();
@@ -6533,6 +6541,16 @@
               body: JSON.stringify({ lp_id: lpId, fund_memberships: fm, managed_account_ids: ma }),
             });
             if (!assignR.ok) throw new Error((await assignR.json()).detail || assignR.status);
+
+            // Update email if it changed
+            if (newEmail && newEmail !== origEmail) {
+              const emailR = await window.dgaFetch('/api/v2/admin/lp/update-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lp_id: lpId, new_email: newEmail }),
+              });
+              if (!emailR.ok) throw new Error('Email: ' + ((await emailR.json()).detail || emailR.status));
+            }
 
             if (pw) {
               const pwR = await window.dgaFetch('/api/v2/admin/lp/set-password', {

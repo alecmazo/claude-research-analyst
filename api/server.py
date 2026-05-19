@@ -1577,6 +1577,28 @@ def admin_lp_update_assignments(request: Request, body: LPAssignRequest):
     return {"ok": True, "lp_id": body.lp_id}
 
 
+class LPEmailUpdateRequest(BaseModel):
+    lp_id: str
+    new_email: str
+
+
+@app.post("/api/v2/admin/lp/update-email")
+def admin_lp_update_email(request: Request, body: LPEmailUpdateRequest):
+    """GP-only: change the login email address of an LP account."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+    if claims.get("demo_mode"):
+        raise HTTPException(status_code=403, detail="Write operations disabled in demo mode")
+    try:
+        ok = auth_v2_mod.update_email(lp_id=body.lp_id, new_email=body.new_email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(400, "Invalid email or user not found")
+    return {"ok": True, "lp_id": body.lp_id, "email": body.new_email.strip().lower()}
+
+
 # ===========================================================================
 # Fund display settings — GP writes, LP reads
 # ===========================================================================
