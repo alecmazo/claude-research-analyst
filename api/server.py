@@ -11646,6 +11646,9 @@ async def fund_export_pdf(request: Request, fund_id: str = None):
 def _parse_report_scenarios(ticker: str) -> dict:
     """Parse a DGA Research Report markdown file and extract scenario/risk data.
 
+    Falls back to the analyst_reports DB table when the local .md file is absent
+    (e.g. on Railway where stocks/*.md files are gitignored).
+
     Returns a dict with keys:
         rating, price_target, implied_return, summary,
         bull, base, bear, expected_value_price, top_risk
@@ -11665,9 +11668,26 @@ def _parse_report_scenarios(ticker: str) -> dict:
     }
     try:
         md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
-        if not md_path.exists():
-            return result
-        text = md_path.read_text(encoding="utf-8", errors="replace")
+        if md_path.exists():
+            text = md_path.read_text(encoding="utf-8", errors="replace")
+        else:
+            # Fallback: load report_md from the analyst_reports DB table
+            text = None
+            try:
+                conn = _fund_conn()
+                with conn.cursor() as _cur:
+                    _cur.execute(
+                        "SELECT report_md FROM analyst_reports WHERE ticker = %s AND (archived IS NULL OR archived = FALSE)",
+                        (ticker.upper(),)
+                    )
+                    _row = _cur.fetchone()
+                    if _row and _row[0]:
+                        text = _row[0]
+                conn.close()
+            except Exception as _db_err:
+                print(f"[parse_scenarios] DB fallback failed for {ticker}: {_db_err}")
+            if not text:
+                return result
         lines = text.splitlines()
     except Exception:
         return result
