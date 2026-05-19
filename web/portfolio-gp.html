@@ -5671,6 +5671,13 @@
     const _usd = v => { if(v==null)return'—'; const n=Number(v); if(Math.abs(n)>=1e9)return'$'+(n/1e9).toFixed(2)+'B'; if(Math.abs(n)>=1e6)return'$'+(n/1e6).toFixed(2)+'M'; if(Math.abs(n)>=1e3)return'$'+(n/1e3).toFixed(1)+'K'; return'$'+n.toFixed(0); };
     const _pct = (v,dec=1) => { if(v==null)return'—'; const n=Number(v); return(n>=0?'+':'')+n.toFixed(dec)+'%'; };
     const _px  = v => v!=null ? '$'+Number(v).toFixed(2) : '—';
+    // Scenario target prices come from markdown as strings like "$157" — strip before parsing
+    const _scPx = v => {
+      if (v == null) return '—';
+      if (typeof v === 'number') return isNaN(v) ? '—' : '$' + v.toFixed(0);
+      const n = parseFloat(String(v).replace(/[$,\s]/g, ''));
+      return isNaN(n) ? (String(v) || '—') : '$' + n.toFixed(0);
+    };
     const _clr = v => Number(v||0)>=0?'#16a34a':'#dc2626';
     const _ratingBadge = r => {
       if(!r) return '';
@@ -5745,7 +5752,7 @@
           <tr style="border-bottom:1px solid #f1f5f9;">
             <td style="padding:6px 8px;font-weight:700;color:${color};background:${bg};white-space:nowrap;">${label}</td>
             <td style="padding:6px 8px;text-align:right;color:#64748b;">${sc.prob||'—'}</td>
-            <td style="padding:6px 8px;text-align:right;font-weight:600;">${sc.price?_px(sc.price):'—'}</td>
+            <td style="padding:6px 8px;text-align:right;font-weight:600;">${_scPx(sc.price)}</td>
             <td style="padding:6px 8px;text-align:right;font-weight:700;color:${_clr(parseFloat(sc.upside)||0)};">${sc.upside||'—'}</td>
             <td style="padding:6px 8px;font-size:10px;color:#64748b;">${_esc((sc.assumption||'').slice(0,80))}${(sc.assumption||'').length>80?'…':''}</td>
           </tr>`).join('')}

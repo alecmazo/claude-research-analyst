@@ -12195,6 +12195,20 @@ def _render_quarterly_report_html(
         bear = res.get("bear") or {}
         top_risk = res.get("top_risk") or "—"
 
+        def _fmt_scenario_price(v):
+            """Format a scenario price that may be a raw string like '$157' or a float."""
+            if v is None:
+                return "—"
+            if isinstance(v, (int, float)):
+                return f"${v:,.0f}" if not (v != v) else "—"  # NaN guard
+            # Strip $ and commas, re-format
+            import re as _re
+            clean = _re.sub(r"[$,\s*]", "", str(v))
+            try:
+                return f"${float(clean):,.0f}"
+            except ValueError:
+                return str(v) or "—"
+
         def _scenario_row(label, d, bg):
             if not d:
                 return ""
@@ -12202,7 +12216,7 @@ def _render_quarterly_report_html(
                 f"<tr style='background:{bg};'>"
                 f"<td style='padding:5px 8px;font-weight:600;font-size:12px;'>{label}</td>"
                 f"<td style='padding:5px 8px;text-align:center;font-size:12px;'>{d.get('prob','—')}</td>"
-                f"<td style='padding:5px 8px;text-align:right;font-size:12px;'>{d.get('price','—')}</td>"
+                f"<td style='padding:5px 8px;text-align:right;font-size:12px;'>{_fmt_scenario_price(d.get('price'))}</td>"
                 f"<td style='padding:5px 8px;text-align:right;font-size:12px;'>{d.get('upside','—')}</td>"
                 f"<td style='padding:5px 8px;font-size:11px;color:#555;'>{(d.get('assumption') or '')[:60]}</td>"
                 f"</tr>"
