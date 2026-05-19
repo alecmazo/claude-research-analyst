@@ -5744,7 +5744,7 @@
           <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:600;">${wt}</td>
           <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.avg_cost)}</td>
           <td style="padding:9px 10px;text-align:right;font-size:12px;">${_px(p.last_price)}</td>
-          <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:700;color:${_clr(unG)};">${unG!=null?_usd(unG)+' ('+_pct(unP)+'  )':'—'}</td>
+          <td style="padding:9px 10px;text-align:right;font-size:11px;font-weight:700;color:${_clr(unG)};white-space:nowrap;">${unG!=null?_usd(unG)+'<br><span style="font-size:10px;font-weight:600;">('+_pct(unP)+')</span>':'—'}</td>
           <td style="padding:9px 10px;text-align:center;">${_ratingBadge(r.rating)}</td>
           <td style="padding:9px 10px;text-align:right;font-size:12px;">${r.price_target?_px(r.price_target):'—'}</td>
           <td style="padding:9px 10px;text-align:right;font-size:12px;font-weight:700;color:${_clr(parseFloat(r.implied_return)||0)};">${r.implied_return||'—'}</td>

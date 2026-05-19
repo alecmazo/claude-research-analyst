@@ -12216,6 +12216,7 @@ def _render_quarterly_report_html(
         avg    = pos.get("avg_cost")
         cur_p  = pos.get("last_price")
         unrlzd = pos.get("unrealized_gain_pct")
+        unrlzd_dollars = pos.get("unrealized_gain")
         res    = pos.get("research") or {}
         rating = res.get("rating")
         pt     = res.get("price_target")
@@ -12224,6 +12225,13 @@ def _render_quarterly_report_html(
         unrlzd_color = _color_pct(unrlzd)
         rating_color = _rating_color(rating)
 
+        if unrlzd_dollars is not None and unrlzd is not None:
+            _unrlzd_str = f"{_fmt_money(unrlzd_dollars, 0)}<br/><span style='font-size:10px;font-weight:600;'>({_fmt_pct(unrlzd)})</span>"
+        elif unrlzd is not None:
+            _unrlzd_str = _fmt_pct(unrlzd)
+        else:
+            _unrlzd_str = "—"
+
         holdings_rows += f"""
         <tr style='border-bottom:1px solid #e8ecf0;'>
           <td style='padding:8px 10px;font-weight:600;color:#0A1628;'>{sym}</td>
@@ -12231,7 +12239,7 @@ def _render_quarterly_report_html(
           <td style='padding:8px 10px;text-align:right;'>{_fmt_pct(wt, plus=False) if wt is not None else '—'}</td>
           <td style='padding:8px 10px;text-align:right;'>{_fmt_money(avg, 2) if avg else '—'}</td>
           <td style='padding:8px 10px;text-align:right;'>{_fmt_money(cur_p, 2) if cur_p else '—'}</td>
-          <td style='padding:8px 10px;text-align:right;color:{unrlzd_color};font-weight:600;'>{_fmt_pct(unrlzd) if unrlzd is not None else '—'}</td>
+          <td style='padding:8px 10px;text-align:right;color:{unrlzd_color};font-weight:600;white-space:nowrap;'>{_unrlzd_str}</td>
           <td style='padding:8px 10px;text-align:center;'>
             <span style='background:{rating_color};color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:700;'>{rating or '—'}</span>
           </td>
