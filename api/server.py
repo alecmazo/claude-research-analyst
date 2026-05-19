@@ -12107,6 +12107,7 @@ def _render_quarterly_report_html(
     gp_letter: str,
     lp_name: str,
     lp_nav: float | None,
+    gp_name: str | None = None,
 ) -> str:
     """Render a complete standalone HTML quarterly LP report.
 
@@ -12158,6 +12159,22 @@ def _render_quarterly_report_html(
         if hurdle_exceeded
         else "Below hurdle — no carry accruing"
     )
+
+    # ── GP signature name ─────────────────────────────────────────────────────
+    signature_name = gp_name or "DGA Capital Management"
+
+    # ── Logo — embed as base64 data URI so it works in PDFs and email ─────────
+    _logo_data_uri = ""
+    try:
+        import base64 as _b64
+        _logo_path = Path(__file__).parent.parent / "branding" / "dga_logo_small.png"
+        if _logo_path.exists():
+            _logo_data_uri = (
+                "data:image/png;base64,"
+                + _b64.b64encode(_logo_path.read_bytes()).decode()
+            )
+    except Exception:
+        pass
 
     # ── GP Letter paragraphs ──────────────────────────────────────────────────
     letter_html = "".join(
@@ -12397,9 +12414,7 @@ def _render_quarterly_report_html(
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
           <td>
-            <img src="/branding/dga_logo_small.png" alt="DGA Capital" height="36"
-                 style="display:block;margin-bottom:10px;"
-                 onerror="this.style.display='none'">
+            {f'<img src="{_logo_data_uri}" alt="DGA Capital" height="40" style="display:block;margin-bottom:12px;">' if _logo_data_uri else '<div style="font-size:14px;font-weight:800;color:#5BB8D4;letter-spacing:2px;margin-bottom:12px;">DGA CAPITAL</div>'}
             <div style="font-size:18px;font-weight:700;color:#fff;">{fund_name}</div>
             <div style="font-size:13px;color:#5BB8D4;margin-top:2px;">{quarter} Investor Report</div>
           </td>
@@ -12435,7 +12450,7 @@ def _render_quarterly_report_html(
 
       <!-- GP Letter -->
       <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                  color:#5BB8D4;margin-bottom:12px;">Letter from DGA Capital Management</div>
+                  color:#5BB8D4;margin-bottom:12px;">Letter from {signature_name}</div>
       <div style="font-size:14px;color:#222;line-height:1.7;margin-bottom:8px;">
         Dear {lp_name or 'Investor'},
       </div>
@@ -12443,7 +12458,7 @@ def _render_quarterly_report_html(
         {letter_html}
       </div>
       <div style="font-size:14px;color:#333;margin-bottom:28px;font-style:italic;">
-        — DGA Capital Management
+        — {signature_name}
       </div>
 
       <!-- Holdings Table -->
@@ -12528,6 +12543,15 @@ async def gp_quarterly_report_send(
         raise HTTPException(403, "GP access required")
 
     gp_email = claims.get("email", "gp@dgacapital.com")
+    gp_name  = claims.get("name") or None
+    # If name not in claims, look it up from auth_v2
+    if not gp_name:
+        try:
+            _gp_user = auth_v2_mod.find_user_by_email(gp_email)
+            if _gp_user:
+                gp_name = _gp_user.get("name") or None
+        except Exception:
+            pass
 
     # ── Fetch report data ─────────────────────────────────────────────────────
     # We call the data function directly (reuse its logic) rather than an
@@ -12706,7 +12730,7 @@ async def gp_quarterly_report_send(
 
         try:
             report_html = _render_quarterly_report_html(
-                data, body.gp_letter, lp_name, lp_nav)
+                data, body.gp_letter, lp_name, lp_nav, gp_name=gp_name)
 
             # Generate PDF attachment
             pdf_bytes = _render_report_pdf(report_html)

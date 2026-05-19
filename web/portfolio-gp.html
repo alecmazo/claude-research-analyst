@@ -5845,9 +5845,12 @@
   <!-- ── HEADER ── -->
   <div class="rpt-header">
     <div class="rpt-confidential">Confidential</div>
+    <img src="/branding/dga_logo_small.png" alt="DGA Capital" height="38"
+         style="display:block;margin-bottom:14px;"
+         onerror="this.style.display='none'">
     <div style="font-size:11px;font-weight:700;color:#5BB8D4;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">${_esc(quarter)} · Quarterly Investor Report</div>
     <div style="font-size:26px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px;">${_esc(fund.name||fundId)}</div>
-    <div style="font-size:12px;color:rgba(255,255,255,0.50);">DGA Capital Management · Prepared ${_esc(dateStr)}</div>
+    <div style="font-size:12px;color:rgba(255,255,255,0.50);">${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')} · Prepared ${_esc(dateStr)}</div>
     ${scorecardHtml}
     <div class="rpt-preview-badge">⚠ PREVIEW — NOT YET SENT</div>
   </div>
@@ -5856,7 +5859,7 @@
   <div class="section">
     <div class="sec-label">Letter to Partners</div>
     <div class="gp-letter">${gpLetterHtml}</div>
-    <div class="gp-sign">— DGA Capital Management</div>
+    <div class="gp-sign">— ${_esc((window.DGA_USER&&window.DGA_USER.name)||'DGA Capital Management')}</div>
   </div>
 
   <!-- ── HOLDINGS TABLE ── -->
