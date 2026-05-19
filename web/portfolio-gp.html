@@ -5805,7 +5805,7 @@
       <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
         <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Management Fee (annualized)</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.mgmt_fee_pct?(fund.mgmt_fee_pct*100).toFixed(2)+'% p.a.':''} ${mgmtFeeAnnual?'(≈'+_usd(mgmtFeeAnnual)+' on current NAV)':''}</td></tr>
         <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Carried Interest Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${fund.carry_pct?(fund.carry_pct*100).toFixed(0)+'%':''}</td></tr>
-        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Hurdle Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${hurdle!=null?hurdle.toFixed(1)+'% per annum':'—'}</td></tr>
+        <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:8px 0;color:#64748b;">Hurdle Rate</td><td style="padding:8px 0;text-align:right;font-weight:600;">${hurdle!=null?hurdle.toFixed(1)+'%':'—'}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Carry Status</td><td style="padding:8px 0;text-align:right;font-weight:600;">${_esc(carryStatus)}</td></tr>
       </table>`;
 
