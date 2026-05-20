@@ -599,12 +599,18 @@
   .fid-sidebar-asof { font-size: 9px; color: #94a3b8; margin-top: 2px; }
   .fid-sidebar-summary {
     padding: 12px 16px; border-bottom: 1px solid #e2e8f0; background: #fafbfc; flex-shrink: 0;
+    cursor: pointer; transition: background .12s; border-left: 3px solid transparent;
+  }
+  .fid-sidebar-summary:hover { background: #f0f9ff; }
+  .fid-sidebar-summary.active {
+    background: #f0f9ff; border-left-color: #5BB8D4;
   }
   .fid-sidebar-total-val {
     font-size: 18px; font-weight: 800; color: #0A1628;
     font-variant-numeric: tabular-nums; letter-spacing: -0.3px;
   }
   .fid-sidebar-total-day { font-size: 11px; margin-top: 4px; }
+  .fid-sidebar-total-sub { font-size: 10px; color: #94a3b8; margin-top: 3px; }
   .fid-acct-list { flex: 1; overflow-y: auto; }
   .fid-acct-item {
     padding: 10px 16px; border-left: 3px solid transparent;
@@ -1282,17 +1288,12 @@
       <div class="fid-sidebar-title">Accounts</div>
       <div class="fid-sidebar-asof" id="fid-sidebar-asof">—</div>
     </div>
-    <div class="fid-sidebar-summary">
+    <div class="fid-sidebar-summary active" id="fid-sidebar-summary">
       <div class="fid-sidebar-total-val" id="fid-sidebar-total-val">—</div>
       <div class="fid-sidebar-total-day" id="fid-sidebar-total-day"></div>
+      <div class="fid-sidebar-total-sub" id="fid-sidebar-total-sub">—</div>
     </div>
     <div id="fid-acct-list" class="fid-acct-list">
-      <div class="fid-acct-item active" data-acct="__all__">
-        <div class="fid-acct-row">
-          <div class="fid-acct-name">All Accounts</div>
-          <div class="fid-acct-val" id="fid-all-val">—</div>
-        </div>
-      </div>
     </div>
   </aside>
 
@@ -3274,10 +3275,10 @@
     const totalMV = data.total_market_value || 0;
     const totalEl = document.getElementById('fid-sidebar-total-val');
     const dayEl   = document.getElementById('fid-sidebar-total-day');
+    const subEl   = document.getElementById('fid-sidebar-total-sub');
     const asofEl  = document.getElementById('fid-sidebar-asof');
     if (totalEl) totalEl.textContent = totalMV > 0 ? fmtUSD(totalMV) : '—';
     if (asofEl)  asofEl.textContent  = 'As of ' + new Date().toLocaleString('en-US', { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) + ' PT';
-    document.getElementById('fid-all-val') && (document.getElementById('fid-all-val').textContent = totalMV > 0 ? fmtUSD(totalMV) : '—');
 
     // ── Aggregate day change ─────────────────────────────────────
     const totalMV_ref = data.total_market_value || 0;
@@ -3341,20 +3342,43 @@
       });
     }
 
-    // ── Build sidebar account list ────────────────────────────────
+    // ── Update summary block (clickable "All Accounts" replacement) ──────────
+    const summaryEl = document.getElementById('fid-sidebar-summary');
+    if (subEl) subEl.textContent = positions.length + ' positions · ' + groupOrder.length + ' account' + (groupOrder.length !== 1 ? 's' : '');
+    if (summaryEl) {
+      // Mark active when no individual account is selected
+      summaryEl.classList.toggle('active', _fidActiveAcct === '__all__');
+      // One-time listener guard
+      if (!summaryEl._allAcctBound) {
+        summaryEl._allAcctBound = true;
+        summaryEl.addEventListener('click', function() {
+          // Deselect any individual account
+          document.querySelectorAll('#fid-acct-list .fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+          summaryEl.classList.add('active');
+          _fidActiveAcct = '__all__';
+          const nameEl = document.getElementById('fid-sel-acct-name');
+          if (nameEl) nameEl.textContent = 'All Accounts';
+          const allPos = _fidAllPositions;
+          const allUnreal = allPos.reduce(function(s,p){ return s+(p.unrealized_gain||0); },0);
+          const allGainers = allPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+          const allLosers  = allPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+          const sc = document.getElementById('fid-stat-count');
+          const sg = document.getElementById('fid-stat-gainers');
+          const sl = document.getElementById('fid-stat-losers');
+          const su = document.getElementById('fid-stat-unrealized');
+          if (sc) sc.textContent = allPos.length;
+          if (sg) sg.textContent = allGainers;
+          if (sl) sl.textContent = allLosers;
+          if (su) { su.textContent = (allUnreal>=0?'+':'')+fmtUSDFull(allUnreal); su.style.color = allUnreal>=0?'#16a34a':'#dc2626'; }
+          _renderFidTable(allPos);
+        });
+      }
+    }
+
+    // ── Build sidebar account list (individual accounts only) ─────────────
     const acctList = document.getElementById('fid-acct-list');
     if (acctList) {
-      // All Accounts entry (no reorder buttons)
-      let html = '<div class="fid-acct-item active" data-acct="__all__">'
-        + '<div class="fid-acct-row"><div class="fid-acct-name">All Accounts</div>'
-        + '<div class="fid-acct-val">' + (totalMV_ref > 0 ? fmtUSD(totalMV_ref) : '—') + '</div></div>';
-      if (validDay) {
-        const dayPct = totalMV_ref > 0 ? (dayChangeAbs / (totalMV_ref - dayChangeAbs) * 100) : 0;
-        const isUp   = dayChangeAbs >= 0;
-        const clr    = isUp ? '#16a34a' : '#dc2626';
-        html += '<div class="fid-acct-day" style="color:' + clr + ';">' + (isUp?'+':'') + fmtUSD(dayChangeAbs) + ' (' + (dayPct>=0?'+':'') + dayPct.toFixed(2) + '%)</div>';
-      }
-      html += '<div class="fid-acct-sub">' + positions.length + ' positions · ' + groupOrder.length + ' account' + (groupOrder.length!==1?'s':'') + '</div></div>';
+      let html = '';
 
       groupOrder.forEach(function(grp, idx) {
         const g = groups[grp];
@@ -3392,11 +3416,14 @@
           if (e.target.closest('.fid-acct-sort-btns')) return;
           acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
           item.classList.add('active');
+          // Summary block loses "all" active state when a specific account is chosen
+          const sumEl2 = document.getElementById('fid-sidebar-summary');
+          if (sumEl2) sumEl2.classList.remove('active');
           const acct = item.dataset.acct;
           _fidActiveAcct = acct;   // persist selection across re-renders
           const nameEl = document.getElementById('fid-sel-acct-name');
-          const filterPos = acct === '__all__' ? positions : ((groups[acct] || {}).positions || []);
-          if (nameEl) nameEl.textContent = acct === '__all__' ? 'All Accounts' : acct;
+          const filterPos = (groups[acct] || {}).positions || [];
+          if (nameEl) nameEl.textContent = acct;
           // Update header stats for this account
           const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
           const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
@@ -3432,22 +3459,28 @@
     }
 
     // ── Restore previously selected account (survives auto-refresh) ───────────
-    const savedItem = acctList.querySelector('.fid-acct-item[data-acct="' + _fidActiveAcct + '"]');
-    if (savedItem && _fidActiveAcct !== '__all__') {
-      // Re-apply active highlight without triggering a click (avoids re-render loop)
-      acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
-      savedItem.classList.add('active');
-      const filterPos = (groups[_fidActiveAcct] || {}).positions || [];
-      const nameEl = document.getElementById('fid-sel-acct-name');
-      if (nameEl) nameEl.textContent = _fidActiveAcct;
-      const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
-      const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
-      const acctLosers  = filterPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
-      if (sc) sc.textContent = filterPos.length;
-      if (sg) sg.textContent = acctGainers;
-      if (sl) sl.textContent = acctLosers;
-      if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
-      _renderFidTable(filterPos);
+    if (_fidActiveAcct !== '__all__') {
+      const savedItem = acctList ? acctList.querySelector('.fid-acct-item[data-acct="' + _fidActiveAcct + '"]') : null;
+      if (savedItem) {
+        acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+        savedItem.classList.add('active');
+        if (summaryEl) summaryEl.classList.remove('active');
+        const filterPos = (groups[_fidActiveAcct] || {}).positions || [];
+        const nameEl = document.getElementById('fid-sel-acct-name');
+        if (nameEl) nameEl.textContent = _fidActiveAcct;
+        const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
+        const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+        const acctLosers  = filterPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+        if (sc) sc.textContent = filterPos.length;
+        if (sg) sg.textContent = acctGainers;
+        if (sl) sl.textContent = acctLosers;
+        if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
+        _renderFidTable(filterPos);
+      } else {
+        // Account no longer exists — fall back to all
+        _fidActiveAcct = '__all__';
+        _renderFidTable(positions);
+      }
     } else {
       _renderFidTable(positions);
     }
