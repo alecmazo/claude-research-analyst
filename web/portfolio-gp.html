@@ -5429,7 +5429,7 @@
               </td>
               <td ${lci} style="white-space:nowrap;">PORTFOLIO RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Time-Weighted · benchmark comparable</div></td>
               <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-md-val">—</td>
-              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Based on when your money was invested</div></td>
+              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div id="acd-xirr-label" style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Based on when your money was invested</div></td>
               <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-xirr-val">—</td>
             </tr>
           </tbody>
@@ -5801,12 +5801,23 @@
         mdEl.title = 'Modified Dietz (TWRR unavailable — upload monthly performance CSV for exact figure)';
       }
     }
-    const xirrEl = document.getElementById('acd-xirr-val');
+    const xirrEl    = document.getElementById('acd-xirr-val');
+    const xirrLabel = document.getElementById('acd-xirr-label');
     if (xirrEl) {
       if (xirrPct != null) {
         xirrEl.textContent = fmtP(xirrPct);
         xirrEl.style.cssText = 'font-weight:700;' + cls(xirrPct);
-        xirrEl.title = 'XIRR / Money-Weighted Return — reflects the actual timing of your cash in and out';
+        // When XIRR == TWRR it means no external cash flows were detected
+        // (account funded via internal transfer/merge).  Show a helpful tooltip.
+        const noFlows = (twrrPct != null && Math.abs(xirrPct - twrrPct) < 0.01);
+        xirrEl.title = noFlows
+          ? 'No external cash flows detected — Personal Return equals Portfolio Return (TWRR)'
+          : 'XIRR / Money-Weighted Return — reflects the actual timing of your deposits & withdrawals';
+        if (xirrLabel) {
+          xirrLabel.textContent = noFlows
+            ? 'No external cash flows this period'
+            : 'Based on when your money was invested';
+        }
       } else {
         xirrEl.textContent = '—';
         xirrEl.title = 'Personal Return requires cash flow history (activity CSV)';

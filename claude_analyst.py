@@ -4215,24 +4215,39 @@ def compute_unified_ytd(
         print(f"⚠️  Monthly chart failed: {mc_exc}")
 
     # ── XIRR / Money-Weighted Return (Personal Rate of Return) ────────────────
-    # Include internal transfers (ACATS, journal entries, account-to-account
-    # moves) as cash flows for XIRR.  These are excluded from TWRR/Modified
-    # Dietz because those metrics are portfolio-level and benchmark-comparable.
-    # For per-account Personal Return, a transfer IN is economically identical
-    # to a deposit: if we exclude it, XIRR sees a tiny begin_value growing to
-    # a large end_value with no flows → wildly inflated result.  Including the
-    # transfer restores the correct "how did MY timing of capital affect return?"
-    # calculation without double-counting — the offset leg (the sending account)
-    # appears there as a corresponding withdrawal.
+    # Rules:
+    #   • Internal transfers (ACATS, account merges, journal entries) are NEVER
+    #     cash flows for XIRR — they are not new money from outside the system.
+    #   • Only genuine external flows count: real LP deposits in, real LP
+    #     withdrawals out.  These come from `flows` which already has internal
+    #     transfers stripped by parse_fidelity_history.
+    #   • If there are no external flows (e.g. account funded entirely via an
+    #     internal merge with no outside cash), Personal Return == Portfolio
+    #     Return (TWRR).  There is no timing-of-money effect to measure when
+    #     no new outside money entered or left.
+    #   • Fall back to Modified Dietz if TWRR is also unavailable.
     xirr_return_pct = None
-    try:
-        _xirr_internal = flows_parse.get("internal_transfers", [])
-        _xirr_flows    = flows + _xirr_internal   # includes transfers for per-account calc
-        xirr_return_pct = _compute_xirr(
-            begin_value, end_value, _xirr_flows, period_start, today_dt
+    if not flows:
+        # No real external cash flows → Personal Return equals Portfolio Return.
+        xirr_return_pct = (
+            twrr_return_pct if twrr_return_pct is not None else md_return_pct
         )
-    except Exception as xirr_exc:  # noqa: BLE001
-        print(f"⚠️  XIRR failed: {xirr_exc}")
+    else:
+        try:
+            xirr_return_pct = _compute_xirr(
+                begin_value, end_value, flows, period_start, today_dt
+            )
+        except Exception as xirr_exc:  # noqa: BLE001
+            print(f"⚠️  XIRR failed: {xirr_exc}")
+        # Sanity check: if XIRR diverges wildly from TWRR and flows are tiny
+        # relative to NAV, the timing effect is negligible — use TWRR instead.
+        if xirr_return_pct is not None and twrr_return_pct is not None:
+            _flow_total = sum(abs(f["amount"]) for f in flows)
+            _nav        = float(end_value) or 1.0
+            _flow_ratio = _flow_total / _nav
+            if _flow_ratio < 0.05 and abs(xirr_return_pct - twrr_return_pct) > 15:
+                # Flows < 5 % of NAV but XIRR diverges > 15 pp → noise, use TWRR
+                xirr_return_pct = twrr_return_pct
 
     # ── Persist the MD/TWRR result + attribution + a snapshot for history ─────
     # `account_history` always holds the most-recent run (used by the YTD
