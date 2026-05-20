@@ -3589,6 +3589,15 @@ _FIDELITY_INTERNAL_ACTIONS = frozenset({
     # ── Fees & taxes ────────────────────────────────────────────────────────
     "FEE CHARGED",                   # ADR fees, account fees
     "FOREIGN TAX PAID",              # ADR withholding tax
+    "MANAGEMENT FEE",                # advisory / management fee deducted
+    # ── Core account / money-market sweeps ──────────────────────────────────
+    # Fidelity auto-sweeps uninvested cash into a core money-market fund
+    # (SPAXX, FZDXX, FCASH, etc.).  Redemptions and purchases are purely
+    # internal liquidity movements — NOT external investor cash flows.
+    "REDEMPTION FROM CORE ACCOUNT",  # money-market liquidated to fund a trade
+    "PURCHASE INTO CORE ACCOUNT",    # excess cash swept into money-market
+    "CONTRIBUTION TO CORE ACCOUNT",  # alternate label for core-account sweep
+    "CORE ACCOUNT",                  # catch-all for any remaining core-acct label
     # ── Corporate actions ───────────────────────────────────────────────────
     "MANDATORY REORGANIZATION",
     "STOCK SPLIT",
@@ -3609,8 +3618,6 @@ _FIDELITY_INTERNAL_ACTIONS = frozenset({
     "CLOSING TRANSACTION",
     # ── Securities lending (Fidelity Fully Paid Lending program) ────────────
     # Bookkeeping entries that move shares in/out of loan; not cash flows.
-    # Hidden from the "captured cash flows" UI but retained in
-    # parse result `all_transactions` for full audit trail.
     "YOU LOANED",                    # "YOU LOANED SECURITIES"
     "LOAN RETURNED",                 # "LOAN RETURNED" / "LOAN RETURNED SECURITIES"
 })
