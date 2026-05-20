@@ -1242,20 +1242,6 @@
 
   <!-- ─── LEFT COLUMN ───────────────────────────────────────── -->
   <aside class="col-left">
-    <!-- Quick actions -->
-    <section class="panel" data-wid="quick-actions">
-      <header class="panel-head">
-        <span class="panel-title">Quick Actions</span>
-      </header>
-      <div class="panel-body">
-        <div class="quick-row">
-          <button class="quick-btn primary" data-action="brief">
-            <span class="qb-icon">⚡</span> Run Daily Brief
-          </button>
-        </div>
-      </div>
-    </section>
-
     <!-- Watchlist -->
     <section class="panel" data-wid="watchlist">
       <header class="panel-head">
@@ -1449,6 +1435,21 @@
       </div>
     </section>
 
+    <!-- Daily Brief — snappable, below Market Pulse -->
+    <section class="panel" data-wid="daily-brief" style="overflow:visible;">
+      <details open>
+        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+          <span class="panel-title">Daily Brief</span>
+          <span class="panel-badge tab-meta" id="brief-meta">—</span>
+          <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;font-size:9px;"
+            onclick="event.stopPropagation();triggerBrief();">📰 Run</button>
+          <span class="ac-chevron" style="margin-left:4px;">›</span>
+        </summary>
+        <div id="brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
+          <div class="tab-loading">Loading…</div>
+        </div>
+      </details>
+    </section>
 
   </aside>
 </main>
@@ -1461,38 +1462,21 @@
     <div class="tab-toolbar">
       <h2>Ideas &amp; Intelligence</h2>
     </div>
-    <div class="wide-grid-2">
 
-      <!-- Daily Brief -->
-      <div>
-        <section class="panel">
-          <header class="panel-head">
-            <span class="panel-title">Daily Brief</span>
-            <span class="panel-badge tab-meta" id="brief-meta">—</span>
-            <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;">📰 Run Daily Brief</button>
-          </header>
-          <div id="brief-content" class="tab-loading">Loading…</div>
-        </section>
-      </div>
+    <section class="panel">
+      <header class="panel-head">
+        <span class="panel-title">Market Intelligence</span>
+        <span class="panel-badge tab-meta" id="intel-meta">—</span>
+        <select id="intel-sector" style="background:var(--navy-mid);color:#334155;border:1px solid var(--panel-edge);border-radius:5px;padding:4px 8px;font-size:11px;margin-left:auto;">
+          <option>Tech</option><option>Energy</option><option>Healthcare</option>
+          <option>Financials</option><option>Consumer</option><option>Industrials</option>
+          <option>Materials</option><option>Real Estate</option><option>Best Mix</option>
+        </select>
+        <button id="run-intel-btn" class="tab-btn">🧠 Run</button>
+      </header>
+      <div id="intel-content" class="tab-loading">Loading…</div>
+    </section>
 
-      <!-- Intelligence -->
-      <div>
-        <section class="panel">
-          <header class="panel-head">
-            <span class="panel-title">Market Intelligence</span>
-            <span class="panel-badge tab-meta" id="intel-meta">—</span>
-            <select id="intel-sector" style="background:var(--navy-mid);color:#334155;border:1px solid var(--panel-edge);border-radius:5px;padding:4px 8px;font-size:11px;margin-left:auto;">
-              <option>Tech</option><option>Energy</option><option>Healthcare</option>
-              <option>Financials</option><option>Consumer</option><option>Industrials</option>
-              <option>Materials</option><option>Real Estate</option><option>Best Mix</option>
-            </select>
-            <button id="run-intel-btn" class="tab-btn">🧠 Run</button>
-          </header>
-          <div id="intel-content" class="tab-loading">Loading…</div>
-        </section>
-      </div>
-
-    </div>
   </div>
 </div><!-- #tab-ideas -->
 
@@ -2188,8 +2172,10 @@
     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
   const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
-  const fmtDate  = (iso) => iso ? new Date(iso).toLocaleDateString('en-US',
-    { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+  // All timestamps displayed in Pacific Time (US West Coast).
+  const _PT = { timeZone: 'America/Los_Angeles' };
+  const fmtDate  = (iso) => iso ? new Date(iso).toLocaleString('en-US',
+    { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
 
   // ── Simple markdown → HTML ───────────────────────────────────
   function renderMd(el, md) {
@@ -2287,6 +2273,7 @@
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
+    research:  () => loadBrief(),     // Brief is now on the Research tab
     ideas:     () => loadIdeasTab(),
     tracker:   () => loadTrackerTab(),
     fund:      () => loadFundTab(),
@@ -2307,12 +2294,11 @@
     l.addEventListener('click', () => showTab(l.dataset.tab));
   });
 
-  // ── Quick Actions ────────────────────────────────────────────
+  // ── Quick Actions (panel removed — kept for any remaining data-action buttons) ──
   document.querySelectorAll('.quick-btn[data-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       const a = btn.dataset.action;
-      if (a === 'brief')        { showTab('ideas');   setTimeout(triggerBrief,   300); }
-      else if (a === 'rebalance') { showTab('tracker'); }
+      if (a === 'rebalance') { showTab('tracker'); }
       else if (a === 'download')  { downloadPortfolio(); }
       else if (a === 'intelligence') { showTab('ideas'); setTimeout(triggerIntel, 300); }
       else if (a === 'tracker')   { showTab('tracker'); }
@@ -2683,10 +2669,9 @@
   }
 
   // ══════════════════════════════════════════════════════════════
-  // IDEAS TAB — Daily Brief + Intelligence
+  // IDEAS TAB — Market Intelligence only (Daily Brief is now on Research tab)
   // ══════════════════════════════════════════════════════════════
   async function loadIdeasTab() {
-    loadBrief();
     loadIntel();
   }
 
@@ -2718,7 +2703,7 @@
         () => loadBrief());
     } catch { btn.disabled=false; btn.textContent='📰 Run Daily Brief'; }
   }
-  document.getElementById('run-brief-btn')?.addEventListener('click', triggerBrief);
+  // run-brief-btn uses inline onclick (stopPropagation needed with <details> parent)
 
   async function loadIntel() {
     const el   = document.getElementById('intel-content');
@@ -3128,7 +3113,7 @@
         dayEl.innerHTML = '';
       }
     }
-    if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { ..._PT, hour: '2-digit', minute: '2-digit' }) + ' PT';
 
     const statCount   = document.getElementById('gp-wl-stat-count');
     const statAccts   = document.getElementById('gp-wl-stat-accts');
@@ -4235,7 +4220,7 @@
             + ' (' + bdata.year + (bdata.notes ? ' · ' + bdata.notes : '') + ')';
           if (eblD && bdata.updated_at) {
             const dt = new Date(bdata.updated_at);
-            eblD.textContent = 'saved ' + dt.toLocaleDateString();
+            eblD.textContent = 'saved ' + dt.toLocaleDateString('en-US', _PT);
           }
         })
         .catch(() => {});
@@ -5385,7 +5370,7 @@
       const data = await r.json();
       if (!data.ok) throw new Error(data.detail || 'Rebalance failed');
       renderRebalanceResult(data, fundId);
-      if (status) { status.style.color='var(--green)'; status.textContent='✓ Done — ' + new Date(data.run_at).toLocaleString(); }
+      if (status) { status.style.color='var(--green)'; status.textContent='✓ Done — ' + new Date(data.run_at).toLocaleString('en-US', _PT); }
     } catch(e) {
       if (status) { status.style.color='var(--red)'; status.textContent='❌ ' + e.message; }
     } finally {
@@ -5448,7 +5433,7 @@
     const elResult = document.getElementById('acd-rebalance-result');
     if (!elResult) return;
 
-    const runDate = data.run_at ? new Date(data.run_at).toLocaleString() : '—';
+    const runDate = data.run_at ? new Date(data.run_at).toLocaleString('en-US', _PT) : '—';
     const evImprove = (data.suggested_ev || 0) - (data.current_ev || 0);
 
     const rowsHtml = (data.rows || []).slice().sort(function(a,b){ return (b.suggested_pct||0)-(a.suggested_pct||0); }).map(function(row) {
@@ -7892,7 +7877,7 @@
     const sent    = (res.sentiment || 'NEUTRAL').toUpperCase();
     const sentCls = sent === 'BULLISH' ? 'low' : sent === 'BEARISH' ? 'high' : 'mid';
     const md      = res.markdown || res.summary || 'No detail available.';
-    const scannedAt = res._scanned_at ? new Date(res._scanned_at).toLocaleString() : '';
+    const scannedAt = res._scanned_at ? new Date(res._scanned_at).toLocaleString('en-US', _PT) + ' PT' : '';
 
     // Convert markdown to simple HTML (bold, headers, lists, links)
     function _mdToHtml(text) {

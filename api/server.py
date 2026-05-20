@@ -18,9 +18,22 @@ import shutil
 import tempfile
 import threading
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
+
+# Pacific Time helper (PDT = UTC-7; switches to PST = UTC-8 in winter —
+# timedelta approach is close enough for display purposes; use zoneinfo/pytz
+# for DST-exact scheduling if ever needed).
+_PACIFIC = timezone(timedelta(hours=-7))
+
+def _now_pacific() -> datetime:
+    """Return current datetime in US/Pacific (PDT, UTC-7)."""
+    return datetime.now(_PACIFIC)
+
+def _pacific_time_str() -> str:
+    """HH:MM PT — for user-facing 'as of' display."""
+    return _now_pacific().strftime("%H:%M PT")
 
 import csv
 import io
@@ -2766,7 +2779,7 @@ def lp_me_positions(request: Request):
             "total_market_value": 0,
             "account_count":      len(fund_map),
             "funds":              all_funds_meta,
-            "as_of":              datetime.utcnow().strftime("%H:%M UTC"),
+            "as_of":              _pacific_time_str(),
         }
 
     symbols = list({r["symbol"] for r in rows if r["symbol"]})
@@ -5886,7 +5899,8 @@ def _run_daily_brief(job_id: str) -> None:
             try:
                 _kv_put("daily_brief.latest", {
                     **result,
-                    "completed_at": datetime.utcnow().isoformat() + "Z",
+                    "completed_at": _now_pacific().isoformat(),
+                    "generated_at": _now_pacific().isoformat(),
                 })
             except Exception as _e:
                 print(f"[daily_brief] kv_put failed: {_e}")
@@ -5902,7 +5916,7 @@ def _run_daily_brief(job_id: str) -> None:
 def start_daily_brief(background_tasks: BackgroundTasks):
     """Start a Goldman-style PM morning brief (Grok 4.30-beta w/ live search)."""
     job_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = _now_pacific().isoformat()
     with _bjobs_lock:
         _bjobs[job_id] = {
             "job_id": job_id,
@@ -6431,10 +6445,9 @@ def _get_automation_settings() -> dict:
         result[job] = {**defaults, **(saved.get(job) or {})}
     return result
 
-def _secs_until(hour: int, minute: int, pacific_offset) -> float:
+def _secs_until(hour: int, minute: int, pacific_offset=None) -> float:
     """Seconds until the next occurrence of HH:MM Pacific."""
-    from datetime import timezone, timedelta
-    now = datetime.now(timezone(pacific_offset))
+    now = _now_pacific()
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if now >= target:
         target += timedelta(days=1)
@@ -6442,14 +6455,12 @@ def _secs_until(hour: int, minute: int, pacific_offset) -> float:
 
 @app.get("/api/automation/settings")
 def get_automation_settings_endpoint():
-    from datetime import timezone, timedelta
-    PACIFIC_OFFSET = timedelta(hours=-7)
     settings = _get_automation_settings()
-    now_pac = datetime.now(timezone(PACIFIC_OFFSET))
+    now_pac = _now_pacific()
     # Annotate each job with seconds_until_next so the UI can show "next in Xh"
     for job, cfg in settings.items():
         if cfg["enabled"]:
-            secs = _secs_until(cfg["hour"], cfg["minute"], PACIFIC_OFFSET)
+            secs = _secs_until(cfg["hour"], cfg["minute"])
             cfg["next_run_secs"] = round(secs)
         else:
             cfg["next_run_secs"] = None
@@ -6477,8 +6488,6 @@ async def save_automation_settings_endpoint(request: Request):
 def _auto_daily_brief_worker() -> None:
     """Daemon thread: fires run_daily_brief() daily at the configured Pacific time."""
     import time as _time
-    from datetime import timezone, timedelta
-    PACIFIC_OFFSET = timedelta(hours=-7)  # PDT; -8 in PST (close enough for scheduling)
     while True:
         try:
             cfg = _get_automation_settings().get("daily_brief", _DEFAULT_AUTOMATION["daily_brief"])
@@ -6488,7 +6497,7 @@ def _auto_daily_brief_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            wait_secs = _secs_until(h, m, PACIFIC_OFFSET)
+            wait_secs = _secs_until(h, m)
             print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
             _time.sleep(wait_secs)
             # Re-check enabled after waking (user may have disabled while sleeping)
@@ -6518,8 +6527,6 @@ threading.Thread(target=_auto_daily_brief_worker, daemon=True, name="daily-brief
 def _auto_market_pulse_worker() -> None:
     """Daemon: scans all saved-report tickers at the configured Pacific time."""
     import time as _time
-    from datetime import timezone, timedelta
-    PACIFIC_OFFSET = timedelta(hours=-7)
     while True:
         try:
             cfg = _get_automation_settings().get("market_pulse", _DEFAULT_AUTOMATION["market_pulse"])
@@ -6528,7 +6535,7 @@ def _auto_market_pulse_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            wait_secs = _secs_until(h, m, PACIFIC_OFFSET)
+            wait_secs = _secs_until(h, m)
             print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
             _time.sleep(wait_secs)
             cfg2 = _get_automation_settings().get("market_pulse", {})
