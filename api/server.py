@@ -667,13 +667,25 @@ def _parse_balance_history_csv(text: str) -> list:
                 pass
         elif '-' in clean:
             dash = clean.split('-', 1)
-            mon_str = dash[0].lower()[:3]
-            month = MONTH_MAP.get(mon_str)
-            try:
-                yr_short = int(dash[1])
-                year = 2000 + yr_short if yr_short < 50 else 1900 + yr_short
-            except (ValueError, IndexError):
-                pass
+            # Support both "Apr-26" (Mon-YY) and "25-Dec" (YY-Mon) formats
+            if dash[0].lower()[:3] in MONTH_MAP:
+                # "Apr-26" format: month name first
+                mon_str = dash[0].lower()[:3]
+                month = MONTH_MAP.get(mon_str)
+                try:
+                    yr_short = int(dash[1])
+                    year = 2000 + yr_short if yr_short < 50 else 1900 + yr_short
+                except (ValueError, IndexError):
+                    pass
+            elif dash[1].lower()[:3] in MONTH_MAP:
+                # "25-Dec" format: 2-digit year first, then month name
+                mon_str = dash[1].lower()[:3]
+                month = MONTH_MAP.get(mon_str)
+                try:
+                    yr_short = int(dash[0])
+                    year = 2000 + yr_short if yr_short < 50 else 1900 + yr_short
+                except (ValueError, IndexError):
+                    pass
 
         if month is None or year is None:
             continue
