@@ -4692,7 +4692,7 @@
             </summary>
             <div style="padding:14px;position:relative;">
               <canvas id="acd-alltime-canvas" style="width:100%;height:260px;display:block;"></canvas>
-              <div id="acd-alltime-tooltip" style="display:none;position:absolute;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+              <div id="acd-alltime-tooltip" style="display:none;position:fixed;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.18);"></div>
             </div>
           </details>
         </section>
@@ -4933,12 +4933,17 @@
       }
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
+      // Viewport-relative positioning (tooltip is position:fixed)
       const ttW = tooltip.offsetWidth  || 240;
       const ttH = tooltip.offsetHeight || 160;
-      const curX = e.clientX - rect.left;
-      const curY = e.clientY - rect.top;
-      const tx = (curX + 12 + ttW > cssW) ? Math.max(0, curX - ttW - 8) : curX + 12;
-      const ty = (curY - 20 + ttH > cssH) ? Math.max(0, curY - ttH - 4) : Math.max(0, curY - 20);
+      const vW  = window.innerWidth;
+      const vH  = window.innerHeight;
+      let tx = e.clientX + 14;
+      let ty = e.clientY - 20;
+      if (tx + ttW > vW - 8)  tx = e.clientX - ttW - 10;
+      if (ty + ttH > vH - 8)  ty = e.clientY - ttH - 4;
+      tx = Math.max(8, tx);
+      ty = Math.max(8, ty);
       tooltip.style.left = tx + 'px';
       tooltip.style.top  = ty + 'px';
     };
@@ -5881,7 +5886,7 @@
           </summary>
           <div style="position:relative;padding:0 12px 8px;">
             <canvas id="acd-balance-canvas" style="width:100%;height:220px;display:block;"></canvas>
-            <div id="acd-bar-tooltip" style="display:none;position:absolute;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>
+            <div id="acd-bar-tooltip" style="display:none;position:fixed;background:#fff;border:1px solid rgba(91,184,212,0.25);border-radius:8px;padding:10px 14px;font-size:11px;color:#1e293b;pointer-events:none;max-width:260px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.18);"></div>
           </div>
           <div style="display:flex;gap:18px;justify-content:center;padding:4px 0 10px;font-size:11px;">
             <span style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:12px;height:12px;background:#1a7f40;border-radius:2px;"></span> Portfolio gain</span>
@@ -6085,12 +6090,18 @@
       }
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
+      // Use viewport-relative positioning (tooltip is position:fixed) so the
+      // card can never bleed off the bottom or right edge of the screen.
       const ttW = tooltip.offsetWidth  || 260;
       const ttH = tooltip.offsetHeight || 200;
-      const curX = e.clientX - rect.left;
-      const curY = e.clientY - rect.top;
-      const tx = (curX + 12 + ttW > cssW) ? Math.max(0, curX - ttW - 8) : curX + 12;
-      const ty = (curY - 20 + ttH > cssH) ? Math.max(0, curY - ttH - 4) : Math.max(0, curY - 20);
+      const vW  = window.innerWidth;
+      const vH  = window.innerHeight;
+      let tx = e.clientX + 14;
+      let ty = e.clientY - 20;
+      if (tx + ttW > vW - 8)  tx = e.clientX - ttW - 10;  // flip left
+      if (ty + ttH > vH - 8)  ty = e.clientY - ttH - 4;   // flip up
+      tx = Math.max(8, tx);
+      ty = Math.max(8, ty);
       tooltip.style.left = tx + 'px';
       tooltip.style.top  = ty + 'px';
     };
