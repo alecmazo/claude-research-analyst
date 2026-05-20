@@ -3065,7 +3065,17 @@
     // Load positions and chart in parallel on first open
     await Promise.all([
       _refreshGPPositions(),
-      _gpChartLoaded ? Promise.resolve() : _loadPortfolioChart('ytd').then(function () { _gpChartLoaded = true; }),
+      // Load chart if never loaded, or if data exists but SVG is blank (e.g. was drawn at 0-width)
+      (function () {
+        const svg = document.getElementById('gp-chart-svg');
+        const svgEmpty = !svg || !svg.innerHTML.trim();
+        if (_gpChartLoaded && _gpChartData && svgEmpty) {
+          // Has data but SVG blank — just redraw with correct dimensions
+          setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
+          return Promise.resolve();
+        }
+        return _gpChartLoaded ? Promise.resolve() : _loadPortfolioChart('ytd').then(function () { _gpChartLoaded = true; });
+      }()),
     ]);
     // Auto-refresh positions every 30 seconds; chart refreshes only on period change
     if (_gpPosTimer) clearInterval(_gpPosTimer);
@@ -3106,9 +3116,15 @@
     }
     if (loading) loading.style.display = 'none';
 
-    const rect = svg.getBoundingClientRect();
-    const W = (rect.width  > 0 ? rect.width  : svg.parentElement?.getBoundingClientRect().width  || 800);
-    const H = (rect.height > 0 ? rect.height : svg.parentElement?.getBoundingClientRect().height || 110);
+    // SVGs with width:100% CSS return 0 from getBoundingClientRect in some browsers.
+    // Read the container's offsetWidth instead — it's always correct after layout.
+    const wrap = document.getElementById('gp-chart-wrap');
+    const W = (wrap ? wrap.offsetWidth : 0) || 800;
+    const H = (wrap ? wrap.offsetHeight : 0) || 170;
+    // Stamp explicit dimensions so the SVG renders at the right size
+    svg.setAttribute('width',   W);
+    svg.setAttribute('height',  H);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     const PAD_L = 0, PAD_R = 0, PAD_T = 12, PAD_B = 2;
     const W2 = W - PAD_L - PAD_R;
     const H2 = H - PAD_T - PAD_B;
@@ -3185,8 +3201,9 @@
       const r = await window.dgaFetch('/api/v2/gp/portfolio-chart?period=' + encodeURIComponent(_gpChartPeriod));
       if (!r.ok) throw new Error('chart ' + r.status);
       _gpChartData = await r.json();
-      // Defer draw by one rAF so the SVG element has been laid out and has real dimensions
-      requestAnimationFrame(function () { _drawPortfolioChart(_gpChartData); });
+      // setTimeout(0) defers past the current rendering cycle so the tab is
+      // fully painted and offsetWidth is non-zero before we draw.
+      setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
     } catch (e) {
       console.warn('[gp-chart]', e);
       if (loading) loading.textContent = 'Chart unavailable';
@@ -3198,15 +3215,19 @@
     document.querySelectorAll('.gp-chart-period-btn').forEach(function (btn) {
       btn.addEventListener('click', function () { _loadPortfolioChart(btn.dataset.period); });
     });
-    // Redraw chart when the collapsible strip is opened (SVG has 0 size while collapsed)
+    // Redraw chart when the collapsible strip is opened (offsetWidth is 0 while collapsed)
     const chartStrip = document.querySelector('.fid-chart-strip');
     if (chartStrip) {
       chartStrip.addEventListener('toggle', function () {
         if (chartStrip.open && _gpChartData) {
-          requestAnimationFrame(function () { _drawPortfolioChart(_gpChartData); });
+          setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 0);
         }
       });
     }
+    // Redraw on window resize so the chart fills the new width
+    window.addEventListener('resize', function () {
+      if (_gpChartData) setTimeout(function () { _drawPortfolioChart(_gpChartData); }, 50);
+    });
   });
 
   // ── Fidelity-style positions renderer ────────────────────────────────────

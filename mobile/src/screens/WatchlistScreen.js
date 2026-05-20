@@ -65,7 +65,20 @@ function fmtAbs(v) {
 }
 
 function fmtTime() {
-  return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  // Always display in US Pacific time to match the web dashboard
+  return new Date().toLocaleTimeString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  }) + ' PT';
+}
+
+// Full dollar format — never abbreviates (used for gain/loss amounts)
+function fmtUSDFull(v) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v);
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '−' : '';
+  return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ── Position row ──────────────────────────────────────────────────────────────
@@ -82,15 +95,17 @@ function PositionRow({ item, onPress }) {
   const gainColor = item.unrealized_gain != null
     ? (item.unrealized_gain >= 0 ? '#4ade80' : '#f87171')
     : GREY_DIM;
+  // Use full dollar format (not abbreviated) for gains to match web ui84 behaviour
   const gainTxt = item.unrealized_gain != null
-    ? (item.unrealized_gain >= 0 ? '+' : '') + fmtUSD(item.unrealized_gain, true)
+    ? (item.unrealized_gain >= 0 ? '+' : '') + fmtUSDFull(item.unrealized_gain)
       + (item.unrealized_gain_pct != null
           ? ' (' + (item.unrealized_gain_pct >= 0 ? '+' : '') + item.unrealized_gain_pct.toFixed(1) + '%)'
           : '')
     : null;
 
-  const wt = item.market_weight_pct != null
-    ? item.market_weight_pct.toFixed(1) + '% of acct'
+  // _acct_weight_pct is computed per-account in fetchPositions; fallback to global field
+  const wt = (item._acct_weight_pct ?? item.market_weight_pct) != null
+    ? (item._acct_weight_pct ?? item.market_weight_pct).toFixed(1) + '% of acct'
     : null;
 
   return (
@@ -130,7 +145,7 @@ function AccountSection({
 }) {
   const isFund    = sourceType === 'lp_fund';
   const chgColor  = dayValid ? (daySum >= 0 ? '#4ade80' : '#f87171') : GREY;
-  const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSD(daySum, true) : null;
+  const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSDFull(daySum) : null;
   const showStake = isFund && stakePct != null && stakePct < 99.99;
 
   return (
@@ -341,6 +356,17 @@ export default function WatchlistScreen({ navigation }) {
         opens[k] = k in savedOpen ? savedOpen[k] : true;
       });
 
+      // Recompute each position's weight relative to its own account (not global AUM)
+      Object.values(map).forEach(grp => {
+        const groupTotal = grp.navSum;
+        grp.positions = grp.positions.map(p => ({
+          ...p,
+          _acct_weight_pct: groupTotal > 0 && p.market_value != null
+            ? (p.market_value / groupTotal) * 100
+            : null,
+        }));
+      });
+
       // Compute breakdown totals
       let fundTotal = 0, acctTotal = 0;
       Object.values(map).forEach(grp => {
@@ -382,7 +408,7 @@ export default function WatchlistScreen({ navigation }) {
   const dayUp     = (dayChange.abs ?? 0) >= 0;
   const dayColor  = dayUp ? '#4ade80' : '#f87171';
   const dayAbsTxt = dayChange.abs != null
-    ? (dayUp ? '+' : '−') + '$' + Math.abs(dayChange.abs).toLocaleString('en-US', { maximumFractionDigits: 0 })
+    ? (dayUp ? '+' : '−') + '$' + Math.abs(dayChange.abs).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : null;
   const dayPctTxt = dayChange.pct != null
     ? (dayUp ? '+' : '−') + Math.abs(dayChange.pct).toFixed(2) + '%'
