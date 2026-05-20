@@ -7,4 +7,5 @@ psycopg2-binary>=2.9.0
 yfinance>=0.2.40
 openpyxl>=3.1.0
 weasyprint>=60.0
+pyxirr>=0.10.0
 

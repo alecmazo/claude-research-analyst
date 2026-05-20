@@ -2696,14 +2696,14 @@
       }
       el.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>Date</th><th>NAV</th><th>YTD</th><th>TWRR</th><th>Holdings</th></tr></thead>
+          <thead><tr><th>Date</th><th>NAV</th><th>Portfolio Return</th><th>Personal Return</th><th>Holdings</th></tr></thead>
           <tbody>
             ${snaps.slice(0,15).map(s => `
               <tr>
                 <td>${fmtDate(s.generated_at || s.created_at)}</td>
                 <td class="tabular">${s.total_market_value != null ? fmtUSD(s.total_market_value) : '—'}</td>
-                <td class="tabular ${cssClass(s.ytd_pct)}">${fmtPct(s.ytd_pct)}</td>
-                <td class="tabular ${cssClass(s.twrr)}">${fmtPct(s.twrr)}</td>
+                <td class="tabular ${cssClass(s.twrr ?? s.ytd_pct)}" title="Time-Weighted Return (TWRR)">${fmtPct(s.twrr ?? s.ytd_pct)}</td>
+                <td class="tabular ${cssClass(s.xirr)}" title="Your Personal Return (XIRR)">${fmtPct(s.xirr)}</td>
                 <td>${s.n_holdings || s.holdings?.length || '—'}</td>
               </tr>`).join('')}
           </tbody>
@@ -4924,8 +4924,10 @@
                 <div id="acd-alpha-val" style="font-weight:700;color:var(--mid);">—</div>
                 <div id="acd-alpha-sub" style="font-size:9px;color:var(--dim);">vs ${_acctBenchKey}</div>
               </td>
-              <td ${lci}>MOD. DIETZ</td>
+              <td ${lci} style="white-space:nowrap;">PORTFOLIO RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Time-Weighted · benchmark comparable</div></td>
               <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-md-val">—</td>
+              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Based on when your money was invested</div></td>
+              <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-xirr-val">—</td>
             </tr>
           </tbody>
         </table>
@@ -5236,8 +5238,12 @@
 
     const mc    = data.monthly_chart;
     const spy   = data.spy_monthly;
-    const mdPct = data.md_return_pct != null ? data.md_return_pct
-                : (cachedYtdPct != null ? cachedYtdPct : null);
+    // Portfolio Return: prefer TWRR (benchmark-comparable), fall back to MD when unavailable
+    const twrrPct = data.twrr_return_pct != null ? data.twrr_return_pct : null;
+    const mdPct   = twrrPct != null ? twrrPct
+                  : (data.md_return_pct != null ? data.md_return_pct
+                  : (cachedYtdPct != null ? cachedYtdPct : null));
+    const xirrPct = data.xirr_return_pct != null ? data.xirr_return_pct : null;
     const spyPts = spy && spy.points ? spy.points : [];
     const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
     const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
@@ -5284,7 +5290,25 @@
     const benchVal = document.getElementById('acd-bench-val');
     if (benchVal) { benchVal.textContent = fmtP(spyPct); benchVal.style.cssText = 'font-weight:700;' + cls(spyPct); }
     const mdEl = document.getElementById('acd-md-val');
-    if (mdEl) { mdEl.textContent = fmtP(mdPct); mdEl.style.cssText = 'font-weight:700;' + cls(mdPct); }
+    if (mdEl) {
+      mdEl.textContent = fmtP(mdPct);
+      mdEl.style.cssText = 'font-weight:700;' + cls(mdPct);
+      // Show a subtle note when we're showing MD fallback instead of true TWRR
+      if (twrrPct == null && mdPct != null) {
+        mdEl.title = 'Modified Dietz (TWRR unavailable — upload monthly performance CSV for exact figure)';
+      }
+    }
+    const xirrEl = document.getElementById('acd-xirr-val');
+    if (xirrEl) {
+      if (xirrPct != null) {
+        xirrEl.textContent = fmtP(xirrPct);
+        xirrEl.style.cssText = 'font-weight:700;' + cls(xirrPct);
+        xirrEl.title = 'XIRR / Money-Weighted Return — reflects the actual timing of your cash in and out';
+      } else {
+        xirrEl.textContent = '—';
+        xirrEl.title = 'Personal Return requires cash flow history (activity CSV)';
+      }
+    }
 
     // Wire benchmark selector (embedded in the compact table)
     const sel = document.getElementById('acd-bench-select');

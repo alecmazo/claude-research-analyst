@@ -3877,6 +3877,98 @@ def upload_account_history(
     }
 
 
+def _compute_xirr(
+    begin_value: float,
+    end_value:   float,
+    flows:       list,
+    period_start,
+    today_dt,
+) -> float | None:
+    """Compute annualised XIRR (Money-Weighted Rate of Return).
+
+    Sign convention (investor's perspective):
+      • Negative = cash OUT of the investor's pocket (initial stake, deposits)
+      • Positive = cash INTO the investor's pocket (withdrawals, ending value)
+
+    Uses pyxirr when available; falls back to a Newton-Raphson solver so the
+    feature degrades gracefully rather than raising an import error on first deploy.
+
+    Returns annualised rate as a percentage (e.g. 12.34 for 12.34%) or None.
+    """
+    from datetime import date as _date
+
+    # Build dated cash-flow list
+    # begin_value: investor "paid" this on day 0 → negative
+    # flows: deposits are positive in our convention (money went INTO account)
+    #        so investor paid them → negative; withdrawals are negative in our
+    #        convention (money came OUT of account) → positive for investor.
+    #        Flipping sign: xirr_amount = -flow["amount"]
+    # end_value: investor "receives" this today → positive
+
+    start_date = period_start.date() if hasattr(period_start, "date") else period_start
+    end_date   = today_dt.date()     if hasattr(today_dt,     "date") else today_dt
+
+    cf_dates   = [start_date]
+    cf_amounts = [-float(begin_value)]
+
+    for f in flows:
+        try:
+            fd  = datetime.strptime(f["date"], "%Y-%m-%d").date()
+            amt = float(f["amount"])
+            if fd < start_date or fd > end_date:
+                continue
+            cf_dates.append(fd)
+            cf_amounts.append(-amt)   # flip sign: deposit → outflow for investor
+        except Exception:
+            continue
+
+    cf_dates.append(end_date)
+    cf_amounts.append(float(end_value))
+
+    # Need at least one sign change for a meaningful IRR
+    if not any(a > 0 for a in cf_amounts) or not any(a < 0 for a in cf_amounts):
+        return None
+
+    # ── Try pyxirr first ────────────────────────────────────────────────────
+    try:
+        from pyxirr import xirr as _pyxirr
+        result = _pyxirr(cf_dates, cf_amounts)
+        if result is not None and abs(result) < 100:   # sanity guard
+            return round(float(result) * 100.0, 4)
+    except ImportError:
+        pass  # fall through to Newton-Raphson
+    except Exception:
+        pass
+
+    # ── Newton-Raphson fallback ─────────────────────────────────────────────
+    def _npv(rate, dates, amounts):
+        t0 = dates[0]
+        npv = 0.0
+        for d, a in zip(dates, amounts):
+            t = (d - t0).days / 365.0
+            npv += a / ((1.0 + rate) ** t)
+        return npv
+
+    try:
+        lo, hi = -0.9999, 10.0
+        for _ in range(200):
+            mid = (lo + hi) / 2.0
+            v   = _npv(mid, cf_dates, cf_amounts)
+            if abs(v) < 0.01:
+                break
+            if v > 0:
+                lo = mid
+            else:
+                hi = mid
+        rate = (lo + hi) / 2.0
+        if abs(rate) < 100:
+            return round(rate * 100.0, 4)
+    except Exception:
+        pass
+
+    return None
+
+
 def _compute_twrr(
     monthly_data: list,
     flows: list,
@@ -4074,6 +4166,15 @@ def compute_unified_ytd(
         monthly_chart_error = str(mc_exc)
         print(f"⚠️  Monthly chart failed: {mc_exc}")
 
+    # ── XIRR / Money-Weighted Return (Personal Rate of Return) ────────────────
+    xirr_return_pct = None
+    try:
+        xirr_return_pct = _compute_xirr(
+            begin_value, end_value, flows, period_start, today_dt
+        )
+    except Exception as xirr_exc:  # noqa: BLE001
+        print(f"⚠️  XIRR failed: {xirr_exc}")
+
     # ── Persist the MD/TWRR result + attribution + a snapshot for history ─────
     # `account_history` always holds the most-recent run (used by the YTD
     # detail view).  `ytd_snapshots` is an append-only list (cap 50) so the
@@ -4093,7 +4194,8 @@ def compute_unified_ytd(
         "trade_count":         int(attr.get("trades_parsed", 0)),
         "dividend_count":      int(attr.get("dividends_parsed", 0)),
         "md_return_pct":       float(md_return_pct),
-        "twrr_return_pct":     float(twrr_return_pct) if twrr_return_pct is not None else None,
+        "twrr_return_pct":     float(twrr_return_pct)   if twrr_return_pct   is not None else None,
+        "xirr_return_pct":     float(xirr_return_pct)   if xirr_return_pct   is not None else None,
         "attribution":         attr.get("attribution", []),
         "monthly_chart":       monthly_chart,
         "monthly_chart_error": monthly_chart_error,
@@ -4175,6 +4277,7 @@ def compute_unified_ytd(
         "snapshot_id":       snapshot_id,
         "md_return_pct":     md_return_pct,
         "twrr_return_pct":   twrr_return_pct,
+        "xirr_return_pct":   xirr_return_pct,
         "begin_value":       round(float(begin_value), 2),
         "end_value":         round(end_value, 2),
         "emv_source":        "positions_csv",
