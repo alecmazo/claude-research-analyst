@@ -6697,6 +6697,38 @@ def _ensure_balance_history_table(conn) -> None:
     conn.commit()
 
 
+def _ensure_ytd_baseline_table(conn) -> None:
+    """Store the Jan 1 beginning balance + full historical cash-flow list for
+    each managed account.  After a merge run the user can set this once, and
+    future YTD uploads will auto-read the saved jan1_balance so they never
+    have to type it again.
+
+    Schema
+    ------
+    fund_id           UUID PK / FK to funds
+    year              SMALLINT  — e.g. 2025 (the YTD year this baseline applies to)
+    jan1_balance      NUMERIC   — portfolio value on Jan 1 of `year`
+    historical_flows  JSONB     — full cash-flow list [{"date","amount","action"}, ...]
+    notes             TEXT      — optional free-text label (e.g. "Post-merge baseline")
+    created_at        TIMESTAMPTZ
+    updated_at        TIMESTAMPTZ
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS account_ytd_baseline (
+                fund_id          UUID        NOT NULL,
+                year             SMALLINT    NOT NULL,
+                jan1_balance     NUMERIC(18,4) NOT NULL,
+                historical_flows JSONB       NOT NULL DEFAULT '[]',
+                notes            TEXT,
+                created_at       TIMESTAMPTZ DEFAULT now(),
+                updated_at       TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (fund_id, year)
+            )
+        """)
+    conn.commit()
+
+
 def _ensure_lp_creds_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("""
@@ -7146,6 +7178,7 @@ def _apply_self_migrations() -> None:
 
         _step("fix_fund_type_column",       lambda: _fix_fund_type_column(conn))
         _step("balance_history_table",      lambda: _ensure_balance_history_table(conn))
+        _step("ytd_baseline_table",         lambda: _ensure_ytd_baseline_table(conn))
         _step("lp_creds_table",             lambda: _ensure_lp_creds_table(conn))
         _step("fund_display_settings",      lambda: _ensure_fund_display_settings_table(conn))
         _step("kv_store_table",             lambda: _ensure_kv_store_table(conn))
@@ -10179,6 +10212,28 @@ async def fund_account_ytd_run(
         except Exception as exc:
             raise HTTPException(422, f"Could not read monthly performance file: {exc}")
 
+    # ── Auto-fill begin_value from stored baseline when not supplied ───────────
+    baseline_used = False
+    if begin_value is None:
+        import json as _json_bv
+        _bv_conn = _fund_conn()
+        try:
+            with _bv_conn.cursor(cursor_factory=_RealDictCursor) as _bv_cur:
+                _bv_fid = _resolve_fund_id(_bv_cur, fund_id)
+                _bv_cur.execute("""
+                    SELECT jan1_balance FROM account_ytd_baseline
+                     WHERE fund_id = %s
+                     ORDER BY year DESC LIMIT 1
+                """, (_bv_fid,))
+                _bv_row = _bv_cur.fetchone()
+                if _bv_row:
+                    begin_value  = float(_bv_row["jan1_balance"])
+                    baseline_used = True
+        except Exception:
+            pass   # table may not exist yet; non-fatal
+        finally:
+            _bv_conn.close()
+
     try:
         result = analyst.compute_unified_ytd(
             pos_text, act_text, begin_value, monthly_perf_text=mp_text,
@@ -10333,6 +10388,7 @@ async def fund_account_ytd_run(
 
     result["positions_sync_ok"]  = _pos_sync_ok
     result["positions_sync_msg"] = _pos_sync_msg
+    result["baseline_used"]      = baseline_used   # True when jan1_balance was auto-read from DB
     return result
 
 
@@ -10520,6 +10576,124 @@ async def fund_purge(fund_id: str, request: Request):
 # ---------------------------------------------------------------------------
 # Merge two balance-history CSVs → download combined CSV
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# YTD Baseline — save / retrieve per-account Jan-1 starting balance
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fund/account/{fund_id}/set-ytd-baseline")
+async def set_ytd_baseline(
+    fund_id:  str,
+    request:  Request,
+    year:     int    = Form(...),
+    jan1_balance: float = Form(...),
+    flows_json:   str  = Form("[]"),   # JSON-encoded list of cash-flow dicts
+    notes:    str      = Form(""),
+):
+    """Store (or overwrite) the Jan 1 beginning balance and historical cash
+    flows for a managed account for a given year.
+
+    After the first merge run the user clicks "Set as YTD Baseline" in the
+    UI.  The endpoint stores the data so that future YTD uploads can auto-fill
+    the beginning balance without the user typing it each time.
+    """
+    _require_fund_token(request)
+    import json as _json
+    try:
+        flows = _json.loads(flows_json)
+        if not isinstance(flows, list):
+            raise ValueError("flows_json must be a JSON array")
+    except Exception as exc:
+        raise HTTPException(422, f"Invalid flows_json: {exc}")
+
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            _ensure_ytd_baseline_table(conn)   # idempotent — creates if missing
+            cur.execute("""
+                INSERT INTO account_ytd_baseline
+                       (fund_id, year, jan1_balance, historical_flows, notes, created_at, updated_at)
+                VALUES (%s, %s, %s, %s::jsonb, %s, now(), now())
+                ON CONFLICT (fund_id, year) DO UPDATE
+                   SET jan1_balance     = EXCLUDED.jan1_balance,
+                       historical_flows = EXCLUDED.historical_flows,
+                       notes            = EXCLUDED.notes,
+                       updated_at       = now()
+            """, (fid, year, jan1_balance, _json.dumps(flows), notes.strip() or None))
+        conn.commit()
+    except Exception as exc:
+        raise HTTPException(500, f"Could not save YTD baseline: {exc}")
+    finally:
+        conn.close()
+
+    return {
+        "ok":           True,
+        "fund_id":      fund_id,
+        "year":         year,
+        "jan1_balance": jan1_balance,
+        "flows_stored": len(flows),
+        "notes":        notes.strip() or None,
+    }
+
+
+@app.get("/api/fund/account/{fund_id}/ytd-baseline")
+async def get_ytd_baseline(
+    fund_id: str,
+    request: Request,
+    year:    int | None = None,
+):
+    """Return the stored YTD baseline for a managed account.
+
+    If `year` is omitted, returns the most-recent year stored.
+    Returns 404 if no baseline has been saved yet.
+    """
+    _require_fund_token(request)
+    import json as _json
+    conn = _fund_conn()
+    try:
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            fid = _resolve_fund_id(cur, fund_id)
+            if year:
+                cur.execute("""
+                    SELECT year, jan1_balance, historical_flows, notes, updated_at
+                      FROM account_ytd_baseline
+                     WHERE fund_id = %s AND year = %s
+                """, (fid, year))
+            else:
+                cur.execute("""
+                    SELECT year, jan1_balance, historical_flows, notes, updated_at
+                      FROM account_ytd_baseline
+                     WHERE fund_id = %s
+                     ORDER BY year DESC
+                     LIMIT 1
+                """, (fid,))
+            row = cur.fetchone()
+    except Exception as exc:
+        raise HTTPException(500, f"Could not read YTD baseline: {exc}")
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(404, "No YTD baseline stored for this account.")
+
+    flows = row["historical_flows"]
+    if isinstance(flows, str):
+        try:
+            flows = _json.loads(flows)
+        except Exception:
+            flows = []
+
+    return {
+        "ok":           True,
+        "fund_id":      fund_id,
+        "year":         row["year"],
+        "jan1_balance": float(row["jan1_balance"]),
+        "flows":        flows,
+        "notes":        row["notes"],
+        "updated_at":   row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
 
 @app.post("/api/fund/merge-balance-history")
 async def merge_balance_history(

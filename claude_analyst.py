@@ -3541,6 +3541,27 @@ def compute_monthly_ytd_chart(
 # external cash flow (deposit or withdrawal).  This captures transfers in/out,
 # credit-card payments, ACH, wire, journal entries, etc. without needing an
 # explicit allowlist of every possible Fidelity action string.
+# ── Transfer-in keywords: ACATS / journal entries that represent assets moving
+# between custodians or accounts — NOT external investor cash flows.  These
+# should appear in all_transactions (for the activity log) but must be excluded
+# from the flows list so they don't inflate or deflate XIRR / TWRR.
+# We flag them separately so the UI can show them with an explanatory label.
+_FIDELITY_TRANSFER_ACTIONS = frozenset({
+    "TRANSFERRED FROM",           # ACATS or internal transfer received
+    "TRANSFERRED TO",             # ACATS or internal transfer sent
+    "JOURNALED FROM",             # Fidelity internal journal (source side)
+    "JOURNALED TO",               # Fidelity internal journal (dest side)
+    "JOURNAL",                    # generic journal entry
+    "ACATS TRANSFER IN",          # ACATS cash/securities received
+    "ACATS TRANSFER OUT",         # ACATS cash/securities sent
+    "ACATS",                      # generic ACATS catch-all
+    "IN KIND TRANSFER",           # securities transferred in-kind
+    "TRANSFER IN",                # generic transfer-in string
+    "TRANSFER OUT",               # generic transfer-out string
+    "INTERNAL TRANSFER",          # Fidelity internal account move
+})
+
+
 _FIDELITY_INTERNAL_ACTIONS = frozenset({
     # ── Trades ──────────────────────────────────────────────────────────────
     "YOU BOUGHT",
@@ -3632,6 +3653,7 @@ def parse_fidelity_history(raw_text: str) -> dict:
 
     flows: list[dict] = []
     all_transactions: list[dict] = []
+    internal_transfers: list[dict] = []   # transfer-in/out rows, excluded from cash flows
     transaction_count = 0
     skipped_no_amount = 0
     unique_actions: set = set()
@@ -3691,14 +3713,28 @@ def parse_fidelity_history(raw_text: str) -> dict:
         symbol = (row.get("Symbol") or "").strip().upper()
         tx_type = (row.get("Type") or "").strip()
 
-        # Record every transaction for full history
-        all_transactions.append({
-            "date":   date_str,
-            "amount": round(amount, 2),
-            "action": action,
-            "symbol": symbol,
-            "type":   tx_type,
-        })
+        # ── Detect account-to-account / ACATS transfers first ────────────────
+        # These are reorganization events: no new money from the investor,
+        # so they must NOT enter the cash flow math.  We detect them by
+        # keyword matching against the action string (case-insensitive, already
+        # uppercased above) before the internal-investment-activity check.
+        is_transfer = any(kw in action for kw in _FIDELITY_TRANSFER_ACTIONS)
+
+        # Record every transaction for full history (with transfer flag)
+        tx_row = {
+            "date":                date_str,
+            "amount":              round(amount, 2),
+            "action":              action,
+            "symbol":              symbol,
+            "type":                tx_type,
+            "is_internal_transfer": is_transfer,
+        }
+        all_transactions.append(tx_row)
+
+        if is_transfer:
+            # Keep a separate list for easy access and UI display
+            internal_transfers.append(tx_row)
+            continue
 
         if amount == 0:
             continue
@@ -3721,6 +3757,7 @@ def parse_fidelity_history(raw_text: str) -> dict:
         "ok":                True,
         "flows":             sorted(flows, key=lambda f: f["date"]),
         "all_transactions":  sorted(all_transactions, key=lambda t: t["date"]),
+        "internal_transfers": sorted(internal_transfers, key=lambda t: t["date"]),
         "transaction_count": transaction_count,
         "net_flow":          round(net_flow, 2),
         "columns_detected":  columns_detected,
@@ -4287,6 +4324,7 @@ def compute_unified_ytd(
         "dividend_count":    int(attr.get("dividends_parsed", 0)),
         "transaction_count": int(flows_parse.get("transaction_count", 0)),
         "flows":             flows,
+        "internal_transfers": flows_parse.get("internal_transfers", []),
         "unique_actions":    sorted(flows_parse.get("unique_actions") or []),
         "attribution":       attr.get("attribution", []),
         "total_dollar_gain": attr.get("total_dollar_gain"),

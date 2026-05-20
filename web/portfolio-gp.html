@@ -1728,6 +1728,55 @@
         </div>
       </div>
 
+      <!-- ④ Set YTD Baseline -->
+      <div class="acd-upload-group" id="acd-baseline-group" style="border-top:1px solid var(--panel-edge);margin-top:0;">
+        <div class="acd-upload-group-label">
+          <span class="acd-upload-group-num">4</span>
+          Set as YTD Baseline
+          <span class="acd-upload-group-sub">Save the Jan 1 starting balance so future uploads auto-fill it — run the YTD upload first</span>
+        </div>
+        <div style="padding:0 20px 16px;display:flex;flex-direction:column;gap:10px;">
+          <!-- Summary row: filled after a YTD run completes -->
+          <div id="acd-baseline-summary" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 14px;">
+            <div style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Last YTD Run Summary</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12px;">
+              <div><span style="color:var(--mid);font-size:10px;">Jan 1 Balance</span><br><strong id="acd-bl-jan1">—</strong></div>
+              <div><span style="color:var(--mid);font-size:10px;">Transfer Events</span><br><strong id="acd-bl-transfers">—</strong></div>
+              <div><span style="color:var(--mid);font-size:10px;">Cash Flows</span><br><strong id="acd-bl-flows">—</strong></div>
+            </div>
+            <!-- Transfer-in notice -->
+            <div id="acd-bl-transfer-notice" style="display:none;margin-top:10px;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;font-size:11px;color:#78350f;">
+              <strong>⚠ Transfer events detected</strong> — these were excluded from cash flow math automatically.
+              <div id="acd-bl-transfer-list" style="margin-top:4px;font-size:10px;color:#92400e;"></div>
+            </div>
+          </div>
+          <!-- Notes + year inputs -->
+          <div style="display:flex;gap:10px;align-items:center;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--mid);text-transform:uppercase;margin-bottom:3px;">Year</div>
+              <input id="acd-bl-year" type="number" value="" min="2020" max="2099"
+                style="width:80px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:13px;color:#1e293b;background:white;outline:none;">
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:10px;font-weight:700;color:var(--mid);text-transform:uppercase;margin-bottom:3px;">Notes (optional)</div>
+              <input id="acd-bl-notes" type="text" placeholder="e.g. Post-merge baseline"
+                style="width:100%;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 10px;font-size:12px;color:#1e293b;background:white;outline:none;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button id="acd-baseline-btn" class="tab-btn" style="font-size:10px;opacity:.45;cursor:not-allowed;" disabled>
+              💾 Save as YTD Baseline
+            </button>
+            <span id="acd-baseline-status" style="font-size:11px;"></span>
+          </div>
+          <!-- Existing baseline badge -->
+          <div id="acd-existing-baseline" style="display:none;font-size:11px;color:var(--mid);">
+            Stored baseline: <strong id="acd-existing-bl-val">—</strong>
+            <span style="margin-left:6px;opacity:.6;" id="acd-existing-bl-date"></span>
+          </div>
+        </div>
+      </div>
+
     </section>
   </div>
 </div><!-- #tab-acct-detail -->
@@ -3978,6 +4027,47 @@
         stat.textContent = '❌ ' + err.message; stat.style.color = 'var(--red)';
       }
     }
+    // Save YTD Baseline
+    if (e.target.id === 'acd-baseline-btn') {
+      const stat = document.getElementById('acd-baseline-status');
+      const btn  = e.target;
+      const year = parseInt(document.getElementById('acd-bl-year')?.value || '0', 10);
+      const jan1 = parseFloat(btn.dataset.jan1 || '0');
+      if (!CURRENT_FUND_ID) { stat.textContent = '❌ No account selected'; stat.style.color = 'var(--red)'; return; }
+      if (!year || !jan1)   { stat.textContent = '❌ Run YTD first'; stat.style.color = 'var(--red)'; return; }
+      const flows     = JSON.parse(btn.dataset.flows     || '[]');
+      const notes     = document.getElementById('acd-bl-notes')?.value || '';
+      btn.disabled = true; btn.textContent = 'Saving…';
+      stat.textContent = ''; stat.style.color = '';
+      try {
+        const fd = new FormData();
+        fd.append('year',        year);
+        fd.append('jan1_balance', jan1);
+        fd.append('flows_json',  JSON.stringify(flows));
+        fd.append('notes',       notes);
+        const r = await window.dgaFetch(
+          '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/set-ytd-baseline',
+          { method: 'POST', body: fd }
+        );
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+        stat.textContent = '✅ Baseline saved — future YTD runs will auto-fill Jan 1 balance';
+        stat.style.color = 'var(--green)';
+        btn.textContent  = '💾 Save as YTD Baseline';
+        btn.disabled     = false;
+        // Update the "existing baseline" row
+        const ebl  = document.getElementById('acd-existing-baseline');
+        const eblV = document.getElementById('acd-existing-bl-val');
+        const eblD = document.getElementById('acd-existing-bl-date');
+        if (ebl)  ebl.style.display  = 'block';
+        if (eblV) eblV.textContent   = '$' + jan1.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+        if (eblD) eblD.textContent   = 'saved just now';
+      } catch (err) {
+        stat.textContent = '❌ ' + err.message; stat.style.color = 'var(--red)';
+        btn.textContent  = '💾 Save as YTD Baseline';
+        btn.disabled     = false;
+      }
+    }
     // Exports — LP fund
     if (e.target.id === 'lpd-export-excel-btn') triggerExport('excel', e.target);
     if (e.target.id === 'lpd-export-pdf-btn')   triggerExport('pdf',   e.target);
@@ -4065,8 +4155,14 @@
       const posMsg = d.positions_sync_ok
         ? `✅ ${d.positions_sync_msg}`
         : `⚠️ ${d.positions_sync_msg || 'positions not synced'}`;
+      let baselineNote = '';
+      if (d.baseline_used) baselineNote = ' · Jan 1 balance auto-filled from saved baseline';
       stat.style.color = 'var(--green)';
-      stat.textContent = '✅ YTD saved' + (mp ? ' · All-Time chart updated' : '') + ` · ${posMsg}. Reloading…`;
+      stat.textContent = '✅ YTD saved' + (mp ? ' · All-Time chart updated' : '') + ` · ${posMsg}${baselineNote}. Reloading…`;
+
+      // ── Populate the "Set as YTD Baseline" section ──────────────────────
+      _populateBaselineSection(d);
+
       setTimeout(() => {
         loadAcctYtdSections(CURRENT_FUND_ID);
         if (mp) loadAllTimePerf(CURRENT_FUND_ID);
@@ -4077,6 +4173,72 @@
       stat.textContent = '❌ ' + e.message;
     } finally {
       btn.disabled = false; btn.textContent = '⚡ Run YTD';
+    }
+  }
+
+  /** Populate the "Set as YTD Baseline" panel from a completed YTD run result. */
+  function _populateBaselineSection(d) {
+    const jan1    = d.begin_value;
+    const flows   = d.flows       || [];
+    const xfers   = d.internal_transfers || [];
+    const curYear = new Date().getFullYear();
+
+    // Show summary block
+    const summaryEl = document.getElementById('acd-baseline-summary');
+    if (summaryEl) summaryEl.style.display = 'block';
+
+    const jan1El = document.getElementById('acd-bl-jan1');
+    if (jan1El && jan1 != null) {
+      jan1El.textContent = '$' + jan1.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+    const xferEl = document.getElementById('acd-bl-transfers');
+    if (xferEl) xferEl.textContent = xfers.length > 0 ? xfers.length + ' excluded' : 'None';
+
+    const flowsEl = document.getElementById('acd-bl-flows');
+    if (flowsEl) flowsEl.textContent = flows.length + ' deposits/withdrawals';
+
+    // Transfer-in notice
+    const noticeEl = document.getElementById('acd-bl-transfer-notice');
+    const listEl   = document.getElementById('acd-bl-transfer-list');
+    if (noticeEl) noticeEl.style.display = xfers.length > 0 ? 'block' : 'none';
+    if (listEl && xfers.length > 0) {
+      listEl.innerHTML = xfers.map(t =>
+        `<div>${t.date} · ${t.action} · $${Math.abs(t.amount).toLocaleString(undefined, {minimumFractionDigits:2})}</div>`
+      ).join('');
+    }
+
+    // Pre-fill year input
+    const yearEl = document.getElementById('acd-bl-year');
+    if (yearEl && !yearEl.value) yearEl.value = curYear;
+
+    // Enable button, store payload in dataset
+    const blBtn = document.getElementById('acd-baseline-btn');
+    if (blBtn) {
+      blBtn.disabled       = false;
+      blBtn.style.opacity  = '1';
+      blBtn.style.cursor   = 'pointer';
+      blBtn.dataset.jan1   = jan1 || '';
+      blBtn.dataset.flows  = JSON.stringify(flows);
+    }
+
+    // Load existing baseline from server (non-blocking)
+    if (CURRENT_FUND_ID) {
+      window.dgaFetch('/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-baseline')
+        .then(r => r.ok ? r.json() : null)
+        .then(bdata => {
+          if (!bdata) return;
+          const ebl  = document.getElementById('acd-existing-baseline');
+          const eblV = document.getElementById('acd-existing-bl-val');
+          const eblD = document.getElementById('acd-existing-bl-date');
+          if (ebl)  ebl.style.display  = 'block';
+          if (eblV) eblV.textContent   = '$' + parseFloat(bdata.jan1_balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})
+            + ' (' + bdata.year + (bdata.notes ? ' · ' + bdata.notes : '') + ')';
+          if (eblD && bdata.updated_at) {
+            const dt = new Date(bdata.updated_at);
+            eblD.textContent = 'saved ' + dt.toLocaleDateString();
+          }
+        })
+        .catch(() => {});
     }
   }
 
