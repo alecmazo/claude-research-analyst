@@ -5429,7 +5429,7 @@
               </td>
               <td ${lci} style="white-space:nowrap;">PORTFOLIO RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Time-Weighted · benchmark comparable</div></td>
               <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-md-val">—</td>
-              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div id="acd-xirr-label" style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Based on when your money was invested</div></td>
+              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div id="acd-xirr-label" style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Money-weighted · same period as Portfolio Return</div></td>
               <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-xirr-val">—</td>
             </tr>
           </tbody>
@@ -5811,12 +5811,12 @@
         // (account funded via internal transfer/merge).  Show a helpful tooltip.
         const noFlows = (twrrPct != null && Math.abs(xirrPct - twrrPct) < 0.01);
         xirrEl.title = noFlows
-          ? 'No external cash flows detected — Personal Return equals Portfolio Return (TWRR)'
-          : 'XIRR / Money-Weighted Return — reflects the actual timing of your deposits & withdrawals';
+          ? 'No external cash flows — Personal Return equals Portfolio Return (period MWRR = TWRR)'
+          : 'Period MWRR — same time window as Portfolio Return; reflects timing of your deposits & withdrawals. Not annualised.';
         if (xirrLabel) {
           xirrLabel.textContent = noFlows
             ? 'No external cash flows this period'
-            : 'Based on when your money was invested';
+            : 'Money-weighted · same period as Portfolio Return';
         }
       } else {
         xirrEl.textContent = '—';

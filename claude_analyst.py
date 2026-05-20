@@ -3941,6 +3941,54 @@ def upload_account_history(
     }
 
 
+def _compute_period_mwrr(
+    begin_value:  float,
+    end_value:    float,
+    flows:        list,
+    period_start,
+    today_dt,
+) -> float | None:
+    """Period Modified Dietz (Money-Weighted Rate of Return).
+
+    Identical time window to TWRR — NOT annualised — so it is directly
+    comparable to YTD Return and Portfolio Return in the UI.
+
+    Formula:  R = (EMV − BMV − CF) / (BMV + Σ(CFᵢ × Wᵢ))
+
+        BMV  = begin_value  (Jan 1)
+        EMV  = end_value    (today)
+        CF   = Σ flows      (deposits positive, withdrawals negative)
+        Wᵢ   = (CD − Dᵢ) / CD  — fraction of period remaining after flow
+
+    When no external flows exist, result == standard Modified Dietz == TWRR
+    (period, not annualised).  When real flows exist, their exact dates are
+    used so personal return correctly reflects the investor's timing.
+
+    Contrast with XIRR: XIRR annualises the same calculation, so a 18 %
+    5-month return becomes ~55 % "annualised" — confusing when displayed
+    next to a non-annualised YTD figure.  MWRR avoids this mismatch.
+    """
+    cd = max(1, (today_dt - period_start).days)
+    net_cf = sum(float(f["amount"]) for f in flows)
+
+    weighted_cf = 0.0
+    for f in flows:
+        try:
+            flow_dt         = datetime.strptime(f["date"], "%Y-%m-%d")
+            di              = max(0, (flow_dt - period_start).days)
+            wi              = (cd - di) / cd
+            weighted_cf    += float(f["amount"]) * wi
+        except Exception:  # noqa: BLE001
+            continue
+
+    denominator = float(begin_value) + weighted_cf
+    if abs(denominator) < 0.01:
+        return None
+
+    numerator = float(end_value) - float(begin_value) - net_cf
+    return round((numerator / denominator) * 100.0, 4)
+
+
 def _compute_xirr(
     begin_value: float,
     end_value:   float,
@@ -4230,40 +4278,32 @@ def compute_unified_ytd(
         monthly_chart_error = str(mc_exc)
         print(f"⚠️  Monthly chart failed: {mc_exc}")
 
-    # ── XIRR / Money-Weighted Return (Personal Rate of Return) ────────────────
-    # Rules:
-    #   • Internal transfers (ACATS, account merges, journal entries) are NEVER
-    #     cash flows for XIRR — they are not new money from outside the system.
-    #   • Only genuine external flows count: real LP deposits in, real LP
-    #     withdrawals out.  These come from `flows` which already has internal
-    #     transfers stripped by parse_fidelity_history.
-    #   • If there are no external flows (e.g. account funded entirely via an
-    #     internal merge with no outside cash), Personal Return == Portfolio
-    #     Return (TWRR).  There is no timing-of-money effect to measure when
-    #     no new outside money entered or left.
-    #   • Fall back to Modified Dietz if TWRR is also unavailable.
+    # ── Personal Return (period MWRR) ─────────────────────────────────────────
+    # We use period Modified Dietz (MWRR) rather than XIRR.  Both are
+    # money-weighted, but XIRR annualises — a 18 % 5-month return becomes
+    # ~55 % — which is confusing when displayed beside a non-annualised YTD
+    # figure.  Period MWRR uses the identical time window as TWRR so the two
+    # numbers are directly comparable.
+    #
+    # Rules for which flows enter the calculation:
+    #   • `flows` already has internal transfers stripped (ACATS, account
+    #     merges, journal entries) — only real external cash remains.
+    #   • Outbound transfers to external custodians (e.g. "TRANSFERRED TO VS
+    #     X82-...") are treated as withdrawals and do reduce Personal Return.
+    #   • If no external flows exist, period MWRR == standard Modified Dietz
+    #     == TWRR (period), so Personal Return == Portfolio Return.
     xirr_return_pct = None
-    if not flows:
-        # No real external cash flows → Personal Return equals Portfolio Return.
+    try:
+        xirr_return_pct = _compute_period_mwrr(
+            begin_value, end_value, flows, period_start, today_dt
+        )
+    except Exception as mwrr_exc:  # noqa: BLE001
+        print(f"⚠️  Period MWRR failed: {mwrr_exc}")
+    # Fall back to TWRR / MD when computation fails
+    if xirr_return_pct is None:
         xirr_return_pct = (
             twrr_return_pct if twrr_return_pct is not None else md_return_pct
         )
-    else:
-        try:
-            xirr_return_pct = _compute_xirr(
-                begin_value, end_value, flows, period_start, today_dt
-            )
-        except Exception as xirr_exc:  # noqa: BLE001
-            print(f"⚠️  XIRR failed: {xirr_exc}")
-        # Sanity check: if XIRR diverges wildly from TWRR and flows are tiny
-        # relative to NAV, the timing effect is negligible — use TWRR instead.
-        if xirr_return_pct is not None and twrr_return_pct is not None:
-            _flow_total = sum(abs(f["amount"]) for f in flows)
-            _nav        = float(end_value) or 1.0
-            _flow_ratio = _flow_total / _nav
-            if _flow_ratio < 0.05 and abs(xirr_return_pct - twrr_return_pct) > 15:
-                # Flows < 5 % of NAV but XIRR diverges > 15 pp → noise, use TWRR
-                xirr_return_pct = twrr_return_pct
 
     # ── Persist the MD/TWRR result + attribution + a snapshot for history ─────
     # `account_history` always holds the most-recent run (used by the YTD
