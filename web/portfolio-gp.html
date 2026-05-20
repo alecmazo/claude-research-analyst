@@ -5763,7 +5763,7 @@
     const totalWdrs = data.ytd_total_withdrawals
                    ?? months.reduce((s, m) => s + (m.perf_detail?.withdrawals || 0), 0);
 
-    let begBalance = data.ytd_beg_balance ?? 0;
+    let begBalance = data.ytd_beg_balance ?? data.begin_value ?? 0;
     if (!begBalance && months.length) begBalance = months[0].beg_balance || 0;
     if (!begBalance && months.length) {
       const m0  = months.find(m => !m.skip) || months[0];

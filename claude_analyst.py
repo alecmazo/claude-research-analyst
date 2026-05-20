@@ -4353,6 +4353,7 @@ def compute_unified_ytd(
         "twrr_return_pct":   twrr_return_pct,
         "xirr_return_pct":   xirr_return_pct,
         "begin_value":       round(float(begin_value), 2),
+        "ytd_beg_balance":   round(float(begin_value), 2),   # alias used by fund overview + frontend
         "end_value":         round(end_value, 2),
         "emv_source":        "positions_csv",
         "net_flow":          round(net_flow, 2),
