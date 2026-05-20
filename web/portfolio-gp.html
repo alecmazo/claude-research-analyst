@@ -572,128 +572,174 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
-  /* ── GP LIVE POSITIONS — summary bar + card grid ─────────────── */
+  /* ── GP LIVE POSITIONS — light Fidelity-style layout ──────────── */
 
-  /* Top summary bar (total NAV + day change + stats) */
+  /* Positions tab background: light */
+  #tab-positions { background: #f0f4f8; }
+
+  /* ── Hero card: total AUM + chart ─────────────────────────────── */
   #gp-pos-summary {
-    background: var(--navy);
-    border-radius: 14px;
-    padding: 18px 24px 16px;
+    background: #fff;
+    border-radius: 16px;
+    padding: 22px 24px 0;
     margin-bottom: 14px;
-    box-shadow: 0 4px 20px rgba(10,22,40,0.20);
-    display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.07);
   }
-  .gp-wl-total { font-size: 28px; font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .gp-wl-day   { font-size: 13px; font-weight: 700; margin-top: 3px; }
-  .gp-wl-badge { font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(255,255,255,0.35); margin-bottom: 4px; }
-  .gp-wl-ts    { font-size: 11px; color: rgba(255,255,255,0.30); }
+  .gp-pos-hero-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; padding-bottom: 14px;
+  }
+  .gp-wl-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
+  .gp-wl-total { font-size: 32px; font-weight: 800; color: #0A1628; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .gp-wl-day   { font-size: 14px; font-weight: 600; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
+  .gp-wl-day-arrow { font-size: 16px; }
+  .gp-wl-ts    { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  #gp-pos-stats { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
   .gp-wl-stat  { text-align: center; }
-  .gp-wl-stat-val { font-size: 14px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
-  .gp-wl-stat-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: rgba(255,255,255,0.30); margin-top: 2px; }
-  #gp-pos-stats { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .gp-wl-stat-val { font-size: 14px; font-weight: 700; color: #0A1628; font-variant-numeric: tabular-nums; }
+  .gp-wl-stat-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: #94a3b8; margin-top: 3px; }
+  .gp-wl-badge { display:none; }
 
-  /* Card grid — accounts as snappable columns */
-  #gp-acct-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 12px;
-    align-items: start;
+  /* Period selector buttons */
+  #gp-chart-periods {
+    display: flex; gap: 0; padding: 0 0 0 2px; align-items: center;
+  }
+  .gp-chart-period-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: #94a3b8;
+    padding: 6px 14px; border-radius: 20px;
+    transition: background .13s, color .13s;
+    font-family: inherit;
+  }
+  .gp-chart-period-btn:hover { background: #f1f5f9; color: #0A1628; }
+  .gp-chart-period-btn.active { background: #5BB8D4; color: #fff; font-weight: 700; }
+
+  /* SVG chart area */
+  #gp-chart-wrap {
+    width: 100%; height: 170px; position: relative; overflow: hidden;
+  }
+  #gp-chart-svg {
+    width: 100%; height: 100%; display: block;
+  }
+  #gp-chart-loading {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; color: #94a3b8;
+  }
+  .gp-chart-label-row {
+    display: flex; justify-content: space-between;
+    padding: 2px 6px 10px; font-size: 10px; color: #94a3b8; font-variant-numeric: tabular-nums;
   }
 
-  /* Per-account card */
+  /* ── Account list (Fidelity-style) ────────────────────────────── */
+  #gp-acct-grid {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+
   .gp-acct-card {
-    background: var(--navy);
+    background: #fff;
     border-radius: 13px;
     overflow: hidden;
-    box-shadow: 0 3px 18px rgba(10,22,40,0.22);
+    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
     transition: box-shadow .15s, opacity .15s;
     cursor: default;
+    border-left: 4px solid #5BB8D4;
   }
   .gp-acct-card[draggable="true"] { cursor: grab; }
   .gp-acct-card[draggable="true"]:active { cursor: grabbing; }
   .gp-acct-card.gp-drag-src  { opacity: 0.45; }
-  .gp-acct-card.gp-drag-over { box-shadow: 0 0 0 2px #5BB8D4, 0 3px 18px rgba(10,22,40,0.22); }
+  .gp-acct-card.gp-drag-over { box-shadow: 0 0 0 2px #5BB8D4, 0 3px 14px rgba(0,0,0,0.10); }
 
-  /* Card header — click to collapse */
+  /* Card header */
   .gp-acct-hdr {
-    display: flex; align-items: center; gap: 10px;
-    padding: 13px 16px 11px;
-    border-bottom: 1px solid rgba(255,255,255,0.07);
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid #f1f5f9;
     cursor: pointer; user-select: none;
     transition: background .12s;
   }
-  .gp-acct-hdr:hover { background: rgba(255,255,255,0.035); }
+  .gp-acct-hdr:hover { background: #f8fafc; }
+  .gp-acct-hdr-left  { flex: 1; min-width: 0; }
   .gp-acct-hdr-name {
-    flex: 1; font-size: 11px; font-weight: 800; letter-spacing: 0.8px;
-    text-transform: uppercase; color: rgba(255,255,255,0.55);
+    font-size: 13px; font-weight: 700; color: #0A1628; letter-spacing: 0.1px;
   }
-  .gp-acct-hdr-nav  { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
-  .gp-acct-hdr-chg  { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .gp-acct-hdr-chg.up { color: #4ade80; }
-  .gp-acct-hdr-chg.dn { color: #f87171; }
-  .gp-acct-chevron  { font-size: 11px; color: rgba(255,255,255,0.30); transition: transform .18s; flex-shrink: 0; }
+  .gp-acct-hdr-sub {
+    font-size: 10px; color: #94a3b8; margin-top: 2px; font-variant-numeric: tabular-nums;
+  }
+  .gp-acct-hdr-right { text-align: right; flex-shrink: 0; }
+  .gp-acct-hdr-nav  { font-size: 16px; font-weight: 700; color: #0A1628; font-variant-numeric: tabular-nums; }
+  .gp-acct-hdr-chg  { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .gp-acct-hdr-chg.up { color: #5BB8D4; }
+  .gp-acct-hdr-chg.dn { color: #dc2626; }
+  .gp-acct-chevron  { font-size: 13px; color: #cbd5e1; transition: transform .18s; flex-shrink: 0; margin-left: 4px; }
   .gp-acct-card.collapsed .gp-acct-chevron { transform: rotate(-90deg); }
   .gp-acct-card.collapsed .gp-acct-body   { display: none; }
 
   /* Card body — position rows */
   .gp-acct-body { overflow: hidden; }
 
-  /* ── GP positions Save View toolbar ───────────────────────────── */
+  /* ── GP positions Save View toolbar ────────────────────────────── */
   #gp-pos-toolbar {
     display: flex; align-items: center; gap: 10px;
     margin-bottom: 10px;
     padding: 6px 12px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: #fff;
+    border: 1px solid #e2e8f0;
     border-radius: 9px;
   }
   #gp-pos-toolbar-hint {
     flex: 1;
-    font-size: 10px; color: rgba(255,255,255,0.30);
+    font-size: 10px; color: #94a3b8;
     letter-spacing: 0.3px;
   }
   #gp-pos-saved-flash {
-    font-size: 10px; font-weight: 700; color: #4ade80;
+    font-size: 10px; font-weight: 700; color: #16a34a;
     letter-spacing: 0.5px; opacity: 0;
     transition: opacity .2s;
   }
   #gp-pos-saved-flash.show { opacity: 1; }
   .gp-pos-save-btn {
     background: transparent;
-    border: 1px solid rgba(91,184,212,0.40);
+    border: 1px solid rgba(91,184,212,0.50);
     color: #5BB8D4;
     padding: 4px 13px; border-radius: 6px;
     font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
     text-transform: uppercase; cursor: pointer;
     transition: background .13s, border-color .13s;
   }
-  .gp-pos-save-btn:hover { background: rgba(91,184,212,0.12); border-color: rgba(91,184,212,0.7); }
+  .gp-pos-save-btn:hover { background: rgba(91,184,212,0.08); border-color: #5BB8D4; }
 
-  /* Individual position rows */
+  /* Individual position rows (light) */
   .gp-wl-row {
     display: flex; align-items: center; gap: 10px;
-    padding: 11px 16px;
-    border-bottom: 0.5px solid rgba(255,255,255,0.06);
+    padding: 11px 18px;
+    border-bottom: 1px solid #f8fafc;
     cursor: pointer; transition: background .12s;
   }
   .gp-wl-row:last-child { border-bottom: none; }
-  .gp-wl-row:hover { background: rgba(255,255,255,0.04); }
+  .gp-wl-row:hover { background: #f8fafc; }
   .gp-wl-left { flex: 1; min-width: 0; }
-  .gp-wl-ticker { font-size: 14px; font-weight: 800; color: #fff; letter-spacing: 0.4px; }
-  .gp-wl-name   { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .gp-wl-wt     { font-size: 9px;  color: rgba(255,255,255,0.20); margin-top: 1px; }
-  .gp-wl-shares { font-size: 10px; color: rgba(255,255,255,0.25); }
-  .gp-wl-price  { font-size: 13px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; text-align: right; min-width: 68px; }
-  .gp-wl-gain   { font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .gp-wl-ticker { font-size: 14px; font-weight: 800; color: #0A1628; letter-spacing: 0.3px; }
+  .gp-wl-name   { font-size: 10px; color: #94a3b8; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gp-wl-wt     { font-size: 9px;  color: #cbd5e1; margin-top: 1px; }
+  .gp-wl-shares { font-size: 10px; color: #cbd5e1; }
+  .gp-wl-price  { font-size: 13px; font-weight: 700; color: #0A1628; font-variant-numeric: tabular-nums; text-align: right; min-width: 68px; }
+  .gp-wl-gain   { font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; margin-top: 1px; color: #94a3b8; }
+  /* Daily change pill — light scheme */
   .gp-wl-pill {
-    min-width: 78px; padding: 5px 8px; border-radius: 7px;
-    text-align: center; flex-shrink: 0;
+    min-width: 82px; padding: 5px 9px; border-radius: 8px;
+    text-align: right; flex-shrink: 0;
   }
-  .gp-wl-pill.up { background: #16A34A; }
-  .gp-wl-pill.dn { background: #DC2626; }
-  .gp-wl-pill.nc { background: rgba(255,255,255,0.08); }
-  .gp-wl-pill-abs { font-size: 11px; font-weight: 800; color: #fff; line-height: 1.2; }
-  .gp-wl-pill-pct { font-size: 9px;  font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.2; }
+  .gp-wl-pill.up { background: #eff9fd; }
+  .gp-wl-pill.dn { background: #fef2f2; }
+  .gp-wl-pill.nc { background: #f8fafc; }
+  .gp-wl-pill-abs { font-size: 12px; font-weight: 700; line-height: 1.25; }
+  .gp-wl-pill.up .gp-wl-pill-abs { color: #5BB8D4; }
+  .gp-wl-pill.dn .gp-wl-pill-abs { color: #dc2626; }
+  .gp-wl-pill.nc .gp-wl-pill-abs { color: #94a3b8; }
+  .gp-wl-pill-pct { font-size: 10px; font-weight: 600; line-height: 1.2; }
+  .gp-wl-pill.up .gp-wl-pill-pct { color: #3E9AB8; }
+  .gp-wl-pill.dn .gp-wl-pill-pct { color: #dc2626; }
+  .gp-wl-pill.nc .gp-wl-pill-pct { color: #94a3b8; }
 
   /* Full-width single-column layout for non-Research tabs */
   .wide-shell {
@@ -1049,39 +1095,62 @@
 <div id="tab-positions" class="tab-panel active">
   <div class="wide-shell">
 
-    <!-- Summary bar -->
+    <!-- Hero card: total + chart -->
     <div id="gp-pos-summary">
-      <div>
-        <div id="gp-wl-total" class="gp-wl-total">Loading…</div>
-        <div id="gp-wl-day"   class="gp-wl-day"></div>
+
+      <!-- Top row: total AUM + stats + period buttons -->
+      <div class="gp-pos-hero-row">
+        <!-- Left: total value + day change -->
+        <div>
+          <div class="gp-wl-label">TOTAL ACCOUNTS</div>
+          <div id="gp-wl-total" class="gp-wl-total">—</div>
+          <div id="gp-wl-day"   class="gp-wl-day"></div>
+          <div id="gp-wl-ts"    class="gp-wl-ts"></div>
+        </div>
+        <!-- Right: mini stats + period buttons -->
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;">
+          <div id="gp-pos-stats">
+            <div class="gp-wl-stat">
+              <div class="gp-wl-stat-val" id="gp-wl-stat-count">—</div>
+              <div class="gp-wl-stat-lbl">Positions</div>
+            </div>
+            <div class="gp-wl-stat">
+              <div class="gp-wl-stat-val" id="gp-wl-stat-accts">—</div>
+              <div class="gp-wl-stat-lbl">Accounts</div>
+            </div>
+            <div class="gp-wl-stat">
+              <div class="gp-wl-stat-val" id="gp-wl-stat-gainers">—</div>
+              <div class="gp-wl-stat-lbl">Up Today</div>
+            </div>
+            <div class="gp-wl-stat">
+              <div class="gp-wl-stat-val" id="gp-wl-stat-losers">—</div>
+              <div class="gp-wl-stat-lbl">Down Today</div>
+            </div>
+            <div class="gp-wl-stat">
+              <div class="gp-wl-stat-val" id="gp-wl-stat-gain">—</div>
+              <div class="gp-wl-stat-lbl">Unrealized</div>
+            </div>
+          </div>
+          <div id="gp-chart-periods">
+            <button class="gp-chart-period-btn" data-period="1m">1M</button>
+            <button class="gp-chart-period-btn active" data-period="ytd">YTD</button>
+            <button class="gp-chart-period-btn" data-period="1y">1Y</button>
+            <button class="gp-chart-period-btn" data-period="3y">3Y</button>
+          </div>
+        </div>
       </div>
-      <div id="gp-pos-stats">
-        <div class="gp-wl-stat">
-          <div class="gp-wl-stat-val" id="gp-wl-stat-count">—</div>
-          <div class="gp-wl-stat-lbl">Positions</div>
-        </div>
-        <div class="gp-wl-stat">
-          <div class="gp-wl-stat-val" id="gp-wl-stat-accts">—</div>
-          <div class="gp-wl-stat-lbl">Accounts</div>
-        </div>
-        <div class="gp-wl-stat">
-          <div class="gp-wl-stat-val" id="gp-wl-stat-gainers">—</div>
-          <div class="gp-wl-stat-lbl">Up Today</div>
-        </div>
-        <div class="gp-wl-stat">
-          <div class="gp-wl-stat-val" id="gp-wl-stat-losers">—</div>
-          <div class="gp-wl-stat-lbl">Down Today</div>
-        </div>
-        <div class="gp-wl-stat">
-          <div class="gp-wl-stat-val" id="gp-wl-stat-gain" style="color:rgba(255,255,255,0.5);">—</div>
-          <div class="gp-wl-stat-lbl">Unrealized P&amp;L</div>
-        </div>
-        <div style="text-align:right;">
-          <div class="gp-wl-badge">LIVE PRICES</div>
-          <div id="gp-wl-ts" class="gp-wl-ts">updating…</div>
-        </div>
+
+      <!-- Chart area -->
+      <div id="gp-chart-wrap">
+        <svg id="gp-chart-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="gp-chart-loading">Loading chart…</div>
       </div>
-    </div>
+      <div class="gp-chart-label-row">
+        <span id="gp-chart-lbl-start">—</span>
+        <span id="gp-chart-lbl-end">—</span>
+      </div>
+
+    </div><!-- #gp-pos-summary -->
 
     <!-- Save View toolbar -->
     <div id="gp-pos-toolbar">
@@ -2675,9 +2744,16 @@
   // ══════════════════════════════════════════════════════════════
   var _gpPosTimer = null;
 
+  var _gpChartLoaded = false;
+  var _gpPosTimer = null;
+
   async function loadGPPositions() {
-    await _refreshGPPositions();
-    // Auto-refresh every 30 seconds while positions tab is active
+    // Load positions and chart in parallel on first open
+    await Promise.all([
+      _refreshGPPositions(),
+      _gpChartLoaded ? Promise.resolve() : _loadPortfolioChart('ytd').then(function () { _gpChartLoaded = true; }),
+    ]);
+    // Auto-refresh positions every 30 seconds; chart refreshes only on period change
     if (_gpPosTimer) clearInterval(_gpPosTimer);
     _gpPosTimer = setInterval(function () {
       if (document.getElementById('tab-positions')?.classList.contains('active')) {
@@ -2694,24 +2770,133 @@
       _renderGPWatchlist(data);
     } catch (e) {
       console.warn('[gp-positions]', e);
-      document.getElementById('gp-wl-rows').innerHTML =
-        '<div class="gp-wl-row" style="opacity:0.5;"><div class="gp-wl-left"><div class="gp-wl-ticker">—</div><div class="gp-wl-name">Could not load positions</div></div></div>';
+      const grid = document.getElementById('gp-acct-grid');
+      if (grid) grid.innerHTML = '<div style="padding:20px;color:#94a3b8;font-size:13px;">Could not load positions.</div>';
     }
   }
+
+  // ── Portfolio chart ──────────────────────────────────────────────
+  var _gpChartPeriod = 'ytd';
+  var _gpChartData   = null;
+
+  function _drawPortfolioChart(data) {
+    const svg     = document.getElementById('gp-chart-svg');
+    const loading = document.getElementById('gp-chart-loading');
+    const lblStart= document.getElementById('gp-chart-lbl-start');
+    const lblEnd  = document.getElementById('gp-chart-lbl-end');
+    if (!svg) return;
+
+    if (!data || !data.dates || data.dates.length < 2) {
+      if (loading) loading.textContent = 'No chart data available';
+      return;
+    }
+    if (loading) loading.style.display = 'none';
+
+    const W = svg.clientWidth  || 800;
+    const H = svg.clientHeight || 170;
+    const PAD_L = 0, PAD_R = 0, PAD_T = 12, PAD_B = 2;
+    const W2 = W - PAD_L - PAD_R;
+    const H2 = H - PAD_T - PAD_B;
+
+    const vals = data.values;
+    const minV = data.min_val;
+    const maxV = data.max_val;
+    const range = maxV - minV || 1;
+
+    // Build SVG path points
+    const n = vals.length;
+    const pts = vals.map(function (v, i) {
+      const x = PAD_L + (i / (n - 1)) * W2;
+      const y = PAD_T + H2 - ((v - minV) / range) * H2;
+      return [x, y];
+    });
+
+    // Smooth line via cubic bezier
+    function pathD(pts) {
+      if (pts.length < 2) return '';
+      let d = 'M' + pts[0][0] + ',' + pts[0][1];
+      for (let i = 1; i < pts.length; i++) {
+        const cp1x = (pts[i-1][0] + pts[i][0]) / 2;
+        const cp1y = pts[i-1][1];
+        const cp2x = cp1x;
+        const cp2y = pts[i][1];
+        d += ' C' + cp1x + ',' + cp1y + ' ' + cp2x + ',' + cp2y + ' ' + pts[i][0] + ',' + pts[i][1];
+      }
+      return d;
+    }
+
+    const isUp    = (data.change_abs || 0) >= 0;
+    const lineClr = isUp ? '#5BB8D4' : '#dc2626';
+    const fillClr = isUp ? 'rgba(91,184,212,0.12)' : 'rgba(220,38,38,0.10)';
+
+    const linePath = pathD(pts);
+    // Area fill path: line + drop to bottom
+    const last = pts[pts.length-1];
+    const first = pts[0];
+    const areaPath = linePath
+      + ' L' + last[0] + ',' + (H - PAD_B)
+      + ' L' + first[0] + ',' + (H - PAD_B) + ' Z';
+
+    svg.innerHTML =
+      '<defs>'
+        + '<linearGradient id="gpChartGrad" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0%" stop-color="' + lineClr + '" stop-opacity="0.25"/>'
+          + '<stop offset="100%" stop-color="' + lineClr + '" stop-opacity="0.01"/>'
+        + '</linearGradient>'
+      + '</defs>'
+      + '<path d="' + areaPath + '" fill="url(#gpChartGrad)" stroke="none"/>'
+      + '<path d="' + linePath + '" fill="none" stroke="' + lineClr + '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'
+      // End dot
+      + '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="4" fill="' + lineClr + '"/>';
+
+    // Labels
+    if (lblStart) lblStart.textContent = data.dates[0].slice(0,10);
+    if (lblEnd)   lblEnd.textContent   = data.dates[data.dates.length-1].slice(0,10);
+  }
+
+  async function _loadPortfolioChart(period) {
+    _gpChartPeriod = period || 'ytd';
+    const loading = document.getElementById('gp-chart-loading');
+    const svg     = document.getElementById('gp-chart-svg');
+    if (loading) { loading.style.display = 'flex'; loading.textContent = 'Loading chart…'; }
+    if (svg) svg.innerHTML = '';
+
+    // Update active button
+    document.querySelectorAll('.gp-chart-period-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.period === _gpChartPeriod);
+    });
+
+    try {
+      const r = await window.dgaFetch('/api/v2/gp/portfolio-chart?period=' + encodeURIComponent(_gpChartPeriod));
+      if (!r.ok) throw new Error('chart ' + r.status);
+      _gpChartData = await r.json();
+      _drawPortfolioChart(_gpChartData);
+    } catch (e) {
+      console.warn('[gp-chart]', e);
+      if (loading) loading.textContent = 'Chart unavailable';
+    }
+  }
+
+  // ── Wire period buttons ──────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.gp-chart-period-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { _loadPortfolioChart(btn.dataset.period); });
+    });
+  });
 
   function _renderGPWatchlist(data) {
     const positions = (data.positions || []).sort(function (a, b) {
       return (b.market_weight_pct || 0) - (a.market_weight_pct || 0);
     });
 
-    // ── Summary bar ────────────────────────────────────────────
+    // ── Hero summary ────────────────────────────────────────────
     const totalMV = data.total_market_value || 0;
     const totalEl = document.getElementById('gp-wl-total');
     const dayEl   = document.getElementById('gp-wl-day');
     const tsEl    = document.getElementById('gp-wl-ts');
     if (totalEl) totalEl.textContent = totalMV > 0 ? fmtUSD(totalMV) : '—';
 
-    // Aggregate day change (day_change_abs is per-share × total_qty)
+    // Aggregate day change
     let dayChangeAbs = 0, validDay = false;
     positions.forEach(function (p) {
       if (p.day_change_abs != null && p.total_qty != null) {
@@ -2721,12 +2906,17 @@
     });
     if (dayEl) {
       if (validDay) {
-        const pct = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
-        dayEl.textContent = (dayChangeAbs >= 0 ? '+' : '') + fmtUSD(dayChangeAbs)
-          + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%) today';
-        dayEl.style.color = dayChangeAbs >= 0 ? '#4ade80' : '#f87171';
+        const pct     = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
+        const isUp    = dayChangeAbs >= 0;
+        const arrow   = isUp ? '↗' : '↘';
+        const clr     = isUp ? '#5BB8D4' : '#dc2626';
+        const absStr  = (isUp ? '+' : '') + fmtUSD(dayChangeAbs);
+        const pctStr  = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        dayEl.innerHTML = '<span class="gp-wl-day-arrow" style="color:' + clr + ';">' + arrow + '</span>'
+          + '<span style="color:' + clr + ';font-weight:700;">' + absStr + ' (' + pctStr + ')</span>'
+          + '<span style="color:#94a3b8;font-size:11px;font-weight:400;"> today</span>';
       } else {
-        dayEl.textContent = '';
+        dayEl.innerHTML = '';
       }
     }
     if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -2740,8 +2930,8 @@
     if (statAccts)   statAccts.textContent = data.account_count || '—';
     const gainers = positions.filter(function (p) { return (p.day_change_pct || 0) > 0; }).length;
     const losers  = positions.filter(function (p) { return (p.day_change_pct || 0) < 0; }).length;
-    if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#4ade80' : '#fff'; }
-    if (statLosers)  { statLosers.textContent  = losers;  statLosers.style.color  = losers  > 0 ? '#f87171' : '#fff'; }
+    if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#5BB8D4' : '#0A1628'; }
+    if (statLosers)  { statLosers.textContent  = losers;  statLosers.style.color  = losers  > 0 ? '#dc2626' : '#0A1628'; }
     let totalUnreal = 0, hasUnreal = false;
     positions.forEach(function (p) {
       if (p.unrealized_gain != null) { totalUnreal += p.unrealized_gain; hasUnreal = true; }
@@ -2749,22 +2939,22 @@
     if (statGain) {
       if (hasUnreal) {
         statGain.textContent = (totalUnreal >= 0 ? '+' : '') + fmtUSD(totalUnreal);
-        statGain.style.color = totalUnreal >= 0 ? '#4ade80' : '#f87171';
+        statGain.style.color = totalUnreal >= 0 ? '#5BB8D4' : '#dc2626';
       } else {
         statGain.textContent = '—';
-        statGain.style.color = 'rgba(255,255,255,0.4)';
+        statGain.style.color = '#94a3b8';
       }
     }
 
-    // ── Per-account cards ──────────────────────────────────────
+    // ── Per-account cards (Fidelity-style) ────────────────────
     const grid = document.getElementById('gp-acct-grid');
     if (!grid) return;
 
-    // Group by account, preserving sort order within each group
+    // Group by account
     const groups = {}, groupOrder = [];
     positions.forEach(function (p) {
       const grp = p.account_name || p.fund_name || 'Portfolio';
-      if (!groups[grp]) { groups[grp] = { positions: [], navSum: 0, daySum: 0, dayValid: false }; groupOrder.push(grp); }
+      if (!groups[grp]) { groups[grp] = { positions: [], navSum: 0, daySum: 0, dayValid: false, id: p.fund_id || grp }; groupOrder.push(grp); }
       groups[grp].positions.push(p);
       if (p.market_value)   groups[grp].navSum += p.market_value;
       if (p.day_change_abs != null && p.total_qty != null) {
@@ -2773,23 +2963,21 @@
       }
     });
 
-    // Load saved config from localStorage
+    // Load saved config
     let _gpSavedCfg = null;
     try {
       const raw = localStorage.getItem('gp_positions_view_config_v1');
       if (raw) _gpSavedCfg = JSON.parse(raw);
     } catch (_) {}
-    const _gpSavedOrder     = (_gpSavedCfg && _gpSavedCfg.order)      ? _gpSavedCfg.order      : null;
-    const _gpSavedCollapsed = (_gpSavedCfg && _gpSavedCfg.collapsed)   ? _gpSavedCfg.collapsed  : {};
+    const _gpSavedOrder     = (_gpSavedCfg && _gpSavedCfg.order)     ? _gpSavedCfg.order     : null;
+    const _gpSavedCollapsed = (_gpSavedCfg && _gpSavedCfg.collapsed) ? _gpSavedCfg.collapsed : {};
 
-    // Apply saved order: saved groups first (filtered to known), then new ones appended
     const knownGroups = new Set(groupOrder);
     const orderedGroups = _gpSavedOrder
       ? [ ...(_gpSavedOrder.filter(g => knownGroups.has(g))),
           ...(groupOrder.filter(g => !_gpSavedOrder.includes(g))) ]
       : groupOrder;
 
-    // Build a card per account — merge: saved collapse state takes priority over in-session state
     const prevCollapsed = {};
     grid.querySelectorAll('.gp-acct-card[data-acct]').forEach(function (c) {
       prevCollapsed[c.dataset.acct] = c.classList.contains('collapsed');
@@ -2801,13 +2989,21 @@
       const nav    = g.navSum > 0 ? fmtUSD(g.navSum) : '—';
       const chgAbs = g.dayValid ? g.daySum : null;
       const chgCls = chgAbs == null ? '' : chgAbs >= 0 ? 'up' : 'dn';
-      const chgTxt = chgAbs == null ? '' : (chgAbs >= 0 ? '+' : '') + fmtUSD(chgAbs);
-      // Saved config takes priority; fall back to in-session state; default open
+      // Dollar amount + percentage for account header
+      let chgHtml = '';
+      if (chgAbs != null) {
+        const chgAbsStr = (chgAbs >= 0 ? '+' : '') + fmtUSD(chgAbs);
+        const prevNav   = g.navSum - chgAbs;
+        const chgPct    = prevNav > 0 ? ((chgAbs / prevNav) * 100) : 0;
+        const chgPctStr = (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%';
+        chgHtml = chgAbsStr + ' (' + chgPctStr + ')';
+      }
+
       const wasCollapsed = grp in _gpSavedCollapsed
         ? _gpSavedCollapsed[grp]
         : (prevCollapsed[grp] || false);
 
-      // ── Card header ──
+      // ── Card ──
       const card = document.createElement('div');
       card.className = 'gp-acct-card' + (wasCollapsed ? ' collapsed' : '');
       card.dataset.acct = grp;
@@ -2815,20 +3011,23 @@
 
       const hdr = document.createElement('div');
       hdr.className = 'gp-acct-hdr';
-      hdr.innerHTML = '<span class="gp-acct-hdr-name">' + _esc(grp) + '</span>'
-        + '<span class="gp-acct-hdr-nav">' + nav + '</span>'
-        + (chgTxt ? '<span class="gp-acct-hdr-chg ' + chgCls + '">' + chgTxt + '</span>' : '')
+      hdr.innerHTML =
+        '<div class="gp-acct-hdr-left">'
+          + '<div class="gp-acct-hdr-name">' + _esc(grp) + '</div>'
+          + '<div class="gp-acct-hdr-sub">' + g.positions.length + ' position' + (g.positions.length !== 1 ? 's' : '') + '</div>'
+        + '</div>'
+        + '<div class="gp-acct-hdr-right">'
+          + '<div class="gp-acct-hdr-nav">' + nav + '</div>'
+          + (chgHtml ? '<div class="gp-acct-hdr-chg ' + chgCls + '">' + chgHtml + '</div>' : '')
+        + '</div>'
         + '<span class="gp-acct-chevron">▾</span>';
       hdr.addEventListener('click', function () {
         card.classList.toggle('collapsed');
-        // Track live collapse state so Save View captures it
-        if (window._gpPosCollapsedMap) {
-          window._gpPosCollapsedMap[grp] = card.classList.contains('collapsed');
-        }
+        if (window._gpPosCollapsedMap) window._gpPosCollapsedMap[grp] = card.classList.contains('collapsed');
       });
       card.appendChild(hdr);
 
-      // ── Card body — position rows ──
+      // ── Card body ──
       const body = document.createElement('div');
       body.className = 'gp-acct-body';
 
@@ -2838,20 +3037,24 @@
         let pillClass = 'nc', absStr = '—', pctStr = '';
         if (pct != null) {
           pillClass = pct > 0 ? 'up' : pct < 0 ? 'dn' : 'nc';
-          const absVal = abs != null ? abs : null;
-          absStr = absVal != null ? ((absVal >= 0 ? '+$' : '-$') + Math.abs(absVal).toFixed(2)) : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+          // Dollar change per position (abs × shares)
+          const totalQty = p.total_qty || p.quantity || 0;
+          const dollarChg = abs != null ? abs * totalQty : null;
+          absStr = dollarChg != null
+            ? (dollarChg >= 0 ? '+' : '') + fmtUSD(dollarChg)
+            : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
           pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
         }
         const wt  = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : null;
         const px  = p.last_price != null ? '$' + Number(p.last_price).toFixed(2) : '—';
-        const qty = (p.total_qty || p.quantity);
+        const qty = p.total_qty || p.quantity;
         const shares = qty != null ? Number(qty).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' sh' : '';
-        let gainTxt = '', gainColor = 'rgba(255,255,255,0.28)';
+        let gainTxt = '', gainColor = '#94a3b8';
         if (p.unrealized_gain != null) {
           const g2 = p.unrealized_gain, gPct = p.unrealized_gain_pct;
-          gainTxt = (g2 >= 0 ? '+' : '') + '$' + Math.abs(g2).toFixed(0);
+          gainTxt = (g2 >= 0 ? '+' : '') + fmtUSD(g2);
           if (gPct != null) gainTxt += ' (' + (gPct >= 0 ? '+' : '') + gPct.toFixed(1) + '%)';
-          gainColor = g2 >= 0 ? '#4ade80' : '#f87171';
+          gainColor = g2 >= 0 ? '#5BB8D4' : '#dc2626';
         }
 
         const row = document.createElement('div');
@@ -2863,7 +3066,7 @@
           + (wt     ? '<div class="gp-wl-wt">'     + wt     + ' of acct</div>' : '')
           + (shares ? '<div class="gp-wl-shares">'  + shares + '</div>' : '')
           + '</div>'
-          + '<div style="text-align:right;min-width:68px;">'
+          + '<div style="text-align:right;min-width:72px;">'
           + '<div class="gp-wl-price">' + px + '</div>'
           + (gainTxt ? '<div class="gp-wl-gain" style="color:' + gainColor + ';">' + gainTxt + '</div>' : '')
           + '</div>'

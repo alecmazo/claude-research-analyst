@@ -2845,6 +2845,140 @@ def lp_me_positions(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# v2 GP — Daily portfolio value chart (live reconstructed from positions × yfinance history)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v2/gp/portfolio-chart")
+def gp_portfolio_chart(request: Request, period: str = "ytd"):
+    """Return daily portfolio value series for the GP dashboard chart.
+
+    Reconstructs portfolio value per calendar day by multiplying each
+    position's current share count × historical closing price from yfinance.
+    This is an approximation — it does not account for intra-period trades —
+    but gives a good picture of market-driven performance.
+
+    period: ytd | 1m | 1y | 3y
+    Response: {dates:[iso], values:[float], current_value, change_abs, change_pct,
+               min_val, max_val, period}
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(status_code=403, detail="GP access required")
+    if not _PSYCOPG2_OK:
+        return {"dates": [], "values": [], "error": "DB unavailable"}
+
+    # ── 1. Get all open positions with quantities ───────────────────────────
+    try:
+        conn = _fund_conn()
+        with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT p.ticker, SUM(p.quantity) AS total_qty
+                  FROM positions p
+                  JOIN funds f ON f.id = p.fund_id
+                 WHERE f.status != 'closed'
+                   AND p.quantity > 0
+                 GROUP BY p.ticker
+                HAVING SUM(p.quantity) > 0
+            """)
+            pos_rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"dates": [], "values": [], "error": str(e)}
+
+    if not pos_rows:
+        return {"dates": [], "values": [], "current_value": 0}
+
+    tickers   = [r["ticker"] for r in pos_rows]
+    qty_map   = {r["ticker"]: float(r["total_qty"]) for r in pos_rows}
+
+    # ── 2. Determine date range ─────────────────────────────────────────────
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    period = (period or "ytd").lower().strip()
+    if period == "ytd":
+        start_date = _date(today.year, 1, 1)
+    elif period == "1m":
+        start_date = today - _td(days=31)
+    elif period == "1y":
+        start_date = today - _td(days=366)
+    elif period == "3y":
+        start_date = today - _td(days=3 * 366)
+    else:
+        start_date = _date(today.year, 1, 1)
+
+    # ── 3. Fetch historical closing prices via yfinance ─────────────────────
+    if not _YF_OK:
+        return {"dates": [], "values": [], "error": "yfinance unavailable"}
+
+    import pandas as _pd
+    try:
+        raw = yf.download(
+            tickers,
+            start=start_date.isoformat(),
+            end=(today + _td(days=1)).isoformat(),
+            progress=False,
+            auto_adjust=True,
+            threads=True,
+        )
+    except Exception as e:
+        return {"dates": [], "values": [], "error": f"yfinance error: {e}"}
+
+    if raw is None or raw.empty:
+        return {"dates": [], "values": [], "error": "No price data returned"}
+
+    # yfinance returns multi-level columns when multiple tickers: (field, ticker)
+    # Single ticker returns flat columns.
+    try:
+        if isinstance(raw.columns, _pd.MultiIndex):
+            close_df = raw["Close"]
+        else:
+            # Single ticker — make it a DataFrame with the ticker as column name
+            tk = tickers[0]
+            close_df = raw[["Close"]].rename(columns={"Close": tk})
+    except Exception:
+        return {"dates": [], "values": [], "error": "Could not extract Close prices"}
+
+    # Forward-fill missing days (weekends / holidays)
+    close_df = close_df.ffill()
+
+    # ── 4. Compute daily portfolio value ────────────────────────────────────
+    daily_values = {}
+    for dt_idx, row in close_df.iterrows():
+        dt_str = dt_idx.strftime("%Y-%m-%d") if hasattr(dt_idx, "strftime") else str(dt_idx)[:10]
+        total = 0.0
+        for tk in tickers:
+            price = row.get(tk)
+            if price is None or (hasattr(price, "__float__") and _pd.isna(price)):
+                continue
+            total += float(price) * qty_map.get(tk, 0.0)
+        if total > 0:
+            daily_values[dt_str] = round(total, 2)
+
+    if not daily_values:
+        return {"dates": [], "values": [], "error": "Could not compute portfolio values"}
+
+    sorted_dates = sorted(daily_values.keys())
+    values_list  = [daily_values[d] for d in sorted_dates]
+    start_val    = values_list[0]
+    end_val      = values_list[-1]
+    chg_abs      = round(end_val - start_val, 2)
+    chg_pct      = round((end_val - start_val) / start_val * 100, 2) if start_val else 0.0
+
+    return {
+        "dates":         sorted_dates,
+        "values":        values_list,
+        "current_value": end_val,
+        "start_value":   start_val,
+        "change_abs":    chg_abs,
+        "change_pct":    chg_pct,
+        "min_val":       round(min(values_list), 2),
+        "max_val":       round(max(values_list), 2),
+        "period":        period,
+        "tickers":       tickers,
+    }
+
+
+# ---------------------------------------------------------------------------
 # v2 LP — Aggregated portfolio history (annual + live YTD endpoint)
 # ---------------------------------------------------------------------------
 
