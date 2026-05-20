@@ -2893,10 +2893,28 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
         return {"dates": [], "values": [], "error": "DB unavailable"}
 
     # ── 1. Get all open positions with quantities ───────────────────────────
+    # Managed accounts store holdings in tax_lots + securities (uploaded via
+    # Fidelity CSV / YTD run).  LP funds use the legacy `positions` table.
+    # We union both so the chart covers the full GP portfolio.
     try:
         conn = _fund_conn()
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""
+                -- Managed-account holdings (tax_lots × securities)
+                SELECT s.symbol AS ticker, SUM(tl.quantity) AS total_qty
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                  JOIN funds f      ON f.id = tl.fund_id
+                 WHERE f.status != 'closed'
+                   AND tl.closed_at IS NULL
+                   AND tl.quantity  > 0
+                   AND s.is_public  = TRUE      -- skip money-market / private placeholders
+                 GROUP BY s.symbol
+                HAVING SUM(tl.quantity) > 0
+
+                UNION ALL
+
+                -- LP-fund holdings (legacy positions table)
                 SELECT p.ticker, SUM(p.quantity) AS total_qty
                   FROM positions p
                   JOIN funds f ON f.id = p.fund_id
@@ -2905,7 +2923,14 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
                  GROUP BY p.ticker
                 HAVING SUM(p.quantity) > 0
             """)
-            pos_rows = cur.fetchall()
+            raw_rows = cur.fetchall()
+            # Merge duplicates that appear in both tables
+            qty_acc: dict = {}
+            for r in raw_rows:
+                tk = (r["ticker"] or "").strip().upper()
+                if tk:
+                    qty_acc[tk] = qty_acc.get(tk, 0.0) + float(r["total_qty"])
+            pos_rows = [{"ticker": tk, "total_qty": qty} for tk, qty in qty_acc.items()]
         conn.close()
     except Exception as e:
         return {"dates": [], "values": [], "error": str(e)}
