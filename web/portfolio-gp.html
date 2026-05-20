@@ -1084,25 +1084,25 @@
 
   /* Fund rows (compact list) */
   .fund-row { background: #fff; border: 1px solid var(--panel-edge);
-    border-radius: 8px; margin-bottom: 5px; overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-  .fund-row-main { display: flex; align-items: center; gap: 12px;
-    padding: 8px 12px; cursor: pointer; transition: background .12s; }
+    border-radius: 6px; margin-bottom: 3px; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+  .fund-row-main { display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; cursor: pointer; transition: background .12s; }
   .fund-row-main:hover { background: rgba(91,184,212,0.06); }
   .fund-row-name { flex: 1; min-width: 0; }
-  .fund-row-name span { font-size: 12px; font-weight: 800; color: #0f172a;
+  .fund-row-name span { font-size: 11px; font-weight: 700; color: #0f172a;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-  .fund-row-badge { font-size: 8px; font-weight: 800; color: #2d7d96;
-    background: rgba(91,184,212,0.10); padding: 2px 7px; border-radius: 6px;
+  .fund-row-badge { font-size: 7px; font-weight: 800; color: #2d7d96;
+    background: rgba(91,184,212,0.10); padding: 1px 5px; border-radius: 4px;
     letter-spacing: 0.4px; white-space: nowrap; flex-shrink: 0;
     border: 1px solid rgba(91,184,212,0.20); }
-  .fund-row-stat { text-align: right; flex-shrink: 0; min-width: 80px; }
-  .fund-row-stat-val { font-size: 12px; font-weight: 700; color: #1e293b;
-    font-variant-numeric: tabular-nums; }
-  .fund-row-stat-sub { font-size: 9px; color: var(--dim); margin-top: 1px; }
-  .fund-row-nav { padding: 5px 12px 7px;
+  .fund-row-stat { text-align: right; flex-shrink: 0; min-width: 72px; }
+  .fund-row-stat-val { font-size: 11px; font-weight: 700; color: #1e293b;
+    font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .fund-row-stat-sub { font-size: 8px; color: var(--dim); margin-top: 0; }
+  .fund-row-nav { padding: 3px 10px 5px;
     border-top: 1px solid var(--panel-edge);
-    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     background: #f8fafc; }
 
   /* Fund sub-tab toggle (LP Funds | Managed Accounts) */
@@ -2283,6 +2283,14 @@
     if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
+  // Full dollar formatting — never abbreviates (used in positions gain/loss columns)
+  const fmtUSDFull = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const n = Number(v);
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
   const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
   // All timestamps displayed in Pacific Time (US West Coast).
   const _PT = { timeZone: 'America/Los_Angeles' };
@@ -3098,8 +3106,9 @@
     }
     if (loading) loading.style.display = 'none';
 
-    const W = svg.clientWidth  || 800;
-    const H = svg.clientHeight || 170;
+    const rect = svg.getBoundingClientRect();
+    const W = (rect.width  > 0 ? rect.width  : svg.parentElement?.getBoundingClientRect().width  || 800);
+    const H = (rect.height > 0 ? rect.height : svg.parentElement?.getBoundingClientRect().height || 110);
     const PAD_L = 0, PAD_R = 0, PAD_T = 12, PAD_B = 2;
     const W2 = W - PAD_L - PAD_R;
     const H2 = H - PAD_T - PAD_B;
@@ -3176,22 +3185,33 @@
       const r = await window.dgaFetch('/api/v2/gp/portfolio-chart?period=' + encodeURIComponent(_gpChartPeriod));
       if (!r.ok) throw new Error('chart ' + r.status);
       _gpChartData = await r.json();
-      _drawPortfolioChart(_gpChartData);
+      // Defer draw by one rAF so the SVG element has been laid out and has real dimensions
+      requestAnimationFrame(function () { _drawPortfolioChart(_gpChartData); });
     } catch (e) {
       console.warn('[gp-chart]', e);
       if (loading) loading.textContent = 'Chart unavailable';
     }
   }
 
-  // ── Wire period buttons ──────────────────────────────────────────
+  // ── Wire period buttons + chart strip toggle ────────────────────
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.gp-chart-period-btn').forEach(function (btn) {
       btn.addEventListener('click', function () { _loadPortfolioChart(btn.dataset.period); });
     });
+    // Redraw chart when the collapsible strip is opened (SVG has 0 size while collapsed)
+    const chartStrip = document.querySelector('.fid-chart-strip');
+    if (chartStrip) {
+      chartStrip.addEventListener('toggle', function () {
+        if (chartStrip.open && _gpChartData) {
+          requestAnimationFrame(function () { _drawPortfolioChart(_gpChartData); });
+        }
+      });
+    }
   });
 
   // ── Fidelity-style positions renderer ────────────────────────────────────
   let _fidAllPositions = [];   // full dataset — kept for sidebar-click re-filter
+  let _fidActiveAcct   = '__all__';  // currently selected sidebar account
   let _fidSortCol = 'value', _fidSortDir = -1;
 
   function _renderGPWatchlist(data) {
@@ -3297,6 +3317,7 @@
           acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
           item.classList.add('active');
           const acct = item.dataset.acct;
+          _fidActiveAcct = acct;   // persist selection across re-renders
           const nameEl = document.getElementById('fid-sel-acct-name');
           const filterPos = acct === '__all__' ? positions : ((groups[acct] || {}).positions || []);
           if (nameEl) nameEl.textContent = acct === '__all__' ? 'All Accounts' : acct;
@@ -3307,14 +3328,32 @@
           if (sc) sc.textContent = filterPos.length;
           if (sg) sg.textContent = acctGainers;
           if (sl) sl.textContent = acctLosers;
-          if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSD(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
+          if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
           _renderFidTable(filterPos);
         });
       });
     }
 
-    // ── Initial full table render ─────────────────────────────────
-    _renderFidTable(positions);
+    // ── Restore previously selected account (survives auto-refresh) ───────────
+    const savedItem = acctList.querySelector('.fid-acct-item[data-acct="' + _fidActiveAcct + '"]');
+    if (savedItem && _fidActiveAcct !== '__all__') {
+      // Re-apply active highlight without triggering a click (avoids re-render loop)
+      acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
+      savedItem.classList.add('active');
+      const filterPos = (groups[_fidActiveAcct] || {}).positions || [];
+      const nameEl = document.getElementById('fid-sel-acct-name');
+      if (nameEl) nameEl.textContent = _fidActiveAcct;
+      const acctUnreal = filterPos.reduce(function(s,p){ return s + (p.unrealized_gain||0); }, 0);
+      const acctGainers = filterPos.filter(function(p){ return (p.day_change_pct||0)>0; }).length;
+      const acctLosers  = filterPos.filter(function(p){ return (p.day_change_pct||0)<0; }).length;
+      if (sc) sc.textContent = filterPos.length;
+      if (sg) sg.textContent = acctGainers;
+      if (sl) sl.textContent = acctLosers;
+      if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
+      _renderFidTable(filterPos);
+    } else {
+      _renderFidTable(positions);
+    }
   }
 
   // ── Table renderer ────────────────────────────────────────────────────────
@@ -3333,18 +3372,20 @@
       else if (_fidSortCol === 'day')   { av = (a.day_change_abs||0)*(a.total_qty||a.quantity||0); bv = (b.day_change_abs||0)*(b.total_qty||b.quantity||0); }
       else if (_fidSortCol === 'total') { av = a.unrealized_gain||0; bv = b.unrealized_gain||0; }
       else if (_fidSortCol === 'value') { av = a.market_value||0;    bv = b.market_value||0; }
-      else if (_fidSortCol === 'pct')   { av = a.market_weight_pct||0; bv = b.market_weight_pct||0; }
+      else if (_fidSortCol === 'pct')   { av = a.market_value||0; bv = b.market_value||0; } // sort by value = sort by % within same account
       else if (_fidSortCol === 'qty')   { av = a.total_qty||a.quantity||0; bv = b.total_qty||b.quantity||0; }
       return _fidSortDir * (bv - av);
     });
 
-    // Compute totals
+    // Compute totals (also used for % of acct denominator)
     let totVal = 0, totDay = 0, totGain = 0, hasGain = false;
     positions.forEach(function(p) {
       totVal  += p.market_value || 0;
       if (p.day_change_abs != null && p.total_qty != null) totDay += p.day_change_abs * p.total_qty;
       if (p.unrealized_gain != null) { totGain += p.unrealized_gain; hasGain = true; }
     });
+    // % of account = position's value ÷ this filtered set's total (not global AUM)
+    const acctTotalForPct = totVal > 0 ? totVal : 1;
 
     const _clr = function(v) { return v >= 0 ? '#16a34a' : '#dc2626'; };
     const _s   = function(v, fmt) {
@@ -3363,19 +3404,20 @@
       const dayAbs = p.day_change_abs != null && qty != null ? p.day_change_abs * qty : null;
       const dayPct = p.day_change_pct;
       const dayCell = dayAbs != null
-        ? '<div class="fid-tbl-main" style="color:' + _clr(dayAbs) + ';">' + (dayAbs>=0?'+':'') + fmtUSD(dayAbs) + '</div>'
+        ? '<div class="fid-tbl-main" style="color:' + _clr(dayAbs) + ';">' + (dayAbs>=0?'+':'') + fmtUSDFull(dayAbs) + '</div>'
           + (dayPct!=null ? '<div class="fid-tbl-sub" style="color:' + _clr(dayPct) + ';">' + (dayPct>=0?'+':'') + dayPct.toFixed(2) + '%</div>' : '')
         : '<span style="color:#94a3b8;">—</span>';
       const gainCell = p.unrealized_gain != null
-        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain) + ';">' + (p.unrealized_gain>=0?'+':'') + fmtUSD(p.unrealized_gain) + '</div>'
+        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain) + ';">' + (p.unrealized_gain>=0?'+':'') + fmtUSDFull(p.unrealized_gain) + '</div>'
           + (p.unrealized_gain_pct!=null ? '<div class="fid-tbl-sub" style="color:' + _clr(p.unrealized_gain_pct) + ';">' + (p.unrealized_gain_pct>=0?'+':'') + p.unrealized_gain_pct.toFixed(2) + '%</div>' : '')
         : '<span style="color:#94a3b8;">—</span>';
       const cbCell = p.avg_cost
         ? '<div class="fid-tbl-main">$' + Number(p.avg_cost).toFixed(2) + '/sh</div>'
-          + (p.cost_basis ? '<div class="fid-tbl-sub">' + fmtUSD(p.cost_basis) + ' total</div>' : '')
+          + (p.cost_basis ? '<div class="fid-tbl-sub">' + fmtUSDFull(p.cost_basis) + ' total</div>' : '')
         : '<span style="color:#94a3b8;">—</span>';
       const mv = p.market_value;
-      const wt = p.market_weight_pct;
+      // % of account = this position's value ÷ the filtered account's total (not global AUM)
+      const wt = mv != null && acctTotalForPct > 0 ? (mv / acctTotalForPct * 100) : null;
 
       html += '<tr data-ticker="' + _esc(p.symbol) + '">'
         + '<td><div class="fid-tbl-ticker">' + _esc(p.symbol) + '</div><div class="fid-tbl-co">' + _esc(p.name||p.symbol) + '</div></td>'
@@ -3393,8 +3435,8 @@
     html += '<tr class="fid-tbl-total-row">'
       + '<td>Account total</td>'
       + '<td></td>'
-      + '<td><div style="color:' + _clr(totDay) + ';font-weight:700;">' + (totDay>=0?'+':'') + fmtUSD(totDay) + '</div></td>'
-      + '<td>' + (hasGain ? '<div style="color:' + _clr(totGain) + ';font-weight:700;">' + (totGain>=0?'+':'') + fmtUSD(totGain) + '</div>' : '—') + '</td>'
+      + '<td><div style="color:' + _clr(totDay) + ';font-weight:700;">' + (totDay>=0?'+':'') + fmtUSDFull(totDay) + '</div></td>'
+      + '<td>' + (hasGain ? '<div style="color:' + _clr(totGain) + ';font-weight:700;">' + (totGain>=0?'+':'') + fmtUSDFull(totGain) + '</div>' : '—') + '</td>'
       + '<td><strong>' + fmtUSD(totVal) + '</strong></td>'
       + '<td>100%</td><td></td><td></td></tr>';
 
