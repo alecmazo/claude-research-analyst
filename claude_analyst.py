@@ -3558,27 +3558,27 @@ def compute_monthly_ytd_chart(
 # from the flows list so they don't inflate or deflate XIRR / TWRR.
 # We flag them separately so the UI can show them with an explanatory label.
 _FIDELITY_TRANSFER_ACTIONS = frozenset({
-    # ── Money coming INTO this account ──────────────────────────────────────
-    # Receiving assets from another account (internal merge, ACATS consolidation,
-    # journal from sibling account).  These are NOT new external investor cash,
-    # so we exclude them from XIRR/TWRR to avoid inflating personal return.
-    "TRANSFERRED FROM",           # assets received from another account
-    "JOURNALED FROM",             # Fidelity internal journal — source side
-    "JOURNALED TO",               # Fidelity internal journal — dest side
-    "JOURNAL",                    # generic journal entry
-    "ACATS TRANSFER IN",          # ACATS cash/securities received
-    "ACATS TRANSFER OUT",         # ACATS cash/securities sent
+    # ── Unambiguously internal Fidelity operations ───────────────────────────
+    # These are bookkeeping / reorganisation events that do NOT represent new
+    # money entering or leaving the investor's overall portfolio.  They are
+    # excluded from MWRR/TWRR cash-flow math and shown separately in the UI.
+    #
+    # "TRANSFERRED FROM" and "TRANSFERRED TO" are intentionally NOT here.
+    # Whether money moves in or out via a "transfer", it is a real cash flow
+    # for this account — the investor either deposited capital (TRANSFERRED FROM
+    # an external source) or withdrew it (TRANSFERRED TO an external destination).
+    # Excluding them would cause Personal Return to ignore real timing effects.
+    #
+    # The only transactions we exclude are ones Fidelity uses internally to
+    # reorganise positions without any actual money moving:
+    "JOURNALED FROM",             # Fidelity internal journal — no external cash
+    "JOURNALED TO",               # Fidelity internal journal — no external cash
+    "JOURNAL",                    # generic Fidelity journal entry
+    "ACATS TRANSFER IN",          # whole-account ACATS move (position reorg)
+    "ACATS TRANSFER OUT",         # whole-account ACATS move (position reorg)
     "ACATS",                      # generic ACATS catch-all
-    "IN KIND TRANSFER",           # securities transferred in-kind
-    "TRANSFER IN",                # generic inbound transfer label
-    "INTERNAL TRANSFER",          # Fidelity internal account move
-
-    # ── NOTE: "TRANSFERRED TO" is intentionally NOT in this list ────────────
-    # When money leaves this account via "TRANSFERRED TO <external account>",
-    # that is a real investor withdrawal and MUST flow through to XIRR so that
-    # Personal Return is correctly reduced.  Only inbound transfers are treated
-    # as internal; outbound transfers may be going to an entirely different
-    # custodian (e.g. "TRANSFERRED TO VS X82-939459-1" = Vanguard account).
+    "IN KIND TRANSFER",           # securities transferred in-kind (no cash)
+    "INTERNAL TRANSFER",          # explicit Fidelity internal-account label
 })
 
 
