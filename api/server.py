@@ -10386,20 +10386,13 @@ async def fund_account_ytd_run(
                 _pos_sync_msg = f"positions sync failed: {str(_pos_exc)[:200]}"
                 print(f"⚠️  positions sync failed for {fund_id}: {_pos_exc}")
 
-            # If Bal.Detail (monthly_perf_file) was provided, also persist as
-            # all-time balance history so the All-Time chart is populated.
-            if mp_text:
-                try:
-                    bh_records = _parse_balance_history_csv(mp_text)
-                    if bh_records:
-                        cur.execute("""
-                            INSERT INTO account_balance_history (fund_id, data_json, updated_at)
-                            VALUES (%s, %s, now())
-                            ON CONFLICT (fund_id) DO UPDATE
-                              SET data_json = EXCLUDED.data_json, updated_at = now()
-                        """, (fid, _json.dumps(bh_records)))
-                except Exception as _bh_exc:
-                    print(f"⚠️  balance history sync failed for {fund_id}: {_bh_exc}")
+            # NOTE: The monthly_perf_file (YTD Balance Detail CSV) is intentionally
+            # NOT written to account_balance_history here.  That table is the
+            # all-time chart's source of truth and must only be populated by the
+            # dedicated "Upload to All-Time Chart" endpoint
+            # (POST /api/fund/{fund_id}/import-balance-history).
+            # Writing a YTD-only file here would overwrite multi-year all-time
+            # data with just the current year's months.
 
         conn.commit()
     finally:

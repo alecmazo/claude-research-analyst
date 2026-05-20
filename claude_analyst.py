@@ -4215,10 +4215,21 @@ def compute_unified_ytd(
         print(f"⚠️  Monthly chart failed: {mc_exc}")
 
     # ── XIRR / Money-Weighted Return (Personal Rate of Return) ────────────────
+    # Include internal transfers (ACATS, journal entries, account-to-account
+    # moves) as cash flows for XIRR.  These are excluded from TWRR/Modified
+    # Dietz because those metrics are portfolio-level and benchmark-comparable.
+    # For per-account Personal Return, a transfer IN is economically identical
+    # to a deposit: if we exclude it, XIRR sees a tiny begin_value growing to
+    # a large end_value with no flows → wildly inflated result.  Including the
+    # transfer restores the correct "how did MY timing of capital affect return?"
+    # calculation without double-counting — the offset leg (the sending account)
+    # appears there as a corresponding withdrawal.
     xirr_return_pct = None
     try:
+        _xirr_internal = flows_parse.get("internal_transfers", [])
+        _xirr_flows    = flows + _xirr_internal   # includes transfers for per-account calc
         xirr_return_pct = _compute_xirr(
-            begin_value, end_value, flows, period_start, today_dt
+            begin_value, end_value, _xirr_flows, period_start, today_dt
         )
     except Exception as xirr_exc:  # noqa: BLE001
         print(f"⚠️  XIRR failed: {xirr_exc}")

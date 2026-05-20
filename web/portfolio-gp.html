@@ -4268,14 +4268,16 @@
       let baselineNote = '';
       if (d.baseline_used) baselineNote = ' · Jan 1 balance auto-filled from saved baseline';
       stat.style.color = 'var(--green)';
-      stat.textContent = '✅ YTD saved' + (mp ? ' · All-Time chart updated' : '') + ` · ${posMsg}${baselineNote}. Reloading…`;
+      stat.textContent = `✅ YTD saved · ${posMsg}${baselineNote}. Reloading…`;
 
       // ── Populate the "Set as YTD Baseline" section ──────────────────────
       _populateBaselineSection(d);
 
       setTimeout(() => {
         loadAcctYtdSections(CURRENT_FUND_ID);
-        if (mp) loadAllTimePerf(CURRENT_FUND_ID);
+        // All-Time chart is driven by its own upload (import-balance-history).
+        // The YTD monthly_perf_file no longer writes to account_balance_history,
+        // so we must NOT call loadAllTimePerf here — it would just show stale data.
         loadAcctPositions(CURRENT_FUND_ID);
       }, 400);
     } catch (e) {
