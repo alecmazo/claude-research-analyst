@@ -668,7 +668,7 @@
   .gp-acct-hdr-right { text-align: right; flex-shrink: 0; }
   .gp-acct-hdr-nav  { font-size: 16px; font-weight: 700; color: #0A1628; font-variant-numeric: tabular-nums; }
   .gp-acct-hdr-chg  { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .gp-acct-hdr-chg.up { color: #5BB8D4; }
+  .gp-acct-hdr-chg.up { color: #16a34a; }
   .gp-acct-hdr-chg.dn { color: #dc2626; }
   .gp-acct-chevron  { font-size: 13px; color: #cbd5e1; transition: transform .18s; flex-shrink: 0; margin-left: 4px; }
   .gp-acct-card.collapsed .gp-acct-chevron { transform: rotate(-90deg); }
@@ -729,15 +729,15 @@
     min-width: 82px; padding: 5px 9px; border-radius: 8px;
     text-align: right; flex-shrink: 0;
   }
-  .gp-wl-pill.up { background: #eff9fd; }
+  .gp-wl-pill.up { background: #f0fdf4; }
   .gp-wl-pill.dn { background: #fef2f2; }
   .gp-wl-pill.nc { background: #f8fafc; }
   .gp-wl-pill-abs { font-size: 12px; font-weight: 700; line-height: 1.25; }
-  .gp-wl-pill.up .gp-wl-pill-abs { color: #5BB8D4; }
+  .gp-wl-pill.up .gp-wl-pill-abs { color: #16a34a; }
   .gp-wl-pill.dn .gp-wl-pill-abs { color: #dc2626; }
   .gp-wl-pill.nc .gp-wl-pill-abs { color: #94a3b8; }
   .gp-wl-pill-pct { font-size: 10px; font-weight: 600; line-height: 1.2; }
-  .gp-wl-pill.up .gp-wl-pill-pct { color: #3E9AB8; }
+  .gp-wl-pill.up .gp-wl-pill-pct { color: #15803d; }
   .gp-wl-pill.dn .gp-wl-pill-pct { color: #dc2626; }
   .gp-wl-pill.nc .gp-wl-pill-pct { color: #94a3b8; }
 
@@ -2909,7 +2909,7 @@
         const pct     = totalMV > 0 ? (dayChangeAbs / (totalMV - dayChangeAbs) * 100) : 0;
         const isUp    = dayChangeAbs >= 0;
         const arrow   = isUp ? '↗' : '↘';
-        const clr     = isUp ? '#5BB8D4' : '#dc2626';
+        const clr     = isUp ? '#16a34a' : '#dc2626';
         const absStr  = (isUp ? '+' : '') + fmtUSD(dayChangeAbs);
         const pctStr  = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
         dayEl.innerHTML = '<span class="gp-wl-day-arrow" style="color:' + clr + ';">' + arrow + '</span>'
@@ -2930,7 +2930,7 @@
     if (statAccts)   statAccts.textContent = data.account_count || '—';
     const gainers = positions.filter(function (p) { return (p.day_change_pct || 0) > 0; }).length;
     const losers  = positions.filter(function (p) { return (p.day_change_pct || 0) < 0; }).length;
-    if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#5BB8D4' : '#0A1628'; }
+    if (statGainers) { statGainers.textContent = gainers; statGainers.style.color = gainers > 0 ? '#16a34a' : '#0A1628'; }
     if (statLosers)  { statLosers.textContent  = losers;  statLosers.style.color  = losers  > 0 ? '#dc2626' : '#0A1628'; }
     let totalUnreal = 0, hasUnreal = false;
     positions.forEach(function (p) {
@@ -2939,7 +2939,7 @@
     if (statGain) {
       if (hasUnreal) {
         statGain.textContent = (totalUnreal >= 0 ? '+' : '') + fmtUSD(totalUnreal);
-        statGain.style.color = totalUnreal >= 0 ? '#5BB8D4' : '#dc2626';
+        statGain.style.color = totalUnreal >= 0 ? '#16a34a' : '#dc2626';
       } else {
         statGain.textContent = '—';
         statGain.style.color = '#94a3b8';
@@ -3054,7 +3054,7 @@
           const g2 = p.unrealized_gain, gPct = p.unrealized_gain_pct;
           gainTxt = (g2 >= 0 ? '+' : '') + fmtUSD(g2);
           if (gPct != null) gainTxt += ' (' + (gPct >= 0 ? '+' : '') + gPct.toFixed(1) + '%)';
-          gainColor = g2 >= 0 ? '#5BB8D4' : '#dc2626';
+          gainColor = g2 >= 0 ? '#16a34a' : '#dc2626';
         }
 
         const row = document.createElement('div');
