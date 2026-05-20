@@ -3558,18 +3558,27 @@ def compute_monthly_ytd_chart(
 # from the flows list so they don't inflate or deflate XIRR / TWRR.
 # We flag them separately so the UI can show them with an explanatory label.
 _FIDELITY_TRANSFER_ACTIONS = frozenset({
-    "TRANSFERRED FROM",           # ACATS or internal transfer received
-    "TRANSFERRED TO",             # ACATS or internal transfer sent
-    "JOURNALED FROM",             # Fidelity internal journal (source side)
-    "JOURNALED TO",               # Fidelity internal journal (dest side)
+    # ── Money coming INTO this account ──────────────────────────────────────
+    # Receiving assets from another account (internal merge, ACATS consolidation,
+    # journal from sibling account).  These are NOT new external investor cash,
+    # so we exclude them from XIRR/TWRR to avoid inflating personal return.
+    "TRANSFERRED FROM",           # assets received from another account
+    "JOURNALED FROM",             # Fidelity internal journal — source side
+    "JOURNALED TO",               # Fidelity internal journal — dest side
     "JOURNAL",                    # generic journal entry
     "ACATS TRANSFER IN",          # ACATS cash/securities received
     "ACATS TRANSFER OUT",         # ACATS cash/securities sent
     "ACATS",                      # generic ACATS catch-all
     "IN KIND TRANSFER",           # securities transferred in-kind
-    "TRANSFER IN",                # generic transfer-in string
-    "TRANSFER OUT",               # generic transfer-out string
+    "TRANSFER IN",                # generic inbound transfer label
     "INTERNAL TRANSFER",          # Fidelity internal account move
+
+    # ── NOTE: "TRANSFERRED TO" is intentionally NOT in this list ────────────
+    # When money leaves this account via "TRANSFERRED TO <external account>",
+    # that is a real investor withdrawal and MUST flow through to XIRR so that
+    # Personal Return is correctly reduced.  Only inbound transfers are treated
+    # as internal; outbound transfers may be going to an entirely different
+    # custodian (e.g. "TRANSFERRED TO VS X82-939459-1" = Vanguard account).
 })
 
 
