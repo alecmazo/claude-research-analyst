@@ -3118,6 +3118,12 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
         for abbr, num in _MONTH_NAMES.items():
             if s.startswith(abbr):
                 return num
+        # YY-MMM format (e.g. "26-May" → year-first, month name after dash)
+        m_yymmm = _re_mp.match(r"^(\d{2})-([a-z]{3})", s)
+        if m_yymmm:
+            abbr = m_yymmm.group(2)
+            if abbr in _MONTH_NAMES:
+                return _MONTH_NAMES[abbr]
         # numeric: 01/2026 or 1/2026 or 2026-01
         m = _re_mp.search(r"(?:^|[-/])(\d{1,2})(?:[-/]\d{4})?$", s)
         if m:
@@ -3127,12 +3133,17 @@ def parse_fidelity_monthly_perf(raw_text: str) -> dict:
         return None
 
     def _parse_year_from_label(s: str) -> int | None:
-        # Fidelity formats: "May 2026(As of...)" or "Apr-26" or "Jan 2017"
+        # Fidelity formats: "May 2026(As of...)" or "Apr-26" or "Jan 2017" or "26-May"
         s = _re_mp.sub(r"\(.*?\)", "", s).strip()
         # 4-digit year anywhere
         m4 = _re_mp.search(r"\b(19\d{2}|20\d{2})\b", s)
         if m4:
             return int(m4.group(1))
+        # YY-MMM format: digits before the dash are the year (e.g. "26-May")
+        m_yymmm = _re_mp.match(r"^(\d{2})-[a-zA-Z]", s)
+        if m_yymmm:
+            yr = int(m_yymmm.group(1))
+            return 2000 + yr if yr < 50 else 1900 + yr
         # 2-digit year after a dash: "Apr-26"
         m2 = _re_mp.search(r"-(\d{2})\b", s)
         if m2:

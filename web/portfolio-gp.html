@@ -4287,6 +4287,8 @@
     btn.style.opacity = ready ? '1' : '.45';
     btn.style.cursor  = ready ? 'pointer' : 'not-allowed';
   }
+  // Expose to global scope so inline oninput attributes can reach it from inside the IIFE
+  window._blCheckEnable = _blCheckEnable;
 
   /** Populate the "Set as YTD Baseline" panel from a completed YTD run result. */
   function _populateBaselineSection(d) {
