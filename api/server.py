@@ -2908,7 +2908,7 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
                  WHERE f.status != 'closed'
                    AND tl.closed_at IS NULL
                    AND tl.quantity  > 0
-                   AND s.is_public  = TRUE      -- skip money-market / private placeholders
+                   AND s.asset_class != 'cash'  -- skip money-market / cash placeholders
                  GROUP BY s.symbol
                 HAVING SUM(tl.quantity) > 0
 
@@ -2957,7 +2957,7 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
         start_date = _date(today.year, 1, 1)
 
     # ── 3. Fetch historical closing prices via yfinance ─────────────────────
-    if not _YF_OK:
+    if not _YFINANCE_OK:
         return {"dates": [], "values": [], "error": "yfinance unavailable"}
 
     import pandas as _pd
@@ -9390,13 +9390,18 @@ async def fund_import_positions(
             sec_ids = {}
             for p in positions:
                 sym = p["symbol"]
+                is_cash = bool(p["is_cash"])
                 cur.execute("""
                     INSERT INTO securities (symbol, name, asset_class, is_public)
-                    VALUES (%s, %s, %s, TRUE)
-                    ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (symbol) DO UPDATE
+                        SET name        = EXCLUDED.name,
+                            asset_class = EXCLUDED.asset_class,
+                            is_public   = EXCLUDED.is_public
                     RETURNING id
                 """, (sym, p["name"] or sym,
-                      "cash" if p["is_cash"] else "equity"))
+                      "cash" if is_cash else "equity",
+                      not is_cash))  # is_public=TRUE for equities, FALSE for cash
                 sec_ids[sym] = str(cur.fetchone()["id"])
 
             # ── Close all existing open lots ──────────────────────────────
@@ -10340,16 +10345,22 @@ async def fund_account_ytd_run(
                     cap_acct  = acct_map.get("3000")
 
                     if sec_acct and cap_acct:
-                        # Upsert securities
+                        # Upsert securities — update asset_class and is_public on conflict
+                        # so pre-existing rows with wrong values get corrected.
                         sec_ids = {}
                         for p in positions_parsed:
+                            _is_cash = bool(p["is_cash"])
                             cur.execute("""
                                 INSERT INTO securities (symbol, name, asset_class, is_public)
-                                VALUES (%s, %s, %s, TRUE)
-                                ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT (symbol) DO UPDATE
+                                    SET name        = EXCLUDED.name,
+                                        asset_class = EXCLUDED.asset_class,
+                                        is_public   = EXCLUDED.is_public
                                 RETURNING id
                             """, (p["symbol"], p["name"] or p["symbol"],
-                                  "cash" if p["is_cash"] else "equity"))
+                                  "cash" if _is_cash else "equity",
+                                  not _is_cash))  # is_public=TRUE for equities
                             sec_ids[p["symbol"]] = str(cur.fetchone()["id"])
 
                         # Close existing open lots

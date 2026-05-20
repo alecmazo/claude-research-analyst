@@ -608,11 +608,23 @@
   .fid-acct-list { flex: 1; overflow-y: auto; }
   .fid-acct-item {
     padding: 10px 16px; border-left: 3px solid transparent;
-    border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background .1s;
+    border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background .1s; position: relative;
   }
   .fid-acct-item:hover { background: #f8fafc; }
   .fid-acct-item.active { border-left-color: #5BB8D4; background: #f0f9ff; }
-  .fid-acct-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .fid-acct-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  /* Up/down reorder buttons — only visible on item hover */
+  .fid-acct-sort-btns {
+    display: none; flex-direction: column; gap: 0; flex-shrink: 0;
+  }
+  .fid-acct-item:hover .fid-acct-sort-btns { display: flex; }
+  .fid-sort-btn {
+    background: none; border: none; cursor: pointer; padding: 0 3px;
+    font-size: 8px; line-height: 1.3; color: #94a3b8; border-radius: 2px;
+    transition: background .1s, color .1s;
+  }
+  .fid-sort-btn:hover { background: #cbd5e1; color: #1e293b; }
+  .fid-sort-btn:disabled { opacity: 0.2; cursor: default; }
   .fid-acct-name {
     font-size: 12px; font-weight: 700; color: #1e293b;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
@@ -3119,7 +3131,8 @@
     if (!svg) return;
 
     if (!data || !data.dates || data.dates.length < 2) {
-      if (loading) loading.textContent = 'No chart data available';
+      const errMsg = data && data.error ? ('Chart error: ' + data.error) : 'No chart data available — run a YTD upload to populate positions';
+      if (loading) { loading.style.display = 'flex'; loading.textContent = errMsg; }
       return;
     }
     if (loading) loading.style.display = 'none';
@@ -3243,6 +3256,14 @@
   let _fidActiveAcct   = '__all__';  // currently selected sidebar account
   let _fidSortCol = 'value', _fidSortDir = -1;
 
+  // ── Account sidebar order (persisted in localStorage) ────────────────────
+  let _fidAcctOrder = [];
+  try { _fidAcctOrder = JSON.parse(localStorage.getItem('_dga_acct_order') || '[]'); } catch(e) {}
+  function _saveAcctOrder(arr) {
+    _fidAcctOrder = arr.slice();
+    try { localStorage.setItem('_dga_acct_order', JSON.stringify(_fidAcctOrder)); } catch(e) {}
+  }
+
   function _renderGPWatchlist(data) {
     const positions = (data.positions || []).slice().sort(function (a, b) {
       return (b.market_value || 0) - (a.market_value || 0);
@@ -3308,10 +3329,22 @@
       }
     });
 
+    // ── Apply saved account order ─────────────────────────────────
+    // New accounts (not yet in saved order) are appended at the end.
+    if (_fidAcctOrder.length) {
+      groupOrder.sort(function(a, b) {
+        var ia = _fidAcctOrder.indexOf(a);
+        var ib = _fidAcctOrder.indexOf(b);
+        if (ia < 0) ia = 9999;
+        if (ib < 0) ib = 9999;
+        return ia - ib;
+      });
+    }
+
     // ── Build sidebar account list ────────────────────────────────
     const acctList = document.getElementById('fid-acct-list');
     if (acctList) {
-      // All Accounts entry
+      // All Accounts entry (no reorder buttons)
       let html = '<div class="fid-acct-item active" data-acct="__all__">'
         + '<div class="fid-acct-row"><div class="fid-acct-name">All Accounts</div>'
         + '<div class="fid-acct-val">' + (totalMV_ref > 0 ? fmtUSD(totalMV_ref) : '—') + '</div></div>';
@@ -3323,7 +3356,7 @@
       }
       html += '<div class="fid-acct-sub">' + positions.length + ' positions · ' + groupOrder.length + ' account' + (groupOrder.length!==1?'s':'') + '</div></div>';
 
-      groupOrder.forEach(function(grp) {
+      groupOrder.forEach(function(grp, idx) {
         const g = groups[grp];
         let dayRow = '';
         if (g.dayValid) {
@@ -3332,17 +3365,31 @@
           const clr  = isUp ? '#16a34a' : '#dc2626';
           dayRow = '<div class="fid-acct-day" style="color:' + clr + ';">' + (isUp?'+':'') + fmtUSD(g.daySum) + ' (' + (pct>=0?'+':'') + pct.toFixed(2) + '%)</div>';
         }
-        html += '<div class="fid-acct-item" data-acct="' + _esc(grp) + '">'
-          + '<div class="fid-acct-row"><div class="fid-acct-name">' + _esc(grp) + '</div>'
-          + '<div class="fid-acct-val">' + (g.navSum > 0 ? fmtUSD(g.navSum) : '—') + '</div></div>'
+        // Up/down reorder buttons (disabled at boundaries)
+        const upDis  = idx === 0             ? ' disabled' : '';
+        const dnDis  = idx === groupOrder.length - 1 ? ' disabled' : '';
+        const sortBtns = '<div class="fid-acct-sort-btns">'
+          + '<button class="fid-sort-btn" data-sort-move="up"' + upDis + ' title="Move up">▲</button>'
+          + '<button class="fid-sort-btn" data-sort-move="down"' + dnDis + ' title="Move down">▼</button>'
+          + '</div>';
+        html += '<div class="fid-acct-item" data-acct="' + _esc(grp) + '" data-sort-idx="' + idx + '">'
+          + '<div class="fid-acct-row">'
+          + '<div class="fid-acct-name">' + _esc(grp) + '</div>'
+          + '<div style="display:flex;align-items:center;gap:4px;">'
+          + sortBtns
+          + '<div class="fid-acct-val">' + (g.navSum > 0 ? fmtUSD(g.navSum) : '—') + '</div>'
+          + '</div>'
+          + '</div>'
           + dayRow
           + '<div class="fid-acct-sub">' + g.positions.length + ' position' + (g.positions.length!==1?'s':'') + '</div></div>';
       });
       acctList.innerHTML = html;
 
-      // Sidebar click → filter table
+      // Sidebar click → filter table (ignore clicks on sort buttons)
       acctList.querySelectorAll('.fid-acct-item').forEach(function(item) {
-        item.addEventListener('click', function() {
+        item.addEventListener('click', function(e) {
+          // Don't trigger account selection when clicking sort buttons
+          if (e.target.closest('.fid-acct-sort-btns')) return;
           acctList.querySelectorAll('.fid-acct-item').forEach(function(i) { i.classList.remove('active'); });
           item.classList.add('active');
           const acct = item.dataset.acct;
@@ -3359,6 +3406,27 @@
           if (sl) sl.textContent = acctLosers;
           if (su) { su.textContent = (acctUnreal>=0?'+':'') + fmtUSDFull(acctUnreal); su.style.color = acctUnreal>=0?'#16a34a':'#dc2626'; }
           _renderFidTable(filterPos);
+        });
+      });
+
+      // ── Sort button handlers ──────────────────────────────────────
+      acctList.querySelectorAll('.fid-sort-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation(); // don't trigger account selection
+          const item = btn.closest('.fid-acct-item');
+          if (!item) return;
+          const idx  = parseInt(item.dataset.sortIdx, 10);
+          const dir  = btn.dataset.sortMove === 'up' ? -1 : 1;
+          const newIdx = idx + dir;
+          if (newIdx < 0 || newIdx >= groupOrder.length) return;
+          // Swap in groupOrder
+          const tmp = groupOrder[idx];
+          groupOrder[idx]    = groupOrder[newIdx];
+          groupOrder[newIdx] = tmp;
+          _saveAcctOrder(groupOrder);
+          // Re-render sidebar only (fast, no API call)
+          // Rebuild HTML in-place by calling the sidebar build portion again
+          _renderGPWatchlist({ positions: _fidAllPositions, total_market_value: data.total_market_value });
         });
       });
     }
