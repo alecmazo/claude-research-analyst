@@ -1084,11 +1084,11 @@
 
   /* Fund rows (compact list) */
   .fund-row { background: #fff; border: 1px solid var(--panel-edge);
-    border-radius: 6px; margin-bottom: 3px; overflow: hidden;
+    border-radius: 5px; margin-bottom: 2px; overflow: hidden;
     box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
   .fund-row-main { display: flex; align-items: center; gap: 8px;
-    padding: 5px 10px; cursor: pointer; transition: background .12s; }
-  .fund-row-main:hover { background: rgba(91,184,212,0.06); }
+    padding: 4px 10px; cursor: pointer; transition: background .12s; min-height: 32px; }
+  .fund-row-main:hover { background: rgba(91,184,212,0.05); }
   .fund-row-name { flex: 1; min-width: 0; }
   .fund-row-name span { font-size: 11px; font-weight: 700; color: #0f172a;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
@@ -1096,14 +1096,22 @@
     background: rgba(91,184,212,0.10); padding: 1px 5px; border-radius: 4px;
     letter-spacing: 0.4px; white-space: nowrap; flex-shrink: 0;
     border: 1px solid rgba(91,184,212,0.20); }
-  .fund-row-stat { text-align: right; flex-shrink: 0; min-width: 72px; }
+  .fund-row-stat { text-align: right; flex-shrink: 0; min-width: 64px; }
   .fund-row-stat-val { font-size: 11px; font-weight: 700; color: #1e293b;
-    font-variant-numeric: tabular-nums; line-height: 1.2; }
+    font-variant-numeric: tabular-nums; line-height: 1.1; }
   .fund-row-stat-sub { font-size: 8px; color: var(--dim); margin-top: 0; }
-  .fund-row-nav { padding: 3px 10px 5px;
+  /* NAV input row — hidden by default, revealed when .nav-open is on the card */
+  .fund-row-nav { padding: 4px 10px 5px;
     border-top: 1px solid var(--panel-edge);
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    display: none; align-items: center; gap: 6px; flex-wrap: wrap;
     background: #f8fafc; }
+  .fund-row.nav-open .fund-row-nav { display: flex; }
+  /* Small toggle button on each row */
+  .fund-row-nav-toggle { background: none; border: none; cursor: pointer;
+    color: #94a3b8; font-size: 13px; line-height: 1; padding: 0 2px;
+    flex-shrink: 0; transition: color .12s; }
+  .fund-row-nav-toggle:hover { color: #5BB8D4; }
+  .fund-row.nav-open .fund-row-nav-toggle { color: #5BB8D4; }
 
   /* Fund sub-tab toggle (LP Funds | Managed Accounts) */
   .fund-subtab { position: relative; padding-right: 36px !important; }
@@ -3588,6 +3596,7 @@
               <div class="fund-row-stat-sub">committed</div>
             </div>` : ''}
             <span style="font-size:9px;color:var(--blue);font-weight:700;letter-spacing:0.4px;flex-shrink:0;">VIEW →</span>
+            <button class="fund-row-nav-toggle" data-nav-toggle="${fid}" title="Set NAV snapshot" onclick="event.stopPropagation();this.closest('.fund-row').classList.toggle('nav-open');">✎</button>
             <button data-purge-fund="${fid}" data-purge-name="${_safeAttr(fname)}" title="Delete ${isAcct ? 'account' : 'fund'}"
               style="width:16px;height:16px;border-radius:50%;background:rgba(204,51,51,0.12);border:1px solid rgba(204,51,51,0.28);color:#cc3333;font-size:11px;line-height:1;cursor:pointer;padding:0;flex-shrink:0;display:flex;align-items:center;justify-content:center;">×</button>
           </div>
@@ -3624,7 +3633,8 @@
       const wireCards = (el) => {
         el.querySelectorAll('[data-fund-id]').forEach(card => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn],[data-purge-fund]')) return;
+            if (e.target.closest('[data-nav-input],[data-nav-date],[data-nav-btn],[data-purge-fund],[data-nav-toggle],[data-nav-mkt]')) return;
+            if (e.target.closest('.fund-row-nav')) return;
             openFundDetail(card.dataset.fundId, card.dataset.fundName);
           });
         });
