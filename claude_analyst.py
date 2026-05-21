@@ -5751,7 +5751,8 @@ def call_claude(system_prompt: str, user_content: str,
                 model: str = CLAUDE_MODEL,
                 *,
                 live_search: bool = False,           # accepted for signature parity with call_grok; ignored
-                search_from_date: str | None = None  # accepted for parity; ignored
+                search_from_date: str | None = None, # accepted for parity; ignored
+                on_delta=None,                       # optional callable(str) invoked for each streamed chunk
                 ) -> str:
     """Call Anthropic Claude. Same signature as :func:`call_grok` so the
     analyze_ticker pipeline can swap providers via a single parameter.
@@ -5761,6 +5762,10 @@ def call_claude(system_prompt: str, user_content: str,
     reasons longer) easily crosses that threshold even when wall-clock
     latency is well under 10 min. We accumulate the streamed text and
     return it as a single string so the caller never has to care.
+
+    If ``on_delta`` is provided, it's invoked with each text chunk as it
+    arrives — enables the UI to render the report live. Exceptions in the
+    callback are swallowed so a buggy listener can't crash the LLM call.
 
     Note: ``live_search`` and ``search_from_date`` are accepted but ignored —
     Anthropic's API doesn't have an equivalent server-side search tool. The
@@ -5781,22 +5786,34 @@ def call_claude(system_prompt: str, user_content: str,
     ) as stream:
         # text_stream yields raw text deltas as they arrive
         for delta in stream.text_stream:
-            if delta:
-                chunks.append(delta)
+            if not delta:
+                continue
+            chunks.append(delta)
+            if on_delta is not None:
+                try:
+                    on_delta(delta)
+                except Exception:  # noqa: BLE001
+                    pass  # listener bugs must never break the LLM call
     return "".join(chunks)
 
 
 def call_llm(provider: str, system_prompt: str, user_content: str,
-             *, live_search: bool = False) -> str:
+             *, live_search: bool = False, on_delta=None) -> str:
     """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude'}.
+
+    ``on_delta`` is forwarded to providers that support streaming (Claude).
+    Grok's call uses non-streaming chat.completions / Responses today so
+    the callback is ignored there — the report appears all at once when
+    the call returns.
 
     Centralised so analyze_ticker stays clean and any future provider
     (gpt-5, gemini, etc.) only needs one branch added here.
     """
     p = (provider or "grok").lower().strip()
     if p == "claude":
-        return call_claude(system_prompt, user_content)
+        return call_claude(system_prompt, user_content, on_delta=on_delta)
     if p == "grok":
+        # call_grok is non-streaming; on_delta is ignored.
         return call_grok(system_prompt, user_content, live_search=live_search)
     raise ValueError(f"Unknown LLM provider: {provider!r}")
 
@@ -6216,7 +6233,8 @@ def _gamma_generate(input_text: str, num_cards: int,
 # ============================================================================
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
                    verbose: bool = True, reuse_existing: bool = False,
-                   on_progress=None, llm_provider: str = "grok") -> dict:
+                   on_progress=None, llm_provider: str = "grok",
+                   on_delta=None) -> dict:
     """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
 
     Any uncaught exception inside the pipeline is converted to a structured
@@ -6242,6 +6260,7 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             reuse_existing=reuse_existing,
             on_progress=on_progress,
             llm_provider=llm_provider,
+            on_delta=on_delta,
         )
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
@@ -6273,7 +6292,8 @@ def _emit_progress(on_progress, step: str, pct: float, label: str = "") -> None:
 
 def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
                          verbose: bool = True, reuse_existing: bool = False,
-                         on_progress=None, llm_provider: str = "grok") -> dict:
+                         on_progress=None, llm_provider: str = "grok",
+                         on_delta=None) -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
@@ -6435,7 +6455,8 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
                    + (" + live X/news search" if llm_provider == "grok" else ""))
     try:
         report_text = call_llm(llm_provider, system_prompt, user_msg,
-                               live_search=(llm_provider == "grok"))
+                               live_search=(llm_provider == "grok"),
+                               on_delta=on_delta)
     except Exception as exc:  # noqa: BLE001
         print(f"   ❌ {llm_provider.upper()} API error: {exc}")
         result["error"] = f"{llm_provider.title()}: {exc}"

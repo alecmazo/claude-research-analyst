@@ -4266,16 +4266,28 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
     Writes to "{ticker}_DGA_Report_{provider}.md" instead of the canonical path.
     Does NOT persist to the analyst_reports DB table — the comparison report
     is intentionally treated as a side artifact, not a replacement.
+
+    on_delta hook: while the LLM is streaming, each text chunk is appended
+    to _jobs[job_id]['streamed_text'] so the frontend can poll and render
+    the report live in the comparison modal.
     """
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
         _jobs[job_id]["progress"] = {"step": "queued", "pct": 0.0,
                                       "label": f"Comparing with {provider.title()}…"}
+        _jobs[job_id]["streamed_text"] = ""    # filled by _record_delta below
 
     def _record(step: str, pct: float, label: str) -> None:
         with _jobs_lock:
             if job_id in _jobs:
                 _jobs[job_id]["progress"] = {"step": step, "pct": pct, "label": label}
+
+    def _record_delta(text: str) -> None:
+        if not text:
+            return
+        with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id]["streamed_text"] += text
 
     try:
         result = analyst.analyze_ticker(
@@ -4285,6 +4297,7 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
             verbose=False,
             on_progress=_record,
             llm_provider=provider,
+            on_delta=_record_delta,
         )
         with _jobs_lock:
             if result.get("ok"):
@@ -4342,6 +4355,7 @@ def start_report_compare(ticker: str, request: Request,
             "error":            None,
             "result":           None,
             "compare_provider": provider,
+            "streamed_text":    "",   # filled by Claude streaming deltas in _run_compare_analysis
             "progress":         {"step": "queued", "pct": 0.0,
                                   "label": f"Queued — {provider.title()} comparison"},
         }

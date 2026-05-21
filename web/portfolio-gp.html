@@ -735,6 +735,7 @@
   .cmp-progress-fill {
     height: 100%; background: #d97706; width: 0%; transition: width .4s;
   }
+  @keyframes cmpBlink { 50% { opacity: 0; } }
   .rep-date { color: var(--dim); font-size: 10px; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
 
@@ -9310,9 +9311,18 @@
     if (alt.has_report) {
       altPane = '<div class="cmp-pane-body">' + _cmpMdToHtml(alt.text) + '</div>';
     } else if (_cmpActiveJobId && _cmpActiveTicker === tk) {
-      altPane = '<div class="cmp-progress" id="cmp-progress-' + tk + '">'
+      // Live-streaming state: sticky progress header on top + scrollable body
+      // below that progressively fills with the rendered Markdown as deltas
+      // arrive from /api/jobs/{id} polling (1s interval while streaming).
+      altPane = '<div style="display:flex;flex-direction:column;height:100%;">'
+        + '<div class="cmp-progress" id="cmp-progress-' + tk + '" style="margin:0;border-radius:0;'
+        + 'border-bottom:1px solid #fed7aa;flex-shrink:0;">'
         + '<div id="cmp-progress-label">Starting comparison…</div>'
         + '<div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmp-progress-fill"></div></div>'
+        + '</div>'
+        + '<div class="cmp-pane-body" id="cmp-stream-body" style="flex:1;">'
+        + '<div style="color:#94a3b8;font-style:italic;font-size:11px;">Waiting for first tokens…</div>'
+        + '</div>'
         + '</div>';
     } else {
       altPane = '<div class="cmp-pane-empty">'
@@ -9391,12 +9401,19 @@
       // Re-render modal to show progress block
       const data = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
       _cmpRenderModal(data);
-      // Start polling
-      _cmpPollTimer = setInterval(function() { _cmpPollCompare(ticker, provider, job.job_id); }, 5000);
+      // Poll fast (1s) while streaming so the live-text view is fluid.
+      _cmpPollTimer = setInterval(function() { _cmpPollCompare(ticker, provider, job.job_id); }, 1000);
       _cmpPollCompare(ticker, provider, job.job_id);
     } catch (e) {
       alert('Could not start compare: ' + e.message);
     }
+  }
+
+  // Track scroll position so we only auto-follow if user is already at bottom.
+  // If they scroll up to read earlier sections, we leave them alone.
+  function _cmpIsAtBottom(el, slack) {
+    if (!el) return true;
+    return (el.scrollTop + el.clientHeight) >= (el.scrollHeight - (slack || 24));
   }
 
   async function _cmpPollCompare(ticker, provider, jobId) {
@@ -9404,11 +9421,32 @@
       const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
       if (!r.ok) throw new Error('job ' + r.status);
       const job = await r.json();
-      // Update progress text
-      const lbl = document.getElementById('cmp-progress-label');
+
+      // ── Update progress header ────────────────────────────────────────
+      const lbl  = document.getElementById('cmp-progress-label');
       const fill = document.getElementById('cmp-progress-fill');
-      if (lbl && job.progress) lbl.textContent = job.progress.label + ' — ' + Math.round((job.progress.pct||0)*100) + '%';
+      if (lbl && job.progress) {
+        const pct = Math.round((job.progress.pct || 0) * 100);
+        const streamedLen = (job.streamed_text || '').length;
+        let suffix = ' — ' + pct + '%';
+        if (job.status === 'running' && streamedLen > 0) {
+          // Once tokens are flowing, show a live char count instead of %
+          suffix = ' — streaming · ' + streamedLen.toLocaleString() + ' chars';
+        }
+        lbl.textContent = (job.progress.label || 'Running') + suffix;
+      }
       if (fill && job.progress) fill.style.width = Math.round((job.progress.pct||0)*100) + '%';
+
+      // ── Live-render streamed text into the right pane body ────────────
+      const streamBody = document.getElementById('cmp-stream-body');
+      if (streamBody && job.streamed_text) {
+        const wasAtBottom = _cmpIsAtBottom(streamBody, 40);
+        streamBody.innerHTML = _cmpMdToHtml(job.streamed_text)
+          + '<span style="display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;"></span>';
+        if (wasAtBottom) streamBody.scrollTop = streamBody.scrollHeight;
+      }
+
+      // ── Terminal states ───────────────────────────────────────────────
       if (job.status === 'done' || job.status === 'failed') {
         clearInterval(_cmpPollTimer); _cmpPollTimer = null;
         if (job.status === 'failed') {
@@ -9416,7 +9454,8 @@
           return;
         }
         _cmpActiveJobId = null;
-        // Re-fetch comparison data and re-render with the new alt pane filled in
+        // Re-fetch comparison data so the summary strip + final formatted
+        // text replace the streaming view (drops the blinking cursor too).
         try {
           const d = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
           _cmpRenderModal(d);
