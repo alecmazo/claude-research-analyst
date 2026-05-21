@@ -5756,6 +5756,12 @@ def call_claude(system_prompt: str, user_content: str,
     """Call Anthropic Claude. Same signature as :func:`call_grok` so the
     analyze_ticker pipeline can swap providers via a single parameter.
 
+    Uses the STREAMING API because Anthropic requires streaming for any
+    request that may take >10 min — large max_tokens with Opus (which
+    reasons longer) easily crosses that threshold even when wall-clock
+    latency is well under 10 min. We accumulate the streamed text and
+    return it as a single string so the caller never has to care.
+
     Note: ``live_search`` and ``search_from_date`` are accepted but ignored —
     Anthropic's API doesn't have an equivalent server-side search tool. The
     pipeline's existing data-gathering (SEC, yfinance, news cache) is baked
@@ -5766,22 +5772,18 @@ def call_claude(system_prompt: str, user_content: str,
     from anthropic import Anthropic   # type: ignore
 
     client = Anthropic(api_key=get_claude_api_key())
-    resp = client.messages.create(
+    chunks: list[str] = []
+    with client.messages.stream(
         model=model,
         max_tokens=16000,   # generous — DGA reports run ~6-10k tokens
         system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
-    )
-    # Concatenate any text blocks the model returned.
-    chunks: list[str] = []
-    for block in (resp.content or []):
-        # SDK objects have a .text attr; dict shape uses {"type":"text","text":...}
-        text = getattr(block, "text", None)
-        if text is None and isinstance(block, dict):
-            text = block.get("text") if block.get("type") == "text" else None
-        if text:
-            chunks.append(text)
-    return "\n".join(chunks)
+    ) as stream:
+        # text_stream yields raw text deltas as they arrive
+        for delta in stream.text_stream:
+            if delta:
+                chunks.append(delta)
+    return "".join(chunks)
 
 
 def call_llm(provider: str, system_prompt: str, user_content: str,
