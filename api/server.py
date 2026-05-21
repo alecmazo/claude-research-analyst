@@ -2893,14 +2893,14 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
         return {"dates": [], "values": [], "error": "DB unavailable"}
 
     # ── 1. Get all open positions with quantities ───────────────────────────
-    # Managed accounts store holdings in tax_lots + securities (uploaded via
-    # Fidelity CSV / YTD run).  LP funds use the legacy `positions` table.
-    # We union both so the chart covers the full GP portfolio.
+    # ALL holdings (managed accounts AND LP fund stakes) live in `tax_lots`
+    # joined to `securities`. There is no separate `positions` table — earlier
+    # versions of this code assumed one existed and broke production with
+    # "relation positions does not exist". One query covers everything.
     try:
         conn = _fund_conn()
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""
-                -- Managed-account holdings (tax_lots × securities)
                 SELECT s.symbol AS ticker, SUM(tl.quantity) AS total_qty
                   FROM tax_lots tl
                   JOIN securities s ON s.id = tl.security_id
@@ -2911,32 +2911,23 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
                    AND s.asset_class != 'cash'  -- skip money-market / cash placeholders
                  GROUP BY s.symbol
                 HAVING SUM(tl.quantity) > 0
-
-                UNION ALL
-
-                -- LP-fund holdings (legacy positions table)
-                SELECT p.ticker, SUM(p.quantity) AS total_qty
-                  FROM positions p
-                  JOIN funds f ON f.id = p.fund_id
-                 WHERE f.status != 'closed'
-                   AND p.quantity > 0
-                 GROUP BY p.ticker
-                HAVING SUM(p.quantity) > 0
             """)
-            raw_rows = cur.fetchall()
-            # Merge duplicates that appear in both tables
-            qty_acc: dict = {}
-            for r in raw_rows:
-                tk = (r["ticker"] or "").strip().upper()
-                if tk:
-                    qty_acc[tk] = qty_acc.get(tk, 0.0) + float(r["total_qty"])
-            pos_rows = [{"ticker": tk, "total_qty": qty} for tk, qty in qty_acc.items()]
+            pos_rows = [
+                {"ticker": (r["ticker"] or "").strip().upper(),
+                 "total_qty": float(r["total_qty"])}
+                for r in cur.fetchall()
+                if (r["ticker"] or "").strip()
+            ]
         conn.close()
     except Exception as e:
-        return {"dates": [], "values": [], "error": str(e)}
+        return {"dates": [], "values": [],
+                "error": f"DB query failed: {e}"}
 
     if not pos_rows:
-        return {"dates": [], "values": [], "current_value": 0}
+        return {"dates": [], "values": [],
+                "current_value": 0,
+                "error": "No open equity positions found in tax_lots. "
+                         "Upload a YTD run with a positions CSV to populate."}
 
     tickers   = [r["ticker"] for r in pos_rows]
     qty_map   = {r["ticker"]: float(r["total_qty"]) for r in pos_rows}
