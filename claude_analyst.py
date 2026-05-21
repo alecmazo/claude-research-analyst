@@ -5733,7 +5733,11 @@ def call_grok(system_prompt: str, user_content: str,
 # but live news that broke since training cutoff will appear in Grok but
 # not in Claude. The UI discloses this in the comparison modal.
 
-CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-1-20250805")
+# ↑ Default to Opus 4.1 — Anthropic's flagship reasoning model, the fair
+# matchup against Grok-4-reasoning. To save money on routine runs, override:
+#   Railway env var → CLAUDE_MODEL=claude-sonnet-4-5-20250929    (~5× cheaper)
+# Check the latest aliases at https://docs.anthropic.com/en/docs/about-claude/models
 
 
 def get_claude_api_key() -> str:
