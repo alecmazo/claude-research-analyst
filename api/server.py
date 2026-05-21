@@ -5149,6 +5149,333 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12
     return out
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Builder — sector-weighted basket allocator from saved-report candidates
+# ──────────────────────────────────────────────────────────────────────────────
+# Candidates come from analyst_reports (must have price_target + upside_pct).
+# Sectors come from _ticker_meta_cache (yfinance, 15-min TTL).
+# Allocates each user-specified sector weight to the top N candidates within
+# that sector, weighted by expected return (with per-stock cap).
+
+_BUILDER_CANDIDATES_CACHE: dict = {"data": None, "ts": 0}
+_BUILDER_CANDIDATES_TTL   = 600   # 10 min
+
+
+def _builder_classify_sector(raw_sector: str) -> str:
+    """Map yfinance sector strings to canonical labels used by the UI.
+
+    Yahoo uses variations like 'Technology', 'Financial Services', 'Healthcare';
+    we normalize so the user's sector weights match candidates predictably.
+    """
+    if not raw_sector or raw_sector == "Unknown":
+        return "Unknown"
+    s = raw_sector.strip()
+    # Canonicalize a few known variants
+    SYN = {
+        "Financial Services":  "Financials",
+        "Financial":           "Financials",
+        "Health Care":         "Healthcare",
+        "Consumer Discretionary": "Consumer Cyclical",
+        "Consumer Staples":    "Consumer Defensive",
+        "Materials":           "Basic Materials",
+    }
+    return SYN.get(s, s)
+
+
+def _builder_fetch_candidates() -> list[dict]:
+    """Return list of saved-report candidates with sector + EV data.
+
+    Schema: [{ticker, name, sector, rating, price_target, upside_pct,
+              current_price, generated_at}].
+    Cached in-process for 10 min — sectors come from the slower yfinance
+    cache so we don't want to thrash it.
+    """
+    now = time.time()
+    if (_BUILDER_CANDIDATES_CACHE["data"] is not None
+            and (now - _BUILDER_CANDIDATES_CACHE["ts"]) < _BUILDER_CANDIDATES_TTL):
+        return _BUILDER_CANDIDATES_CACHE["data"]
+
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ticker, rating, price_target, upside_pct, generated_at
+                  FROM analyst_reports
+                 WHERE archived IS NOT TRUE
+                   AND price_target IS NOT NULL
+                   AND upside_pct   IS NOT NULL
+                 ORDER BY upside_pct DESC NULLS LAST
+            """)
+            rows = cur.fetchall()
+    except Exception as e:
+        print(f"[builder] candidates query failed: {e}")
+        return []
+
+    if not rows:
+        return []
+
+    # Batch live quotes for current-price column
+    tickers = [r["ticker"] for r in rows if r["ticker"]]
+    try:
+        quotes = batch_quotes(",".join(tickers)) if tickers else {}
+    except Exception:
+        quotes = {}
+
+    out: list[dict] = []
+    for r in rows:
+        tk = (r["ticker"] or "").strip().upper()
+        if not tk:
+            continue
+        # Sector from cached ticker meta (uses yfinance under the hood)
+        sector_raw = "Unknown"
+        name = tk
+        try:
+            meta = get_ticker_meta(tk)
+            sector_raw = (meta.get("sector") or "Unknown")
+            name = meta.get("name") or tk
+        except Exception:
+            pass
+        sector = _builder_classify_sector(sector_raw)
+
+        q = quotes.get(tk) or {}
+        out.append({
+            "ticker":        tk,
+            "name":          name,
+            "sector":        sector,
+            "sector_raw":    sector_raw,
+            "rating":        r["rating"],
+            "price_target":  float(r["price_target"]) if r["price_target"] is not None else None,
+            "upside_pct":    float(r["upside_pct"])   if r["upside_pct"]   is not None else None,
+            "current_price": float(q.get("price")) if q.get("price") is not None else None,
+            "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
+            "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
+        })
+
+    _BUILDER_CANDIDATES_CACHE["data"] = out
+    _BUILDER_CANDIDATES_CACHE["ts"]   = now
+    return out
+
+
+@app.get("/api/v2/builder/candidates")
+def builder_candidates(request: Request):
+    """Return all eligible Builder candidates with sector + EV.
+
+    Response: {
+      candidates: [...],
+      by_sector:  {sector: [tickers...]},
+      sectors:    [{name, count, median_upside_pct}, ...]
+    }
+    """
+    _claims_or_401(request)
+    cands = _builder_fetch_candidates()
+    by_sector: dict[str, list[str]] = {}
+    upside_by_sec: dict[str, list[float]] = {}
+    for c in cands:
+        by_sector.setdefault(c["sector"], []).append(c["ticker"])
+        if c["upside_pct"] is not None:
+            upside_by_sec.setdefault(c["sector"], []).append(c["upside_pct"])
+    sectors = []
+    for s, tks in sorted(by_sector.items(), key=lambda kv: -len(kv[1])):
+        ups = upside_by_sec.get(s) or []
+        median_up = sorted(ups)[len(ups) // 2] if ups else None
+        sectors.append({
+            "name":              s,
+            "count":             len(tks),
+            "median_upside_pct": round(median_up, 2) if median_up is not None else None,
+        })
+    return {
+        "candidates": cands,
+        "by_sector":  by_sector,
+        "sectors":    sectors,
+        "total":      len(cands),
+    }
+
+
+class BuilderAllocateRequest(BaseModel):
+    sector_weights:        dict          # {sector_name: pct}; values should roughly sum to 100
+    basket_size:           float = 1_000_000
+    method:                str   = "ev_weighted"   # 'ev_weighted' | 'equal'
+    max_per_stock_pct:     float = 15.0
+    max_stocks_per_sector: int   = 6
+    redistribute_empty:    bool  = True            # if a sector has no candidates, push its weight into the others
+    softmax_temperature:   float = 1.0             # for ev_weighted; >1 flattens, <1 sharpens
+
+
+@app.post("/api/v2/builder/allocate")
+def builder_allocate(request: Request, body: BuilderAllocateRequest):
+    """Run the sector-weighted allocator and return a built basket.
+
+    Algorithm per sector:
+      1. Filter candidates matching this sector.
+      2. Sort by upside_pct DESC; keep top `max_stocks_per_sector`.
+      3. Distribute the sector's weight using:
+           ev_weighted: softmax(upside_pct / temperature)
+           equal      : uniform weight
+      4. Apply per-stock cap: if any stock exceeds max_per_stock_pct of the
+         BASKET (not the sector), trim and redistribute the excess to the
+         other stocks in that sector pro-rata.
+    Empty sectors:
+      • If `redistribute_empty`, the missing weight is redistributed pro-rata
+        across sectors that DO have candidates.
+      • Otherwise, the weight is left unallocated (reported in summary).
+    """
+    _claims_or_401(request)
+
+    if not body.sector_weights:
+        raise HTTPException(400, "sector_weights is required")
+    basket = max(0.0, float(body.basket_size or 0))
+    max_stock_frac  = max(0.0, min(100.0, float(body.max_per_stock_pct))) / 100.0
+    max_per_sector  = max(1, int(body.max_stocks_per_sector or 6))
+    method          = body.method if body.method in ("ev_weighted", "equal") else "ev_weighted"
+    softmax_T       = max(0.1, float(body.softmax_temperature or 1.0))
+
+    # Normalize input weights to sum 1.0
+    raw = {_builder_classify_sector(k): float(v) for k, v in body.sector_weights.items() if float(v) > 0}
+    total = sum(raw.values())
+    if total <= 0:
+        raise HTTPException(400, "sector_weights must sum to a positive value")
+    sec_weight = {s: w / total for s, w in raw.items()}   # fractions
+
+    cands = _builder_fetch_candidates()
+
+    # Bucket candidates by sector and prune to top N by upside
+    cands_by_sec: dict[str, list[dict]] = {}
+    for c in cands:
+        if c["upside_pct"] is None:
+            continue
+        cands_by_sec.setdefault(c["sector"], []).append(c)
+    for s in cands_by_sec:
+        cands_by_sec[s].sort(key=lambda x: x["upside_pct"] or -999, reverse=True)
+        cands_by_sec[s] = cands_by_sec[s][:max_per_sector]
+
+    # Identify empty target sectors
+    empty_targets = [s for s in sec_weight if not cands_by_sec.get(s)]
+    funded_targets = [s for s in sec_weight if cands_by_sec.get(s)]
+    warnings: list[str] = []
+    unallocated_frac = 0.0
+
+    if empty_targets:
+        empty_sum = sum(sec_weight[s] for s in empty_targets)
+        if body.redistribute_empty and funded_targets:
+            funded_sum = sum(sec_weight[s] for s in funded_targets) or 1.0
+            for s in funded_targets:
+                sec_weight[s] += empty_sum * (sec_weight[s] / funded_sum)
+            warnings.append(f"Sectors with no candidates ({', '.join(empty_targets)}) — "
+                            f"{empty_sum*100:.1f}% redistributed across {len(funded_targets)} funded sectors")
+        else:
+            unallocated_frac += empty_sum
+            warnings.append(f"Sectors with no candidates: {', '.join(empty_targets)} "
+                            f"({empty_sum*100:.1f}% left unallocated)")
+        for s in empty_targets:
+            sec_weight.pop(s, None)
+
+    # ── Per-sector allocation ─────────────────────────────────────────────────
+    def _allocate_within_sector(sec_cands: list[dict], sector_frac: float) -> list[dict]:
+        n = len(sec_cands)
+        if n == 0 or sector_frac <= 0:
+            return []
+        # Compute initial weights of stocks WITHIN the sector (sum to 1)
+        if method == "equal":
+            w = [1.0 / n] * n
+        else:
+            import math as _m
+            ups = [(c["upside_pct"] or 0.0) / softmax_T for c in sec_cands]
+            if not ups:
+                w = [1.0 / n] * n
+            else:
+                m_max = max(ups)
+                exps = [_m.exp(u - m_max) for u in ups]  # numerical stability
+                z = sum(exps) or 1.0
+                w = [e / z for e in exps]
+        # Translate to basket-fractions
+        stock_frac = [wi * sector_frac for wi in w]
+
+        # Enforce per-stock cap (in BASKET units, not sector units).
+        # Iteratively: any stock above cap is trimmed to cap; excess spread
+        # proportionally to the others. Stop when no caps are breached or
+        # all eligible stocks are at the cap.
+        cap = max_stock_frac
+        if cap > 0 and cap < 1.0:
+            for _it in range(20):
+                over = [(i, sf - cap) for i, sf in enumerate(stock_frac) if sf > cap + 1e-9]
+                if not over:
+                    break
+                excess = sum(o[1] for o in over)
+                for i, _ in over:
+                    stock_frac[i] = cap
+                # Recipients: stocks below cap
+                below = [i for i, sf in enumerate(stock_frac) if sf < cap - 1e-9]
+                if not below:
+                    # All capped — excess becomes sector-level slack (rare)
+                    break
+                room = sum(cap - stock_frac[i] for i in below) or 1.0
+                for i in below:
+                    delta = excess * ((cap - stock_frac[i]) / room)
+                    stock_frac[i] = min(cap, stock_frac[i] + delta)
+
+        out_rows = []
+        for c, frac in zip(sec_cands, stock_frac):
+            if frac <= 1e-9:
+                continue
+            out_rows.append({
+                "ticker":        c["ticker"],
+                "name":          c["name"],
+                "weight_pct":    round(frac * 100.0, 3),
+                "dollars":       round(frac * basket, 2) if basket else None,
+                "upside_pct":    c["upside_pct"],
+                "price_target":  c["price_target"],
+                "current_price": c["current_price"],
+                "rating":        c["rating"],
+            })
+        return out_rows
+
+    sectors_out = []
+    grand_alloc = 0.0
+    total_expected = 0.0
+    total_positions = 0
+    for s, frac in sec_weight.items():
+        positions = _allocate_within_sector(cands_by_sec.get(s, []), frac)
+        sec_alloc = sum(p["weight_pct"] for p in positions) / 100.0
+        # Weighted expected return for the sector
+        sec_exp = sum((p["weight_pct"] or 0) * (p["upside_pct"] or 0)
+                      for p in positions) / 100.0
+        grand_alloc += sec_alloc
+        total_expected += sec_exp
+        total_positions += len(positions)
+        sectors_out.append({
+            "sector":               s,
+            "target_weight_pct":    round(frac * 100.0, 3),
+            "allocated_weight_pct": round(sec_alloc * 100.0, 3),
+            "allocated_dollars":    round(sec_alloc * basket, 2) if basket else None,
+            "candidates_available": len(cands_by_sec.get(s, [])),
+            "positions":            positions,
+            "weighted_expected_return_pct":
+                round(sec_exp / (sec_alloc * 100.0) * 100.0, 2)
+                if sec_alloc > 0 else None,
+        })
+
+    # Sort sectors by allocated weight desc for display
+    sectors_out.sort(key=lambda x: -x["allocated_weight_pct"])
+
+    return {
+        "basket_size":           basket,
+        "method":                method,
+        "max_per_stock_pct":     body.max_per_stock_pct,
+        "max_stocks_per_sector": max_per_sector,
+        "sectors":               sectors_out,
+        "summary": {
+            "total_positions":            total_positions,
+            "sectors_funded":             len([s for s in sectors_out if s["positions"]]),
+            "total_allocated_pct":        round(grand_alloc * 100.0, 3),
+            "unallocated_pct":            round(unallocated_frac * 100.0, 3),
+            "projected_return_pct":       round(total_expected, 2),  # already weighted by basket-fraction
+            "warnings":                   warnings,
+        },
+    }
+
+
 @app.delete("/api/cache")
 def clear_local_cache():
     """Delete all locally-cached _DGA_Report.md files from /stocks.

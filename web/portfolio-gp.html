@@ -330,6 +330,121 @@
   }
   .idea-gen-deep:hover { background: var(--blue); color: #fff; }
 
+  /* ── Builder ──────────────────────────────────────────────────── */
+  .builder-grid {
+    display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 14px;
+  }
+  @media (max-width: 980px) {
+    .builder-grid { grid-template-columns: 1fr; }
+  }
+  .builder-card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+  }
+  .builder-card-head {
+    padding: 10px 14px; border-bottom: 1px solid #e2e8f0; background: #fafbfc;
+    display: flex; align-items: center;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.8px;
+    text-transform: uppercase; color: #475569;
+  }
+  .builder-card-body { padding: 14px; }
+  .builder-field {
+    display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;
+  }
+  .builder-field > span {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: #64748b;
+  }
+  .builder-field > input, .builder-field > select {
+    padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 4px;
+    font-size: 13px; color: #0A1628; background: #fff;
+    font-family: inherit; font-variant-numeric: tabular-nums;
+  }
+  .builder-field > input:focus, .builder-field > select:focus {
+    outline: none; border-color: var(--blue);
+  }
+  .builder-field-inline {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    font-size: 12px; color: #334155; cursor: pointer;
+  }
+  .builder-field-inline input { accent-color: var(--blue); width: 14px; height: 14px; }
+  .builder-btn-primary {
+    width: 100%; padding: 10px 14px; border: none; border-radius: 5px;
+    background: var(--blue); color: #fff; font-weight: 800; font-size: 12px;
+    letter-spacing: 0.6px; cursor: pointer; transition: opacity .12s;
+  }
+  .builder-btn-primary:hover { opacity: 0.88; }
+  .builder-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .builder-btn-sec {
+    padding: 7px 12px; border: 1px solid var(--blue); background: #fff;
+    color: var(--blue); font-size: 11px; font-weight: 700; border-radius: 4px;
+    cursor: pointer; transition: background .12s, color .12s;
+  }
+  .builder-btn-sec:hover { background: var(--blue); color: #fff; }
+  .builder-sector-row {
+    display: grid; grid-template-columns: 1fr 70px 24px;
+    gap: 8px; align-items: center; padding: 6px 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .builder-sector-row:last-child { border-bottom: none; }
+  .builder-sector-name {
+    font-size: 12px; font-weight: 600; color: #0A1628;
+  }
+  .builder-sector-pct {
+    padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 3px;
+    font-size: 12px; font-variant-numeric: tabular-nums; text-align: right;
+    width: 100%; box-sizing: border-box;
+  }
+  .builder-sector-pct:focus { outline: none; border-color: var(--blue); }
+  .builder-sector-rm {
+    background: none; border: none; cursor: pointer;
+    color: #94a3b8; font-size: 14px; padding: 0; line-height: 1;
+  }
+  .builder-sector-rm:hover { color: #dc2626; }
+  .builder-pool-row {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 4px 0; border-bottom: 1px dashed #e2e8f0;
+    font-size: 11.5px;
+  }
+  .builder-pool-row:last-child { border-bottom: none; }
+  .builder-pool-row strong { color: #0A1628; }
+  .builder-pool-row span.medup { color: #16a34a; font-variant-numeric: tabular-nums; }
+  .builder-pool-row span.medup.neg { color: #dc2626; }
+  /* Result sector card */
+  .builder-result-sector {
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .builder-result-sector:last-child { border-bottom: none; }
+  .builder-result-sector-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 12.5px; color: #0A1628;
+  }
+  .builder-result-sector-name { font-weight: 800; flex: 1; }
+  .builder-result-stat {
+    font-variant-numeric: tabular-nums; font-size: 11px; color: #475569;
+  }
+  .builder-result-stat strong { color: #0A1628; }
+  .builder-result-table { width: 100%; border-collapse: collapse; }
+  .builder-result-table th {
+    font-size: 9px; font-weight: 800; color: #64748b; letter-spacing: 0.8px;
+    text-transform: uppercase; text-align: right; padding: 8px 14px;
+    border-bottom: 1px solid #e2e8f0; background: #fafbfc;
+  }
+  .builder-result-table th:first-child,
+  .builder-result-table td:first-child { text-align: left; }
+  .builder-result-table td {
+    padding: 8px 14px; font-size: 12px; text-align: right;
+    border-bottom: 1px solid #f1f5f9; font-variant-numeric: tabular-nums;
+  }
+  .builder-result-table tr:last-child td { border-bottom: none; }
+  .builder-result-table .tk {
+    font-weight: 800; color: #0A1628; letter-spacing: 0.3px;
+  }
+  .builder-result-table .upside-up   { color: #16a34a; font-weight: 700; }
+  .builder-result-table .upside-down { color: #dc2626; font-weight: 700; }
+  .builder-result-table tr:hover td { background: rgba(91,184,212,0.05); }
+
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
     display: flex; flex-direction: column;
@@ -1329,6 +1444,7 @@
   <nav class="topbar-right">
     <span class="topbar-link active" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="positions">📊 Positions</span>
+    <span class="topbar-link" data-tab="builder">🧮 Builder</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
@@ -1665,6 +1781,94 @@
   </aside>
 </main>
 </div><!-- #tab-research -->
+
+
+<!-- ══ BUILDER TAB ═════════════════════════════════════════════ -->
+<div id="tab-builder" class="tab-panel">
+  <div class="wide-shell" style="max-width:1300px;margin:18px auto;padding:0 20px;">
+    <div class="tab-toolbar" style="display:flex;align-items:baseline;gap:16px;margin-bottom:16px;">
+      <h2 style="margin:0;font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#0A1628;">🧮 Builder</h2>
+      <div style="font-size:11.5px;color:#64748b;flex:1;">
+        Allocate a sector-weighted basket from your saved research. Highest-EV stocks per sector get the largest weights.
+      </div>
+      <div id="builder-pool-meta" style="font-size:11px;color:#64748b;font-weight:600;">—</div>
+    </div>
+
+    <div class="builder-grid">
+      <!-- ── LEFT: weight controls ────────────────────────────────── -->
+      <section class="builder-card">
+        <header class="builder-card-head">Sector Weights</header>
+        <div class="builder-card-body">
+          <div id="builder-sectors-list"></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+            <select id="builder-add-sector" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;">
+              <option value="">+ Add sector…</option>
+            </select>
+            <button id="builder-add-sector-btn" class="builder-btn-sec">Add</button>
+          </div>
+          <div id="builder-weight-total" style="margin-top:12px;padding:8px 10px;background:#f8fafc;border-radius:4px;font-size:11px;color:#475569;display:flex;justify-content:space-between;">
+            <span>Total weight:</span>
+            <strong id="builder-weight-total-val" style="color:#0A1628;">0%</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── CENTER: options + build ──────────────────────────────── -->
+      <section class="builder-card">
+        <header class="builder-card-head">Options</header>
+        <div class="builder-card-body">
+          <label class="builder-field">
+            <span>Basket size ($)</span>
+            <input id="builder-basket-size" type="number" value="1000000" step="10000" min="0">
+          </label>
+          <label class="builder-field">
+            <span>Allocation method</span>
+            <select id="builder-method">
+              <option value="ev_weighted" selected>EV-weighted (softmax by upside)</option>
+              <option value="equal">Equal-weight top N</option>
+            </select>
+          </label>
+          <label class="builder-field">
+            <span>Max per stock (%)</span>
+            <input id="builder-max-per-stock" type="number" value="15" step="1" min="1" max="100">
+          </label>
+          <label class="builder-field">
+            <span>Max stocks per sector</span>
+            <input id="builder-max-per-sector" type="number" value="6" step="1" min="1" max="20">
+          </label>
+          <label class="builder-field-inline">
+            <input id="builder-redistribute" type="checkbox" checked>
+            <span>Redistribute empty sectors</span>
+          </label>
+          <button id="builder-run-btn" class="builder-btn-primary" style="margin-top:14px;">⚡ Build Basket</button>
+          <div id="builder-status" style="margin-top:8px;font-size:11px;color:#94a3b8;min-height:16px;"></div>
+        </div>
+      </section>
+
+      <!-- ── RIGHT: candidate pool summary ────────────────────────── -->
+      <section class="builder-card">
+        <header class="builder-card-head">Candidate Pool</header>
+        <div class="builder-card-body">
+          <div id="builder-sectors-summary" style="font-size:11.5px;color:#475569;">
+            <div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── RESULT PANEL ──────────────────────────────────────────── -->
+    <section id="builder-result" class="builder-card" style="margin-top:18px;display:none;">
+      <header class="builder-card-head">
+        <span>Allocation Result</span>
+        <span id="builder-result-summary" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:600;">—</span>
+      </header>
+      <div class="builder-card-body" style="padding:0;">
+        <div id="builder-warnings" style="display:none;padding:10px 16px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#78350f;"></div>
+        <div id="builder-result-body"></div>
+      </div>
+    </section>
+  </div>
+</div><!-- #tab-builder -->
 
 
 <!-- ══ IDEAS TAB ═══════════════════════════════════════════════ -->
@@ -2500,6 +2704,7 @@
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
     research:  () => { loadBrief(); loadIdeaFeed(true); },
+    builder:   () => _initBuilderTab(),
     ideas:     () => loadIdeasTab(),
     tracker:   () => loadTrackerTab(),
     fund:      () => loadFundTab(),
@@ -3081,6 +3286,261 @@
       }, 15 * 60 * 1000);
     }
   });
+
+  // ── Builder ───────────────────────────────────────────────────────────────
+  // Sector-weighted basket allocator from saved-report candidates.
+  // Pre-defined sector taxonomy (matches the backend's _builder_classify_sector
+  // canonical labels). User picks weights → backend allocates by EV.
+  var _builderCandidatesCache = null;
+  var _builderSectorWeights   = {};   // {sectorName: percentValue}
+  var _builderInitialized     = false;
+
+  const BUILDER_SECTOR_OPTIONS = [
+    "Technology", "Energy", "Financials", "Healthcare", "Consumer Cyclical",
+    "Consumer Defensive", "Industrials", "Utilities", "Real Estate",
+    "Communication Services", "Basic Materials",
+  ];
+
+  function _builderFmtUSD(v) {
+    if (v == null || isNaN(v)) return '—';
+    if (Math.abs(v) >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (Math.abs(v) >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
+    return '$' + Math.round(v).toLocaleString();
+  }
+  function _builderFmtPct(v, decimals) {
+    if (v == null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + Number(v).toFixed(decimals == null ? 2 : decimals) + '%';
+  }
+  function _builderEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function _renderBuilderSectors() {
+    const list = document.getElementById('builder-sectors-list');
+    if (!list) return;
+    const entries = Object.entries(_builderSectorWeights);
+    if (!entries.length) {
+      list.innerHTML = '<div style="font-size:11px;color:#94a3b8;font-style:italic;padding:8px 0;">No sectors added yet — pick one below.</div>';
+    } else {
+      list.innerHTML = entries.map(function([sec, pct]) {
+        return '<div class="builder-sector-row" data-sec="' + _builderEsc(sec) + '">'
+          + '<div class="builder-sector-name">' + _builderEsc(sec) + '</div>'
+          + '<input type="number" class="builder-sector-pct" value="' + pct + '" min="0" max="100" step="1">'
+          + '<button class="builder-sector-rm" title="Remove">×</button>'
+          + '</div>';
+      }).join('');
+      // Wire weight inputs
+      list.querySelectorAll('.builder-sector-pct').forEach(function(inp) {
+        inp.addEventListener('input', function() {
+          const sec = inp.closest('.builder-sector-row').dataset.sec;
+          _builderSectorWeights[sec] = parseFloat(inp.value) || 0;
+          _updateBuilderTotal();
+        });
+      });
+      list.querySelectorAll('.builder-sector-rm').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const sec = btn.closest('.builder-sector-row').dataset.sec;
+          delete _builderSectorWeights[sec];
+          _renderBuilderSectors();
+          _updateBuilderTotal();
+          _refreshBuilderAddDropdown();
+        });
+      });
+    }
+    _updateBuilderTotal();
+  }
+  function _updateBuilderTotal() {
+    const total = Object.values(_builderSectorWeights).reduce(function(a, b) { return a + (b || 0); }, 0);
+    const el = document.getElementById('builder-weight-total-val');
+    if (!el) return;
+    el.textContent = total.toFixed(0) + '%';
+    el.style.color = (Math.abs(total - 100) < 0.5) ? '#16a34a' : (total > 100 ? '#dc2626' : '#f59e0b');
+  }
+  function _refreshBuilderAddDropdown() {
+    const dd = document.getElementById('builder-add-sector');
+    if (!dd) return;
+    const used = new Set(Object.keys(_builderSectorWeights));
+    dd.innerHTML = '<option value="">+ Add sector…</option>';
+    BUILDER_SECTOR_OPTIONS.forEach(function(s) {
+      if (used.has(s)) return;
+      dd.innerHTML += '<option value="' + _builderEsc(s) + '">' + _builderEsc(s) + '</option>';
+    });
+  }
+
+  async function loadBuilderCandidates() {
+    const meta   = document.getElementById('builder-pool-meta');
+    const sumEl  = document.getElementById('builder-sectors-summary');
+    if (sumEl) sumEl.innerHTML = '<div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>';
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/candidates');
+      if (!r.ok) throw new Error('candidates ' + r.status);
+      const data = await r.json();
+      _builderCandidatesCache = data;
+      if (meta) meta.textContent = data.total + ' candidates · ' + (data.sectors || []).length + ' sectors';
+      if (sumEl) {
+        if (!data.sectors || !data.sectors.length) {
+          sumEl.innerHTML = '<div style="font-size:11.5px;color:#94a3b8;font-style:italic;">No saved reports yet. Run analyses with price targets to populate the pool.</div>';
+        } else {
+          sumEl.innerHTML = data.sectors.map(function(s) {
+            const med = s.median_upside_pct;
+            const medCls = (med != null && med < 0) ? 'medup neg' : 'medup';
+            const medTxt = med == null ? '—' : ((med >= 0 ? '+' : '') + med.toFixed(1) + '%');
+            return '<div class="builder-pool-row">'
+              + '<span><strong>' + _builderEsc(s.name) + '</strong></span>'
+              + '<span>' + s.count + ' name' + (s.count !== 1 ? 's' : '')
+              +   ' · median upside <span class="' + medCls + '">' + medTxt + '</span></span>'
+              + '</div>';
+          }).join('');
+        }
+      }
+    } catch (e) {
+      console.warn('[builder]', e);
+      if (sumEl) sumEl.innerHTML = '<div style="font-size:11.5px;color:#dc2626;">Could not load candidates: ' + _builderEsc(e.message) + '</div>';
+    }
+  }
+
+  function _renderBuilderResult(data) {
+    const wrap = document.getElementById('builder-result');
+    const body = document.getElementById('builder-result-body');
+    const sumEl = document.getElementById('builder-result-summary');
+    const warnEl = document.getElementById('builder-warnings');
+    if (!wrap || !body) return;
+    wrap.style.display = 'block';
+
+    const sm = data.summary || {};
+    if (sumEl) {
+      const projColor = (sm.projected_return_pct || 0) >= 0 ? '#16a34a' : '#dc2626';
+      sumEl.innerHTML = '<strong style="color:' + projColor + ';">'
+        + _builderFmtPct(sm.projected_return_pct, 2) + ' projected return</strong>'
+        + ' · ' + sm.total_positions + ' positions'
+        + ' · ' + sm.sectors_funded + ' sectors funded'
+        + (sm.unallocated_pct > 0.01 ? ' · ' + sm.unallocated_pct.toFixed(1) + '% unallocated' : '');
+    }
+    if (warnEl) {
+      if (sm.warnings && sm.warnings.length) {
+        warnEl.style.display = 'block';
+        warnEl.innerHTML = '⚠ ' + sm.warnings.map(_builderEsc).join('<br>⚠ ');
+      } else {
+        warnEl.style.display = 'none';
+      }
+    }
+
+    const sectors = data.sectors || [];
+    if (!sectors.length) {
+      body.innerHTML = '<div style="padding:24px;color:#94a3b8;text-align:center;font-size:12px;">No allocation produced — check that your selected sectors have saved reports.</div>';
+      return;
+    }
+    body.innerHTML = sectors.map(function(s) {
+      if (!s.positions || !s.positions.length) {
+        return '<div class="builder-result-sector">'
+          + '<div class="builder-result-sector-head">'
+          +   '<span class="builder-result-sector-name">' + _builderEsc(s.sector) + '</span>'
+          +   '<span class="builder-result-stat">target <strong>' + s.target_weight_pct.toFixed(1) + '%</strong></span>'
+          +   '<span class="builder-result-stat" style="color:#dc2626;">no candidates</span>'
+          + '</div></div>';
+      }
+      const rows = s.positions.map(function(p) {
+        const upCls = (p.upside_pct || 0) >= 0 ? 'upside-up' : 'upside-down';
+        const upTxt = p.upside_pct == null ? '—' : _builderFmtPct(p.upside_pct, 1);
+        return '<tr>'
+          + '<td><span class="tk">' + _builderEsc(p.ticker) + '</span> '
+          +   '<span style="font-size:10px;color:#94a3b8;">' + _builderEsc(p.name) + '</span></td>'
+          + '<td><strong>' + p.weight_pct.toFixed(2) + '%</strong></td>'
+          + '<td>' + _builderFmtUSD(p.dollars) + '</td>'
+          + '<td>' + (p.current_price != null ? '$' + p.current_price.toFixed(2) : '—') + '</td>'
+          + '<td>' + (p.price_target != null ? '$' + p.price_target.toFixed(2) : '—') + '</td>'
+          + '<td class="' + upCls + '">' + upTxt + '</td>'
+          + '<td style="font-size:10.5px;color:#475569;">' + _builderEsc(p.rating || '') + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<div class="builder-result-sector">'
+        + '<div class="builder-result-sector-head">'
+        +   '<span class="builder-result-sector-name">' + _builderEsc(s.sector) + '</span>'
+        +   '<span class="builder-result-stat">target <strong>' + s.target_weight_pct.toFixed(1) + '%</strong></span>'
+        +   '<span class="builder-result-stat">allocated <strong>' + s.allocated_weight_pct.toFixed(2) + '%</strong> (' + _builderFmtUSD(s.allocated_dollars) + ')</span>'
+        + (s.weighted_expected_return_pct != null
+            ? '<span class="builder-result-stat">avg EV <strong style="color:' + ((s.weighted_expected_return_pct >= 0) ? '#16a34a' : '#dc2626') + ';">' + _builderFmtPct(s.weighted_expected_return_pct, 1) + '</strong></span>'
+            : '')
+        + '</div>'
+        + '<table class="builder-result-table">'
+        + '<thead><tr><th>Ticker</th><th>Weight</th><th>$ Alloc</th><th>Price</th><th>Target</th><th>Upside</th><th>Rating</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody>'
+        + '</table>'
+        + '</div>';
+    }).join('');
+  }
+
+  async function buildBasket() {
+    const btn   = document.getElementById('builder-run-btn');
+    const stat  = document.getElementById('builder-status');
+    const total = Object.values(_builderSectorWeights).reduce(function(a,b){return a+(b||0);}, 0);
+    if (total <= 0) { if (stat) stat.textContent = 'Add at least one sector with weight > 0.'; return; }
+    if (Math.abs(total - 100) > 0.5 && stat) {
+      stat.textContent = 'Weights sum to ' + total.toFixed(0) + '% — will be normalized to 100%.';
+    } else if (stat) {
+      stat.textContent = '';
+    }
+    const body = {
+      sector_weights:        _builderSectorWeights,
+      basket_size:           parseFloat(document.getElementById('builder-basket-size').value) || 0,
+      method:                document.getElementById('builder-method').value,
+      max_per_stock_pct:     parseFloat(document.getElementById('builder-max-per-stock').value)  || 15,
+      max_stocks_per_sector: parseInt(document.getElementById('builder-max-per-sector').value)   || 6,
+      redistribute_empty:    document.getElementById('builder-redistribute').checked,
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/allocate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error('allocate ' + r.status + ': ' + txt);
+      }
+      const data = await r.json();
+      _renderBuilderResult(data);
+      if (stat) stat.textContent = 'Done.';
+    } catch (e) {
+      console.warn('[builder]', e);
+      if (stat) stat.textContent = 'Error: ' + e.message;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Build Basket'; }
+    }
+  }
+
+  function _initBuilderTab() {
+    if (_builderInitialized) {
+      // Refresh candidates pool on tab re-activation (cheap, server-cached 10 min)
+      loadBuilderCandidates();
+      return;
+    }
+    _builderInitialized = true;
+    // Default sector weights (popular starting point)
+    _builderSectorWeights = { "Technology": 60, "Financials": 20, "Healthcare": 20 };
+    _refreshBuilderAddDropdown();
+    _renderBuilderSectors();
+    // Wire add-sector button
+    const addBtn = document.getElementById('builder-add-sector-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', function() {
+        const dd = document.getElementById('builder-add-sector');
+        const val = dd.value;
+        if (!val || _builderSectorWeights[val] != null) return;
+        _builderSectorWeights[val] = 10;
+        _renderBuilderSectors();
+        _refreshBuilderAddDropdown();
+        dd.value = '';
+      });
+    }
+    // Wire build button
+    const runBtn = document.getElementById('builder-run-btn');
+    if (runBtn) runBtn.addEventListener('click', buildBasket);
+    // Load candidates pool
+    loadBuilderCandidates();
+  }
 
   async function loadBrief() {
     const el = document.getElementById('brief-content');
