@@ -4031,7 +4031,20 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
                 _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
                 _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
                 _gamma_url = (result.get("gamma_url") or None)
-                _db_upsert_report(ticker, _md_text, _summary, _has_docx, _has_pptx, _gamma_url)
+                # pptx_stale logic:
+                #   generate_gamma=True  → deck regenerated alongside report → fresh
+                #   generate_gamma=False → report rerun without deck refresh
+                #     → if a PPTX exists, mark it stale (older than this new MD)
+                #     → if no PPTX exists, leave pptx_stale=False (nothing to be stale)
+                _pptx_stale: bool | None
+                if generate_gamma:
+                    _pptx_stale = False
+                else:
+                    _pptx_stale = True if _has_pptx else False
+                _db_upsert_report(
+                    ticker, _md_text, _summary, _has_docx, _has_pptx, _gamma_url,
+                    pptx_stale=_pptx_stale,
+                )
             except Exception as _dbe:
                 print(f"[analyst_reports] post-run DB persist failed for {ticker} (non-fatal): {_dbe!s:.200}")
     except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
@@ -4044,6 +4057,198 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
             # more useful than just the message.
             tb_tail = tb_str.strip().splitlines()[-3:] if tb_str else []
             _jobs[job_id]["error"] = f"{exc} | {' | '.join(tb_tail)}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bulk re-analyze: re-run analysis for every saved report, sequentially, in
+# a daemon thread so the rest of the site stays fully responsive.
+# Sequential by design: parallel runs would hit Anthropic/SEC rate limits and
+# blow Railway memory. Each run still uses _run_analysis internally so the
+# pptx_stale flag is set correctly (generate_gamma=False).
+# ──────────────────────────────────────────────────────────────────────────────
+_bulk_reanalyze_jobs: dict[str, dict[str, Any]] = {}
+_bulk_reanalyze_lock = threading.Lock()
+
+
+def _bulk_reanalyze_worker(bulk_id: str, tickers: list[str]) -> None:
+    """Sequentially re-analyze each ticker. Updates job state per step."""
+    total = len(tickers)
+    with _bulk_reanalyze_lock:
+        j = _bulk_reanalyze_jobs.get(bulk_id)
+        if j is None:
+            return
+        j["status"]  = "running"
+        j["started"] = datetime.utcnow().isoformat()
+
+    for idx, ticker in enumerate(tickers):
+        # Honor cancel request
+        with _bulk_reanalyze_lock:
+            j = _bulk_reanalyze_jobs.get(bulk_id)
+            if not j or j.get("cancel_requested"):
+                if j:
+                    j["status"] = "cancelled"
+                    j["finished"] = datetime.utcnow().isoformat()
+                return
+            j["current_ticker"]  = ticker
+            j["current_index"]   = idx
+            j["progress_pct"]    = round(idx / total * 100, 1) if total else 0
+
+        # Drive a sub-job via the existing _run_analysis pipeline (no Gamma)
+        sub_job_id = str(uuid.uuid4())
+        now_iso = datetime.utcnow().isoformat()
+        with _jobs_lock:
+            _jobs[sub_job_id] = {
+                "job_id": sub_job_id, "ticker": ticker, "status": "queued",
+                "created_at": now_iso, "error": None, "result": None,
+                "progress": {"step": "queued", "pct": 0.0, "label": "Bulk re-analyze queued"},
+            }
+        try:
+            _run_analysis(sub_job_id, ticker, generate_gamma=False)
+            with _jobs_lock:
+                sub = _jobs.get(sub_job_id) or {}
+            ok = (sub.get("status") == "done")
+            with _bulk_reanalyze_lock:
+                j = _bulk_reanalyze_jobs.get(bulk_id)
+                if not j: return
+                if ok:
+                    j["completed"].append(ticker)
+                else:
+                    j["failed"].append({"ticker": ticker, "error": sub.get("error") or "unknown"})
+        except BaseException as exc:  # noqa: BLE001
+            with _bulk_reanalyze_lock:
+                j = _bulk_reanalyze_jobs.get(bulk_id)
+                if j:
+                    j["failed"].append({"ticker": ticker, "error": str(exc)[:240]})
+
+    with _bulk_reanalyze_lock:
+        j = _bulk_reanalyze_jobs.get(bulk_id)
+        if j:
+            j["status"]       = "done"
+            j["current_ticker"] = None
+            j["current_index"]  = total
+            j["progress_pct"]   = 100.0
+            j["finished"]     = datetime.utcnow().isoformat()
+
+
+@app.post("/api/reports/reanalyze-all")
+def start_reanalyze_all(request: Request):
+    """Kick off a bulk re-analysis of every saved report.
+
+    Behaviour:
+      • Iterates saved-report tickers sequentially (NOT parallel — see header).
+      • Each ticker is re-analyzed with generate_gamma=False, so:
+          - The full MD report + DOCX get regenerated.
+          - Existing PPTX files on disk are kept (has_pptx stays TRUE).
+          - DB row is marked pptx_stale=TRUE so the UI can fade the PPT pill.
+      • Estimated 2-3 min per ticker. The whole site stays responsive — each
+        sub-analysis runs in the FastAPI threadpool, not the request loop.
+
+    Returns: {bulk_job_id, total, tickers}
+    """
+    _claims_or_401(request)
+    # Collect all non-archived tickers
+    tickers: list[str] = []
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker FROM analyst_reports
+                     WHERE archived IS NOT TRUE
+                     ORDER BY ticker
+                """)
+                tickers = [r[0] for r in cur.fetchall() if r and r[0]]
+        except Exception as e:
+            print(f"[bulk-reanalyze] ticker fetch failed: {e}")
+    if not tickers:
+        # Fallback to filesystem
+        try:
+            tickers = sorted({
+                p.name.replace("_DGA_Report.md", "")
+                for p in analyst.STOCKS_FOLDER.glob("*_DGA_Report.md")
+            })
+        except Exception:
+            tickers = []
+    if not tickers:
+        raise HTTPException(status_code=422, detail="No saved reports to re-analyze")
+
+    bulk_id = str(uuid.uuid4())
+    with _bulk_reanalyze_lock:
+        # Refuse to start a second concurrent bulk job
+        active = [j for j in _bulk_reanalyze_jobs.values()
+                  if j.get("status") in ("queued", "running")]
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A bulk re-analyze is already running ({active[0].get('current_index',0)}/{active[0].get('total',0)} complete). Wait or cancel it first.",
+            )
+        _bulk_reanalyze_jobs[bulk_id] = {
+            "bulk_job_id":    bulk_id,
+            "total":          len(tickers),
+            "tickers":        tickers,
+            "status":         "queued",
+            "current_ticker": None,
+            "current_index":  0,
+            "progress_pct":   0.0,
+            "completed":      [],
+            "failed":         [],
+            "cancel_requested": False,
+            "created_at":     datetime.utcnow().isoformat(),
+        }
+    threading.Thread(
+        target=_bulk_reanalyze_worker,
+        args=(bulk_id, tickers),
+        daemon=True,
+        name=f"bulk-reanalyze-{bulk_id[:8]}",
+    ).start()
+    return _bulk_reanalyze_jobs[bulk_id]
+
+
+@app.get("/api/reports/reanalyze-all/{bulk_job_id}")
+def get_reanalyze_all_status(bulk_job_id: str, request: Request):
+    """Poll status of a bulk re-analyze job."""
+    _claims_or_401(request)
+    with _bulk_reanalyze_lock:
+        j = _bulk_reanalyze_jobs.get(bulk_job_id)
+        if not j:
+            # Maybe the most-recent one — many clients won't track the id
+            raise HTTPException(status_code=404, detail="Bulk job not found")
+        # Return a copy (lists are mutable)
+        return dict(j)
+
+
+@app.get("/api/reports/reanalyze-all")
+def get_active_reanalyze_all(request: Request):
+    """Return the currently active or most-recent bulk re-analyze job.
+    Used by the UI to auto-resume progress display after a refresh.
+    """
+    _claims_or_401(request)
+    with _bulk_reanalyze_lock:
+        if not _bulk_reanalyze_jobs:
+            return {"active": None}
+        # Prefer an in-flight job; otherwise return the newest
+        running = [j for j in _bulk_reanalyze_jobs.values()
+                   if j.get("status") in ("queued", "running")]
+        if running:
+            return {"active": dict(running[0])}
+        newest = sorted(_bulk_reanalyze_jobs.values(),
+                        key=lambda x: x.get("created_at") or "", reverse=True)[0]
+        return {"active": dict(newest)}
+
+
+@app.post("/api/reports/reanalyze-all/{bulk_job_id}/cancel")
+def cancel_reanalyze_all(bulk_job_id: str, request: Request):
+    """Request cancellation of a running bulk job. Takes effect AFTER the
+    current ticker finishes (we can't safely interrupt the worker mid-LLM-call).
+    """
+    _claims_or_401(request)
+    with _bulk_reanalyze_lock:
+        j = _bulk_reanalyze_jobs.get(bulk_job_id)
+        if not j:
+            raise HTTPException(status_code=404, detail="Bulk job not found")
+        if j["status"] not in ("queued", "running"):
+            return {"ok": False, "message": "Job is not running."}
+        j["cancel_requested"] = True
+    return {"ok": True, "message": "Cancel requested — will stop after current ticker."}
 
 
 # In-memory portfolio job store.
@@ -5537,8 +5742,14 @@ def _db_upsert_report(
     has_docx: bool,
     has_pptx: bool,
     gamma_url: str | None = None,
+    pptx_stale: bool | None = None,
 ) -> None:
     """Upsert one analyst report row into PostgreSQL.
+
+    pptx_stale:
+      • None   — preserve existing value (don't touch the column)
+      • True   — mark deck as old/stale (report rerun without Gamma)
+      • False  — deck regenerated alongside the report (in sync)
 
     Entirely wrapped in try/except — never raises, so a DB failure never
     affects the job result or any calling code.
@@ -5547,30 +5758,49 @@ def _db_upsert_report(
         return
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO analyst_reports
-                    (ticker, generated_at, report_md, has_docx, has_pptx,
-                     rating, price_target, upside_pct, gamma_url)
-                VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker) DO UPDATE SET
-                    generated_at = NOW(),
-                    report_md    = EXCLUDED.report_md,
-                    has_docx     = EXCLUDED.has_docx,
-                    has_pptx     = EXCLUDED.has_pptx,
-                    rating       = EXCLUDED.rating,
-                    price_target = EXCLUDED.price_target,
-                    upside_pct   = EXCLUDED.upside_pct,
-                    gamma_url    = EXCLUDED.gamma_url
-            """, (
-                ticker,
-                md_text,
-                has_docx,
-                has_pptx,
-                summary.get("rating"),
-                summary.get("price_target"),
-                summary.get("upside_pct"),
-                gamma_url,
-            ))
+            if pptx_stale is None:
+                # Path A: do not touch pptx_stale
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         rating, price_target, upside_pct, gamma_url)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        generated_at = NOW(),
+                        report_md    = EXCLUDED.report_md,
+                        has_docx     = EXCLUDED.has_docx,
+                        has_pptx     = EXCLUDED.has_pptx,
+                        rating       = EXCLUDED.rating,
+                        price_target = EXCLUDED.price_target,
+                        upside_pct   = EXCLUDED.upside_pct,
+                        gamma_url    = EXCLUDED.gamma_url
+                """, (
+                    ticker, md_text, has_docx, has_pptx,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"), gamma_url,
+                ))
+            else:
+                # Path B: explicitly set pptx_stale
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         rating, price_target, upside_pct, gamma_url, pptx_stale)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        generated_at = NOW(),
+                        report_md    = EXCLUDED.report_md,
+                        has_docx     = EXCLUDED.has_docx,
+                        has_pptx     = EXCLUDED.has_pptx,
+                        rating       = EXCLUDED.rating,
+                        price_target = EXCLUDED.price_target,
+                        upside_pct   = EXCLUDED.upside_pct,
+                        gamma_url    = EXCLUDED.gamma_url,
+                        pptx_stale   = EXCLUDED.pptx_stale
+                """, (
+                    ticker, md_text, has_docx, has_pptx,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"), gamma_url, bool(pptx_stale),
+                ))
     except Exception as _e:
         print(f"[analyst_reports] upsert failed for {ticker} (non-fatal): {_e!s:.200}")
 
@@ -5759,7 +5989,8 @@ def list_reports():
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""
                     SELECT ticker, generated_at, has_docx, has_pptx,
-                           rating, price_target, upside_pct, gamma_url
+                           rating, price_target, upside_pct, gamma_url,
+                           COALESCE(pptx_stale, FALSE) AS pptx_stale
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
                     ORDER BY generated_at DESC
@@ -5772,6 +6003,7 @@ def list_reports():
                         "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
                         "has_docx":      r["has_docx"],
                         "has_pptx":      r["has_pptx"],
+                        "pptx_stale":    bool(r["pptx_stale"]),
                         "gamma_url":     r["gamma_url"],
                         "rating":        r["rating"],
                         "price_target":  float(r["price_target"]) if r["price_target"] is not None else None,
@@ -7388,6 +7620,13 @@ def _ensure_analyst_reports_table(conn) -> None:
         cur.execute("""
             ALTER TABLE analyst_reports
             ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        # pptx_stale: TRUE when the report MD was rerun without regenerating
+        # the PowerPoint. UI uses this to render the PPT pill faded so the
+        # user knows the deck reflects an earlier version of the report.
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS pptx_stale BOOLEAN NOT NULL DEFAULT FALSE
         """)
     conn.commit()
 

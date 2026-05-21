@@ -630,6 +630,16 @@
   }
   .rep-pill-doc { background: var(--navy-mid); color: var(--navy); border: 1px solid var(--panel-edge); }
   .rep-pill-ppt { background: var(--blue); color: var(--navy); }
+  /* Stale PPT — generated from an earlier report run. Fade + small dot. */
+  .rep-pill-ppt.stale {
+    background: #e2e8f0; color: #64748b; position: relative;
+    opacity: 0.85;
+  }
+  .rep-pill-ppt.stale::after {
+    content: ''; position: absolute; top: -1px; right: -2px;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #f59e0b; border: 1px solid #fff;
+  }
   .rep-date { color: var(--dim); font-size: 10px; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
 
@@ -1611,9 +1621,25 @@
       <header class="panel-head">
         <span class="panel-title">Saved Reports</span>
         <span class="panel-badge" id="reports-count">…</span>
+        <button id="reports-reanalyze-btn"
+          title="Re-run analysis for every saved report (sequential, ~2-3 min each, runs in the background — existing PowerPoints kept but marked as older)"
+          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:#9333ea;margin-left:auto;">🔄 Re-analyze All</button>
         <button id="reports-scan-btn"
-          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ Scan All</button>
+          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:12px;">⚡ Scan All</button>
       </header>
+      <!-- Bulk re-analyze progress banner (hidden until job starts) -->
+      <div id="reanalyze-banner" style="display:none;background:linear-gradient(90deg,#f3e8ff,#fae8ff);border-bottom:1px solid #e9d5ff;padding:8px 14px;">
+        <div style="display:flex;align-items:center;gap:8px;font-size:11px;">
+          <span style="font-size:14px;animation:spin 2s linear infinite;display:inline-block;">⚙️</span>
+          <strong id="reanalyze-banner-status" style="color:#6b21a8;flex:1;">Re-analyzing…</strong>
+          <button id="reanalyze-banner-cancel" style="background:none;border:1px solid #c084fc;color:#7e22ce;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;cursor:pointer;">CANCEL</button>
+          <button id="reanalyze-banner-close" title="Hide (job keeps running)" style="background:none;border:none;color:#7e22ce;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">×</button>
+        </div>
+        <div style="margin-top:6px;height:4px;background:#ede9fe;border-radius:2px;overflow:hidden;">
+          <div id="reanalyze-banner-fill" style="height:100%;background:#9333ea;width:0%;transition:width 0.4s;"></div>
+        </div>
+        <div id="reanalyze-banner-detail" style="margin-top:4px;font-size:10px;color:#6b21a8;font-variant-numeric:tabular-nums;">—</div>
+      </div>
       <div id="reports-scroll" style="overflow-y:auto;max-height:calc(100vh - 260px);">
       <table class="rep-table">
         <thead style="position:sticky;top:0;background:#fafbfc;z-index:1;">
@@ -2898,7 +2924,12 @@
                 'onclick="event.stopPropagation();">×</button>' +
             '</span>' +
             (rep.has_docx !== false ? '<span class="rep-pill rep-pill-doc">DOC</span>' : '') +
-            (rep.has_pptx ? '<span class="rep-pill rep-pill-ppt">PPT</span>' : '') +
+            (rep.has_pptx
+              ? '<span class="rep-pill rep-pill-ppt' + (rep.pptx_stale ? ' stale' : '') + '"'
+                + ' title="' + (rep.pptx_stale
+                    ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
+                    : 'PowerPoint presentation') + '">PPT</span>'
+              : '') +
             '<div class="rep-date">' + dateStr + '</div>' +
           '</td>' +
           '<td class="rep-num">' +
@@ -8899,6 +8930,132 @@
         $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
       }
     });
+  })();
+
+  // ── Bulk Re-analyze All Saved Reports ─────────────────────────────────────
+  // Sequential server-side; non-blocking for the rest of the site.
+  // Each ticker re-runs WITHOUT regenerating the Gamma deck (existing PPTs
+  // stay on disk but are marked pptx_stale so the UI fades them).
+  (function() {
+    const btn      = document.getElementById('reports-reanalyze-btn');
+    const banner   = document.getElementById('reanalyze-banner');
+    const bStatus  = document.getElementById('reanalyze-banner-status');
+    const bDetail  = document.getElementById('reanalyze-banner-detail');
+    const bFill    = document.getElementById('reanalyze-banner-fill');
+    const bCancel  = document.getElementById('reanalyze-banner-cancel');
+    const bClose   = document.getElementById('reanalyze-banner-close');
+    if (!btn || !banner) return;
+
+    let pollTimer = null;
+    let activeBulkId = null;
+
+    function _renderBulkProgress(j) {
+      if (!j) { banner.style.display = 'none'; return; }
+      banner.style.display = 'block';
+      activeBulkId = j.bulk_job_id;
+      const total = j.total || 0;
+      const idx   = j.current_index || 0;
+      const done  = (j.completed || []).length;
+      const failed = (j.failed || []).length;
+      const pct = Math.min(100, Math.max(0, j.progress_pct || 0));
+      bFill.style.width = pct + '%';
+      if (j.status === 'done') {
+        bStatus.textContent = '✓ Re-analyze complete';
+        bDetail.textContent = `${done}/${total} succeeded · ${failed} failed`;
+        bCancel.style.display = 'none';
+        bFill.style.background = '#10b981';
+      } else if (j.status === 'cancelled') {
+        bStatus.textContent = '⊘ Re-analyze cancelled';
+        bDetail.textContent = `${done}/${total} done before cancel · ${failed} failed`;
+        bCancel.style.display = 'none';
+        bFill.style.background = '#94a3b8';
+      } else {
+        const cur = j.current_ticker || '…';
+        bStatus.textContent = `Re-analyzing ${cur} (${idx + 1}/${total})`;
+        bDetail.textContent = `${done} done · ${failed} failed · ETA ~${Math.max(1, (total - idx) * 2.5)} min`;
+        bCancel.style.display = '';
+        bFill.style.background = '#9333ea';
+      }
+    }
+
+    async function _pollBulk(bulkId) {
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all/' + encodeURIComponent(bulkId));
+        if (!r.ok) throw new Error('poll ' + r.status);
+        const j = await r.json();
+        _renderBulkProgress(j);
+        if (j.status === 'done' || j.status === 'cancelled' || j.status === 'failed') {
+          clearInterval(pollTimer); pollTimer = null;
+          btn.disabled = false; btn.textContent = '🔄 Re-analyze All';
+          // Refresh the reports list to pick up new pptx_stale flags + updated dates
+          if (typeof loadReports === 'function') loadReports();
+        }
+      } catch (e) {
+        console.warn('[bulk-reanalyze poll]', e);
+      }
+    }
+
+    function _startPolling(bulkId) {
+      if (pollTimer) clearInterval(pollTimer);
+      _pollBulk(bulkId);
+      pollTimer = setInterval(function() { _pollBulk(bulkId); }, 5000);
+    }
+
+    btn.addEventListener('click', async function() {
+      if (btn.disabled) return;
+      const reportsCount = (document.getElementById('reports-count') || {}).textContent || '?';
+      const estMin = Math.max(2, Number(reportsCount) * 2.5) || '?';
+      const ok = confirm(
+        'Re-analyze ALL ' + reportsCount + ' saved reports?\n\n'
+        + '• Runs sequentially in the background — site stays responsive\n'
+        + '• ~2-3 min per report (≈ ' + estMin + ' min total for ' + reportsCount + ')\n'
+        + '• Existing PowerPoint files are KEPT but marked as older (faded PPT pill)\n'
+        + '• To get a fresh PPT for any report, re-run that ticker individually with the Gamma checkbox\n\n'
+        + 'Proceed?'
+      );
+      if (!ok) return;
+      btn.disabled = true; btn.textContent = '⏳ Starting…';
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all', { method: 'POST' });
+        if (!r.ok) {
+          const err = await r.json().catch(function(){ return {detail: r.status}; });
+          throw new Error(err.detail || r.status);
+        }
+        const j = await r.json();
+        _startPolling(j.bulk_job_id);
+      } catch(e) {
+        btn.disabled = false; btn.textContent = '🔄 Re-analyze All';
+        alert('Could not start: ' + e.message);
+      }
+    });
+
+    bCancel.addEventListener('click', async function() {
+      if (!activeBulkId) return;
+      if (!confirm('Cancel re-analysis after the current ticker finishes?')) return;
+      try {
+        await window.dgaFetch('/api/reports/reanalyze-all/' + encodeURIComponent(activeBulkId) + '/cancel', { method: 'POST' });
+        bCancel.textContent = 'CANCELLING…';
+        bCancel.disabled = true;
+      } catch(e) { console.warn('[bulk-reanalyze cancel]', e); }
+    });
+
+    bClose.addEventListener('click', function() {
+      banner.style.display = 'none';
+      // NOTE: job keeps running on the server. Hide the banner only.
+    });
+
+    // On page load: resume display if there's an active or recent bulk job
+    setTimeout(async function() {
+      try {
+        const r = await window.dgaFetch('/api/reports/reanalyze-all');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.active && d.active.status === 'running') {
+          btn.disabled = true; btn.textContent = '⏳ Running…';
+          _startPolling(d.active.bulk_job_id);
+        }
+      } catch(e) {}
+    }, 800);
   })();
 
   // Check if Gamma API key is configured, update label
