@@ -640,6 +640,101 @@
     width: 5px; height: 5px; border-radius: 50%;
     background: #f59e0b; border: 1px solid #fff;
   }
+  /* 🔬 Compare with Claude button */
+  .rep-compare-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 11px; padding: 1px 4px; margin-left: 4px;
+    opacity: 0.45; transition: opacity .12s, background .12s;
+    vertical-align: middle; border-radius: 3px;
+  }
+  .rep-compare-btn:hover { opacity: 1; background: #f0f9ff; }
+
+  /* Side-by-side comparison modal */
+  .cmp-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.55);
+    z-index: 10000; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .cmp-modal {
+    background: #fff; border-radius: 10px; width: min(1400px, 96vw);
+    height: 90vh; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.3);
+  }
+  .cmp-modal-hdr {
+    padding: 12px 18px; border-bottom: 1px solid #e2e8f0; background: #fafbfc;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .cmp-modal-title {
+    font-size: 15px; font-weight: 800; color: #0A1628; flex: 1;
+    letter-spacing: -0.2px;
+  }
+  .cmp-modal-close {
+    background: none; border: none; cursor: pointer; font-size: 22px;
+    color: #94a3b8; padding: 0 6px; line-height: 1;
+  }
+  .cmp-modal-close:hover { color: #0A1628; }
+  .cmp-modal-body {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: #e2e8f0; flex: 1; overflow: hidden;
+  }
+  .cmp-pane {
+    background: #fff; overflow: hidden; display: flex; flex-direction: column;
+  }
+  .cmp-pane-hdr {
+    padding: 8px 14px; background: #fafbfc; border-bottom: 1px solid #e2e8f0;
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  }
+  .cmp-pane-engine {
+    font-size: 11px; font-weight: 800; color: #fff;
+    padding: 3px 7px; border-radius: 3px; letter-spacing: 0.4px;
+  }
+  .cmp-pane-engine.grok   { background: #0A1628; }
+  .cmp-pane-engine.claude { background: #d97706; }
+  .cmp-pane-meta {
+    font-size: 10px; color: #64748b; font-variant-numeric: tabular-nums;
+  }
+  .cmp-pane-meta strong { color: #0A1628; font-weight: 700; }
+  .cmp-pane-body {
+    flex: 1; overflow-y: auto; padding: 16px 22px;
+    font-size: 12.5px; line-height: 1.55; color: #1e293b;
+  }
+  .cmp-pane-body h1 { font-size: 16px; margin: 14px 0 8px; }
+  .cmp-pane-body h2 { font-size: 14px; margin: 12px 0 6px; color: #0A1628; }
+  .cmp-pane-body h3 { font-size: 13px; margin: 10px 0 4px; }
+  .cmp-pane-body table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11px; }
+  .cmp-pane-body th, .cmp-pane-body td { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; text-align: left; }
+  .cmp-pane-body th { background: #fafbfc; font-weight: 700; font-size: 10px; }
+  .cmp-pane-body p { margin: 6px 0; }
+  .cmp-pane-empty {
+    padding: 40px 20px; text-align: center; color: #64748b; font-size: 13px;
+  }
+  .cmp-pane-empty button {
+    margin-top: 16px; background: #d97706; color: #fff; border: none;
+    padding: 10px 18px; border-radius: 5px; cursor: pointer;
+    font-weight: 700; font-size: 12px; letter-spacing: 0.5px;
+  }
+  .cmp-pane-empty button:hover { background: #b45309; }
+  .cmp-pane-empty button:disabled { opacity: 0.5; cursor: wait; }
+  .cmp-summary-strip {
+    display: flex; gap: 16px; padding: 8px 18px; background: #fef3c7;
+    border-bottom: 1px solid #fde68a; font-size: 11px; color: #78350f;
+  }
+  .cmp-summary-strip .delta-bad  { color: #dc2626; font-weight: 800; }
+  .cmp-summary-strip .delta-good { color: #16a34a; font-weight: 800; }
+  .cmp-disclaimer {
+    padding: 6px 18px; background: #f1f5f9; font-size: 9.5px;
+    color: #64748b; border-top: 1px solid #e2e8f0; flex-shrink: 0;
+  }
+  .cmp-progress {
+    padding: 14px 18px; background: #fff7ed; border-radius: 5px; margin: 16px;
+    font-size: 12px; color: #92400e;
+  }
+  .cmp-progress-bar {
+    height: 4px; background: #fed7aa; border-radius: 2px; margin-top: 8px; overflow: hidden;
+  }
+  .cmp-progress-fill {
+    height: 100%; background: #d97706; width: 0%; transition: width .4s;
+  }
   .rep-date { color: var(--dim); font-size: 10px; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
 
@@ -2930,6 +3025,9 @@
                     ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
                     : 'PowerPoint presentation') + '">PPT</span>'
               : '') +
+            '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
+              + ' title="Compare Grok report with Claude (≈2-3 min)"'
+              + ' onclick="event.stopPropagation();">🔬</button>' +
             '<div class="rep-date">' + dateStr + '</div>' +
           '</td>' +
           '<td class="rep-num">' +
@@ -2945,11 +3043,21 @@
         );
       }).join('');
 
-      // Click row → open inline report viewer (ignore clicks on the × button)
+      // Click row → open inline report viewer (ignore clicks on the × / 🔬 buttons)
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
         tr.addEventListener('click', (e) => {
           if (e.target.closest('[data-rep-delete]')) return;
+          if (e.target.closest('[data-compare-ticker]')) return;
           openReport(tr.getAttribute('data-ticker'));
+        });
+      });
+
+      // 🔬 Compare buttons — open side-by-side Grok vs Claude modal
+      tbody.querySelectorAll('[data-compare-ticker]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-compare-ticker');
+          openCompareModal(tk);
         });
       });
 
@@ -9126,6 +9234,211 @@
   // RIGHT COLUMN — Market Pulse (scan results as news)
   // Auto-refreshes every 15 minutes
   // ══════════════════════════════════════════════════════════════
+  // ── 🔬 Compare modal — Grok vs Claude side-by-side ───────────────────────
+  // Opens with whatever's already on disk; if the Claude (alt) side is
+  // missing, shows a button to kick off the comparison run. Polls the
+  // job and live-replaces the empty pane with the rendered report once done.
+  var _cmpActiveJobId  = null;
+  var _cmpActiveTicker = null;
+  var _cmpPollTimer    = null;
+
+  function _cmpMdToHtml(md) {
+    // Prefer the global marked library (richer); fall back to a tiny regex
+    // converter for safety.
+    try {
+      if (window.marked && typeof window.marked.parse === 'function') {
+        return window.marked.parse(md);
+      }
+    } catch(e) {}
+    // Fallback: minimal markdown
+    return (md || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm,'<h3>$1</h3>')
+      .replace(/^## (.+)$/gm,'<h2>$1</h2>')
+      .replace(/^# (.+)$/gm,'<h1>$1</h1>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\n\n/g,'</p><p>')
+      .replace(/^/, '<p>').concat('</p>');
+  }
+
+  function _cmpSummaryStrip(grok, alt) {
+    // Quick at-a-glance row: price target delta + rating + upside between the two
+    const gs = (grok.summary || {});
+    const as = (alt.summary || {});
+    const gt = gs.price_target, at = as.price_target;
+    const gu = gs.upside_pct,   au = as.upside_pct;
+    if (gt == null && at == null && gu == null && au == null) return '';
+    let row = '<div class="cmp-summary-strip">';
+    row += '<div>Grok: <strong>' + (gs.rating || '—') + '</strong>'
+        + ' · target <strong>' + (gt != null ? ('$' + Number(gt).toFixed(2)) : '—') + '</strong>'
+        + ' · upside <strong>' + (gu != null ? ((gu>=0?'+':'')+Number(gu).toFixed(1)+'%') : '—') + '</strong></div>';
+    row += '<div>Claude: <strong>' + (as.rating || '—') + '</strong>'
+        + ' · target <strong>' + (at != null ? ('$' + Number(at).toFixed(2)) : '—') + '</strong>'
+        + ' · upside <strong>' + (au != null ? ((au>=0?'+':'')+Number(au).toFixed(1)+'%') : '—') + '</strong></div>';
+    // Delta
+    if (gt != null && at != null) {
+      const pctDelta = ((at - gt) / gt) * 100;
+      const cls = Math.abs(pctDelta) > 5 ? 'delta-bad' : 'delta-good';
+      row += '<div>Δ Target: <span class="' + cls + '">'
+        + ((pctDelta>=0?'+':'')+pctDelta.toFixed(1)+'%') + '</span></div>';
+    }
+    row += '</div>';
+    return row;
+  }
+
+  function _cmpRenderModal(data) {
+    let modal = document.getElementById('cmp-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'cmp-modal';
+      modal.className = 'cmp-modal-backdrop';
+      document.body.appendChild(modal);
+    }
+    const grok = data.grok || {};
+    const alt  = data.alt  || {};
+    const tk   = data.ticker;
+    const altProvider = (alt.provider || 'claude');
+
+    const grokDate = grok.generated_at ? new Date(grok.generated_at).toLocaleString('en-US', { ..._PT, year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+    const altDate  = alt.generated_at  ? new Date(alt.generated_at).toLocaleString('en-US',  { ..._PT, year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+
+    const grokPane = grok.has_report
+      ? '<div class="cmp-pane-body">' + _cmpMdToHtml(grok.text) + '</div>'
+      : '<div class="cmp-pane-empty">No Grok report on disk for ' + tk + '.</div>';
+
+    let altPane;
+    if (alt.has_report) {
+      altPane = '<div class="cmp-pane-body">' + _cmpMdToHtml(alt.text) + '</div>';
+    } else if (_cmpActiveJobId && _cmpActiveTicker === tk) {
+      altPane = '<div class="cmp-progress" id="cmp-progress-' + tk + '">'
+        + '<div id="cmp-progress-label">Starting comparison…</div>'
+        + '<div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmp-progress-fill"></div></div>'
+        + '</div>';
+    } else {
+      altPane = '<div class="cmp-pane-empty">'
+        + 'No ' + altProvider.toUpperCase() + ' comparison report yet.<br>'
+        + '<small style="color:#94a3b8;">Reruns the analysis using ' + altProvider.toUpperCase() + ' with the same system prompt + gathered data (~2-3 min).</small><br>'
+        + '<button id="cmp-start-btn" data-ticker="' + tk + '">⚡ Run ' + altProvider.toUpperCase() + ' analysis now</button>'
+        + '</div>';
+    }
+
+    modal.innerHTML =
+      '<div class="cmp-modal">'
+        + '<div class="cmp-modal-hdr">'
+          + '<div class="cmp-modal-title">🔬 Comparison: ' + tk + ' &nbsp;—&nbsp; Grok vs ' + altProvider.toUpperCase() + '</div>'
+          + '<button class="cmp-modal-close" id="cmp-modal-close">×</button>'
+        + '</div>'
+        + (grok.has_report && alt.has_report ? _cmpSummaryStrip(grok, alt) : '')
+        + '<div class="cmp-modal-body">'
+          + '<div class="cmp-pane">'
+            + '<div class="cmp-pane-hdr">'
+              + '<span class="cmp-pane-engine grok">GROK</span>'
+              + '<span class="cmp-pane-meta">' + (grok.model || 'grok') + ' · <strong>' + grokDate + '</strong></span>'
+            + '</div>'
+            + grokPane
+          + '</div>'
+          + '<div class="cmp-pane">'
+            + '<div class="cmp-pane-hdr">'
+              + '<span class="cmp-pane-engine claude">' + altProvider.toUpperCase() + '</span>'
+              + '<span class="cmp-pane-meta">' + (alt.model || altProvider) + ' · <strong>' + altDate + '</strong></span>'
+            + '</div>'
+            + altPane
+          + '</div>'
+        + '</div>'
+        + '<div class="cmp-disclaimer">Note: Grok runs with live web/X search; Claude works only from the same gathered SEC + market data passed via system prompt. This reflects the real capability difference between the two providers — read accordingly.</div>'
+      + '</div>';
+
+    // Wire close
+    document.getElementById('cmp-modal-close').addEventListener('click', _cmpCloseModal);
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) _cmpCloseModal();
+    });
+    // Wire start button (if shown)
+    const startBtn = document.getElementById('cmp-start-btn');
+    if (startBtn) {
+      startBtn.addEventListener('click', function() {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Starting…';
+        _cmpStartCompare(tk, altProvider);
+      });
+    }
+  }
+
+  async function openCompareModal(ticker) {
+    _cmpActiveTicker = ticker;
+    // First render with current disk state
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=claude');
+      if (!r.ok) throw new Error('comparison ' + r.status);
+      const data = await r.json();
+      _cmpRenderModal(data);
+    } catch (e) {
+      console.warn('[compare]', e);
+      alert('Could not open comparison: ' + e.message);
+    }
+  }
+
+  async function _cmpStartCompare(ticker, provider) {
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker)
+        + '/compare?provider=' + encodeURIComponent(provider), { method: 'POST' });
+      if (!r.ok) {
+        const err = await r.json().catch(function(){ return {detail: r.status}; });
+        throw new Error(err.detail || r.status);
+      }
+      const job = await r.json();
+      _cmpActiveJobId = job.job_id;
+      // Re-render modal to show progress block
+      const data = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
+      _cmpRenderModal(data);
+      // Start polling
+      _cmpPollTimer = setInterval(function() { _cmpPollCompare(ticker, provider, job.job_id); }, 5000);
+      _cmpPollCompare(ticker, provider, job.job_id);
+    } catch (e) {
+      alert('Could not start compare: ' + e.message);
+    }
+  }
+
+  async function _cmpPollCompare(ticker, provider, jobId) {
+    try {
+      const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
+      if (!r.ok) throw new Error('job ' + r.status);
+      const job = await r.json();
+      // Update progress text
+      const lbl = document.getElementById('cmp-progress-label');
+      const fill = document.getElementById('cmp-progress-fill');
+      if (lbl && job.progress) lbl.textContent = job.progress.label + ' — ' + Math.round((job.progress.pct||0)*100) + '%';
+      if (fill && job.progress) fill.style.width = Math.round((job.progress.pct||0)*100) + '%';
+      if (job.status === 'done' || job.status === 'failed') {
+        clearInterval(_cmpPollTimer); _cmpPollTimer = null;
+        if (job.status === 'failed') {
+          if (lbl) lbl.textContent = 'Failed: ' + (job.error || 'unknown error');
+          return;
+        }
+        _cmpActiveJobId = null;
+        // Re-fetch comparison data and re-render with the new alt pane filled in
+        try {
+          const d = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
+          _cmpRenderModal(d);
+        } catch(e) {}
+      }
+    } catch (e) {
+      console.warn('[compare poll]', e);
+    }
+  }
+
+  function _cmpCloseModal() {
+    const m = document.getElementById('cmp-modal');
+    if (m) m.remove();
+    if (_cmpPollTimer) { clearInterval(_cmpPollTimer); _cmpPollTimer = null; }
+    // Note: Compare job keeps running on the server if still in flight.
+    // Reopen the modal anytime to resume display.
+    _cmpActiveTicker = null;
+  }
+
+  // Expose for inline handlers + console
+  window.openCompareModal = openCompareModal;
+
   // ── Market Pulse detail modal ─────────────────────────────────────────────
   function _openPulseDetail(ticker, res) {
     // Remove any existing modal

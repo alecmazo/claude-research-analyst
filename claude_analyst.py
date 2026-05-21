@@ -5719,6 +5719,83 @@ def call_grok(system_prompt: str, user_content: str,
 
 
 # ============================================================================
+# Claude (Anthropic) call — for A/B comparison against Grok
+# ============================================================================
+# The default analyzer runs on Grok (call_grok above). call_claude provides
+# a same-signature alternative so the Compare button can rerun an existing
+# report through Anthropic's model for side-by-side evaluation.
+#
+# Asymmetry to be aware of when interpreting comparisons:
+#   • Grok has server-side web + X search (live_search=True).
+#   • Claude doesn't have an equivalent in the Messages API.
+# The user_msg passed in already contains all the gathered data (SEC filings,
+# financials, market snapshot) so the report is data-grounded either way,
+# but live news that broke since training cutoff will appear in Grok but
+# not in Claude. The UI discloses this in the comparison modal.
+
+CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+
+
+def get_claude_api_key() -> str:
+    return _require_env(
+        "ANTHROPIC_API_KEY",
+        hint="Get one at https://console.anthropic.com/",
+    )
+
+
+def call_claude(system_prompt: str, user_content: str,
+                model: str = CLAUDE_MODEL,
+                *,
+                live_search: bool = False,           # accepted for signature parity with call_grok; ignored
+                search_from_date: str | None = None  # accepted for parity; ignored
+                ) -> str:
+    """Call Anthropic Claude. Same signature as :func:`call_grok` so the
+    analyze_ticker pipeline can swap providers via a single parameter.
+
+    Note: ``live_search`` and ``search_from_date`` are accepted but ignored —
+    Anthropic's API doesn't have an equivalent server-side search tool. The
+    pipeline's existing data-gathering (SEC, yfinance, news cache) is baked
+    into ``user_content`` and reaches Claude that way.
+    """
+    # Lazy import so the module loads even when anthropic isn't installed
+    # (e.g. during unit tests of the parser/renderer).
+    from anthropic import Anthropic   # type: ignore
+
+    client = Anthropic(api_key=get_claude_api_key())
+    resp = client.messages.create(
+        model=model,
+        max_tokens=16000,   # generous — DGA reports run ~6-10k tokens
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    # Concatenate any text blocks the model returned.
+    chunks: list[str] = []
+    for block in (resp.content or []):
+        # SDK objects have a .text attr; dict shape uses {"type":"text","text":...}
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text") if block.get("type") == "text" else None
+        if text:
+            chunks.append(text)
+    return "\n".join(chunks)
+
+
+def call_llm(provider: str, system_prompt: str, user_content: str,
+             *, live_search: bool = False) -> str:
+    """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude'}.
+
+    Centralised so analyze_ticker stays clean and any future provider
+    (gpt-5, gemini, etc.) only needs one branch added here.
+    """
+    p = (provider or "grok").lower().strip()
+    if p == "claude":
+        return call_claude(system_prompt, user_content)
+    if p == "grok":
+        return call_grok(system_prompt, user_content, live_search=live_search)
+    raise ValueError(f"Unknown LLM provider: {provider!r}")
+
+
+# ============================================================================
 # Ratings / price-target extraction for portfolio ranking
 # ============================================================================
 _RATING_RE = re.compile(
@@ -6133,7 +6210,7 @@ def _gamma_generate(input_text: str, num_cards: int,
 # ============================================================================
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
                    verbose: bool = True, reuse_existing: bool = False,
-                   on_progress=None) -> dict:
+                   on_progress=None, llm_provider: str = "grok") -> dict:
     """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
 
     Any uncaught exception inside the pipeline is converted to a structured
@@ -6158,6 +6235,7 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             verbose=verbose,
             reuse_existing=reuse_existing,
             on_progress=on_progress,
+            llm_provider=llm_provider,
         )
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
@@ -6189,7 +6267,7 @@ def _emit_progress(on_progress, step: str, pct: float, label: str = "") -> None:
 
 def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
                          verbose: bool = True, reuse_existing: bool = False,
-                         on_progress=None) -> dict:
+                         on_progress=None, llm_provider: str = "grok") -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
@@ -6336,28 +6414,35 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         + f"Generate the full research report for {ticker} following every rule in your system prompt."
     )
 
-    # live_search=True makes Grok scan X/news/web for the last ~90 days of
-    # developments on this ticker, which is how Section 2 (Recent
-    # Developments) can surface a CEO departure from two days ago even
-    # though it's past the model's training cutoff.
-    print(f"   🧠 Calling Grok ({GROK_MODEL}) with live X/news/web search…")
+    # ── LLM call (provider-routed) ────────────────────────────────────────
+    # Grok = default; uses live web/X search to surface news past training cutoff.
+    # Claude = comparison path; works only from the gathered user_msg payload.
+    # Non-grok providers write to "{ticker}_DGA_Report_{provider}.md/.docx" so
+    # they DON'T overwrite the canonical Grok reports (which other features
+    # like the saved-reports table, Builder, Idea Generator depend on).
+    _suffix = "" if llm_provider == "grok" else f"_{llm_provider}"
+    _model_label = GROK_MODEL if llm_provider == "grok" else (CLAUDE_MODEL if llm_provider == "claude" else llm_provider)
+    print(f"   🧠 Calling {llm_provider.upper()} ({_model_label})"
+          + (" with live X/news/web search…" if llm_provider == "grok" else "…"))
     _emit_progress(on_progress, "grok", 0.40,
-                   f"Grok ({GROK_MODEL}) — analyzing + live X/news search")
+                   f"{llm_provider.title()} ({_model_label}) — analyzing"
+                   + (" + live X/news search" if llm_provider == "grok" else ""))
     try:
-        report_text = call_grok(system_prompt, user_msg, live_search=True)
+        report_text = call_llm(llm_provider, system_prompt, user_msg,
+                               live_search=(llm_provider == "grok"))
     except Exception as exc:  # noqa: BLE001
-        print(f"   ❌ Grok API error: {exc}")
-        result["error"] = f"Grok: {exc}"
+        print(f"   ❌ {llm_provider.upper()} API error: {exc}")
+        result["error"] = f"{llm_provider.title()}: {exc}"
         return result
 
-    # Save markdown too, for debugging / iteration.
-    md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+    # Save markdown — suffixed for non-Grok providers so they don't overwrite.
+    md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
     md_path.write_text(report_text)
 
     # Render Word
     _emit_progress(on_progress, "rendering", 0.85,
                    "Rendering Word document")
-    out_docx = STOCKS_FOLDER / f"{ticker}_DGA_Report.docx"
+    out_docx = STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.docx"
     summary = extract_summary_from_report(report_text)
     rating_hint = summary.get("rating") or ""
     render_report(

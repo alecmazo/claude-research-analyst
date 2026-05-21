@@ -4251,6 +4251,166 @@ def cancel_reanalyze_all(bulk_job_id: str, request: Request):
     return {"ok": True, "message": "Cancel requested — will stop after current ticker."}
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# LLM Compare — run an existing report through an alternate provider for A/B
+# evaluation. Default canonical engine is Grok; the alt is Claude. Output is
+# saved to "{TICKER}_DGA_Report_{provider}.md" so the canonical Grok report
+# is never overwritten and downstream features (saved-reports table, Builder,
+# Idea Generator) continue to use the trusted Grok version.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
+    """Background worker for /api/reports/{ticker}/compare.
+
+    Calls analyst.analyze_ticker with llm_provider=<provider> and generate_gamma=False.
+    Writes to "{ticker}_DGA_Report_{provider}.md" instead of the canonical path.
+    Does NOT persist to the analyst_reports DB table — the comparison report
+    is intentionally treated as a side artifact, not a replacement.
+    """
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+        _jobs[job_id]["progress"] = {"step": "queued", "pct": 0.0,
+                                      "label": f"Comparing with {provider.title()}…"}
+
+    def _record(step: str, pct: float, label: str) -> None:
+        with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id]["progress"] = {"step": step, "pct": pct, "label": label}
+
+    try:
+        result = analyst.analyze_ticker(
+            ticker,
+            system_prompt=analyst.load_system_prompt(),
+            generate_gamma=False,
+            verbose=False,
+            on_progress=_record,
+            llm_provider=provider,
+        )
+        with _jobs_lock:
+            if result.get("ok"):
+                _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["result"] = {k: v for k, v in result.items()
+                                            if k != "report_text"}
+                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
+                                              "label": f"{provider.title()} report ready"}
+            else:
+                _jobs[job_id]["status"] = "failed"
+                _jobs[job_id]["error"] = result.get("error", "Unknown error")
+    except BaseException as exc:  # noqa: BLE001
+        tb_str = traceback.format_exc()
+        print(f"\n❌ Compare job {job_id} ({ticker}, {provider}) CRASHED:\n{tb_str}", flush=True)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = f"{exc}"[:300]
+
+
+@app.post("/api/reports/{ticker}/compare")
+def start_report_compare(ticker: str, request: Request,
+                         background_tasks: BackgroundTasks,
+                         provider: str = "claude"):
+    """Kick off a comparison analysis of `ticker` using the alt LLM provider.
+
+    Returns a standard job dict — poll /api/jobs/{job_id} for progress like
+    any other single-ticker analysis. When done, fetch the side-by-side data
+    via /api/reports/{ticker}/comparison.
+
+    provider: 'claude' (default) | 'grok'
+    """
+    _claims_or_401(request)
+    provider = (provider or "claude").lower().strip()
+    if provider not in ("claude", "grok"):
+        raise HTTPException(422, f"Unknown provider: {provider!r}")
+    tk = (ticker or "").strip().upper()
+    if not tk or not tk.replace(".", "").replace("-", "").isalnum() or len(tk) > 12:
+        raise HTTPException(422, "Invalid ticker")
+
+    # Verify the canonical Grok report exists — comparing against nothing is
+    # nonsensical and points to a UX bug or a stale tickers list.
+    grok_md = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report.md"
+    if not grok_md.exists() and provider == "claude":
+        raise HTTPException(404, f"No canonical Grok report for {tk} to compare against. "
+                                  "Run the standard analyzer first.")
+
+    job_id  = str(uuid.uuid4())
+    now_iso = datetime.utcnow().isoformat()
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id":           job_id,
+            "ticker":           tk,
+            "status":           "queued",
+            "created_at":       now_iso,
+            "error":            None,
+            "result":           None,
+            "compare_provider": provider,
+            "progress":         {"step": "queued", "pct": 0.0,
+                                  "label": f"Queued — {provider.title()} comparison"},
+        }
+    _save_job_index_entry(job_id, {"ticker": tk, "type": "compare",
+                                    "provider": provider, "created_at": now_iso})
+    background_tasks.add_task(_run_compare_analysis, job_id, tk, provider)
+    return _jobs[job_id]
+
+
+@app.get("/api/reports/{ticker}/comparison")
+def get_report_comparison(ticker: str, request: Request, provider: str = "claude"):
+    """Return both the canonical (Grok) report and the alt-provider comparison.
+
+    Either side may be missing (text=None) — frontend renders an empty-state
+    on that side with an action button to generate it.
+    """
+    _claims_or_401(request)
+    provider = (provider or "claude").lower().strip()
+    tk = (ticker or "").strip().upper()
+
+    def _read_report(path) -> tuple[str | None, str | None]:
+        if not path.exists():
+            return None, None
+        try:
+            text = path.read_text()
+        except Exception:
+            return None, None
+        try:
+            from datetime import datetime as _dt
+            mtime = _dt.fromtimestamp(path.stat().st_mtime).isoformat()
+        except Exception:
+            mtime = None
+        return text, mtime
+
+    grok_path = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report.md"
+    alt_path  = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report_{provider}.md"
+    grok_text, grok_mtime = _read_report(grok_path)
+    alt_text,  alt_mtime  = _read_report(alt_path)
+
+    def _safe_summary(text: str | None) -> dict:
+        if not text:
+            return {}
+        try:
+            return analyst.extract_summary_from_report(text) or {}
+        except Exception:
+            return {}
+
+    return {
+        "ticker": tk,
+        "grok": {
+            "text":         grok_text,
+            "generated_at": grok_mtime,
+            "model":        getattr(analyst, "GROK_MODEL", "grok"),
+            "summary":      _safe_summary(grok_text),
+            "has_report":   bool(grok_text),
+        },
+        "alt": {
+            "provider":     provider,
+            "text":         alt_text,
+            "generated_at": alt_mtime,
+            "model":        getattr(analyst,
+                                     f"{provider.upper()}_MODEL",
+                                     provider),
+            "summary":      _safe_summary(alt_text),
+            "has_report":   bool(alt_text),
+        },
+    }
+
+
 # In-memory portfolio job store.
 _pjobs: dict[str, dict[str, Any]] = {}
 _pjobs_lock = threading.Lock()
