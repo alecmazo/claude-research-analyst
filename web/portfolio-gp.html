@@ -260,6 +260,76 @@
     border-radius: 8px;
   }
 
+  /* ── Idea Generator card ──────────────────────────────────────── */
+  .idea-gen-panel[data-open="1"] #idea-gen-chev { transform: rotate(180deg); }
+  .idea-gen-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; border-bottom: 1px solid #f1f5f9;
+    cursor: pointer; transition: background .12s;
+  }
+  .idea-gen-row:hover { background: #f8fafc; }
+  .idea-gen-row:last-child { border-bottom: none; }
+  .idea-gen-tk {
+    font-weight: 800; font-size: 13px; color: #0A1628; min-width: 56px;
+    letter-spacing: 0.4px;
+  }
+  .idea-gen-pct {
+    font-weight: 800; font-size: 13px; font-variant-numeric: tabular-nums;
+    min-width: 60px; text-align: right;
+  }
+  .idea-gen-pct.up   { color: #16a34a; }
+  .idea-gen-pct.down { color: #dc2626; }
+  .idea-gen-reason {
+    flex: 1; font-size: 11px; color: #475569; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .idea-gen-reason-cls {
+    display: inline-block; font-size: 8.5px; font-weight: 800;
+    letter-spacing: 0.6px; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; margin-right: 6px;
+    vertical-align: 1px;
+  }
+  .idea-gen-cls-sector_move { background: #dbeafe; color: #1e40af; }
+  .idea-gen-cls-news        { background: #fef3c7; color: #92400e; }
+  .idea-gen-cls-unknown     { background: #e2e8f0; color: #475569; }
+  .idea-gen-src {
+    font-size: 9px; color: #94a3b8; letter-spacing: 0.3px;
+    margin-left: 4px; flex-shrink: 0;
+  }
+  .idea-gen-src-chip {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    background: #f1f5f9; color: #64748b; margin-left: 3px;
+    font-size: 8.5px; font-weight: 700; text-transform: uppercase;
+  }
+  .idea-gen-detail {
+    background: #fafbfc; padding: 10px 14px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 11.5px; color: #334155;
+  }
+  .idea-gen-detail h5 {
+    margin: 0 0 4px; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+    text-transform: uppercase; color: #64748b;
+  }
+  .idea-gen-news-item {
+    padding: 6px 0; border-bottom: 1px dashed #e2e8f0;
+  }
+  .idea-gen-news-item:last-child { border-bottom: none; }
+  .idea-gen-news-item a {
+    color: #0A1628; text-decoration: none; font-weight: 600; line-height: 1.35;
+  }
+  .idea-gen-news-item a:hover { color: var(--blue); text-decoration: underline; }
+  .idea-gen-news-meta { font-size: 9.5px; color: #94a3b8; margin-top: 2px; }
+  .idea-gen-empty {
+    padding: 16px; color: #94a3b8; font-size: 12px; text-align: center;
+  }
+  .idea-gen-deep {
+    display: inline-block; margin-top: 8px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--blue); background: none; border: 1px solid var(--blue);
+    padding: 4px 10px; border-radius: 4px; cursor: pointer;
+  }
+  .idea-gen-deep:hover { background: var(--blue); color: #fff; }
+
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
     display: flex; flex-direction: column;
@@ -1388,6 +1458,21 @@
 
   <!-- ─── CENTER COLUMN ─────────────────────────────────────── -->
   <section class="col-center">
+
+    <!-- ── Idea Generator (movers ≥ ±4% from your universe) ─────────── -->
+    <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" style="margin-bottom:12px;">
+      <header class="panel-head" id="idea-gen-head" style="cursor:pointer;user-select:none;">
+        <span class="panel-title">🔔 Idea Generator</span>
+        <span class="panel-badge" id="idea-gen-count" style="background:#fde68a;color:#92400e;">—</span>
+        <span id="idea-gen-asof" style="margin-left:auto;font-size:9px;color:var(--dim);font-weight:400;letter-spacing:0;">—</span>
+        <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
+      </header>
+      <div class="panel-body" id="idea-gen-body" style="padding:0;display:none;border-top:1px solid var(--panel-edge);">
+        <div id="idea-gen-note" style="display:none;padding:10px 14px;font-size:11px;color:#94a3b8;background:#fafbfc;border-bottom:1px solid var(--panel-edge);"></div>
+        <div id="idea-gen-list"></div>
+      </div>
+    </section>
+
     <!-- Hero analyze card -->
     <div class="hero-card">
       <div class="hero-label">Analyze Ticker</div>
@@ -2414,7 +2499,7 @@
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
-    research:  () => loadBrief(),     // Brief is now on the Research tab
+    research:  () => { loadBrief(); loadIdeaFeed(true); },
     ideas:     () => loadIdeasTab(),
     tracker:   () => loadTrackerTab(),
     fund:      () => loadFundTab(),
@@ -2815,6 +2900,187 @@
   async function loadIdeasTab() {
     loadIntel();
   }
+
+  // ── Idea Generator ────────────────────────────────────────────────────────
+  // Surfaces movers ≥ ±4% from the user's universe (watchlist + positions +
+  // saved reports), classified into sector_move / news / unknown.
+  // Auto-loads on Research tab activation; refreshes every 15 min.
+  var _ideaFeedTimer = null;
+  var _ideaFeedLastFetch = 0;
+  var _ideaFeedThreshold = 4.0;   // default; future: make user-settable
+  var _ideaFeedExpanded = {};     // { ticker: bool } — which rows are showing news detail
+  var _ideaFeedPanelOpen = false; // is the whole card expanded
+
+  function _ideaFmtPct(p) {
+    if (p == null || isNaN(p)) return '—';
+    return (p >= 0 ? '+' : '') + Number(p).toFixed(2) + '%';
+  }
+  function _ideaFmtAge(iso) {
+    if (!iso) return '';
+    // _pacific_time_str returns 'YYYY-MM-DD HH:MM PT' — just display as-is, compact.
+    return iso.replace(/^\d{4}-/, '').replace(' PT', ' PT');
+  }
+  function _ideaEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+  function _ideaFmtNewsAge(ts) {
+    if (!ts) return '';
+    const ageMin = (Date.now() / 1000 - Number(ts)) / 60;
+    if (ageMin < 60)  return Math.round(ageMin) + 'm ago';
+    if (ageMin < 1440) return Math.round(ageMin / 60) + 'h ago';
+    return Math.round(ageMin / 1440) + 'd ago';
+  }
+
+  function _renderIdeaFeedRow(m) {
+    const isUp  = m.pct_change >= 0;
+    const cls   = isUp ? 'up' : 'down';
+    const srcs  = (m.sources || []).map(function(s) {
+      const lbl = s === 'watchlist' ? 'WL' : s === 'report' ? 'RPT' : s === 'position' ? 'POS' : s.toUpperCase();
+      return '<span class="idea-gen-src-chip" title="' + _ideaEsc(s) + '">' + lbl + '</span>';
+    }).join('');
+    const reasonCls = 'idea-gen-cls-' + (m.reason_class || 'unknown');
+    const reasonLbl = (m.reason_class || 'unknown').replace('_', ' ');
+    const reason = m.reason_text || (m.reason_class === 'unknown' ? 'No specific catalyst detected' : '');
+
+    let html = '<div class="idea-gen-row" data-ticker="' + _ideaEsc(m.ticker) + '">'
+      + '<div class="idea-gen-tk">' + _ideaEsc(m.ticker) + '</div>'
+      + '<div class="idea-gen-pct ' + cls + '">' + _ideaFmtPct(m.pct_change) + '</div>'
+      + '<div class="idea-gen-reason">'
+      +   '<span class="idea-gen-reason-cls ' + reasonCls + '">' + reasonLbl + '</span>'
+      +   _ideaEsc(reason)
+      + '</div>'
+      + '<div class="idea-gen-src">' + srcs + '</div>'
+      + '</div>';
+
+    // Expanded detail (rendered but hidden by default)
+    if (_ideaFeedExpanded[m.ticker]) {
+      html += '<div class="idea-gen-detail" data-ticker="' + _ideaEsc(m.ticker) + '">';
+      // Sector + price line
+      const sectorLine = (m.sector && m.sector !== 'Unknown' ? m.sector : '—')
+        + (m.sector_etf ? ' · ' + m.sector_etf + ' ' + _ideaFmtPct(m.sector_pct_change) : '');
+      html += '<h5>Snapshot</h5>'
+           + '<div style="margin-bottom:8px;font-size:11px;">'
+           +   '<span style="color:#0A1628;font-weight:700;">$' + Number(m.price || 0).toFixed(2) + '</span>'
+           +   ' · ' + sectorLine
+           + '</div>';
+      if (m.news && m.news.length) {
+        html += '<h5>Headlines (' + m.news.length + ')</h5>';
+        m.news.forEach(function(n) {
+          html += '<div class="idea-gen-news-item">'
+            + (n.url
+                ? '<a href="' + _ideaEsc(n.url) + '" target="_blank" rel="noopener">' + _ideaEsc(n.title) + '</a>'
+                : '<span style="color:#0A1628;font-weight:600;">' + _ideaEsc(n.title) + '</span>')
+            + '<div class="idea-gen-news-meta">'
+            +   _ideaEsc(n.publisher || '')
+            +   (n.pub_ts ? ' · ' + _ideaFmtNewsAge(n.pub_ts) : '')
+            + '</div>'
+            + '</div>';
+        });
+      } else {
+        html += '<div style="font-size:11px;color:#94a3b8;font-style:italic;">No recent headlines available.</div>';
+      }
+      html += '<button class="idea-gen-deep" data-deep-ticker="' + _ideaEsc(m.ticker) + '">⚡ Run deep-dive</button>';
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function _renderIdeaFeed(data) {
+    const list  = document.getElementById('idea-gen-list');
+    const badge = document.getElementById('idea-gen-count');
+    const asof  = document.getElementById('idea-gen-asof');
+    const note  = document.getElementById('idea-gen-note');
+    if (!list) return;
+    const movers = data && data.movers || [];
+    if (badge) badge.textContent = movers.length;
+    if (asof)  asof.textContent  = data && data.as_of ? data.as_of : '—';
+    if (note) {
+      if (data && data.note) { note.style.display = 'block'; note.textContent = data.note; }
+      else if (data && data.error) { note.style.display = 'block'; note.textContent = 'Error: ' + data.error; }
+      else { note.style.display = 'none'; note.textContent = ''; }
+    }
+    if (!movers.length) {
+      list.innerHTML = '<div class="idea-gen-empty">'
+        + (data && data.note ? '' : 'No movers ≥ ±' + (data && data.threshold || _ideaFeedThreshold) + '% right now.')
+        + '</div>';
+      return;
+    }
+    list.innerHTML = movers.map(_renderIdeaFeedRow).join('');
+
+    // Row click → toggle detail expand
+    list.querySelectorAll('.idea-gen-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        const tk = row.dataset.ticker;
+        _ideaFeedExpanded[tk] = !_ideaFeedExpanded[tk];
+        // Re-render the list (state preserved in _ideaFeedExpanded)
+        _renderIdeaFeed(data);
+      });
+    });
+    // Deep-dive button → trigger analyze flow
+    list.querySelectorAll('[data-deep-ticker]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const tk = btn.dataset.deepTicker;
+        // Use the existing Analyze Ticker hero input + button
+        const heroInput = document.getElementById('hero-ticker');
+        const heroBtn   = document.getElementById('hero-run-btn');
+        if (heroInput) heroInput.value = tk;
+        if (heroBtn)   heroBtn.click();
+        // Scroll into view so the user can see the analysis kicking off
+        if (heroInput) heroInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+  }
+
+  async function loadIdeaFeed(force) {
+    // Cache-aware: skip refetch if last successful fetch was < 5 min ago
+    // (unless `force` is true). Server-side caching duplicates this but
+    // avoids a needless round-trip too.
+    const now = Date.now();
+    if (!force && (now - _ideaFeedLastFetch) < 5 * 60 * 1000 && document.getElementById('idea-gen-count')?.textContent !== '—') {
+      return;
+    }
+    try {
+      const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold);
+      const r = await window.dgaFetch(url);
+      if (!r.ok) throw new Error('idea-feed ' + r.status);
+      const data = await r.json();
+      _ideaFeedLastFetch = now;
+      _renderIdeaFeed(data);
+    } catch (e) {
+      console.warn('[idea-feed]', e);
+      const list  = document.getElementById('idea-gen-list');
+      if (list) list.innerHTML = '<div class="idea-gen-empty">Idea feed unavailable.</div>';
+    }
+  }
+
+  // Wire header click → expand/collapse the whole card
+  document.addEventListener('DOMContentLoaded', function() {
+    const head  = document.getElementById('idea-gen-head');
+    const body  = document.getElementById('idea-gen-body');
+    const panel = document.getElementById('idea-gen-panel');
+    if (head && body && panel) {
+      head.addEventListener('click', function() {
+        _ideaFeedPanelOpen = !_ideaFeedPanelOpen;
+        body.style.display = _ideaFeedPanelOpen ? 'block' : 'none';
+        panel.dataset.open = _ideaFeedPanelOpen ? '1' : '0';
+        if (_ideaFeedPanelOpen) loadIdeaFeed(false);
+      });
+    }
+    // Initial fetch on page load (Research is the default tab)
+    // Delay slightly so auth token is ready
+    setTimeout(function() { loadIdeaFeed(true); }, 500);
+    // Auto-refresh every 15 min
+    if (!_ideaFeedTimer) {
+      _ideaFeedTimer = setInterval(function() {
+        if (document.getElementById('tab-research')?.classList.contains('active')) {
+          loadIdeaFeed(true);
+        }
+      }, 15 * 60 * 1000);
+    }
+  });
 
   async function loadBrief() {
     const el = document.getElementById('brief-content');

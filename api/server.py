@@ -4939,6 +4939,216 @@ def get_ticker_meta(ticker: str):
     return result
 
 
+# ── Idea Generator — surface movers ≥ threshold% from user's universe ─────────
+# Sources: watchlist ∪ open positions ∪ saved-report tickers.
+# Classifies each mover into earnings_today | sector_move | news | unknown.
+# Caches per-(user, threshold) for 5 min so repeated tab visits don't refetch.
+_IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit) → {data, ts}
+_IDEA_FEED_TTL    = 300                    # 5 minutes
+
+_SECTOR_ETF_MAP = {
+    "Technology":             "XLK",
+    "Energy":                 "XLE",
+    "Financial Services":     "XLF",
+    "Financial":              "XLF",
+    "Financials":             "XLF",
+    "Healthcare":             "XLV",
+    "Health Care":            "XLV",
+    "Consumer Cyclical":      "XLY",
+    "Consumer Discretionary": "XLY",
+    "Consumer Defensive":     "XLP",
+    "Consumer Staples":       "XLP",
+    "Industrials":            "XLI",
+    "Utilities":              "XLU",
+    "Real Estate":            "XLRE",
+    "Communication Services": "XLC",
+    "Basic Materials":        "XLB",
+    "Materials":              "XLB",
+}
+
+
+@app.get("/api/v2/research/idea-feed")
+def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12):
+    """Return today's notable movers from the user's universe.
+
+    Universe = watchlist ∪ open positions (tax_lots) ∪ saved-report subjects.
+    A mover is any ticker with |today's pct_change| ≥ `threshold` (default 4%).
+    Each mover is enriched with:
+      • sector and sector-ETF comparison (XLK/XLE/...)
+      • headline news items (up to 5 from Yahoo via yfinance)
+      • reason_class: 'sector_move' | 'news' | 'unknown'
+      • source labels: where it came from in the universe
+    """
+    claims = _claims_or_401(request)
+    lp_id   = claims.get("lp_id") or claims.get("email") or "anon"
+    role    = claims.get("role", "lp")
+    is_priv = role in ("gp", "admin")
+
+    # Cache key includes the request shape; user-scoped to be safe.
+    cache_key = (str(lp_id), float(threshold), int(limit), is_priv)
+    cached = _IDEA_FEED_CACHE.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _IDEA_FEED_TTL:
+        return cached["data"]
+
+    # ── 1. Build universe ─────────────────────────────────────────────────────
+    universe: set[str] = set()
+    sources: dict[str, set] = {}
+
+    def _add(tk: str, src: str) -> None:
+        if not tk:
+            return
+        tk = tk.strip().upper().rstrip("*")
+        if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+            return
+        universe.add(tk)
+        sources.setdefault(tk, set()).add(src)
+
+    # 1a. Watchlist
+    try:
+        if lp_id and lp_id != "anon":
+            for tk in (_wl_get_db(lp_id) or []):
+                _add(tk, "watchlist")
+    except Exception as _e:
+        print(f"[idea-feed] watchlist fetch failed: {_e}")
+
+    # 1b. Saved-report tickers
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ticker FROM analyst_reports
+                     WHERE archived IS NOT TRUE
+                """)
+                for row in cur.fetchall():
+                    _add(row[0], "report")
+    except Exception as _e:
+        print(f"[idea-feed] reports fetch failed: {_e}")
+
+    # 1c. Open positions (managed accounts + LP funds — both live in tax_lots)
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT DISTINCT s.symbol
+                      FROM tax_lots tl
+                      JOIN securities s ON s.id = tl.security_id
+                      JOIN funds      f ON f.id = tl.fund_id
+                     WHERE f.status     != 'closed'
+                       AND tl.closed_at  IS NULL
+                       AND tl.quantity   > 0
+                       AND s.asset_class != 'cash'
+                """)
+                for r in cur.fetchall():
+                    _add(r["symbol"] or "", "position")
+    except Exception as _e:
+        print(f"[idea-feed] positions fetch failed: {_e}")
+
+    if not universe:
+        out = {"movers": [], "universe_size": 0, "as_of": _pacific_time_str(),
+               "threshold": threshold, "note": "Universe is empty — add to "
+                                                "watchlist, save a report, or upload positions."}
+        _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
+        return out
+
+    # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
+    try:
+        quotes = batch_quotes(",".join(sorted(universe))) or {}
+    except Exception as _e:
+        return {"movers": [], "universe_size": len(universe),
+                "as_of": _pacific_time_str(),
+                "error": f"quote fetch failed: {_e}"}
+
+    # ── 3. Filter to movers ≥ |threshold|% ────────────────────────────────────
+    raw_movers: list[dict] = []
+    for tk in universe:
+        q = quotes.get(tk) or {}
+        pct = q.get("pct_change")
+        prc = q.get("price")
+        if pct is None or prc is None:
+            continue
+        try:
+            pct_f = float(pct)
+        except Exception:
+            continue
+        if abs(pct_f) < float(threshold):
+            continue
+        raw_movers.append({
+            "ticker":     tk,
+            "price":      float(prc),
+            "pct_change": round(pct_f, 4),
+            "abs_change": round(float(prc) * pct_f / 100.0, 2) if prc else None,
+            "sources":    sorted(sources.get(tk, ())),
+        })
+
+    raw_movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
+    movers = raw_movers[: int(limit)]
+
+    if not movers:
+        out = {"movers": [], "universe_size": len(universe),
+               "as_of": _pacific_time_str(), "threshold": threshold,
+               "note": f"No tickers moved ≥ ±{threshold}% today in your universe of "
+                       f"{len(universe)} symbols."}
+        _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
+        return out
+
+    # ── 4. Sector-ETF batch quote (one call covers all 11 sectors) ────────────
+    sector_etf_set = set(_SECTOR_ETF_MAP.values())
+    try:
+        etf_quotes = batch_quotes(",".join(sorted(sector_etf_set))) or {}
+    except Exception:
+        etf_quotes = {}
+
+    # ── 5. Per-mover enrichment: sector + news + reason classification ────────
+    for m in movers:
+        try:
+            meta = get_ticker_meta(m["ticker"])   # cached 15 min via _ticker_meta_cache
+        except Exception:
+            meta = {}
+        sector = (meta.get("sector") or "Unknown").strip()
+        m["sector"]   = sector
+        m["industry"] = meta.get("industry") or ""
+        m["news"]     = (meta.get("news") or [])[:5]
+
+        # Sector ETF comparison
+        etf = _SECTOR_ETF_MAP.get(sector)
+        etf_pct = None
+        if etf:
+            etf_pct = (etf_quotes.get(etf) or {}).get("pct_change")
+            if etf_pct is not None:
+                try:
+                    etf_pct = float(etf_pct)
+                except Exception:
+                    etf_pct = None
+        m["sector_etf"]        = etf
+        m["sector_pct_change"] = round(etf_pct, 4) if etf_pct is not None else None
+
+        # Classify
+        reason_class = "unknown"
+        reason_text  = ""
+        # Sector move: ETF also moved same direction with ≥ 1.5% magnitude
+        if (etf_pct is not None
+                and abs(etf_pct) >= 1.5
+                and (m["pct_change"] * etf_pct) > 0):
+            reason_class = "sector_move"
+            direction = "tailwind" if m["pct_change"] > 0 else "headwind"
+            reason_text = f"{sector} sector {direction} ({etf}: {etf_pct:+.2f}%)"
+        elif m["news"]:
+            reason_class = "news"
+            reason_text  = (m["news"][0].get("title") or "")[:160]
+        m["reason_class"] = reason_class
+        m["reason_text"]  = reason_text
+
+    out = {
+        "movers":        movers,
+        "universe_size": len(universe),
+        "as_of":         _pacific_time_str(),
+        "threshold":     threshold,
+        "ttl_seconds":   _IDEA_FEED_TTL,
+    }
+    _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
+    return out
+
+
 @app.delete("/api/cache")
 def clear_local_cache():
     """Delete all locally-cached _DGA_Report.md files from /stocks.
