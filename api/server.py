@@ -2874,7 +2874,7 @@ def lp_me_positions(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v2/gp/portfolio-chart")
-def gp_portfolio_chart(request: Request, period: str = "ytd"):
+def gp_portfolio_chart(request: Request, period: str = "ytd", fund_id: str = None):
     """Return daily portfolio value series for the GP dashboard chart.
 
     Reconstructs portfolio value per calendar day by multiplying each
@@ -2883,8 +2883,12 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
     but gives a good picture of market-driven performance.
 
     period: ytd | 1m | 1y | 3y
+    fund_id: optional — if provided, scope chart to just that fund / managed
+             account. Accepts either a UUID or a short_name. If omitted, the
+             chart aggregates across ALL non-closed funds.
+
     Response: {dates:[iso], values:[float], current_value, change_abs, change_pct,
-               min_val, max_val, period}
+               min_val, max_val, period, scope:'all'|fund_short_name}
     """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
@@ -2897,10 +2901,23 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
     # joined to `securities`. There is no separate `positions` table — earlier
     # versions of this code assumed one existed and broke production with
     # "relation positions does not exist". One query covers everything.
+    scope_label = "all"
     try:
         conn = _fund_conn()
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""
+            # Resolve fund_id (UUID or short_name) if a specific account was requested
+            scoped_fid = None
+            if fund_id:
+                try:
+                    scoped_fid = _resolve_fund_id(cur, fund_id)
+                    cur.execute("SELECT short_name FROM funds WHERE id = %s", (scoped_fid,))
+                    _r = cur.fetchone()
+                    scope_label = (_r["short_name"] if _r else fund_id) or fund_id
+                except Exception:
+                    return {"dates": [], "values": [],
+                            "error": f"Unknown fund_id: {fund_id}"}
+
+            base_sql = """
                 SELECT s.symbol AS ticker, SUM(tl.quantity) AS total_qty
                   FROM tax_lots tl
                   JOIN securities s ON s.id = tl.security_id
@@ -2908,10 +2925,17 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
                  WHERE f.status != 'closed'
                    AND tl.closed_at IS NULL
                    AND tl.quantity  > 0
-                   AND s.asset_class != 'cash'  -- skip money-market / cash placeholders
+                   AND s.asset_class != 'cash'
+            """
+            params: list = []
+            if scoped_fid:
+                base_sql += " AND tl.fund_id = %s"
+                params.append(scoped_fid)
+            base_sql += """
                  GROUP BY s.symbol
                 HAVING SUM(tl.quantity) > 0
-            """)
+            """
+            cur.execute(base_sql, params)
             pos_rows = [
                 {"ticker": (r["ticker"] or "").strip().upper(),
                  "total_qty": float(r["total_qty"])}
@@ -2924,9 +2948,10 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
                 "error": f"DB query failed: {e}"}
 
     if not pos_rows:
+        scope_msg = f" for {scope_label}" if scope_label != "all" else ""
         return {"dates": [], "values": [],
-                "current_value": 0,
-                "error": "No open equity positions found in tax_lots. "
+                "current_value": 0, "scope": scope_label,
+                "error": f"No open equity positions found{scope_msg}. "
                          "Upload a YTD run with a positions CSV to populate."}
 
     tickers   = [r["ticker"] for r in pos_rows]
@@ -3015,6 +3040,7 @@ def gp_portfolio_chart(request: Request, period: str = "ytd"):
         "min_val":       round(min(values_list), 2),
         "max_val":       round(max(values_list), 2),
         "period":        period,
+        "scope":         scope_label,   # 'all' or fund short_name
         "tickers":       tickers,
     }
 
