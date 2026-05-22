@@ -3343,6 +3343,10 @@
             '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
               + ' title="Compare Grok report with Claude (≈2-3 min)"'
               + ' onclick="event.stopPropagation();">🔬</button>' +
+            '<button class="rep-compare-btn" data-refresh-ticker="' + rep.ticker + '"'
+              + ' title="Wipe cached SEC + market data for this ticker and re-run a fresh Grok analysis. '
+              + 'Use when the report has empty financial tables (cached extract was bad)."'
+              + ' onclick="event.stopPropagation();">🔃</button>' +
             '<div class="rep-date">' + dateStr + '</div>' +
           '</td>' +
           '<td class="rep-num">' +
@@ -3411,6 +3415,46 @@
           e.stopPropagation();
           const tk = btn.getAttribute('data-compare-ticker');
           openCompareModal(tk);
+        });
+      });
+
+      // 🔃 Refresh-data buttons — wipe SEC cache + force fresh Grok analyze
+      // Use when financial tables are empty in the saved report (cached XBRL
+      // extract was bad). Re-runs the data layer + new LLM call.
+      tbody.querySelectorAll('[data-refresh-ticker]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-refresh-ticker');
+          if (!confirm('Wipe cached SEC + market data for ' + tk + ' and re-run a fresh Grok analysis?\n\n'
+              + '• Use this when the saved report has empty financial tables\n'
+              + '• Forces a fresh SEC EDGAR download + XBRL extract\n'
+              + '• Then re-runs Grok analysis (~2-3 min)\n'
+              + '• After it finishes, re-Compare with Claude will use the new data')) return;
+          btn.disabled = true; btn.textContent = '⏳';
+          try {
+            const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/refresh-data',
+                                            { method: 'POST' });
+            if (!r.ok) { const err = await r.json().catch(()=>({})); throw new Error(err.detail || r.status); }
+            const j = await r.json();
+            btn.textContent = '⏳';
+            btn.title = 'Refreshing (job ' + j.job_id.slice(0,8) + '). This may take 2-3 min.';
+            // Poll the job; refresh the reports list when done
+            const interval = setInterval(async () => {
+              try {
+                const jr = await window.dgaFetch('/api/jobs/' + j.job_id);
+                if (!jr.ok) return;
+                const jd = await jr.json();
+                if (jd.status === 'done' || jd.status === 'failed') {
+                  clearInterval(interval);
+                  btn.disabled = false; btn.textContent = '🔃';
+                  loadReports();
+                }
+              } catch (e) {}
+            }, 10000);
+          } catch (err) {
+            btn.disabled = false; btn.textContent = '🔃';
+            alert('Refresh failed: ' + err.message);
+          }
         });
       });
 

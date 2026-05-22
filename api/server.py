@@ -6746,6 +6746,79 @@ def clear_local_cache():
     return {"cleared": cleared, "count": len(cleared)}
 
 
+@app.post("/api/reports/{ticker}/refresh-data")
+def refresh_ticker_data(ticker: str, request: Request,
+                        background_tasks: BackgroundTasks):
+    """Wipe cached SEC + user_msg + market data for `ticker` and kick off a
+    fresh Grok analyze. Use this when a saved report has empty financial
+    tables — the cached extract was bad, and reuse_user_msg keeps serving
+    it to every downstream LLM run.
+
+    Side effects:
+      • Deletes {ticker}_xbrl_extract.json, {ticker}_user_msg.txt,
+        {ticker}_market_snapshot.json, and stock-financials/{ticker}/*
+      • Triggers a fresh /api/analyze with llm_provider='grok'
+        (Claude can be re-compared after the new user_msg lands)
+      • Returns the new job_id so the UI can poll progress
+
+    The next 🔬 Compare / 🔬 LLM Lab run on this ticker will see the
+    refreshed data automatically (they reuse_user_msg from the new cache).
+    """
+    _claims_or_401(request)
+    tk = (ticker or "").strip().upper()
+    if not tk or not tk.replace(".", "").replace("-", "").isalnum() or len(tk) > 12:
+        raise HTTPException(status_code=422, detail="Invalid ticker")
+
+    cleared: list[str] = []
+    folder = analyst.STOCKS_FOLDER
+    # Files to wipe — these are what reuse_user_msg picks up
+    cache_files = [
+        folder / f"{tk}_xbrl_extract.json",
+        folder / f"{tk}_user_msg.txt",
+        folder / f"{tk}_market_snapshot.json",
+    ]
+    for path in cache_files:
+        if path.exists():
+            try:
+                path.unlink()
+                cleared.append(path.name)
+            except OSError:
+                pass
+    # Also wipe the downloaded Excel workbooks so pull_sec_financials gets
+    # the latest filings (Tesla, etc. publish new 10-Qs that the cached
+    # workbooks won't reflect)
+    try:
+        fin_dir = analyst.STOCKS_FOLDER.parent / "stock-financials" / tk
+        if fin_dir.exists():
+            import shutil
+            shutil.rmtree(fin_dir)
+            cleared.append(f"stock-financials/{tk}/*")
+    except Exception as _e:
+        print(f"[refresh-data] could not wipe stock-financials/{tk}: {_e}")
+
+    # Kick off a fresh Grok analyze (no reuse_user_msg)
+    job_id  = str(uuid.uuid4())
+    now_iso = datetime.utcnow().isoformat()
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id, "ticker": tk, "status": "queued",
+            "created_at": now_iso, "error": None, "result": None,
+            "llm_provider": "grok",
+            "progress": {"step": "queued", "pct": 0.0,
+                          "label": f"Queued — fresh data refresh for {tk}"},
+        }
+    _save_job_index_entry(job_id, {"ticker": tk, "type": "refresh",
+                                    "created_at": now_iso})
+    background_tasks.add_task(_run_analysis, job_id, tk, False, "grok")
+    return {
+        "ok":      True,
+        "cleared": cleared,
+        "job_id":  job_id,
+        "message": f"Wiped {len(cleared)} cached file(s). Fresh Grok analysis queued — "
+                   f"poll /api/jobs/{job_id} for status.",
+    }
+
+
 @app.delete("/api/report/{ticker}")
 def delete_report(ticker: str):
     """Delete the locally-cached report files for a single ticker.

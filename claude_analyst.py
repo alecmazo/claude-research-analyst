@@ -6648,30 +6648,73 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         # --- Step 2: read the Excel workbooks and build the verified data dict
         _emit_progress(on_progress, "financials", 0.20,
                        "Extracting filing-accurate financials")
+        # Two-source extraction with completeness check. The primary path
+        # (Excel workbooks from each filing) is filing-exact when it works,
+        # but it returns an empty annuals[] for some tickers (workbook format
+        # variations, missing sheets). When that happens we MUST fall through
+        # to the companyfacts API — not just on raised exceptions.
+        data = None
+        verified_block = None
+        primary_ok = False
         try:
             data = xlsx_edgar.extract_financials(ticker)
-            verified_block = xlsx_edgar.format_verified_block(data)
-            print(f"   ✅ Loaded filing-accurate financials from Excel workbooks.")
+            _ann = data.get("annuals", []) if isinstance(data, dict) else []
+            if _ann and len(_ann) >= 1:
+                verified_block = xlsx_edgar.format_verified_block(data)
+                primary_ok = True
+                print(f"   ✅ Loaded {len(_ann)} annual rows from Excel workbooks.")
+            else:
+                print(f"   ⚠️  Excel reader returned 0 annual rows for {ticker} — "
+                      f"trying companyfacts fallback for completeness.")
         except Exception as exc:  # noqa: BLE001
-            print(f"   ⚠️  Excel reader failed: {exc}")
+            print(f"   ⚠️  Excel reader raised: {exc}")
             print(f"   Falling back to SEC companyfacts API…")
+
+        if not primary_ok:
             try:
-                data = edgar.extract_financials(ticker, user_agent=get_sec_user_agent())
-                verified_block = edgar.format_verified_block(data)
+                _ed_data = edgar.extract_financials(ticker, user_agent=get_sec_user_agent())
+                _ed_ann = _ed_data.get("annuals", []) if isinstance(_ed_data, dict) else []
+                if _ed_ann:
+                    data = _ed_data
+                    verified_block = edgar.format_verified_block(data)
+                    print(f"   ✅ Loaded {len(_ed_ann)} annual rows via companyfacts API.")
+                else:
+                    print(f"   ⚠️  Companyfacts also returned no annuals for {ticker}.")
+                    # Keep the partial Excel data (TTM only) rather than nothing
+                    if data is None:
+                        data = _ed_data
+                    if verified_block is None:
+                        try:
+                            verified_block = (edgar.format_verified_block(_ed_data)
+                                              if _ed_data
+                                              else xlsx_edgar.format_verified_block(data or {"ticker": ticker, "annuals": []}))
+                        except Exception:
+                            verified_block = ""
             except Exception as exc2:  # noqa: BLE001
                 print(f"   ❌ EDGAR fallback also failed: {exc2}")
                 traceback.print_exc()
-                # Last-resort: continue with no verified financials so Grok can still
-                # produce a qualitative report (it will note the data is unavailable).
-                print(f"   ⚠️  Proceeding without verified financials for {ticker}.")
-                verified_block = (
-                    f"## ⚠️ Financial Data Unavailable\n\n"
-                    f"Automated extraction failed for **{ticker}**. "
-                    f"Error: {exc2}\n\n"
-                    f"The analysis below relies on Grok's training data and publicly "
-                    f"available information only. No SEC XBRL figures have been verified."
-                )
-                data = {"ticker": ticker, "errors": [str(exc2)]}
+                if data is None:
+                    # Last-resort stub
+                    print(f"   ⚠️  Proceeding without verified financials for {ticker}.")
+                    verified_block = (
+                        f"## ⚠️ Financial Data Unavailable\n\n"
+                        f"Automated extraction failed for **{ticker}**. "
+                        f"Error: {exc2}\n\n"
+                        f"The analysis below relies on the model's training data and "
+                        f"publicly available information only. No SEC XBRL figures "
+                        f"have been verified."
+                    )
+                    data = {"ticker": ticker, "errors": [str(exc2)]}
+                elif verified_block is None:
+                    # Excel returned data but no annuals AND companyfacts also blew up.
+                    # Use whatever Excel got (TTM only) — better than nothing.
+                    try:
+                        verified_block = xlsx_edgar.format_verified_block(data)
+                    except Exception:
+                        verified_block = ""
+
+        if verified_block is None:
+            verified_block = ""
 
         # Cache the raw extract for auditing.
         try:
