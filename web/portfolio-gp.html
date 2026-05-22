@@ -444,6 +444,38 @@
   .builder-result-table .upside-up   { color: #16a34a; font-weight: 700; }
   .builder-result-table .upside-down { color: #dc2626; font-weight: 700; }
   .builder-result-table tr:hover td { background: rgba(91,184,212,0.05); }
+  /* Source chip on candidate rows: REPORT (deep) vs COMP (extracted) */
+  .builder-src-chip {
+    display: inline-block; font-size: 8px; font-weight: 800;
+    padding: 1px 4px; border-radius: 3px; margin-left: 5px;
+    vertical-align: 1px; letter-spacing: 0.4px;
+  }
+  .builder-src-report { background: #dbeafe; color: #1e40af; }
+  .builder-src-comp   { background: #f3e8ff; color: #6b21a8; }
+
+  /* Saved scenarios list */
+  .builder-scenario-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px; border-bottom: 1px solid #f1f5f9;
+    cursor: pointer; transition: background .12s;
+  }
+  .builder-scenario-row:last-child { border-bottom: none; }
+  .builder-scenario-row:hover { background: #f8fafc; }
+  .builder-scenario-name { font-size: 13px; font-weight: 700; color: #0A1628; }
+  .builder-scenario-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .builder-scenario-actions { display: flex; gap: 6px; margin-left: auto; flex-shrink: 0; }
+  .builder-scenario-actions button {
+    background: none; border: 1px solid #cbd5e1; color: #475569;
+    font-size: 10px; padding: 4px 8px; border-radius: 3px; cursor: pointer;
+    font-weight: 600; transition: background .12s, color .12s;
+  }
+  .builder-scenario-actions button:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .builder-scenario-actions button.danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
+  .builder-scenario-synced {
+    display: inline-block; background: #ecfdf5; color: #065f46;
+    font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px;
+    margin-left: 6px; letter-spacing: 0.4px;
+  }
 
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
@@ -2011,9 +2043,28 @@
         <span>Allocation Result</span>
         <span id="builder-result-summary" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:600;">—</span>
       </header>
+      <!-- Action bar: save scenario / push tickers to watchlist -->
+      <div id="builder-actions" style="display:flex;gap:10px;padding:10px 16px;background:#fafbfc;border-bottom:1px solid #e2e8f0;align-items:center;">
+        <input id="builder-scenario-name" type="text" placeholder="Name this basket (optional)"
+          style="flex:1;padding:7px 10px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px;background:#fff;">
+        <button id="builder-save-btn" class="builder-btn-sec" style="white-space:nowrap;">💾 Save Scenario</button>
+        <button id="builder-watchlist-btn" class="builder-btn-primary" style="width:auto;padding:8px 14px;white-space:nowrap;">📌 Add Basket to Watchlist</button>
+      </div>
+      <div id="builder-action-status" style="display:none;padding:8px 16px;font-size:11px;background:#ecfdf5;color:#065f46;border-bottom:1px solid #d1fae5;"></div>
       <div class="builder-card-body" style="padding:0;">
         <div id="builder-warnings" style="display:none;padding:10px 16px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#78350f;"></div>
         <div id="builder-result-body"></div>
+      </div>
+    </section>
+
+    <!-- ── SAVED SCENARIOS ───────────────────────────────────────── -->
+    <section id="builder-scenarios-panel" class="builder-card" style="margin-top:18px;display:none;">
+      <header class="builder-card-head">
+        <span>Saved Scenarios</span>
+        <span id="builder-scenarios-count" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:600;">—</span>
+      </header>
+      <div class="builder-card-body" style="padding:0;">
+        <div id="builder-scenarios-list"></div>
       </div>
     </section>
   </div>
@@ -3550,6 +3601,9 @@
   var _builderCandidatesCache = null;
   var _builderSectorWeights   = {};   // {sectorName: percentValue}
   var _builderInitialized     = false;
+  var _builderLastRequest     = null; // the most recent allocate request body
+  var _builderLastResult      = null; // the most recent allocate response
+  var _builderLastScenarioId  = null; // id of the saved scenario, if any
 
   const BUILDER_SECTOR_OPTIONS = [
     "Technology", "Energy", "Financials", "Healthcare", "Consumer Cyclical",
@@ -3699,8 +3753,18 @@
       const rows = s.positions.map(function(p) {
         const upCls = (p.upside_pct || 0) >= 0 ? 'upside-up' : 'upside-down';
         const upTxt = p.upside_pct == null ? '—' : _builderFmtPct(p.upside_pct, 1);
+        // Source chip: REPORT vs COMP (from-saved-report's comp table)
+        let srcChip = '';
+        if (p.source === 'report') {
+          srcChip = '<span class="builder-src-chip builder-src-report" title="Saved DGA report subject">RPT</span>';
+        } else if (p.source === 'comp') {
+          srcChip = '<span class="builder-src-chip builder-src-comp" '
+            + 'title="Extracted from another saved report\'s comp table'
+            + (p.from_report ? ' (' + _builderEsc(p.from_report) + ')' : '')
+            + '. Upside derived from Yahoo analyst targets.">COMP</span>';
+        }
         return '<tr>'
-          + '<td><span class="tk">' + _builderEsc(p.ticker) + '</span> '
+          + '<td><span class="tk">' + _builderEsc(p.ticker) + '</span>' + srcChip + ' '
           +   '<span style="font-size:10px;color:#94a3b8;">' + _builderEsc(p.name) + '</span></td>'
           + '<td><strong>' + p.weight_pct.toFixed(2) + '%</strong></td>'
           + '<td>' + _builderFmtUSD(p.dollars) + '</td>'
@@ -3757,6 +3821,9 @@
         throw new Error('allocate ' + r.status + ': ' + txt);
       }
       const data = await r.json();
+      _builderLastRequest = body;     // track for save-scenario
+      _builderLastResult  = data;
+      _builderLastScenarioId = null;  // new build = new unsaved iteration
       _renderBuilderResult(data);
       if (stat) stat.textContent = 'Done.';
     } catch (e) {
@@ -3767,10 +3834,232 @@
     }
   }
 
+  // ── Save / Watchlist / Saved-Scenarios helpers ─────────────────────────────
+  function _setBuilderActionStatus(text, ok) {
+    const el = document.getElementById('builder-action-status');
+    if (!el) return;
+    if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = 'block';
+    el.textContent = text;
+    if (ok === false) {
+      el.style.background = '#fef2f2';
+      el.style.color      = '#991b1b';
+      el.style.borderBottomColor = '#fecaca';
+    } else {
+      el.style.background = '#ecfdf5';
+      el.style.color      = '#065f46';
+      el.style.borderBottomColor = '#d1fae5';
+    }
+  }
+
+  async function _builderSaveScenario() {
+    if (!_builderLastResult || !_builderLastRequest) {
+      _setBuilderActionStatus('No basket to save — Build first.', false); return null;
+    }
+    const nameEl = document.getElementById('builder-scenario-name');
+    const name = (nameEl && nameEl.value || '').trim();
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:    name || null,
+          request: _builderLastRequest,
+          result:  _builderLastResult,
+        }),
+      });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const sc = await r.json();
+      _builderLastScenarioId = sc.id;
+      if (nameEl) nameEl.value = '';
+      _setBuilderActionStatus('✓ Scenario "' + sc.name + '" saved.', true);
+      loadBuilderScenarios();   // refresh list
+      return sc;
+    } catch (e) {
+      _setBuilderActionStatus('Could not save: ' + e.message, false);
+      return null;
+    }
+  }
+
+  async function _builderBasketToWatchlist() {
+    if (!_builderLastResult) {
+      _setBuilderActionStatus('No basket to follow — Build first.', false); return;
+    }
+    // Auto-save scenario first if it hasn't been saved yet — that way the
+    // saved-scenarios list keeps a permanent record alongside the watchlist
+    let scenarioId = _builderLastScenarioId;
+    if (!scenarioId) {
+      const sc = await _builderSaveScenario();
+      if (!sc) return;
+      scenarioId = sc.id;
+    }
+    try {
+      const r = await window.dgaFetch(
+        '/api/v2/builder/scenarios/' + encodeURIComponent(scenarioId) + '/to-watchlist',
+        { method: 'POST' });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const d = await r.json();
+      const skipped = d.total_in_basket - d.added_count;
+      _setBuilderActionStatus(
+        '✓ Added ' + d.added_count + ' ticker' + (d.added_count !== 1 ? 's' : '') +
+        ' to your watchlist' + (skipped > 0 ? ' (' + skipped + ' already there)' : '') +
+        ' — follow the basket\'s performance in the Watchlist panel.',
+        true);
+      loadBuilderScenarios();
+    } catch (e) {
+      _setBuilderActionStatus('Could not sync to watchlist: ' + e.message, false);
+    }
+  }
+
+  async function _builderRestoreScenario(sc) {
+    if (!sc || !sc.request) return;
+    // Apply the scenario's inputs back into the controls
+    _builderSectorWeights = Object.assign({}, sc.request.sector_weights || {});
+    const sizeEl  = document.getElementById('builder-basket-size');
+    const methEl  = document.getElementById('builder-method');
+    const capEl   = document.getElementById('builder-max-per-stock');
+    const perSEl  = document.getElementById('builder-max-per-sector');
+    const redEl   = document.getElementById('builder-redistribute');
+    if (sizeEl) sizeEl.value = sc.request.basket_size || 1000000;
+    if (methEl) methEl.value = sc.request.method || 'ev_weighted';
+    if (capEl)  capEl.value  = sc.request.max_per_stock_pct  || 15;
+    if (perSEl) perSEl.value = sc.request.max_stocks_per_sector || 6;
+    if (redEl)  redEl.checked = sc.request.redistribute_empty !== false;
+    _renderBuilderSectors();
+    _refreshBuilderAddDropdown();
+    // Restore the result panel too
+    _builderLastRequest = sc.request;
+    _builderLastResult  = sc.result;
+    _builderLastScenarioId = sc.id;
+    _renderBuilderResult(sc.result);
+    _setBuilderActionStatus('Restored "' + sc.name + '" (saved ' + _builderFmtAge(sc.created_at) + ').', true);
+    // Scroll the result into view
+    setTimeout(function() {
+      const wrap = document.getElementById('builder-result');
+      if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }
+
+  async function _builderDeleteScenario(scId, scName) {
+    if (!confirm('Delete scenario "' + scName + '"? This does NOT remove its tickers from your watchlist.')) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios/' + encodeURIComponent(scId), { method: 'DELETE' });
+      if (!r.ok) throw new Error('delete ' + r.status);
+      _setBuilderActionStatus('Scenario "' + scName + '" deleted.', true);
+      loadBuilderScenarios();
+    } catch (e) {
+      _setBuilderActionStatus('Could not delete: ' + e.message, false);
+    }
+  }
+
+  function _builderFmtAge(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1)   return 'just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 2)  return 'yesterday';
+    if (days < 14) return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  async function loadBuilderScenarios() {
+    const panel = document.getElementById('builder-scenarios-panel');
+    const list  = document.getElementById('builder-scenarios-list');
+    const count = document.getElementById('builder-scenarios-count');
+    if (!list || !panel) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/scenarios');
+      if (!r.ok) throw new Error('scenarios ' + r.status);
+      const d = await r.json();
+      const arr = d.scenarios || [];
+      if (count) count.textContent = arr.length + (arr.length === 1 ? ' saved basket' : ' saved baskets');
+      if (!arr.length) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      list.innerHTML = arr.map(function(sc) {
+        const sm = (sc.result && sc.result.summary) || {};
+        const projRet = sm.projected_return_pct;
+        const projColor = (projRet || 0) >= 0 ? '#16a34a' : '#dc2626';
+        const projTxt = projRet == null ? '—' : (projRet >= 0 ? '+' : '') + projRet.toFixed(2) + '%';
+        const tickerCount = (sm.total_positions != null) ? sm.total_positions : '?';
+        const sw = sc.request && sc.request.sector_weights || {};
+        const sectorSummary = Object.keys(sw).slice(0, 3).join(', ');
+        const wl = sc.watchlist_synced
+          ? '<span class="builder-scenario-synced" title="Tickers added to your watchlist '
+            + (sc.watchlist_synced_at ? _builderFmtAge(sc.watchlist_synced_at) : '') + '">📌 WATCHLIST</span>'
+          : '';
+        return '<div class="builder-scenario-row" data-scid="' + _builderEsc(sc.id) + '">'
+          + '<div style="flex:1;min-width:0;">'
+          +   '<div class="builder-scenario-name">' + _builderEsc(sc.name) + wl + '</div>'
+          +   '<div class="builder-scenario-meta">'
+          +     _builderFmtAge(sc.created_at) + ' · ' + tickerCount + ' positions · '
+          +     '<span style="color:' + projColor + ';font-weight:700;">' + projTxt + '</span> proj. return'
+          +     (sectorSummary ? ' · sectors: ' + _builderEsc(sectorSummary) : '')
+          +   '</div>'
+          + '</div>'
+          + '<div class="builder-scenario-actions">'
+          +   '<button data-action="restore" data-scid="' + _builderEsc(sc.id) + '">↺ Restore</button>'
+          + (sc.watchlist_synced
+              ? ''
+              : '<button data-action="watchlist" data-scid="' + _builderEsc(sc.id) + '">📌 Watchlist</button>')
+          +   '<button data-action="delete"  class="danger" data-scid="' + _builderEsc(sc.id) + '" data-scname="' + _builderEsc(sc.name) + '">×</button>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+
+      // Wire actions
+      list.querySelectorAll('.builder-scenario-actions button').forEach(function(btn) {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id     = btn.getAttribute('data-scid');
+          const action = btn.getAttribute('data-action');
+          const sc = arr.find(function(x) { return x.id === id; });
+          if (!sc) return;
+          if (action === 'restore') {
+            _builderRestoreScenario(sc);
+          } else if (action === 'delete') {
+            _builderDeleteScenario(id, btn.getAttribute('data-scname'));
+          } else if (action === 'watchlist') {
+            try {
+              const rr = await window.dgaFetch(
+                '/api/v2/builder/scenarios/' + encodeURIComponent(id) + '/to-watchlist',
+                { method: 'POST' });
+              if (!rr.ok) throw new Error('watchlist ' + rr.status);
+              const dd = await rr.json();
+              _setBuilderActionStatus(
+                '✓ Added ' + dd.added_count + ' ticker(s) from "' + sc.name + '" to your watchlist.',
+                true);
+              loadBuilderScenarios();
+            } catch (e) {
+              _setBuilderActionStatus('Could not sync to watchlist: ' + e.message, false);
+            }
+          }
+        });
+      });
+
+      // Click row body → restore
+      list.querySelectorAll('.builder-scenario-row').forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          if (e.target.closest('.builder-scenario-actions')) return;
+          const id = row.getAttribute('data-scid');
+          const sc = arr.find(function(x) { return x.id === id; });
+          if (sc) _builderRestoreScenario(sc);
+        });
+      });
+    } catch (e) {
+      console.warn('[builder-scenarios]', e);
+    }
+  }
+
   function _initBuilderTab() {
     if (_builderInitialized) {
-      // Refresh candidates pool on tab re-activation (cheap, server-cached 10 min)
+      // Refresh candidates pool + scenarios on tab re-activation
       loadBuilderCandidates();
+      loadBuilderScenarios();
       return;
     }
     _builderInitialized = true;
@@ -3794,8 +4083,14 @@
     // Wire build button
     const runBtn = document.getElementById('builder-run-btn');
     if (runBtn) runBtn.addEventListener('click', buildBasket);
-    // Load candidates pool
+    // Wire save-scenario + watchlist buttons
+    const saveBtn = document.getElementById('builder-save-btn');
+    const wlBtn   = document.getElementById('builder-watchlist-btn');
+    if (saveBtn) saveBtn.addEventListener('click', _builderSaveScenario);
+    if (wlBtn)   wlBtn.addEventListener('click',   _builderBasketToWatchlist);
+    // Load candidates pool + previously saved scenarios
     loadBuilderCandidates();
+    loadBuilderScenarios();
   }
 
   async function loadBrief() {

@@ -5658,13 +5658,116 @@ def _builder_classify_sector(raw_sector: str) -> str:
     return SYN.get(s, s)
 
 
+# Words that match the ticker-shaped regex but are clearly financial jargon,
+# not actual stock symbols. Filter applied during comp extraction to keep noise
+# out of the Builder candidate pool.
+_TICKER_BLACKLIST = {
+    # Roles / acronyms
+    "CEO","CFO","COO","CIO","CTO","CMO","CRO","CSO","CDO","ESG","IPO","M&A",
+    "OEM","B2B","B2C","SDK","API","CRM","ERP","SAAS","DTC","FDA","SEC","NYSE",
+    # Financial metrics / accounting
+    "EPS","ROIC","ROE","ROA","ROCE","EBIT","EBITDA","DCF","NPV","IRR","FCF",
+    "OCF","CAPEX","OPEX","WACC","TAM","SAM","SOM","GMV","ARR","MRR","LTV",
+    "CAC","COGS","SGA","D&A","P&L","BS","CF","YTD","YOY","QOQ","MOM","HOH",
+    "TTM","NTM","LTM","FY","FQ","H1","H2","Q1","Q2","Q3","Q4","FY1","FY2",
+    "BPS","PBV","PEG","PSR","DPS","BVPS","CAGR","NIM","NPL","CET1",
+    # Currencies / units
+    "USD","EUR","GBP","JPY","CNY","CAD","AUD","CHF","SEK","NOK","DKK","INR",
+    "BRL","MXN","RUB","ZAR","HKD","SGD","KRW","TRY","ARS","NZD",
+    # Common all-caps words that show up in DGA reports
+    "BUY","SELL","HOLD","ADD","TRIM","RATING","TARGET","PRICE","UPSIDE",
+    "DOWNSIDE","BASE","BULL","BEAR","VERDICT","SUMMARY","SECTION","CHART",
+    "TABLE","COMP","COMPS","PEER","PEERS","INDUSTRY","SECTOR","INDEX","NA",
+    "NM","TBD","ETA","FYI","DGA","LP","GP","AI","ML","IT","HQ","CO","INC",
+    "LLC","LP","ETC","RE","SE","CO","AS","IS","BE","OF","TO","IN","ON","BY",
+    "AT","NO","OK","TY","HR","PR","UI","UX","KPI","SAM","ROIC","FY23","FY24",
+    "FY25","FY26","FY27","Q126","Q226","Q326","Q426","H125","H225",
+    # Rating buckets we use
+    "STRONG","CONVICTION","PICK","OVERWEIGHT","UNDERWEIGHT","NEUTRAL",
+}
+
+# Per-report-content cache of validated comp tickers, keyed by report ticker.
+# Cleared whenever a report row's generated_at advances (i.e. the report was
+# re-run), so freshly-extracted comps appear after a refresh.
+_BUILDER_COMP_CACHE: dict[str, tuple[float, list[str]]] = {}   # report_ticker -> (cached_ts, [tickers])
+_BUILDER_COMP_TTL    = 1800   # 30 min
+
+
+def _extract_ticker_candidates_from_md(md: str) -> list[str]:
+    """Regex-extract things that LOOK like tickers from a DGA report.
+
+    Scans for 1-5 uppercase letters, optionally with .X suffix (BRK.B style),
+    then filters against the financial-jargon blacklist above. Doesn't
+    validate against yfinance here — caller does that step lazily, with
+    caching, to amortize the cost.
+    """
+    if not md:
+        return []
+    # Word boundary + 1-5 uppercase letters, optional .X class share suffix
+    raw = re.findall(r"\b([A-Z]{1,5}(?:\.[A-Z])?)\b", md)
+    out, seen = [], set()
+    for tk in raw:
+        if tk in _TICKER_BLACKLIST:
+            continue
+        if tk in seen:
+            continue
+        # Pure all-caps strings of length 1 are almost never tickers in context
+        if len(tk) == 1:
+            continue
+        seen.add(tk)
+        out.append(tk)
+    return out
+
+
+def _is_real_ticker(tk: str) -> bool:
+    """Lazy yfinance validation — does this symbol have a real market_cap?
+
+    Cached implicitly by yfinance fast_info path. Returns False on any error
+    so we never include garbage in the Builder pool.
+    """
+    if not _YFINANCE_OK:
+        return False
+    try:
+        fi = yf.Ticker(tk).fast_info
+        mcap = getattr(fi, "market_cap", None)
+        return bool(mcap and float(mcap) > 0)
+    except Exception:
+        return False
+
+
+def _builder_extract_comps_for_report(ticker: str, report_md: str) -> list[str]:
+    """Return the list of validated comp tickers mentioned in `report_md`,
+    excluding the report's subject and previously-seen blacklist words.
+    Cached 30 min per report ticker.
+    """
+    now = time.time()
+    cached = _BUILDER_COMP_CACHE.get(ticker)
+    if cached and (now - cached[0]) < _BUILDER_COMP_TTL:
+        return cached[1]
+    cands = _extract_ticker_candidates_from_md(report_md or "")
+    target = ticker.upper()
+    cands = [c for c in cands if c != target]
+    # Limit raw candidates per report so a runaway parse doesn't 100x yfinance calls.
+    # Pick the first 25 occurrences (mostly clustered in comp tables anyway).
+    cands = cands[:25]
+    validated = [c for c in cands if _is_real_ticker(c)]
+    _BUILDER_COMP_CACHE[ticker] = (now, validated)
+    return validated
+
+
 def _builder_fetch_candidates() -> list[dict]:
-    """Return list of saved-report candidates with sector + EV data.
+    """Return list of Builder candidates: saved-report subjects PLUS comp
+    tickers extracted from those reports' markdown.
 
     Schema: [{ticker, name, sector, rating, price_target, upside_pct,
-              current_price, generated_at}].
-    Cached in-process for 10 min — sectors come from the slower yfinance
-    cache so we don't want to thrash it.
+              current_price, generated_at, source}].
+
+    Where `source` is:
+      • 'report' — the ticker is the subject of a saved DGA report
+                   (has explicit price_target + upside_pct)
+      • 'comp'   — the ticker was mentioned as a comparable in another
+                   report's comp table; we derive upside_pct from
+                   yfinance analyst targetMeanPrice when available
     """
     now = time.time()
     if (_BUILDER_CANDIDATES_CACHE["data"] is not None
@@ -5674,10 +5777,11 @@ def _builder_fetch_candidates() -> list[dict]:
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return []
 
+    # ── 1. Pull report subjects (explicit price_target + upside_pct) ─────
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""
-                SELECT ticker, rating, price_target, upside_pct, generated_at
+                SELECT ticker, rating, price_target, upside_pct, generated_at, report_md
                   FROM analyst_reports
                  WHERE archived IS NOT TRUE
                    AND price_target IS NOT NULL
@@ -5692,21 +5796,41 @@ def _builder_fetch_candidates() -> list[dict]:
     if not rows:
         return []
 
-    # Batch live quotes for current-price column
-    tickers = [r["ticker"] for r in rows if r["ticker"]]
+    # ── 2. Walk each report and extract comp tickers from the markdown ───
+    comp_universe: dict[str, str] = {}   # ticker → first-report-ticker that mentioned it
+    own_tickers: set[str] = set()
+    for r in rows:
+        tk = (r["ticker"] or "").strip().upper()
+        if not tk: continue
+        own_tickers.add(tk)
+        md = r.get("report_md") or ""
+        if not md: continue
+        try:
+            comps = _builder_extract_comps_for_report(tk, md)
+            for c in comps:
+                if c not in comp_universe and c not in own_tickers:
+                    comp_universe[c] = tk
+        except Exception as _e:
+            print(f"[builder] comp extract failed for {tk}: {_e!s:.120}")
+    # Comps that are ALSO report subjects: drop from the comp universe
+    for tk in own_tickers:
+        comp_universe.pop(tk, None)
+    print(f"[builder] candidate pool: {len(own_tickers)} report subjects + "
+          f"{len(comp_universe)} comp tickers (validated)")
+
+    # ── 3. Batch live quotes for the whole universe ──────────────────────
+    all_tickers = list(own_tickers) + list(comp_universe.keys())
     try:
-        quotes = batch_quotes(",".join(tickers)) if tickers else {}
+        quotes = batch_quotes(",".join(all_tickers)) if all_tickers else {}
     except Exception:
         quotes = {}
 
+    # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
     for r in rows:
         tk = (r["ticker"] or "").strip().upper()
-        if not tk:
-            continue
-        # Sector from cached ticker meta (uses yfinance under the hood)
-        sector_raw = "Unknown"
-        name = tk
+        if not tk: continue
+        sector_raw, name = "Unknown", tk
         try:
             meta = get_ticker_meta(tk)
             sector_raw = (meta.get("sector") or "Unknown")
@@ -5714,7 +5838,6 @@ def _builder_fetch_candidates() -> list[dict]:
         except Exception:
             pass
         sector = _builder_classify_sector(sector_raw)
-
         q = quotes.get(tk) or {}
         out.append({
             "ticker":        tk,
@@ -5727,6 +5850,58 @@ def _builder_fetch_candidates() -> list[dict]:
             "current_price": float(q.get("price")) if q.get("price") is not None else None,
             "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
             "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
+            "source":        "report",
+            "from_report":   None,
+        })
+
+    # ── 5. Build candidate dicts for comp tickers ────────────────────────
+    # For comps, derive upside_pct from yfinance analyst targetMeanPrice
+    # when available. If neither current price nor target is known, skip
+    # the comp (no signal for the EV-weighted allocator).
+    for tk, source_report in comp_universe.items():
+        sector_raw, name = "Unknown", tk
+        try:
+            meta = get_ticker_meta(tk)
+            sector_raw = (meta.get("sector") or "Unknown")
+            name = meta.get("name") or tk
+        except Exception:
+            pass
+        sector = _builder_classify_sector(sector_raw)
+
+        q = quotes.get(tk) or {}
+        cur_price = float(q.get("price")) if q.get("price") is not None else None
+
+        target = None
+        try:
+            if _YFINANCE_OK:
+                info = yf.Ticker(tk).info or {}
+                t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+                if t and float(t) > 0:
+                    target = float(t)
+        except Exception:
+            pass
+
+        upside = None
+        if target is not None and cur_price and cur_price > 0:
+            upside = round((target - cur_price) / cur_price * 100, 2)
+
+        # Skip comps with no usable signal (no target AND no upside)
+        if upside is None:
+            continue
+
+        out.append({
+            "ticker":        tk,
+            "name":          name,
+            "sector":        sector,
+            "sector_raw":    sector_raw,
+            "rating":        None,
+            "price_target":  target,
+            "upside_pct":    upside,
+            "current_price": cur_price,
+            "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
+            "generated_at":  None,
+            "source":        "comp",
+            "from_report":   source_report,
         })
 
     _BUILDER_CANDIDATES_CACHE["data"] = out
@@ -5904,6 +6079,8 @@ def builder_allocate(request: Request, body: BuilderAllocateRequest):
                 "price_target":  c["price_target"],
                 "current_price": c["current_price"],
                 "rating":        c["rating"],
+                "source":        c.get("source", "report"),
+                "from_report":   c.get("from_report"),
             })
         return out_rows
 
@@ -5949,6 +6126,161 @@ def builder_allocate(request: Request, body: BuilderAllocateRequest):
             "projected_return_pct":       round(total_expected, 2),  # already weighted by basket-fraction
             "warnings":                   warnings,
         },
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Builder — saved scenarios (per-user, kv_store backed)
+# ──────────────────────────────────────────────────────────────────────────────
+# Each saved scenario captures:
+#   • The Build request (sector_weights, basket_size, method, ...)
+#   • The result (sectors[] with positions, summary)
+#   • A user-given name + auto timestamp
+# Stored under kv_store key `builder:scenarios:{lp_id}` as a list. Bounded at
+# 50 scenarios per user (oldest auto-pruned on save).
+
+_BUILDER_SCENARIO_KEY_PREFIX = "builder:scenarios:"
+_BUILDER_SCENARIO_LIMIT      = 50
+
+
+def _builder_scenarios_key(lp_id: str) -> str:
+    return _BUILDER_SCENARIO_KEY_PREFIX + str(lp_id)
+
+
+def _builder_load_scenarios(lp_id: str) -> list[dict]:
+    raw = _kv_get(_builder_scenarios_key(lp_id))
+    if not raw or not isinstance(raw, list):
+        return []
+    return raw
+
+
+def _builder_save_scenarios(lp_id: str, scenarios: list[dict]) -> bool:
+    return _kv_put(_builder_scenarios_key(lp_id), scenarios)
+
+
+class BuilderSaveScenarioRequest(BaseModel):
+    name:    str | None = None
+    request: dict
+    result:  dict
+
+
+@app.post("/api/v2/builder/scenarios")
+def builder_save_scenario(request: Request, body: BuilderSaveScenarioRequest):
+    """Persist a built basket as a named scenario for later review.
+    Returns the saved scenario with its server-generated id + created_at."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    if not body.request or not body.result:
+        raise HTTPException(400, "request and result are required")
+
+    sc_id = str(uuid.uuid4())
+    now_iso = datetime.utcnow().isoformat()
+    # Derive a default name when not provided: '60% Tech · 20% Energy · …'
+    name = (body.name or "").strip()
+    if not name:
+        sw = body.request.get("sector_weights") or {}
+        if isinstance(sw, dict) and sw:
+            parts = [f"{int(round(float(v)))}% {k}" for k, v in sw.items() if float(v) > 0]
+            name = " · ".join(parts[:4]) or "Basket"
+        else:
+            name = f"Basket {now_iso[:10]}"
+
+    scenario = {
+        "id":         sc_id,
+        "name":       name[:120],
+        "created_at": now_iso,
+        "request":    body.request,
+        "result":     body.result,
+        "watchlist_synced": False,
+    }
+    existing = _builder_load_scenarios(lp_id)
+    existing.insert(0, scenario)        # newest first
+    if len(existing) > _BUILDER_SCENARIO_LIMIT:
+        existing = existing[:_BUILDER_SCENARIO_LIMIT]
+    if not _builder_save_scenarios(lp_id, existing):
+        raise HTTPException(500, "Could not persist scenario (kv_store unavailable)")
+    return scenario
+
+
+@app.get("/api/v2/builder/scenarios")
+def builder_list_scenarios(request: Request):
+    """Return all saved scenarios for the current user, newest first."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    return {"scenarios": _builder_load_scenarios(lp_id)}
+
+
+@app.delete("/api/v2/builder/scenarios/{scenario_id}")
+def builder_delete_scenario(scenario_id: str, request: Request):
+    """Remove one saved scenario."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    existing = _builder_load_scenarios(lp_id)
+    kept = [s for s in existing if s.get("id") != scenario_id]
+    if len(kept) == len(existing):
+        raise HTTPException(404, "Scenario not found")
+    _builder_save_scenarios(lp_id, kept)
+    return {"ok": True}
+
+
+@app.post("/api/v2/builder/scenarios/{scenario_id}/to-watchlist")
+def builder_scenario_to_watchlist(scenario_id: str, request: Request):
+    """Add every ticker from the scenario's allocation to the user's watchlist
+    so the basket can be followed over time using the existing watchlist
+    mechanics. Idempotent — tickers already on the watchlist stay there.
+    Returns the watchlist after the merge + how many were newly added.
+    """
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    existing = _builder_load_scenarios(lp_id)
+    scenario = next((s for s in existing if s.get("id") == scenario_id), None)
+    if scenario is None:
+        raise HTTPException(404, "Scenario not found")
+
+    # Walk the scenario's result.sectors → positions → ticker
+    sectors = ((scenario.get("result") or {}).get("sectors") or [])
+    tickers: list[str] = []
+    for s in sectors:
+        for p in (s.get("positions") or []):
+            tk = (p.get("ticker") or "").strip().upper()
+            if tk:
+                tickers.append(tk)
+    # Dedup while preserving order (largest-weight first, since sectors are
+    # already weight-sorted and positions are EV-sorted within sector)
+    seen, ordered = set(), []
+    for tk in tickers:
+        if tk not in seen:
+            seen.add(tk); ordered.append(tk)
+
+    if not ordered:
+        raise HTTPException(422, "Scenario has no positions to add")
+
+    _watchlist_migrate_legacy_once()
+    before = set(_wl_get_db(lp_id) or [])
+    added: list[str] = []
+    for tk in ordered:
+        if not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+            continue
+        if tk in before:
+            continue
+        try:
+            _wl_add_db(lp_id, tk)
+            added.append(tk)
+        except Exception as _e:
+            print(f"[builder→watchlist] could not add {tk}: {_e!s:.120}")
+
+    # Mark scenario as synced and bump it back to the top of the list
+    scenario["watchlist_synced"]    = True
+    scenario["watchlist_synced_at"] = datetime.utcnow().isoformat()
+    new_list = [scenario] + [s for s in existing if s.get("id") != scenario_id]
+    _builder_save_scenarios(lp_id, new_list)
+
+    return {
+        "ok":           True,
+        "added":        added,
+        "added_count":  len(added),
+        "total_in_basket": len(ordered),
+        "watchlist":    _wl_get_db(lp_id),
     }
 
 
