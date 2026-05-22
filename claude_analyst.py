@@ -6234,7 +6234,7 @@ def _gamma_generate(input_text: str, num_cards: int,
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
                    verbose: bool = True, reuse_existing: bool = False,
                    on_progress=None, llm_provider: str = "grok",
-                   on_delta=None) -> dict:
+                   on_delta=None, reuse_user_msg: bool = False) -> dict:
     """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
 
     Any uncaught exception inside the pipeline is converted to a structured
@@ -6261,6 +6261,7 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             on_progress=on_progress,
             llm_provider=llm_provider,
             on_delta=on_delta,
+            reuse_user_msg=reuse_user_msg,
         )
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
@@ -6293,7 +6294,7 @@ def _emit_progress(on_progress, step: str, pct: float, label: str = "") -> None:
 def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
                          verbose: bool = True, reuse_existing: bool = False,
                          on_progress=None, llm_provider: str = "grok",
-                         on_delta=None) -> dict:
+                         on_delta=None, reuse_user_msg: bool = False) -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
@@ -6349,96 +6350,200 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             "cached": True,
         }
 
-    # --- Step 1: download the latest 10-K and 10-Q into stock-financials/{TICKER}/
-    # This parses the actual XBRL instance documents from each filing, so the
-    # columns we read later map 1-to-1 onto the filing's own period contexts.
-    print(f"\n🚀 {ticker}: downloading latest 10-K + 10-Q Excel workbooks…")
-    _emit_progress(on_progress, "sec_filings", 0.05,
-                   "Downloading SEC filings (10-K, 10-Q)")
-    data: dict | None = None
-    try:
-        pull_sec_financials.download_financials(ticker)
-    except Exception as exc:  # noqa: BLE001
-        print(f"   ⚠️  Could not download fresh Excel files: {exc}")
-        print("   Falling back to existing workbooks (if any) or companyfacts API.")
-
-    # --- Step 2: read the Excel workbooks and build the verified data dict
-    _emit_progress(on_progress, "financials", 0.20,
-                   "Extracting filing-accurate financials")
-    try:
-        data = xlsx_edgar.extract_financials(ticker)
-        verified_block = xlsx_edgar.format_verified_block(data)
-        print(f"   ✅ Loaded filing-accurate financials from Excel workbooks.")
-    except Exception as exc:  # noqa: BLE001
-        print(f"   ⚠️  Excel reader failed: {exc}")
-        print(f"   Falling back to SEC companyfacts API…")
-        try:
-            data = edgar.extract_financials(ticker, user_agent=get_sec_user_agent())
-            verified_block = edgar.format_verified_block(data)
-        except Exception as exc2:  # noqa: BLE001
-            print(f"   ❌ EDGAR fallback also failed: {exc2}")
-            traceback.print_exc()
-            # Last-resort: continue with no verified financials so Grok can still
-            # produce a qualitative report (it will note the data is unavailable).
-            print(f"   ⚠️  Proceeding without verified financials for {ticker}.")
-            verified_block = (
-                f"## ⚠️ Financial Data Unavailable\n\n"
-                f"Automated extraction failed for **{ticker}**. "
-                f"Error: {exc2}\n\n"
-                f"The analysis below relies on Grok's training data and publicly "
-                f"available information only. No SEC XBRL figures have been verified."
-            )
-            data = {"ticker": ticker, "errors": [str(exc2)]}
-
-    # Cache the raw extract for auditing.
+    # ── Reuse-cached-prompt fast path ─────────────────────────────────────
+    # When reuse_user_msg=True (Compare runs), skip data gathering and reuse
+    # the EXACT user_msg from the prior run. This guarantees:
+    #   1. Fair A/B — both LLMs see literally identical inputs
+    #   2. No second SEC EDGAR hit → no rate-limit-induced XBRL failures
+    #      (the cause of "SEC XBRL extraction failed" on Claude after Grok
+    #      had just consumed its EDGAR budget seconds earlier)
+    #   3. Faster Compare turnaround (skips 20-40s of data gathering)
+    # If the cache is missing or unreadable, falls through to fresh gathering.
     audit_path = STOCKS_FOLDER / f"{ticker}_xbrl_extract.json"
-    try:
-        with open(audit_path, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-    except Exception:
-        pass
+    _cached_um_path  = STOCKS_FOLDER / f"{ticker}_user_msg.txt"
+    _cached_mkt_path = STOCKS_FOLDER / f"{ticker}_market_snapshot.json"
+    _cache_hit = False
+    if reuse_user_msg and _cached_um_path.exists():
+        # Full cache hit — read everything off disk, zero new SEC calls.
+        try:
+            user_msg = _cached_um_path.read_text()
+            mkt = (json.loads(_cached_mkt_path.read_text())
+                   if _cached_mkt_path.exists() else fetch_market_snapshot(ticker))
+            if audit_path.exists():
+                with open(audit_path) as fh:
+                    data = json.load(fh)
+            else:
+                data = {"ticker": ticker, "entity_name": ticker,
+                        "latest_filing_type": "10-K"}
+            print(f"   ♻️  {ticker}: reusing cached user_msg ({len(user_msg):,} chars) "
+                  f"for {llm_provider} — avoids re-hitting SEC EDGAR")
+            _emit_progress(on_progress, "financials", 0.30,
+                           f"Reusing cached SEC + market data ({llm_provider.title()} compare)")
+            _cache_hit = True
+        except Exception as _re:  # noqa: BLE001
+            print(f"   ⚠️  Cached-input reuse failed ({_re}); falling through to fresh gathering")
+            _cache_hit = False
+    elif reuse_user_msg and audit_path.exists():
+        # Partial cache hit — covers reports run BEFORE user_msg caching was
+        # added. The XBRL audit JSON has the financials; rebuild verified_block
+        # from it and only re-fetch the small (yfinance) market snapshot —
+        # NEVER re-hit SEC EDGAR. This is what actually saves us from the
+        # rate-limit-induced "XBRL extraction failed" on Compare.
+        try:
+            print(f"   ♻️  {ticker}: partial cache hit — rebuilding user_msg from "
+                  f"audit JSON (no SEC re-fetch)")
+            _emit_progress(on_progress, "financials", 0.30,
+                           f"Reusing cached SEC data ({llm_provider.title()} compare)")
+            with open(audit_path) as fh:
+                data = json.load(fh)
+            # Re-render the verified block from cached data. If the cached
+            # data shape differs from what format_verified_block expects
+            # (e.g. JSON-coerced types), fall back to a minimal stub so we
+            # at least don't trigger the "Financial Data Unavailable" path.
+            try:
+                verified_block = xlsx_edgar.format_verified_block(data)
+            except Exception as _vbe:  # noqa: BLE001
+                print(f"   ⚠️  format_verified_block on cached data failed ({_vbe}); using minimal stub")
+                verified_block = (
+                    f"## Verified Financials (from prior SEC extract)\n\n"
+                    f"Entity: {data.get('entity_name', ticker)}\n"
+                    f"Latest filing: {data.get('latest_filing_type', '10-K')}\n"
+                    f"(Full extract available at {audit_path.name} — see line items below)\n\n"
+                    f"```json\n{json.dumps(data, indent=2, default=str)[:6000]}\n```"
+                )
+            mkt = fetch_market_snapshot(ticker)
+            analyst_block = fetch_analyst_ratings(ticker)
+            today = datetime.now().strftime("%Y-%m-%d")
+            _mcap = mkt.get("market_cap"); _ev = mkt.get("enterprise_value")
+            _yh   = mkt.get("year_high");  _yl = mkt.get("year_low")
+            mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
+            ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
+            wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
+            user_msg = (
+                f"DATE: {today}\n"
+                f"TICKER: {ticker}\n"
+                f"ENTITY: {data.get('entity_name','')}\n"
+                f"CURRENT_PRICE: {mkt.get('price')}\n"
+                f"PREVIOUS_CLOSE: {mkt.get('previous_close')}\n"
+                f"MARKET_CAP: {mcap_str}\n"
+                f"ENTERPRISE_VALUE: {ev_str}\n"
+                f"52_WEEK_RANGE: {wk52_str}\n"
+                f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
+                f"{verified_block}\n\n"
+                + (f"{analyst_block}\n\n" if analyst_block else "")
+                + f"Generate the full research report for {ticker} following every rule in your system prompt."
+            )
+            # Cache for next time
+            try: _cached_um_path.write_text(user_msg)
+            except Exception: pass
+            try: _cached_mkt_path.write_text(json.dumps(mkt, default=str))
+            except Exception: pass
+            _cache_hit = True
+        except Exception as _re:  # noqa: BLE001
+            print(f"   ⚠️  Partial cache reconstruction failed ({_re}); falling through to fresh gathering")
+            _cache_hit = False
 
-    if verbose:
-        print(verified_block)
+    if not _cache_hit:
+        # --- Step 1: download the latest 10-K and 10-Q into stock-financials/{TICKER}/
+        # This parses the actual XBRL instance documents from each filing, so the
+        # columns we read later map 1-to-1 onto the filing's own period contexts.
+        print(f"\n🚀 {ticker}: downloading latest 10-K + 10-Q Excel workbooks…")
+        _emit_progress(on_progress, "sec_filings", 0.05,
+                       "Downloading SEC filings (10-K, 10-Q)")
+        data: dict | None = None
+        try:
+            pull_sec_financials.download_financials(ticker)
+        except Exception as exc:  # noqa: BLE001
+            print(f"   ⚠️  Could not download fresh Excel files: {exc}")
+            print("   Falling back to existing workbooks (if any) or companyfacts API.")
 
-    # Current price
-    _emit_progress(on_progress, "market_data", 0.30,
-                   "Fetching live price + analyst ratings")
-    mkt = fetch_market_snapshot(ticker)
+        # --- Step 2: read the Excel workbooks and build the verified data dict
+        _emit_progress(on_progress, "financials", 0.20,
+                       "Extracting filing-accurate financials")
+        try:
+            data = xlsx_edgar.extract_financials(ticker)
+            verified_block = xlsx_edgar.format_verified_block(data)
+            print(f"   ✅ Loaded filing-accurate financials from Excel workbooks.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"   ⚠️  Excel reader failed: {exc}")
+            print(f"   Falling back to SEC companyfacts API…")
+            try:
+                data = edgar.extract_financials(ticker, user_agent=get_sec_user_agent())
+                verified_block = edgar.format_verified_block(data)
+            except Exception as exc2:  # noqa: BLE001
+                print(f"   ❌ EDGAR fallback also failed: {exc2}")
+                traceback.print_exc()
+                # Last-resort: continue with no verified financials so Grok can still
+                # produce a qualitative report (it will note the data is unavailable).
+                print(f"   ⚠️  Proceeding without verified financials for {ticker}.")
+                verified_block = (
+                    f"## ⚠️ Financial Data Unavailable\n\n"
+                    f"Automated extraction failed for **{ticker}**. "
+                    f"Error: {exc2}\n\n"
+                    f"The analysis below relies on Grok's training data and publicly "
+                    f"available information only. No SEC XBRL figures have been verified."
+                )
+                data = {"ticker": ticker, "errors": [str(exc2)]}
 
-    # Fetch live analyst ratings from GuruFocus (best-effort, non-blocking).
-    analyst_block = fetch_analyst_ratings(ticker)
-    if analyst_block:
-        print(f"   📊 Analyst ratings block built for {ticker} ({len(analyst_block)} chars)")
-    else:
-        print(f"   ⚠️  No live analyst data — Grok will use training-data estimates")
+        # Cache the raw extract for auditing.
+        try:
+            with open(audit_path, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+        except Exception:
+            pass
 
-    # Compose Grok user message
-    today = datetime.now().strftime("%Y-%m-%d")
+        if verbose:
+            print(verified_block)
 
-    # Format cover-block market data — use verified values from yfinance or "N/A"
-    _mcap = mkt.get("market_cap")
-    _ev   = mkt.get("enterprise_value")
-    _yh   = mkt.get("year_high")
-    _yl   = mkt.get("year_low")
-    mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
-    ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
-    wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
+        # Current price
+        _emit_progress(on_progress, "market_data", 0.30,
+                       "Fetching live price + analyst ratings")
+        mkt = fetch_market_snapshot(ticker)
 
-    user_msg = (
-        f"DATE: {today}\n"
-        f"TICKER: {ticker}\n"
-        f"ENTITY: {data.get('entity_name','')}\n"
-        f"CURRENT_PRICE: {mkt.get('price')}\n"
-        f"PREVIOUS_CLOSE: {mkt.get('previous_close')}\n"
-        f"MARKET_CAP: {mcap_str}\n"
-        f"ENTERPRISE_VALUE: {ev_str}\n"
-        f"52_WEEK_RANGE: {wk52_str}\n"
-        f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
-        f"{verified_block}\n\n"
-        + (f"{analyst_block}\n\n" if analyst_block else "")
-        + f"Generate the full research report for {ticker} following every rule in your system prompt."
-    )
+        # Fetch live analyst ratings from GuruFocus (best-effort, non-blocking).
+        analyst_block = fetch_analyst_ratings(ticker)
+        if analyst_block:
+            print(f"   📊 Analyst ratings block built for {ticker} ({len(analyst_block)} chars)")
+        else:
+            print(f"   ⚠️  No live analyst data — Grok will use training-data estimates")
+
+        # Compose user message
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # Format cover-block market data — use verified values from yfinance or "N/A"
+        _mcap = mkt.get("market_cap")
+        _ev   = mkt.get("enterprise_value")
+        _yh   = mkt.get("year_high")
+        _yl   = mkt.get("year_low")
+        mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
+        ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
+        wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
+
+        user_msg = (
+            f"DATE: {today}\n"
+            f"TICKER: {ticker}\n"
+            f"ENTITY: {data.get('entity_name','')}\n"
+            f"CURRENT_PRICE: {mkt.get('price')}\n"
+            f"PREVIOUS_CLOSE: {mkt.get('previous_close')}\n"
+            f"MARKET_CAP: {mcap_str}\n"
+            f"ENTERPRISE_VALUE: {ev_str}\n"
+            f"52_WEEK_RANGE: {wk52_str}\n"
+            f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
+            f"{verified_block}\n\n"
+            + (f"{analyst_block}\n\n" if analyst_block else "")
+            + f"Generate the full research report for {ticker} following every rule in your system prompt."
+        )
+
+        # Cache user_msg + market snapshot so future Compare runs can reuse
+        # them and avoid re-hitting SEC EDGAR. Best-effort; never raises.
+        try:
+            _cached_um_path.write_text(user_msg)
+        except Exception:
+            pass
+        try:
+            _cached_mkt_path.write_text(json.dumps(mkt, default=str))
+        except Exception:
+            pass
 
     # ── LLM call (provider-routed) ────────────────────────────────────────
     # Grok = default; uses live web/X search to surface news past training cutoff.

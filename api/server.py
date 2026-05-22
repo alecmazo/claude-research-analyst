@@ -4298,6 +4298,12 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
             on_progress=_record,
             llm_provider=provider,
             on_delta=_record_delta,
+            # CRITICAL for Compare: reuse the EXACT user_msg from the
+            # canonical Grok run so both engines see identical inputs.
+            # Also avoids re-hitting SEC EDGAR (the root cause of
+            # "SEC XBRL extraction failed" appearing in Claude reports
+            # after a fresh Grok run had just consumed EDGAR rate-limit).
+            reuse_user_msg=True,
         )
         with _jobs_lock:
             if result.get("ok"):
