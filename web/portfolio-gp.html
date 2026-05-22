@@ -477,6 +477,57 @@
     margin-left: 6px; letter-spacing: 0.4px;
   }
 
+  /* ── LLM Lab tab ──────────────────────────────────────────────── */
+  .lab-grid {
+    display: grid; grid-template-columns: 2fr 1fr; gap: 14px;
+  }
+  @media (max-width: 900px) { .lab-grid { grid-template-columns: 1fr; } }
+  .lab-panes {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 1px; background: #e2e8f0;
+    height: 65vh; min-height: 400px;
+  }
+  .lab-pane {
+    background: #fff; display: flex; flex-direction: column;
+    min-height: 0; min-width: 0; overflow: hidden;
+  }
+  /* Override .md-body max-height inside lab panes (same trick as cmp modal) */
+  .lab-pane .cmp-pane-body.md-body {
+    max-height: none !important; height: auto !important;
+    overflow-y: auto !important; flex: 1 1 auto; min-height: 0;
+  }
+  .lab-vote-btn:hover { background: #f8fafc !important; }
+  .lab-vote-btn[data-cast="1"] { box-shadow: 0 0 0 2px currentColor; }
+  /* Leaderboard styling */
+  .lab-lb-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 12px;
+  }
+  .lab-lb-row:last-child { border-bottom: none; }
+  .lab-lb-row strong { color: #0A1628; font-weight: 700; }
+  .lab-lb-bar {
+    height: 6px; background: #f1f5f9; border-radius: 3px;
+    overflow: hidden; margin-top: 6px; display: flex;
+  }
+  .lab-lb-bar > .seg-grok   { background: #0A1628; }
+  .lab-lb-bar > .seg-claude { background: #d97706; }
+  .lab-lb-bar > .seg-tie    { background: #94a3b8; }
+  /* Vote history rows */
+  .lab-hist-row {
+    display: flex; gap: 10px; padding: 8px 16px;
+    border-bottom: 1px solid #f1f5f9; align-items: baseline; font-size: 11.5px;
+  }
+  .lab-hist-row:last-child { border-bottom: none; }
+  .lab-hist-tk { font-weight: 800; min-width: 60px; color: #0A1628; letter-spacing: 0.3px; }
+  .lab-hist-winner { font-weight: 800; min-width: 80px; }
+  .lab-hist-winner.grok   { color: #0A1628; }
+  .lab-hist-winner.claude { color: #d97706; }
+  .lab-hist-winner.tie    { color: #64748b; }
+  .lab-hist-note  { flex: 1; color: #475569; min-width: 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lab-hist-when  { font-size: 10px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  .lab-hist-del   { background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 14px; }
+  .lab-hist-del:hover { color: #dc2626; }
+
   /* ── LEFT COLUMN: Quick Actions + Watchlist ─────────────────── */
   .quick-row {
     display: flex; flex-direction: column;
@@ -713,11 +764,13 @@
   }
   .cmp-modal-close:hover { color: #0A1628; }
   .cmp-modal-body {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
-    background: #e2e8f0; flex: 1; overflow: hidden;
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;
+    gap: 1px; background: #e2e8f0; flex: 1 1 auto; overflow: hidden;
+    min-height: 0; /* lets the row collapse to fit and allow inner scroll */
   }
   .cmp-pane {
     background: #fff; overflow: hidden; display: flex; flex-direction: column;
+    min-height: 0; min-width: 0;
   }
   .cmp-pane-hdr {
     padding: 8px 14px; background: #fafbfc; border-bottom: 1px solid #e2e8f0;
@@ -738,12 +791,17 @@
     font-size: 12.5px; line-height: 1.55; color: #1e293b;
   }
   /* When the body is also a renderMd target (.md-body), let .md-body's own
-     typography rules win — we just provide the scrolling container. */
+     typography rules win — we just provide the scrolling container. The
+     !important overrides the global .md-body max-height:600px which would
+     otherwise cap the pane far short of the 90vh modal. */
   .cmp-pane-body.md-body {
     max-height: none !important;
+    height: auto !important;
     overflow-y: auto !important;
+    flex: 1 1 auto;
+    min-height: 0;
   }
-  .cmp-pane-body.md-body > .md-body { padding: 0; }
+  .cmp-pane-body.md-body > .md-body { padding: 0; max-height: none !important; }
   .cmp-pane-empty {
     padding: 40px 20px; text-align: center; color: #64748b; font-size: 13px;
   }
@@ -1610,6 +1668,7 @@
     <span class="topbar-link active" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="positions">📊 Positions</span>
     <span class="topbar-link" data-tab="builder">🧮 Builder</span>
+    <span class="topbar-link" data-tab="lab">🔬 LLM Lab</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
@@ -2069,6 +2128,92 @@
     </section>
   </div>
 </div><!-- #tab-builder -->
+
+
+<!-- ══ LLM LAB TAB ═════════════════════════════════════════════ -->
+<div id="tab-lab" class="tab-panel">
+  <div class="wide-shell" style="max-width:1500px;margin:18px auto;padding:0 20px;">
+    <div class="tab-toolbar" style="display:flex;align-items:baseline;gap:16px;margin-bottom:16px;">
+      <h2 style="margin:0;font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#0A1628;">🔬 LLM Lab</h2>
+      <div style="font-size:11.5px;color:#64748b;flex:1;">
+        Side-by-side A/B testing of Grok (current default) vs Claude Opus on any saved report. Vote on each comparison and track aggregate quality over time.
+      </div>
+    </div>
+
+    <!-- ── Top row: ticker picker + leaderboard ─────────────────── -->
+    <div class="lab-grid">
+      <section class="builder-card" style="grid-column: span 2;">
+        <header class="builder-card-head">Pick a ticker to compare</header>
+        <div class="builder-card-body" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <label class="builder-field" style="margin-bottom:0;">
+              <span>Saved report</span>
+              <select id="lab-ticker-select" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;">
+                <option value="">— select a saved report —</option>
+              </select>
+            </label>
+          </div>
+          <button id="lab-load-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">Load Comparison →</button>
+          <button id="lab-runclaude-btn" class="builder-btn-sec" style="padding:8px 12px;display:none;">⚡ Run Claude analysis</button>
+        </div>
+      </section>
+
+      <section class="builder-card">
+        <header class="builder-card-head">Leaderboard</header>
+        <div class="builder-card-body" id="lab-leaderboard">
+          <div style="font-size:11px;color:#94a3b8;font-style:italic;">No votes yet — load a comparison and cast one.</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── Comparison panes (filled when user selects a ticker) ─── -->
+    <section id="lab-compare" class="builder-card" style="margin-top:18px;display:none;">
+      <header class="builder-card-head">
+        <span id="lab-compare-title">Comparison</span>
+        <span id="lab-compare-meta" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:600;">—</span>
+      </header>
+      <div id="lab-summary-strip" style="display:none;padding:8px 16px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#78350f;gap:16px;align-items:center;"></div>
+      <div class="lab-panes" id="lab-panes">
+        <div class="lab-pane">
+          <div class="cmp-pane-hdr">
+            <span class="cmp-pane-engine grok">GROK</span>
+            <span class="cmp-pane-meta" id="lab-grok-meta">—</span>
+          </div>
+          <div class="cmp-pane-body md-body" id="lab-grok-body"></div>
+        </div>
+        <div class="lab-pane">
+          <div class="cmp-pane-hdr">
+            <span class="cmp-pane-engine claude">CLAUDE</span>
+            <span class="cmp-pane-meta" id="lab-claude-meta">—</span>
+          </div>
+          <div class="cmp-pane-body md-body" id="lab-claude-body"></div>
+        </div>
+      </div>
+
+      <!-- Voting widget -->
+      <div id="lab-vote" style="padding:14px 18px;background:#fafbfc;border-top:1px solid #e2e8f0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <strong style="font-size:12px;color:#0A1628;">Which is better?</strong>
+        <div style="display:flex;gap:8px;">
+          <button class="lab-vote-btn" data-winner="grok"   style="border:1px solid #0A1628;background:#fff;color:#0A1628;font-weight:800;font-size:11px;padding:8px 14px;border-radius:5px;cursor:pointer;letter-spacing:0.5px;">GROK WINS</button>
+          <button class="lab-vote-btn" data-winner="tie"    style="border:1px solid #94a3b8;background:#fff;color:#475569;font-weight:800;font-size:11px;padding:8px 14px;border-radius:5px;cursor:pointer;letter-spacing:0.5px;">TIE</button>
+          <button class="lab-vote-btn" data-winner="claude" style="border:1px solid #d97706;background:#fff;color:#d97706;font-weight:800;font-size:11px;padding:8px 14px;border-radius:5px;cursor:pointer;letter-spacing:0.5px;">CLAUDE WINS</button>
+        </div>
+        <input id="lab-vote-note" type="text" placeholder="One-line reason (optional)"
+          style="flex:1;min-width:200px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px;background:#fff;">
+        <span id="lab-vote-status" style="font-size:11px;color:#16a34a;font-weight:600;display:none;">✓ Vote saved</span>
+      </div>
+    </section>
+
+    <!-- ── Vote history ─────────────────────────────────────────── -->
+    <section id="lab-history" class="builder-card" style="margin-top:18px;display:none;">
+      <header class="builder-card-head">
+        <span>Vote history</span>
+        <span id="lab-history-count" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:600;">—</span>
+      </header>
+      <div id="lab-history-list" class="builder-card-body" style="padding:0;"></div>
+    </section>
+  </div>
+</div><!-- #tab-lab -->
 
 
 <!-- ══ IDEAS TAB ═══════════════════════════════════════════════ -->
@@ -2905,6 +3050,7 @@
     positions: () => loadGPPositions(),
     research:  () => { loadBrief(); loadIdeaFeed(true); },
     builder:   () => _initBuilderTab(),
+    lab:       () => _initLabTab(),
     ideas:     () => loadIdeasTab(),
     tracker:   () => loadTrackerTab(),
     fund:      () => loadFundTab(),
@@ -4091,6 +4237,344 @@
     // Load candidates pool + previously saved scenarios
     loadBuilderCandidates();
     loadBuilderScenarios();
+  }
+
+  // ── LLM Lab ────────────────────────────────────────────────────────────────
+  // Full A/B testing rig: load any saved report's Grok vs Claude side-by-side,
+  // vote on which is better, see aggregate stats over time.
+  var _labInitialized   = false;
+  var _labCurrentTicker = null;
+  var _labCurrentData   = null;   // {grok, alt, ticker}
+  var _labPollTimer     = null;
+
+  function _labFmtRelDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1)   return 'just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
+  }
+
+  async function _labLoadReports() {
+    // Populate the ticker dropdown from saved reports (newest first — same
+    // sort order as the Research tab's Saved Reports list)
+    const sel = document.getElementById('lab-ticker-select');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      if (!r.ok) throw new Error('reports ' + r.status);
+      const list = await r.json();
+      const arr  = Array.isArray(list) ? list : [];
+      sel.innerHTML = '<option value="">— select a saved report (' + arr.length + ' available) —</option>';
+      arr.forEach(function(rep) {
+        const opt = document.createElement('option');
+        opt.value = rep.ticker;
+        opt.textContent = rep.ticker + (rep.rating ? ' · ' + rep.rating : '')
+          + (rep.upside_pct != null ? ' · ' + (rep.upside_pct >= 0 ? '+' : '') + rep.upside_pct.toFixed(1) + '%' : '');
+        sel.appendChild(opt);
+      });
+    } catch (e) {
+      console.warn('[lab-reports]', e);
+    }
+  }
+
+  async function _labLoadComparison(ticker) {
+    _labCurrentTicker = ticker;
+    const wrap = document.getElementById('lab-compare');
+    if (!wrap) return;
+    wrap.style.display = 'block';
+
+    document.getElementById('lab-compare-title').textContent = '🔬 ' + ticker + ': Grok vs Claude';
+    document.getElementById('lab-grok-body').innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">Loading Grok report…</div>';
+    document.getElementById('lab-claude-body').innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">Loading Claude report…</div>';
+    document.getElementById('lab-runclaude-btn').style.display = 'none';
+
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=claude');
+      if (!r.ok) throw new Error('comparison ' + r.status);
+      const data = await r.json();
+      _labCurrentData = data;
+      _labRenderComparison(data);
+    } catch (e) {
+      document.getElementById('lab-grok-body').innerHTML = '<div style="padding:20px;color:#dc2626;">Error: ' + e.message + '</div>';
+    }
+  }
+
+  function _labRenderComparison(data) {
+    const grok = data.grok || {};
+    const alt  = data.alt  || {};
+
+    // Meta lines
+    document.getElementById('lab-grok-meta').innerHTML   = (grok.model || 'grok') + ' · <strong>' + _labFmtRelDate(grok.generated_at) + '</strong>';
+    document.getElementById('lab-claude-meta').innerHTML = (alt.model  || 'claude') + ' · <strong>' + _labFmtRelDate(alt.generated_at)  + '</strong>';
+
+    // Top summary strip (same as compare modal)
+    const strip = document.getElementById('lab-summary-strip');
+    if (strip) {
+      if (grok.has_report && alt.has_report) {
+        const gs = grok.summary || {}, as = alt.summary || {};
+        let html = '<div>Grok: <strong>' + (gs.rating || '—') + '</strong>'
+          + ' · target <strong>' + (gs.price_target != null ? ('$' + Number(gs.price_target).toFixed(2)) : '—') + '</strong>'
+          + ' · upside <strong>' + (gs.upside_pct != null ? ((gs.upside_pct>=0?'+':'')+Number(gs.upside_pct).toFixed(1)+'%') : '—') + '</strong></div>';
+        html += '<div>Claude: <strong>' + (as.rating || '—') + '</strong>'
+          + ' · target <strong>' + (as.price_target != null ? ('$' + Number(as.price_target).toFixed(2)) : '—') + '</strong>'
+          + ' · upside <strong>' + (as.upside_pct != null ? ((as.upside_pct>=0?'+':'')+Number(as.upside_pct).toFixed(1)+'%') : '—') + '</strong></div>';
+        if (gs.price_target && as.price_target) {
+          const d = (Number(as.price_target) - Number(gs.price_target)) / Number(gs.price_target) * 100;
+          const cls = Math.abs(d) > 5 ? '#dc2626' : '#16a34a';
+          html += '<div>Δ Target: <strong style="color:' + cls + ';">' + ((d>=0?'+':'')+d.toFixed(1)+'%') + '</strong></div>';
+        }
+        strip.innerHTML = html;
+        strip.style.display = 'flex';
+      } else {
+        strip.style.display = 'none';
+      }
+    }
+
+    // Pane bodies
+    const gBody = document.getElementById('lab-grok-body');
+    const cBody = document.getElementById('lab-claude-body');
+    if (grok.has_report) {
+      _cmpRenderMdInto(gBody, grok.text);
+    } else {
+      gBody.innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">No Grok report on disk for ' + data.ticker + '.</div>';
+    }
+    if (alt.has_report) {
+      _cmpRenderMdInto(cBody, alt.text);
+      document.getElementById('lab-runclaude-btn').style.display = 'none';
+    } else {
+      cBody.innerHTML = '<div style="padding:20px;color:#94a3b8;font-style:italic;">No Claude comparison yet — click "Run Claude analysis" above (~2-3 min).</div>';
+      document.getElementById('lab-runclaude-btn').style.display = '';
+    }
+
+    // Reset vote button state, prefill if a vote exists for this ticker
+    document.querySelectorAll('.lab-vote-btn').forEach(function(b) { b.dataset.cast = '0'; });
+    document.getElementById('lab-vote-status').style.display = 'none';
+    document.getElementById('lab-vote-note').value = '';
+    _labLoadExistingVote(data.ticker);
+  }
+
+  async function _labLoadExistingVote(ticker) {
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/votes');
+      if (!r.ok) return;
+      const d = await r.json();
+      const existing = (d.votes || []).find(function(v) { return v.ticker === ticker; });
+      if (existing) {
+        document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+          b.dataset.cast = (b.dataset.winner === existing.winner) ? '1' : '0';
+        });
+        if (existing.note) document.getElementById('lab-vote-note').value = existing.note;
+        const st = document.getElementById('lab-vote-status');
+        st.style.display = 'inline'; st.textContent = '✓ Previously voted ' + _labFmtRelDate(existing.voted_at);
+      }
+    } catch (e) {}
+  }
+
+  async function _labRunClaude() {
+    const tk = _labCurrentTicker;
+    if (!tk) return;
+    const btn = document.getElementById('lab-runclaude-btn');
+    btn.disabled = true; btn.textContent = '⏳ Starting…';
+    try {
+      const r = await window.dgaFetch('/api/reports/' + encodeURIComponent(tk) + '/compare?provider=claude', { method: 'POST' });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+      const job = await r.json();
+      document.getElementById('lab-claude-body').innerHTML =
+        '<div style="padding:20px;color:#d97706;">'
+        + '<div style="display:flex;align-items:center;gap:8px;"><span class="cmp-wait-pulse"></span><strong>Claude running…</strong></div>'
+        + '<div style="margin-top:10px;font-size:11px;color:#94a3b8;" id="lab-run-status">Job ' + job.job_id.slice(0,8) + '… (this can take 30-60s to start streaming)</div>'
+        + '<div class="cmp-pane-body md-body" id="lab-claude-stream" style="margin-top:12px;max-height:50vh;overflow-y:auto;"></div>'
+        + '</div>';
+      _labPollClaudeJob(tk, job.job_id);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '⚡ Run Claude analysis';
+      alert('Could not start: ' + e.message);
+    }
+  }
+
+  async function _labPollClaudeJob(ticker, jobId) {
+    if (_labPollTimer) clearInterval(_labPollTimer);
+    const tick = async function() {
+      try {
+        const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
+        if (!r.ok) return;
+        const job = await r.json();
+        const stat = document.getElementById('lab-run-status');
+        const stream = document.getElementById('lab-claude-stream');
+        const streamedLen = (job.streamed_text || '').length;
+        if (stat) {
+          stat.textContent = streamedLen > 0
+            ? 'Streaming · ' + streamedLen.toLocaleString() + ' chars'
+            : (job.progress && job.progress.label || 'Running…');
+        }
+        if (stream && streamedLen > 0) {
+          const wasAtBottom = (stream.scrollTop + stream.clientHeight) >= stream.scrollHeight - 30;
+          _cmpRenderMdInto(stream, job.streamed_text);
+          if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
+        }
+        if (job.status === 'done' || job.status === 'failed') {
+          clearInterval(_labPollTimer); _labPollTimer = null;
+          const btn = document.getElementById('lab-runclaude-btn');
+          if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Claude analysis'; }
+          if (job.status === 'failed') {
+            document.getElementById('lab-claude-body').innerHTML = '<div style="padding:20px;color:#dc2626;">Failed: ' + (job.error || 'unknown') + '</div>';
+            return;
+          }
+          // Reload the comparison so the final report shows formatted
+          _labLoadComparison(ticker);
+        }
+      } catch (e) {}
+    };
+    tick();
+    _labPollTimer = setInterval(tick, 1500);
+  }
+
+  async function _labVote(winner) {
+    if (!_labCurrentData || !_labCurrentTicker) return;
+    const note = document.getElementById('lab-vote-note').value.trim();
+    const gs = _labCurrentData.grok && _labCurrentData.grok.summary || {};
+    const as = _labCurrentData.alt  && _labCurrentData.alt.summary  || {};
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker:        _labCurrentTicker,
+          winner:        winner,
+          note:          note || null,
+          grok_target:   gs.price_target || null,
+          claude_target: as.price_target || null,
+          grok_upside:   gs.upside_pct   || null,
+          claude_upside: as.upside_pct   || null,
+        }),
+      });
+      if (!r.ok) throw new Error('vote ' + r.status);
+      document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+        b.dataset.cast = (b.dataset.winner === winner) ? '1' : '0';
+      });
+      const st = document.getElementById('lab-vote-status');
+      st.style.display = 'inline'; st.textContent = '✓ Vote saved · ' + winner.toUpperCase();
+      _labLoadStats();        // refresh leaderboard
+      _labLoadHistory();      // refresh history
+    } catch (e) {
+      alert('Could not save vote: ' + e.message);
+    }
+  }
+
+  async function _labLoadStats() {
+    const lb = document.getElementById('lab-leaderboard');
+    if (!lb) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/stats');
+      if (!r.ok) throw new Error('stats ' + r.status);
+      const s = await r.json();
+      if (!s.total) {
+        lb.innerHTML = '<div style="font-size:11px;color:#94a3b8;font-style:italic;">No votes yet — load a comparison and cast one.</div>';
+        return;
+      }
+      let html = '<div style="font-size:11px;color:#0A1628;margin-bottom:8px;"><strong>' + s.total + '</strong> vote' + (s.total!==1?'s':'') + ' cast</div>';
+      // Bar
+      html += '<div class="lab-lb-bar">'
+        + '<div class="seg-grok"   style="width:' + s.grok_win_pct + '%;"></div>'
+        + '<div class="seg-tie"    style="width:' + s.tie_pct + '%;"></div>'
+        + '<div class="seg-claude" style="width:' + s.claude_win_pct + '%;"></div>'
+        + '</div>';
+      html += '<div class="lab-lb-row"><span style="color:#0A1628;font-weight:700;">GROK</span>'
+            + '<strong>' + s.grok_wins + ' wins · ' + s.grok_win_pct + '%</strong></div>';
+      html += '<div class="lab-lb-row"><span style="color:#d97706;font-weight:700;">CLAUDE</span>'
+            + '<strong>' + s.claude_wins + ' wins · ' + s.claude_win_pct + '%</strong></div>';
+      html += '<div class="lab-lb-row"><span style="color:#64748b;font-weight:700;">TIE</span>'
+            + '<strong>' + s.ties + ' · ' + s.tie_pct + '%</strong></div>';
+      // Avg deltas
+      if (s.avg_target_delta_pct != null) {
+        const sign = s.target_delta_sign;
+        const txt = (s.avg_target_delta_pct >= 0 ? '+' : '') + s.avg_target_delta_pct.toFixed(1) + '%';
+        const label = sign === 'claude_higher' ? 'Claude sets higher targets'
+                    : sign === 'grok_higher'   ? 'Grok sets higher targets'
+                    : 'Targets converge';
+        html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:11px;color:#475569;">'
+          + label + ' on avg: <strong>' + txt + '</strong></div>';
+      }
+      lb.innerHTML = html;
+    } catch (e) {
+      console.warn('[lab-stats]', e);
+    }
+  }
+
+  async function _labLoadHistory() {
+    const wrap = document.getElementById('lab-history');
+    const list = document.getElementById('lab-history-list');
+    const cnt  = document.getElementById('lab-history-count');
+    if (!wrap || !list) return;
+    try {
+      const r = await window.dgaFetch('/api/v2/lab/votes');
+      if (!r.ok) return;
+      const d = await r.json();
+      const arr = d.votes || [];
+      if (cnt) cnt.textContent = arr.length + (arr.length === 1 ? ' vote' : ' votes');
+      if (!arr.length) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      list.innerHTML = arr.map(function(v) {
+        return '<div class="lab-hist-row" data-vote-id="' + v.id + '">'
+          + '<span class="lab-hist-tk">' + v.ticker + '</span>'
+          + '<span class="lab-hist-winner ' + v.winner + '">' + v.winner.toUpperCase() + '</span>'
+          + '<span class="lab-hist-note" title="' + (v.note || '').replace(/"/g,'&quot;') + '">'
+          +   (v.note || '<em style="color:#94a3b8;">no note</em>')
+          + '</span>'
+          + '<span class="lab-hist-when">' + _labFmtRelDate(v.voted_at) + '</span>'
+          + '<button class="lab-hist-del" data-vote-id="' + v.id + '" title="Delete vote">×</button>'
+          + '</div>';
+      }).join('');
+      list.querySelectorAll('.lab-hist-del').forEach(function(btn) {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id = btn.getAttribute('data-vote-id');
+          if (!confirm('Delete this vote?')) return;
+          try {
+            await window.dgaFetch('/api/v2/lab/votes/' + encodeURIComponent(id), { method: 'DELETE' });
+            _labLoadStats(); _labLoadHistory();
+          } catch (e) {}
+        });
+      });
+      list.querySelectorAll('.lab-hist-row').forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          if (e.target.classList.contains('lab-hist-del')) return;
+          // Click a history row → load that comparison
+          const tk = row.querySelector('.lab-hist-tk').textContent.trim();
+          const sel = document.getElementById('lab-ticker-select');
+          if (sel) sel.value = tk;
+          _labLoadComparison(tk);
+        });
+      });
+    } catch (e) {}
+  }
+
+  function _initLabTab() {
+    if (_labInitialized) {
+      _labLoadReports(); _labLoadStats(); _labLoadHistory();
+      return;
+    }
+    _labInitialized = true;
+    _labLoadReports();
+    _labLoadStats();
+    _labLoadHistory();
+    // Wire load button
+    document.getElementById('lab-load-btn').addEventListener('click', function() {
+      const tk = document.getElementById('lab-ticker-select').value;
+      if (!tk) return;
+      _labLoadComparison(tk);
+    });
+    // Wire run-claude button
+    document.getElementById('lab-runclaude-btn').addEventListener('click', _labRunClaude);
+    // Wire vote buttons
+    document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
+      b.addEventListener('click', function() { _labVote(b.dataset.winner); });
+    });
   }
 
   async function loadBrief() {

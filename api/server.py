@@ -6284,6 +6284,157 @@ def builder_scenario_to_watchlist(scenario_id: str, request: Request):
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# LLM Lab — A/B vote tracking + aggregate leaderboard
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-user vote log under kv_store key 'lab:votes:{lp_id}'. Each vote ties to
+# a (ticker, grok_generated_at, alt_generated_at) tuple so re-runs produce a
+# fresh comparison ID and don't conflate old votes with new outputs.
+
+_LAB_VOTES_KEY_PREFIX = "lab:votes:"
+_LAB_VOTE_LIMIT       = 500   # per user; oldest auto-pruned
+
+
+def _lab_votes_key(lp_id: str) -> str:
+    return _LAB_VOTES_KEY_PREFIX + str(lp_id)
+
+
+def _lab_load_votes(lp_id: str) -> list[dict]:
+    raw = _kv_get(_lab_votes_key(lp_id))
+    return raw if isinstance(raw, list) else []
+
+
+def _lab_save_votes(lp_id: str, votes: list[dict]) -> bool:
+    return _kv_put(_lab_votes_key(lp_id), votes)
+
+
+class LabVoteRequest(BaseModel):
+    ticker:    str
+    winner:    str           # 'grok' | 'claude' | 'tie'
+    note:      str | None = None
+    grok_target:   float | None = None
+    claude_target: float | None = None
+    grok_upside:   float | None = None
+    claude_upside: float | None = None
+
+
+@app.post("/api/v2/lab/vote")
+def lab_vote(request: Request, body: LabVoteRequest):
+    """Record a comparison vote: which model produced the better report."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    tk = (body.ticker or "").strip().upper()
+    if not tk:
+        raise HTTPException(400, "ticker is required")
+    if body.winner not in ("grok", "claude", "tie"):
+        raise HTTPException(400, "winner must be 'grok' | 'claude' | 'tie'")
+
+    vote = {
+        "id":             str(uuid.uuid4()),
+        "ticker":         tk,
+        "winner":         body.winner,
+        "note":           (body.note or "")[:500],
+        "grok_target":    body.grok_target,
+        "claude_target":  body.claude_target,
+        "grok_upside":    body.grok_upside,
+        "claude_upside":  body.claude_upside,
+        "voted_at":       datetime.utcnow().isoformat(),
+    }
+    votes = _lab_load_votes(lp_id)
+    # Replace any previous vote for the same ticker (latest wins)
+    votes = [v for v in votes if v.get("ticker") != tk]
+    votes.insert(0, vote)
+    if len(votes) > _LAB_VOTE_LIMIT:
+        votes = votes[:_LAB_VOTE_LIMIT]
+    _lab_save_votes(lp_id, votes)
+    return vote
+
+
+@app.get("/api/v2/lab/votes")
+def lab_list_votes(request: Request):
+    """Return all votes (newest first) for the current user."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    return {"votes": _lab_load_votes(lp_id)}
+
+
+@app.delete("/api/v2/lab/votes/{vote_id}")
+def lab_delete_vote(vote_id: str, request: Request):
+    """Remove a single vote."""
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    votes = _lab_load_votes(lp_id)
+    kept  = [v for v in votes if v.get("id") != vote_id]
+    if len(kept) == len(votes):
+        raise HTTPException(404, "Vote not found")
+    _lab_save_votes(lp_id, kept)
+    return {"ok": True}
+
+
+@app.get("/api/v2/lab/stats")
+def lab_stats(request: Request):
+    """Aggregate stats across all votes for the leaderboard.
+
+    Returns: {
+      total, grok_wins, claude_wins, ties, grok_win_pct, claude_win_pct,
+      avg_target_delta_pct      — (claude - grok) / grok × 100,  if both targets known
+      avg_upside_delta_pct      — claude_upside - grok_upside,    if both known
+      target_delta_sign         — 'claude_higher' | 'grok_higher' | 'even'
+      upside_delta_sign         — same
+      by_ticker:  [{ticker, winner, note, ...}]
+    }
+    """
+    claims = _claims_or_401(request)
+    lp_id = str(claims.get("lp_id") or claims.get("email") or "anon")
+    votes = _lab_load_votes(lp_id)
+    total = len(votes)
+    if total == 0:
+        return {"total": 0, "grok_wins": 0, "claude_wins": 0, "ties": 0,
+                "grok_win_pct": 0, "claude_win_pct": 0, "tie_pct": 0,
+                "avg_target_delta_pct": None, "avg_upside_delta_pct": None,
+                "target_delta_sign": None, "upside_delta_sign": None,
+                "by_ticker": []}
+
+    g = sum(1 for v in votes if v.get("winner") == "grok")
+    c = sum(1 for v in votes if v.get("winner") == "claude")
+    t = sum(1 for v in votes if v.get("winner") == "tie")
+
+    # Target delta: %% change from grok target → claude target (only votes with both)
+    deltas_pct: list[float] = []
+    upside_deltas: list[float] = []
+    for v in votes:
+        gt, ct = v.get("grok_target"), v.get("claude_target")
+        if gt and ct and float(gt) != 0:
+            deltas_pct.append((float(ct) - float(gt)) / float(gt) * 100.0)
+        gu, cu = v.get("grok_upside"), v.get("claude_upside")
+        if gu is not None and cu is not None:
+            upside_deltas.append(float(cu) - float(gu))
+
+    avg_t = (sum(deltas_pct) / len(deltas_pct)) if deltas_pct else None
+    avg_u = (sum(upside_deltas) / len(upside_deltas)) if upside_deltas else None
+
+    def _sign(x):
+        if x is None: return None
+        if x > 1:  return "claude_higher"
+        if x < -1: return "grok_higher"
+        return "even"
+
+    return {
+        "total":               total,
+        "grok_wins":           g,
+        "claude_wins":         c,
+        "ties":                t,
+        "grok_win_pct":        round(g / total * 100, 1),
+        "claude_win_pct":      round(c / total * 100, 1),
+        "tie_pct":             round(t / total * 100, 1),
+        "avg_target_delta_pct": round(avg_t, 2) if avg_t is not None else None,
+        "avg_upside_delta_pct": round(avg_u, 2) if avg_u is not None else None,
+        "target_delta_sign":    _sign(avg_t),
+        "upside_delta_sign":    _sign(avg_u),
+        "by_ticker":            votes[:50],   # cap response size
+    }
+
+
 @app.delete("/api/cache")
 def clear_local_cache():
     """Delete all locally-cached _DGA_Report.md files from /stocks.
