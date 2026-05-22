@@ -1302,6 +1302,7 @@ class CreateFundRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     ticker: str
     generate_gamma: bool = False
+    llm_provider:   str  = "grok"   # 'grok' | 'claude' | 'both'
 
 
 class JobStatus(BaseModel):
@@ -3985,10 +3986,136 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
 # Background worker
 # ---------------------------------------------------------------------------
 
-def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
+def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
+    """Run Grok then Claude sequentially in a single job.
+
+    Sequential by design — running them in parallel would hit SEC EDGAR + LLM
+    rate limits in lockstep. Grok runs first (with optional Gamma). Claude
+    runs second and reuses Grok's cached user_msg via reuse_user_msg=True,
+    so the two LLMs see identical inputs and Claude doesn't re-hit SEC.
+    """
+    with _jobs_lock:
+        _jobs[job_id]["status"]       = "running"
+        _jobs[job_id]["llm_provider"] = "both"
+        _jobs[job_id]["providers"]    = {"grok": "queued", "claude": "queued"}
+        _jobs[job_id]["progress"]     = {"step": "queued", "pct": 0.0,
+                                          "label": "Both: starting Grok…"}
+
+    def _phase(step, pct, label):
+        with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id]["progress"] = {"step": step, "pct": pct, "label": label}
+
+    # ── Phase 1: Grok ─────────────────────────────────────────────────
+    try:
+        result_g = analyst.analyze_ticker(
+            ticker,
+            system_prompt=analyst.load_system_prompt(),
+            generate_gamma=generate_gamma,
+            verbose=False,
+            on_progress=lambda s,p,l: _phase(s, p * 0.5, f"Grok: {l}"),
+            llm_provider="grok",
+            reuse_user_msg=False,
+        )
+        ok_g = bool(result_g.get("ok"))
+        with _jobs_lock:
+            _jobs[job_id]["providers"]["grok"] = "done" if ok_g else "failed"
+        if ok_g:
+            try:
+                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+                _md_text = _md_path.read_text() if _md_path.exists() else ""
+                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
+                _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
+                _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
+                _db_upsert_report(ticker, _md_text, _summary, _has_docx, _has_pptx,
+                                  result_g.get("gamma_url"),
+                                  pptx_stale=(False if generate_gamma else (_has_pptx)),
+                                  provider="grok")
+            except Exception as _de:
+                print(f"[both] Grok DB persist failed for {ticker}: {_de}")
+        else:
+            try:
+                _db_record_attempt_failure(ticker, "Grok: " + (result_g.get("error") or "?"))
+            except Exception: pass
+    except BaseException as exc:  # noqa: BLE001
+        with _jobs_lock:
+            _jobs[job_id]["providers"]["grok"] = "failed"
+
+    # ── Phase 2: Claude (uses Grok's cached user_msg) ──────────────────
+    _phase("grok", 0.55, "Both: Grok done · starting Claude…")
+    try:
+        result_c = analyst.analyze_ticker(
+            ticker,
+            system_prompt=analyst.load_system_prompt(),
+            generate_gamma=False,           # Gamma only on Grok side
+            verbose=False,
+            on_progress=lambda s,p,l: _phase(s, 0.5 + p * 0.5, f"Claude: {l}"),
+            llm_provider="claude",
+            reuse_user_msg=True,            # identical inputs to Grok
+        )
+        ok_c = bool(result_c.get("ok"))
+        with _jobs_lock:
+            _jobs[job_id]["providers"]["claude"] = "done" if ok_c else "failed"
+        if ok_c:
+            try:
+                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report_claude.md"
+                _md_text = _md_path.read_text() if _md_path.exists() else ""
+                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
+                _db_upsert_report(ticker, _md_text, _summary, False, False, None,
+                                  pptx_stale=None, provider="claude")
+            except Exception as _de:
+                print(f"[both] Claude DB persist failed for {ticker}: {_de}")
+    except BaseException as exc:  # noqa: BLE001
+        with _jobs_lock:
+            _jobs[job_id]["providers"]["claude"] = "failed"
+
+    # ── Final job state ───────────────────────────────────────────────
+    with _jobs_lock:
+        provs = _jobs[job_id].get("providers", {})
+        any_ok = "done" in provs.values()
+        _jobs[job_id]["status"] = "done" if any_ok else "failed"
+        if not any_ok:
+            _jobs[job_id]["error"] = f"Both providers failed: {provs}"
+        _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
+                                      "label": "Both reports complete"}
+        _jobs[job_id]["result"] = {
+            "ok": any_ok,
+            "providers": provs,
+            "has_grok_report":   provs.get("grok") == "done",
+            "has_claude_report": provs.get("claude") == "done",
+        }
+
+
+def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
+                  llm_provider: str = "grok") -> None:
+    """Run a single-ticker analysis.
+
+    llm_provider:
+      • 'grok'   — default; runs the existing pipeline, persists to the
+                   canonical analyst_reports columns
+      • 'claude' — runs analyze_ticker with llm_provider='claude'; saves
+                   {TICKER}_DGA_Report_claude.md + persists to the
+                   *_claude columns. Reuses Grok's cached user_msg so
+                   inputs are identical (no SEC re-fetch).
+      • 'both'   — runs Grok first, then Claude (sequentially, in this
+                   same job). The job's status stays 'running' until
+                   both complete. Each side's failure is reported
+                   independently in result['providers'].
+    """
+    provider = (llm_provider or "grok").lower().strip()
+    if provider not in ("grok", "claude", "both"):
+        provider = "grok"
+
+    # Dispatch 'both' to the dedicated runner
+    if provider == "both":
+        _run_analysis_both(job_id, ticker, generate_gamma)
+        return
+
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
-        _jobs[job_id]["progress"] = {"step": "queued", "pct": 0.0, "label": "Starting…"}
+        _jobs[job_id]["progress"] = {"step": "queued", "pct": 0.0,
+                                      "label": f"Starting {provider.title()}…"}
+        _jobs[job_id]["llm_provider"] = provider
 
     # Progress callback — runs on the worker thread, mutates the shared job dict.
     # Wrapped so a slow lock acquisition can't slow down the analysis itself.
@@ -4001,12 +4128,18 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
 
     try:
         system_prompt = analyst.load_system_prompt()
+        # For Claude path, reuse Grok's cached user_msg so the LLMs see
+        # identical inputs (the same trick the Compare button uses).
+        # If no cache exists yet, analyze_ticker falls through to fresh
+        # gathering — first-time Claude analyze on a brand-new ticker.
         result = analyst.analyze_ticker(
             ticker,
             system_prompt=system_prompt,
             generate_gamma=generate_gamma,
             verbose=False,
             on_progress=_record_progress,
+            llm_provider=provider,
+            reuse_user_msg=(provider == "claude"),
         )
         with _jobs_lock:
             if result.get("ok"):
@@ -4030,25 +4163,25 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
         # Wrapped in try/except — a DB failure must never affect the job result.
         if result.get("ok"):
             try:
-                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
-                _md_text = _md_path.read_text() if _md_path.exists() else ""
-                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
-                _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
-                _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
+                # Provider-suffixed paths: '' for grok, '_claude' for claude
+                _suffix    = "" if provider == "grok" else f"_{provider}"
+                _md_path   = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
+                _md_text   = _md_path.read_text() if _md_path.exists() else ""
+                _summary   = _extract_summary_cached(_md_path) if _md_path.exists() else {}
+                _has_docx  = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.docx").exists()
+                # PPTX is Gamma-only and Gamma only runs on the Grok path
+                _has_pptx  = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists() if provider == "grok" else False
                 _gamma_url = (result.get("gamma_url") or None)
-                # pptx_stale logic:
-                #   generate_gamma=True  → deck regenerated alongside report → fresh
-                #   generate_gamma=False → report rerun without deck refresh
-                #     → if a PPTX exists, mark it stale (older than this new MD)
-                #     → if no PPTX exists, leave pptx_stale=False (nothing to be stale)
+                # pptx_stale logic only relevant for the Grok columns
                 _pptx_stale: bool | None
-                if generate_gamma:
-                    _pptx_stale = False
+                if provider == "grok":
+                    _pptx_stale = False if generate_gamma else (True if _has_pptx else False)
                 else:
-                    _pptx_stale = True if _has_pptx else False
+                    _pptx_stale = None   # don't touch the column for Claude runs
                 _db_upsert_report(
                     ticker, _md_text, _summary, _has_docx, _has_pptx, _gamma_url,
                     pptx_stale=_pptx_stale,
+                    provider=provider,
                 )
             except Exception as _dbe:
                 print(f"[analyst_reports] post-run DB persist failed for {ticker} (non-fatal): {_dbe!s:.200}")
@@ -4790,10 +4923,20 @@ def diagnostics():
 
 @app.post("/api/analyze", response_model=JobStatus)
 def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
-    """Kick off an async analysis for *ticker*. Returns a job_id to poll."""
+    """Kick off an async analysis for *ticker*. Returns a job_id to poll.
+
+    Body fields:
+      • ticker         — required
+      • generate_gamma — whether to also generate the Gamma deck (Grok only)
+      • llm_provider   — 'grok' (default) | 'claude' | 'both'
+    """
     ticker = req.ticker.strip().upper()
     if not ticker or not ticker.isalpha() or len(ticker) > 10:
         raise HTTPException(status_code=422, detail="Invalid ticker symbol")
+
+    provider = (req.llm_provider or "grok").lower().strip()
+    if provider not in ("grok", "claude", "both"):
+        raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'both'")
 
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -4805,16 +4948,16 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
             "created_at": now,
             "error": None,
             "result": None,
-            # Progress reported by the analysis pipeline. {step, pct, label}.
-            # `step` is one of: queued | sec_filings | financials | market_data
-            #                 | grok | rendering | gamma | upload | done
-            "progress": {"step": "queued", "pct": 0.0, "label": "Queued — starting shortly…"},
+            "llm_provider": provider,
+            "progress": {"step": "queued", "pct": 0.0,
+                          "label": f"Queued — {provider.title()} starting shortly…"},
         }
 
     # Persist mapping so we can recover after a server restart.
-    _save_job_index_entry(job_id, {"ticker": ticker, "type": "analysis", "created_at": now})
+    _save_job_index_entry(job_id, {"ticker": ticker, "type": "analysis",
+                                    "provider": provider, "created_at": now})
 
-    background_tasks.add_task(_run_analysis, job_id, ticker, req.generate_gamma)
+    background_tasks.add_task(_run_analysis, job_id, ticker, req.generate_gamma, provider)
     return _jobs[job_id]
 
 
@@ -5642,9 +5785,13 @@ def _builder_classify_sector(raw_sector: str) -> str:
 
     Yahoo uses variations like 'Technology', 'Financial Services', 'Healthcare';
     we normalize so the user's sector weights match candidates predictably.
+
+    Unknown / blank → 'Other' so those candidates aren't silently dropped
+    from the Builder pool — they roll up into a selectable 'Other' bucket
+    the user can include in any basket allocation.
     """
-    if not raw_sector or raw_sector == "Unknown":
-        return "Unknown"
+    if not raw_sector or raw_sector.strip() in ("", "Unknown", "—"):
+        return "Other"
     s = raw_sector.strip()
     # Canonicalize a few known variants
     SYN = {
@@ -5778,15 +5925,20 @@ def _builder_fetch_candidates() -> list[dict]:
         return []
 
     # ── 1. Pull report subjects (explicit price_target + upside_pct) ─────
+    # Surface ANY ticker that has at least one provider's price_target.
+    # The effective (conservative) target — min(grok, claude) when both
+    # exist — is computed below for the EV-weighted allocator.
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""
-                SELECT ticker, rating, price_target, upside_pct, generated_at, report_md
+                SELECT ticker, rating, price_target, upside_pct, generated_at, report_md,
+                       claude_price_target, claude_upside_pct, claude_rating
                   FROM analyst_reports
                  WHERE archived IS NOT TRUE
-                   AND price_target IS NOT NULL
-                   AND upside_pct   IS NOT NULL
-                 ORDER BY upside_pct DESC NULLS LAST
+                   AND (price_target IS NOT NULL OR claude_price_target IS NOT NULL)
+                   AND (upside_pct   IS NOT NULL OR claude_upside_pct   IS NOT NULL)
+                 ORDER BY COALESCE(LEAST(upside_pct, claude_upside_pct),
+                                   upside_pct, claude_upside_pct) DESC NULLS LAST
             """)
             rows = cur.fetchall()
     except Exception as e:
@@ -5839,19 +5991,31 @@ def _builder_fetch_candidates() -> list[dict]:
             pass
         sector = _builder_classify_sector(sector_raw)
         q = quotes.get(tk) or {}
+        # Conservative (less-aggressive) target/upside when both LLMs ran.
+        pt_g = float(r["price_target"])         if r["price_target"]         is not None else None
+        pt_c = float(r["claude_price_target"])  if r["claude_price_target"]  is not None else None
+        up_g = float(r["upside_pct"])           if r["upside_pct"]           is not None else None
+        up_c = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
+        eff_pt = min(pt_g, pt_c) if (pt_g is not None and pt_c is not None) else (pt_g if pt_g is not None else pt_c)
+        eff_up = min(up_g, up_c) if (up_g is not None and up_c is not None) else (up_g if up_g is not None else up_c)
+        providers = []
+        if pt_g is not None: providers.append("grok")
+        if pt_c is not None: providers.append("claude")
         out.append({
             "ticker":        tk,
             "name":          name,
             "sector":        sector,
             "sector_raw":    sector_raw,
-            "rating":        r["rating"],
-            "price_target":  float(r["price_target"]) if r["price_target"] is not None else None,
-            "upside_pct":    float(r["upside_pct"])   if r["upside_pct"]   is not None else None,
+            "rating":        r["rating"] or r.get("claude_rating"),
+            "price_target":  eff_pt,
+            "upside_pct":    eff_up,
             "current_price": float(q.get("price")) if q.get("price") is not None else None,
             "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
             "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
             "source":        "report",
             "from_report":   None,
+            "providers":     providers,
+            "grok_target":   pt_g, "claude_target": pt_c,
         })
 
     # ── 5. Build candidate dicts for comp tickers ────────────────────────
@@ -6497,8 +6661,16 @@ def _db_upsert_report(
     has_pptx: bool,
     gamma_url: str | None = None,
     pptx_stale: bool | None = None,
+    provider: str = "grok",
 ) -> None:
     """Upsert one analyst report row into PostgreSQL.
+
+    provider:
+      • 'grok'   — writes report_md / generated_at / rating / price_target /
+                   upside_pct (the canonical columns; default)
+      • 'claude' — writes report_md_claude / claude_generated_at /
+                   claude_rating / claude_price_target / claude_upside_pct
+                   alongside the existing Grok columns (which stay intact)
 
     pptx_stale:
       • None   — preserve existing value (don't touch the column)
@@ -6512,6 +6684,34 @@ def _db_upsert_report(
         return
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
+            # ── Claude path: only touches the *_claude columns ──────────
+            if provider == "claude":
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         report_md_claude, claude_generated_at,
+                         claude_rating, claude_price_target, claude_upside_pct,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), '', FALSE, FALSE,
+                            %s, NOW(), %s, %s, %s,
+                            NOW(), 'success', NULL)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        report_md_claude    = EXCLUDED.report_md_claude,
+                        claude_generated_at = NOW(),
+                        claude_rating       = EXCLUDED.claude_rating,
+                        claude_price_target = EXCLUDED.claude_price_target,
+                        claude_upside_pct   = EXCLUDED.claude_upside_pct,
+                        last_attempt_at     = NOW(),
+                        last_attempt_status = 'success',
+                        last_attempt_error  = NULL
+                """, (
+                    ticker, md_text,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"),
+                ))
+                return
+
+            # ── Grok path (existing behavior) ──────────────────────────
             if pptx_stale is None:
                 # Path A: do not touch pptx_stale
                 cur.execute("""
@@ -6787,15 +6987,45 @@ def list_reports():
                     SELECT ticker, generated_at, has_docx, has_pptx,
                            rating, price_target, upside_pct, gamma_url,
                            COALESCE(pptx_stale, FALSE) AS pptx_stale,
-                           last_attempt_at, last_attempt_status, last_attempt_error
+                           last_attempt_at, last_attempt_status, last_attempt_error,
+                           claude_generated_at, claude_rating,
+                           claude_price_target, claude_upside_pct
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
                     ORDER BY COALESCE(last_attempt_at, generated_at) DESC NULLS LAST
                 """)
                 rows = cur.fetchall()
             if rows:
-                return [
-                    {
+                out = []
+                for r in rows:
+                    # Detect which providers have a report
+                    has_grok   = bool(r["generated_at"]) and bool(r["price_target"])
+                    has_claude = bool(r["claude_generated_at"]) and bool(r["claude_price_target"])
+                    providers = []
+                    if has_grok:   providers.append("grok")
+                    if has_claude: providers.append("claude")
+                    provider_badge = "BOTH" if (has_grok and has_claude) else (
+                        "CLAUDE" if has_claude else ("GROK" if has_grok else "—"))
+
+                    # Effective (less aggressive) price target / upside for
+                    # downstream EV math (Builder, rebalance, etc.). When both
+                    # providers have a target, take the LOWER of the two —
+                    # that's the conservative read. When only one has data,
+                    # use it directly.
+                    pt_g  = float(r["price_target"])         if r["price_target"]         is not None else None
+                    pt_c  = float(r["claude_price_target"])  if r["claude_price_target"]  is not None else None
+                    up_g  = float(r["upside_pct"])           if r["upside_pct"]           is not None else None
+                    up_c  = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
+                    if pt_g is not None and pt_c is not None:
+                        eff_pt = min(pt_g, pt_c)
+                    else:
+                        eff_pt = pt_g if pt_g is not None else pt_c
+                    if up_g is not None and up_c is not None:
+                        eff_up = min(up_g, up_c)
+                    else:
+                        eff_up = up_g if up_g is not None else up_c
+
+                    out.append({
                         "ticker":              r["ticker"],
                         "generated_at":        r["generated_at"].isoformat() if r["generated_at"] else None,
                         "has_docx":            r["has_docx"],
@@ -6803,15 +7033,25 @@ def list_reports():
                         "pptx_stale":          bool(r["pptx_stale"]),
                         "gamma_url":           r["gamma_url"],
                         "rating":              r["rating"],
-                        "price_target":        float(r["price_target"]) if r["price_target"] is not None else None,
+                        # Backward-compat: price_target / upside_pct EXPOSE the
+                        # effective (conservative) values now. Existing UI
+                        # using these fields gets the safer number for free.
+                        "price_target":        eff_pt,
+                        "upside_pct":          eff_up,
+                        "grok_price_target":   pt_g,
+                        "grok_upside_pct":     up_g,
+                        "claude_price_target": pt_c,
+                        "claude_upside_pct":   up_c,
+                        "claude_generated_at": r["claude_generated_at"].isoformat() if r["claude_generated_at"] else None,
+                        "claude_rating":       r["claude_rating"],
+                        "providers":           providers,
+                        "provider_badge":      provider_badge,
                         "current_price":       None,
-                        "upside_pct":          float(r["upside_pct"]) if r["upside_pct"] is not None else None,
                         "last_attempt_at":     r["last_attempt_at"].isoformat() if r.get("last_attempt_at") else None,
                         "last_attempt_status": r.get("last_attempt_status"),
                         "last_attempt_error":  r.get("last_attempt_error"),
-                    }
-                    for r in rows
-                ]
+                    })
+                return out
         except Exception as _e:
             print(f"[analyst_reports] list_reports DB query failed (falling back): {_e!s:.200}")
 
@@ -8443,6 +8683,31 @@ def _ensure_analyst_reports_table(conn) -> None:
         cur.execute("""
             ALTER TABLE analyst_reports
             ADD COLUMN IF NOT EXISTS last_attempt_error  TEXT
+        """)
+        # Claude (alternate-LLM) parallel columns. The existing report_md /
+        # generated_at / rating / price_target / upside_pct columns hold Grok
+        # output (canonical). When the user runs the analyzer with Claude
+        # selected — or runs 'Both' — Claude's output lands in these columns
+        # alongside Grok. Both report sets coexist per ticker.
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS report_md_claude    TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS claude_generated_at TIMESTAMP
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS claude_rating       VARCHAR(30)
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS claude_price_target NUMERIC
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS claude_upside_pct   NUMERIC
         """)
     conn.commit()
 

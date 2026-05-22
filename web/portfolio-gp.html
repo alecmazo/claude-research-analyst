@@ -713,6 +713,11 @@
   }
   .rep-pill-doc { background: var(--navy-mid); color: var(--navy); border: 1px solid var(--panel-edge); }
   .rep-pill-ppt { background: var(--blue); color: var(--navy); }
+  /* LLM provider badge — shown next to DOC/PPT so user knows which engine
+     produced (or both produced) this saved report */
+  .rep-pill-llm-grok   { background: #0A1628; color: #fff; }
+  .rep-pill-llm-claude { background: #d97706; color: #fff; }
+  .rep-pill-llm-both   { background: linear-gradient(90deg, #0A1628 50%, #d97706 50%); color: #fff; }
   /* Stale PPT — generated from an earlier report run. Fade + small dot. */
   .rep-pill-ppt.stale {
     background: #e2e8f0; color: #64748b; position: relative;
@@ -1821,7 +1826,15 @@
         <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
       </div>
       <div id="hero-hint"></div>
-      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;">
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+          <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
+          <select id="hero-llm" style="font-size:11px;font-weight:700;border:1px solid var(--panel-edge);border-radius:4px;padding:3px 6px;background:#fff;color:#0A1628;cursor:pointer;">
+            <option value="grok"   selected>Grok 4.20 (default)</option>
+            <option value="claude">Claude Opus 4.1</option>
+            <option value="both">Both (sequential ~5 min)</option>
+          </select>
+        </label>
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
           <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
           <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
@@ -3296,6 +3309,19 @@
                     ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
                     : 'PowerPoint presentation') + '">PPT</span>'
               : '') +
+            // LLM provider badge — GROK / CLAUDE / BOTH. Tooltip shows
+            // both targets when both providers ran so the user can spot
+            // disagreements at a glance.
+            (rep.provider_badge && rep.provider_badge !== '—'
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-' + (rep.provider_badge || '').toLowerCase() + '"'
+                + ' title="' + (rep.provider_badge === 'BOTH'
+                    ? 'Both Grok and Claude reports saved. Effective target (used for EV calcs) = '
+                      + (rep.price_target != null ? ('$' + Number(rep.price_target).toFixed(2)) : '—')
+                      + ' (Grok ' + (rep.grok_price_target != null ? '$' + Number(rep.grok_price_target).toFixed(2) : '—')
+                      + ' vs Claude ' + (rep.claude_price_target != null ? '$' + Number(rep.claude_price_target).toFixed(2) : '—')
+                      + ' — using less aggressive)'
+                    : (rep.provider_badge + ' analysis')) + '">' + rep.provider_badge + '</span>'
+              : '') +
             '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
               + ' title="Compare Grok report with Claude (≈2-3 min)"'
               + ' onclick="event.stopPropagation();">🔬</button>' +
@@ -3434,7 +3460,11 @@
       const r = await window.dgaFetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, generate_gamma: document.getElementById('hero-gamma')?.checked === true }),
+        body: JSON.stringify({
+          ticker,
+          generate_gamma: document.getElementById('hero-gamma')?.checked === true,
+          llm_provider:   document.getElementById('hero-llm')?.value || 'grok',
+        }),
       });
       if (!r.ok) throw new Error('analyze ' + r.status);
       const job = await r.json();
@@ -3755,6 +3785,10 @@
     "Technology", "Energy", "Financials", "Healthcare", "Consumer Cyclical",
     "Consumer Defensive", "Industrials", "Utilities", "Real Estate",
     "Communication Services", "Basic Materials",
+    // 'Other' rolls up candidates whose yfinance sector returned blank/Unknown
+    // (ETFs, ADRs, foreign listings, recent IPOs, etc.) so they're still
+    // selectable in any basket instead of being silently excluded.
+    "Other",
   ];
 
   function _builderFmtUSD(v) {
