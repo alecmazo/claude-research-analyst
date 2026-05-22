@@ -7360,10 +7360,21 @@ def _run_scan(job_id: str, tickers: list[str]) -> None:
         except Exception as _pe:
             print(f"[scan] streaming kv persist failed for {ticker}: {_pe}")
 
-    try:
-        final = analyst.run_portfolio_scan(tickers, on_progress=on_progress, verbose=True)
+    # Cancellation predicate — checked between tickers by analyst.run_portfolio_scan.
+    # The in-flight Grok call (if any) completes naturally; we just don't
+    # start the next one. xAI charges for any call we already initiated.
+    def _is_cancelled() -> bool:
         with _sjobs_lock:
-            _sjobs[job_id]["status"] = "done"
+            j = _sjobs.get(job_id) or {}
+            return bool(j.get("cancel_requested"))
+
+    try:
+        final = analyst.run_portfolio_scan(
+            tickers, on_progress=on_progress, verbose=True,
+            is_cancelled=_is_cancelled,
+        )
+        with _sjobs_lock:
+            _sjobs[job_id]["status"] = "cancelled" if final.get("cancelled") else "done"
             _sjobs[job_id]["results"] = final["results"]
             _sjobs[job_id]["scanned_at"] = final["scanned_at"]
             _sjobs[job_id]["tickers_done"] = list(final["results"].keys())
@@ -7572,9 +7583,33 @@ def start_reports_scan(background_tasks: BackgroundTasks):
             "results": {},
             "scanned_at": None,
             "error": None,
+            "cancel_requested": False,
         }
     background_tasks.add_task(_run_scan, job_id, tickers)
     return _sjobs[job_id]
+
+
+@app.post("/api/scan/reports/{job_id}/cancel")
+def cancel_reports_scan(job_id: str):
+    """Request cancellation of an in-flight Saved-Reports scan.
+
+    Takes effect AFTER the in-flight ticker completes — the current Grok
+    call (already billed) finishes naturally and the scan exits before
+    starting the next one. Saves remaining cost.
+    """
+    with _sjobs_lock:
+        j = _sjobs.get(job_id)
+        if not j:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        if j.get("status") not in ("queued", "running"):
+            return {"ok": False, "message": f"Job is not running (status: {j.get('status')})."}
+        j["cancel_requested"] = True
+        done = len(j.get("tickers_done") or [])
+        total = len(j.get("tickers") or [])
+    return {
+        "ok": True,
+        "message": f"Cancel requested — will stop after current ticker. {done}/{total} done so far.",
+    }
 
 
 # Batch-quote and per-ticker-price cache are now unified in _QUOTE_CACHE above.

@@ -1413,15 +1413,24 @@ def run_portfolio_scan(
     *,
     on_progress: "Any | None" = None,
     verbose: bool = True,
+    is_cancelled: "Any | None" = None,
 ) -> dict:
     """Scan every ticker in the list and persist results to SCAN_RESULTS_FILE.
 
     ``on_progress(ticker, result)`` is called after each ticker completes so
     a background job can stream partial updates to the API.
 
+    ``is_cancelled()`` is an optional zero-arg callable that returns True when
+    the user has requested the scan stop. Checked BEFORE each ticker so any
+    in-flight Grok call finishes naturally (cheaper than killing mid-call,
+    and xAI bills the call either way once started). When cancelled, the
+    scan returns with the partial results gathered so far and
+    ``cancelled: True`` set on the payload.
+
     Returns:
         {
             "ok": bool,
+            "cancelled": bool,
             "scanned_at": str,
             "tickers": [...],
             "results": {TICKER: {...}, ...},
@@ -1429,8 +1438,21 @@ def run_portfolio_scan(
     """
     scanned_at = datetime.utcnow().isoformat()
     results: dict[str, dict] = {}
+    was_cancelled = False
 
     for ticker in tickers:
+        # Cancellation check between tickers — current in-flight Grok call
+        # (if any) completes; we just don't start the next one.
+        if is_cancelled is not None:
+            try:
+                if is_cancelled():
+                    was_cancelled = True
+                    if verbose:
+                        print(f"⊘  Scan cancelled after {len(results)}/{len(tickers)} tickers")
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+
         result = scan_ticker_news(ticker, verbose=verbose)
         results[ticker] = result
         if on_progress is not None:
@@ -1440,10 +1462,11 @@ def run_portfolio_scan(
                 pass
 
     payload = {
-        "ok": bool(results),
+        "ok":        bool(results),
+        "cancelled": was_cancelled,
         "scanned_at": scanned_at,
-        "tickers": list(tickers),
-        "results": results,
+        "tickers":   list(tickers),
+        "results":   results,
     }
 
     # Persist to disk so /api/scan/latest can serve it after a redeploy.

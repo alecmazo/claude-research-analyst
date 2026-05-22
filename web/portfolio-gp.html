@@ -10001,31 +10001,72 @@
   (function() {
     const $rBtn = document.getElementById('reports-scan-btn');
     if (!$rBtn) return;
+    let _scanActiveJobId = null;
+
     $rBtn.addEventListener('click', async function() {
       if ($rBtn.disabled) return;
-      $rBtn.disabled = true; $rBtn.textContent = '⏳ Scanning…';
+
+      // If a scan is already in flight on THIS button, treat the click as Cancel.
+      if (_scanActiveJobId) {
+        const yes = confirm('Cancel the in-flight scan?\nThe current ticker (already billed by xAI) will finish, then the scan stops.');
+        if (!yes) return;
+        try {
+          await window.dgaFetch('/api/scan/reports/' + encodeURIComponent(_scanActiveJobId) + '/cancel', { method: 'POST' });
+          $rBtn.textContent = '⊘ CANCELLING…';
+        } catch(e) { console.warn('[scan cancel]', e); }
+        return;
+      }
+
+      // ── Confirmation prompt with cost estimate ─────────────────────
+      // Approx cost: ~$0.06–0.10 per ticker (Grok-4-reasoning + live search).
+      // We don't know the exact ticker count client-side without a fetch, but
+      // we can read the saved-reports badge for a quick estimate.
+      const repCountEl = document.getElementById('reports-count');
+      const repCount = parseInt((repCountEl && repCountEl.textContent || '').trim(), 10) || 0;
+      const estLow   = (repCount * 0.06).toFixed(2);
+      const estHigh  = (repCount * 0.10).toFixed(2);
+      const estMin   = Math.ceil(repCount * 7 / 60);   // ~7s/ticker → min
+      const msg = repCount
+        ? `Scan all ${repCount} saved reports?\n\n`
+          + `• Each ticker hits Grok-4-reasoning with live web/X search\n`
+          + `• Estimated cost: $${estLow} – $${estHigh} (xAI billed per call)\n`
+          + `• Estimated time: ~${estMin} min (sequential)\n`
+          + `• You can CANCEL mid-run (button turns into Cancel after start)\n\n`
+          + `Proceed?`
+        : 'Scan all saved reports?\n\nEach ticker hits Grok-4-reasoning with live search (~$0.06–0.10 per ticker).';
+      if (!confirm(msg)) return;
+
+      $rBtn.disabled = false;   // keep enabled so it can act as Cancel
+      $rBtn.textContent = '⏳ Starting…';
       const pulse = document.getElementById('gp-pulse-rows');
       if (pulse) pulse.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Scanning saved reports…</div>';
       try {
         const r = await window.dgaFetch('/api/scan/reports', { method: 'POST' });
         if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
         const job = await r.json();
+        _scanActiveJobId = job.job_id;
         const badge = document.getElementById('mini-scan-badge');
         _pollScanJob(job.job_id,
           function(tk, res) {
-            const done = job.tickers_done?.length || 0;
+            const done = (job.tickers_done && job.tickers_done.length) || 0;
             const total = (job.tickers || []).length;
-            $rBtn.textContent = `⏳ ${done}/${total}`;
+            $rBtn.textContent = '⊘ CANCEL (' + done + '/' + total + ')';
           },
           function(jp) {
-            $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
+            _scanActiveJobId = null;
+            $rBtn.disabled = false;
+            $rBtn.textContent = (jp && jp.status === 'cancelled') ? '⚡ Scan All (cancelled)' : '⚡ Scan All';
             loadGPMarketPulse();
+            // Restore label after a few seconds so the cancelled note doesn't stick
+            setTimeout(function() { $rBtn.textContent = '⚡ Scan All'; }, 4000);
           },
           function(err) {
+            _scanActiveJobId = null;
             $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
           }
         );
       } catch(e) {
+        _scanActiveJobId = null;
         $rBtn.disabled = false; $rBtn.textContent = '⚡ Scan All';
       }
     });
