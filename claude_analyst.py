@@ -6675,8 +6675,27 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
                 _ed_data = edgar.extract_financials(ticker, user_agent=get_sec_user_agent())
                 _ed_ann = _ed_data.get("annuals", []) if isinstance(_ed_data, dict) else []
                 if _ed_ann:
+                    # The companyfacts module doesn't compute TTM (only
+                    # xlsx_edgar does). Without this, the report's TTM column
+                    # would be all N/A even though the underlying YTD quarterly
+                    # data is present. Bolt the TTM calc on here and render
+                    # via xlsx_edgar's format_verified_block (which knows how
+                    # to emit a TTM row).
                     data = _ed_data
-                    verified_block = edgar.format_verified_block(data)
+                    try:
+                        _ed_ttm = xlsx_edgar._compute_ttm(_ed_ann, _ed_data.get("quarterly", {}))
+                        if _ed_ttm:
+                            data["ttm"] = _ed_ttm
+                            print(f"   ✅ Computed TTM bridge from companyfacts YTD data "
+                                  f"(method: {_ed_ttm.get('method','bridge')})")
+                    except Exception as _tex:
+                        print(f"   ⚠️  TTM bridge calc failed ({_tex}); annuals still usable")
+                    # Render with xlsx_edgar's block (handles the TTM row);
+                    # falls back to companyfacts' own renderer on error.
+                    try:
+                        verified_block = xlsx_edgar.format_verified_block(data)
+                    except Exception:
+                        verified_block = edgar.format_verified_block(data)
                     print(f"   ✅ Loaded {len(_ed_ann)} annual rows via companyfacts API.")
                 else:
                     print(f"   ⚠️  Companyfacts also returned no annuals for {ticker}.")
