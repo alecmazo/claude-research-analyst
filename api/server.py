@@ -4500,6 +4500,25 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
                                             if k != "report_text"}
                 _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
                                               "label": f"{provider.title()} report ready"}
+                # ── Persist the alt-provider report to analyst_reports ──────
+                # Earlier versions of Compare were intentionally read-only;
+                # they wrote the MD file but skipped the DB. That meant Claude
+                # runs done via the 🔬 Compare button or 🔬 LLM Lab tab never
+                # showed up in Saved Reports. Fixed: persist via the new
+                # _db_upsert_report(provider='claude') path so the CLAUDE
+                # badge + Saved Reports row appear immediately.
+                try:
+                    _suffix = "" if provider == "grok" else f"_{provider}"
+                    _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
+                    _md_text = _md_path.read_text() if _md_path.exists() else ""
+                    _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
+                    _db_upsert_report(
+                        ticker, _md_text, _summary,
+                        has_docx=False, has_pptx=False, gamma_url=None,
+                        pptx_stale=None, provider=provider,
+                    )
+                except Exception as _dbe:
+                    print(f"[compare] DB persist failed for {ticker}/{provider} (non-fatal): {_dbe!s:.200}")
             else:
                 _jobs[job_id]["status"] = "failed"
                 _jobs[job_id]["error"] = result.get("error", "Unknown error")
@@ -5028,58 +5047,83 @@ def list_jobs():
 
 
 @app.get("/api/report/{ticker}")
-def get_report(ticker: str):
-    """Return the full markdown report text for the most-recently-analyzed ticker.
+def get_report(ticker: str, provider: str = "grok"):
+    """Return the full markdown report text for *ticker* from `provider`.
 
-    Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
-    Fallback: reads the .md file from STOCKS_FOLDER (local cache).
+    provider:
+      • 'grok'   — canonical report (analyst_reports.report_md). Default.
+      • 'claude' — alternate report (analyst_reports.report_md_claude).
+                   Falls back to {TICKER}_DGA_Report_claude.md on disk
+                   when DB is unavailable.
+
+    Primary source: PostgreSQL `analyst_reports` table.
+    Fallback: reads the corresponding .md file from STOCKS_FOLDER.
     """
     ticker = ticker.strip().upper()
+    provider = (provider or "grok").lower().strip()
+    if provider not in ("grok", "claude"):
+        provider = "grok"
 
     # ── Primary: PostgreSQL ──────────────────────────────────────────────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT report_md, has_docx, has_pptx, generated_at, gamma_url
+                    SELECT report_md, has_docx, has_pptx, generated_at, gamma_url,
+                           report_md_claude, claude_generated_at
                     FROM analyst_reports
                     WHERE ticker = %s
                 """, (ticker,))
                 row = cur.fetchone()
-            if row and row["report_md"]:
-                return {
-                    "ticker": ticker,
-                    "report_md": row["report_md"],
-                    "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
-                    "has_docx": row["has_docx"],
-                    "has_pptx": row["has_pptx"],
-                    "gamma_url": row["gamma_url"],
-                    "gamma_generated_at": None,
-                }
+            if row:
+                if provider == "claude" and row.get("report_md_claude"):
+                    return {
+                        "ticker": ticker,
+                        "provider": "claude",
+                        "report_md": row["report_md_claude"],
+                        "generated_at": row["claude_generated_at"].isoformat() if row.get("claude_generated_at") else None,
+                        "has_docx": False,    # Claude path doesn't render DOCX yet
+                        "has_pptx": False,
+                        "gamma_url": None,
+                        "gamma_generated_at": None,
+                    }
+                if provider == "grok" and row["report_md"]:
+                    return {
+                        "ticker": ticker,
+                        "provider": "grok",
+                        "report_md": row["report_md"],
+                        "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
+                        "has_docx": row["has_docx"],
+                        "has_pptx": row["has_pptx"],
+                        "gamma_url": row["gamma_url"],
+                        "gamma_generated_at": None,
+                    }
         except Exception as _e:
             print(f"[analyst_reports] get_report DB query failed for {ticker} (falling back): {_e!s:.200}")
 
     # ── Fallback: filesystem ─────────────────────────────────────────────────
-    md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
+    _suffix = "" if provider == "grok" else f"_{provider}"
+    md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
     if not md_path.exists():
-        raise HTTPException(status_code=404, detail=f"No report found for {ticker}")
+        raise HTTPException(status_code=404,
+                             detail=f"No {provider} report found for {ticker}")
     folder = analyst.STOCKS_FOLDER
-    has_docx = (folder / f"{ticker}_DGA_Report.docx").exists()
-    has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists()
-    # Look up Gamma URL from the on-disk index so the mobile UI can show
-    # the "View Gamma" button even days/weeks after the original run.
+    has_docx = (folder / f"{ticker}_DGA_Report{_suffix}.docx").exists()
+    has_pptx = (folder / f"{ticker}_DGA_Presentation.pptx").exists() if provider == "grok" else False
     gamma_url = None
     gamma_generated_at = None
-    try:
-        idx = analyst._load_gamma_index()
-        entry = idx.get(ticker)
-        if entry:
-            gamma_url = entry.get("gamma_url")
-            gamma_generated_at = entry.get("generated_at")
-    except Exception:
-        pass
+    if provider == "grok":
+        try:
+            idx = analyst._load_gamma_index()
+            entry = idx.get(ticker)
+            if entry:
+                gamma_url = entry.get("gamma_url")
+                gamma_generated_at = entry.get("generated_at")
+        except Exception:
+            pass
     return {
         "ticker": ticker,
+        "provider": provider,
         "report_md": md_path.read_text(),
         "generated_at": datetime.utcfromtimestamp(md_path.stat().st_mtime).isoformat(),
         "has_docx": has_docx,
@@ -6968,6 +7012,49 @@ def restore_all_reports():
     return {"ok": True, "restored": list(set(restored))}
 
 
+def _hydrate_orphaned_claude_reports() -> None:
+    """One-shot: detect on-disk {TICKER}_DGA_Report_claude.md files that
+    aren't yet in the analyst_reports.claude_* columns and backfill them.
+
+    Targets Claude reports that were generated via the early Compare button
+    (before ui112 added DB persistence). Idempotent — skips tickers whose
+    claude_generated_at is already populated. Runs lazily inside list_reports
+    so the user never has to wait on a separate migration.
+    """
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    folder = analyst.STOCKS_FOLDER
+    try:
+        files = list(folder.glob("*_DGA_Report_claude.md"))
+    except Exception:
+        return
+    if not files:
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            for path in files:
+                tk = path.name.replace("_DGA_Report_claude.md", "").upper()
+                # Skip if already in DB
+                cur.execute("""SELECT claude_generated_at FROM analyst_reports
+                               WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+                if row and row["claude_generated_at"]:
+                    continue
+                try:
+                    md = path.read_text()
+                    summary = _extract_summary_cached(path) or {}
+                    _db_upsert_report(
+                        tk, md, summary,
+                        has_docx=False, has_pptx=False, gamma_url=None,
+                        pptx_stale=None, provider="claude",
+                    )
+                    print(f"[hydrate] backfilled Claude report for {tk} from disk")
+                except Exception as _e:
+                    print(f"[hydrate] failed for {tk}: {_e!s:.120}")
+    except Exception as _e:
+        print(f"[hydrate] outer error: {_e!s:.120}")
+
+
 @app.get("/api/reports")
 def list_reports():
     """Return all tickers that have saved reports.
@@ -6979,6 +7066,13 @@ def list_reports():
     Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
     Fallback: filesystem glob of *_DGA_Report.md files.
     """
+    # Lazy one-shot: hydrate any orphaned Claude reports sitting on disk
+    # so OKLO / SMR / anything Compared earlier appears in the list.
+    try:
+        _hydrate_orphaned_claude_reports()
+    except Exception:
+        pass
+
     # ── Primary: PostgreSQL ──────────────────────────────────────────────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:

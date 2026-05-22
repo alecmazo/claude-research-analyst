@@ -718,6 +718,22 @@
   .rep-pill-llm-grok   { background: #0A1628; color: #fff; }
   .rep-pill-llm-claude { background: #d97706; color: #fff; }
   .rep-pill-llm-both   { background: linear-gradient(90deg, #0A1628 50%, #d97706 50%); color: #fff; }
+  .rep-pill-clickable { cursor: pointer; transition: opacity .12s, transform .08s; }
+  .rep-pill-clickable:hover { opacity: 0.85; transform: translateY(-1px); }
+  .rep-pill-clickable:active { transform: translateY(0); }
+  /* Per-provider rows inside the TGT column (when both providers ran) */
+  .rep-tgt-row {
+    display: flex; align-items: baseline; justify-content: flex-end;
+    gap: 6px; font-size: 11px; line-height: 1.25;
+  }
+  .rep-tgt-row .rep-tgt-up   { font-size: 10px; font-weight: 700; }
+  .rep-tgt-row .rep-tgt-price { font-weight: 700; color: #0f172a; }
+  .rep-tgt-row .rep-tgt-prov {
+    font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
+    padding: 0 3px; border-radius: 2px;
+  }
+  .rep-tgt-prov.grok   { background: #0A1628; color: #fff; }
+  .rep-tgt-prov.claude { background: #d97706; color: #fff; }
   /* Stale PPT — generated from an earlier report run. Fade + small dot. */
   .rep-pill-ppt.stale {
     background: #e2e8f0; color: #64748b; position: relative;
@@ -3309,18 +3325,20 @@
                     ? 'PowerPoint was generated from an earlier report run. Re-run the analyzer with the Gamma checkbox to refresh.'
                     : 'PowerPoint presentation') + '">PPT</span>'
               : '') +
-            // LLM provider badge — GROK / CLAUDE / BOTH. Tooltip shows
-            // both targets when both providers ran so the user can spot
-            // disagreements at a glance.
-            (rep.provider_badge && rep.provider_badge !== '—'
-              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-' + (rep.provider_badge || '').toLowerCase() + '"'
-                + ' title="' + (rep.provider_badge === 'BOTH'
-                    ? 'Both Grok and Claude reports saved. Effective target (used for EV calcs) = '
-                      + (rep.price_target != null ? ('$' + Number(rep.price_target).toFixed(2)) : '—')
-                      + ' (Grok ' + (rep.grok_price_target != null ? '$' + Number(rep.grok_price_target).toFixed(2) : '—')
-                      + ' vs Claude ' + (rep.claude_price_target != null ? '$' + Number(rep.claude_price_target).toFixed(2) : '—')
-                      + ' — using less aggressive)'
-                    : (rep.provider_badge + ' analysis')) + '">' + rep.provider_badge + '</span>'
+            // LLM provider pills — each is independently clickable to open
+            // that engine's specific report. When BOTH ran, render TWO pills
+            // side-by-side so the user has a one-click path into each version.
+            ((rep.providers || []).includes('grok')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-grok rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="grok"'
+                + ' title="Click to open Grok report"'
+                + ' onclick="event.stopPropagation();">GROK</span>'
+              : '') +
+            ((rep.providers || []).includes('claude')
+              ? '<span class="rep-pill rep-pill-llm rep-pill-llm-claude rep-pill-clickable" '
+                + 'data-rep-open="' + rep.ticker + '" data-rep-provider="claude"'
+                + ' title="Click to open Claude report"'
+                + ' onclick="event.stopPropagation();">CLAUDE</span>'
               : '') +
             '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
               + ' title="Compare Grok report with Claude (≈2-3 min)"'
@@ -3333,19 +3351,57 @@
           '</td>' +
           '<td class="rep-num" data-sort-val="' + sortVal + '">' +
             '<div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>' +
-            '<div style="color:#0f172a; font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>' +
-            '<div class="' + cssClass(upside) + '" style="font-size:10px;">' + fmtPct(upside) + '</div>' +
+            (function() {
+              // When BOTH LLMs produced a target, stack them: each row has
+              // [provider chip · upside % · target $] right-aligned. When only
+              // one LLM ran, keep the original single-target layout.
+              const gT = rep.grok_price_target,   cT = rep.claude_price_target;
+              const _fmtTgt = function(v) { return v == null ? '—' : '$' + (v >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)); };
+              if (gT != null && cT != null) {
+                // Recompute upsides from current LIVE price for an honest comparison
+                const gUp = (price != null && price > 0) ? ((gT - price) / price * 100) : null;
+                const cUp = (price != null && price > 0) ? ((cT - price) / price * 100) : null;
+                return ''
+                  + '<div class="rep-tgt-row">'
+                  +   '<span class="rep-tgt-prov grok">G</span>'
+                  +   '<span class="rep-tgt-up ' + cssClass(gUp) + '">' + fmtPct(gUp) + '</span>'
+                  +   '<span class="rep-tgt-price">' + _fmtTgt(gT) + '</span>'
+                  + '</div>'
+                  + '<div class="rep-tgt-row" style="margin-top:1px;">'
+                  +   '<span class="rep-tgt-prov claude">C</span>'
+                  +   '<span class="rep-tgt-up ' + cssClass(cUp) + '">' + fmtPct(cUp) + '</span>'
+                  +   '<span class="rep-tgt-price">' + _fmtTgt(cT) + '</span>'
+                  + '</div>';
+              }
+              // Single-provider layout: target then upside (original)
+              return ''
+                + '<div style="color:#0f172a; font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>'
+                + '<div class="' + cssClass(upside) + '" style="font-size:10px;">' + fmtPct(upside) + '</div>';
+            })() +
           '</td>' +
           '</tr>'
         );
       }).join('');
 
-      // Click row → open inline report viewer (ignore clicks on the × / 🔬 buttons)
+      // Click row → open default (Grok) report viewer; per-pill buttons get
+      // their own opener handlers below
       tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
         tr.addEventListener('click', (e) => {
           if (e.target.closest('[data-rep-delete]')) return;
           if (e.target.closest('[data-compare-ticker]')) return;
+          if (e.target.closest('[data-rep-open]')) return;
+          if (e.target.closest('[data-rep-retry]')) return;
           openReport(tr.getAttribute('data-ticker'));
+        });
+      });
+
+      // GROK / CLAUDE pill clicks → open THAT engine's specific report
+      tbody.querySelectorAll('[data-rep-open]').forEach(span => {
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = span.getAttribute('data-rep-open');
+          const pv = span.getAttribute('data-rep-provider') || 'grok';
+          openReport(tk, pv);
         });
       });
 
@@ -9710,8 +9766,9 @@
     document.body.style.overflow = '';
   }
 
-  async function openReport(ticker) {
+  async function openReport(ticker, provider) {
     if (!ticker) return;
+    provider = (provider || 'grok').toLowerCase();
 
     // Remove any existing report overlay (re-open clean)
     closeReportModal();
@@ -9727,6 +9784,9 @@
       <div class="dga-dialog">
         <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
           <span id="rm-ticker" style="font-size:15px;font-weight:800;color:#0f172a;letter-spacing:0.8px;">${ticker}</span>
+          ${provider !== 'grok'
+            ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#d97706;color:#fff;">${provider.toUpperCase()}</span>`
+            : `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#0A1628;color:#fff;">GROK</span>`}
           <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
           <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
@@ -9766,7 +9826,8 @@
     const pptxBtn  = overlay.querySelector('#rm-pptx-btn');
 
     try {
-      const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker));
+      const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker)
+                                       + '?provider=' + encodeURIComponent(provider));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
       if (d.generated_at) dateEl.textContent = '· ' + fmtDate(d.generated_at);
