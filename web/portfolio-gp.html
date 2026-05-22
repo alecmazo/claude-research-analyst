@@ -698,13 +698,13 @@
     flex: 1; overflow-y: auto; padding: 16px 22px;
     font-size: 12.5px; line-height: 1.55; color: #1e293b;
   }
-  .cmp-pane-body h1 { font-size: 16px; margin: 14px 0 8px; }
-  .cmp-pane-body h2 { font-size: 14px; margin: 12px 0 6px; color: #0A1628; }
-  .cmp-pane-body h3 { font-size: 13px; margin: 10px 0 4px; }
-  .cmp-pane-body table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11px; }
-  .cmp-pane-body th, .cmp-pane-body td { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; text-align: left; }
-  .cmp-pane-body th { background: #fafbfc; font-weight: 700; font-size: 10px; }
-  .cmp-pane-body p { margin: 6px 0; }
+  /* When the body is also a renderMd target (.md-body), let .md-body's own
+     typography rules win — we just provide the scrolling container. */
+  .cmp-pane-body.md-body {
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+  .cmp-pane-body.md-body > .md-body { padding: 0; }
   .cmp-pane-empty {
     padding: 40px 20px; text-align: center; color: #64748b; font-size: 13px;
   }
@@ -9265,23 +9265,20 @@
   var _cmpJobStartMs   = null;   // wall-clock start for elapsed-time display
   var _cmpFirstTokenMs = null;   // when streaming first produced text
 
-  function _cmpMdToHtml(md) {
-    // Prefer the global marked library (richer); fall back to a tiny regex
-    // converter for safety.
-    try {
-      if (window.marked && typeof window.marked.parse === 'function') {
-        return window.marked.parse(md);
-      }
-    } catch(e) {}
-    // Fallback: minimal markdown
-    return (md || '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/^### (.+)$/gm,'<h3>$1</h3>')
-      .replace(/^## (.+)$/gm,'<h2>$1</h2>')
-      .replace(/^# (.+)$/gm,'<h1>$1</h1>')
-      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-      .replace(/\n\n/g,'</p><p>')
-      .replace(/^/, '<p>').concat('</p>');
+  // Render markdown into the given element using the SAME rich renderMd()
+  // that openReport() uses for the saved-report viewer. Falls back to
+  // marked.parse() only if renderMd isn't available for some reason.
+  function _cmpRenderMdInto(el, md) {
+    if (!el) return;
+    if (typeof renderMd === 'function') {
+      renderMd(el, md || '');
+      return;
+    }
+    if (window.marked && typeof window.marked.parse === 'function') {
+      el.innerHTML = window.marked.parse(md || '');
+      return;
+    }
+    el.textContent = md || '';
   }
 
   function _cmpSummaryStrip(grok, alt) {
@@ -9326,12 +9323,12 @@
     const altDate  = alt.generated_at  ? new Date(alt.generated_at).toLocaleString('en-US',  { ..._PT, year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
 
     const grokPane = grok.has_report
-      ? '<div class="cmp-pane-body">' + _cmpMdToHtml(grok.text) + '</div>'
+      ? '<div class="cmp-pane-body md-body" id="cmp-grok-body"></div>'
       : '<div class="cmp-pane-empty">No Grok report on disk for ' + tk + '.</div>';
 
     let altPane;
     if (alt.has_report) {
-      altPane = '<div class="cmp-pane-body">' + _cmpMdToHtml(alt.text) + '</div>';
+      altPane = '<div class="cmp-pane-body md-body" id="cmp-alt-body"></div>';
     } else if (_cmpActiveJobId && _cmpActiveTicker === tk) {
       // Live-streaming state: sticky progress header on top + scrollable body
       // below that progressively fills with the rendered Markdown as deltas
@@ -9342,7 +9339,7 @@
         + '<div id="cmp-progress-label">Starting comparison…</div>'
         + '<div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmp-progress-fill"></div></div>'
         + '</div>'
-        + '<div class="cmp-pane-body" id="cmp-stream-body" style="flex:1;">'
+        + '<div class="cmp-pane-body md-body" id="cmp-stream-body" style="flex:1;">'
         + '<div style="padding:20px;color:#94a3b8;font-size:12px;line-height:1.6;">'
         +   '<div style="display:flex;align-items:center;gap:8px;">'
         +     '<span class="cmp-wait-pulse"></span>'
@@ -9401,6 +9398,14 @@
         startBtn.textContent = 'Starting…';
         _cmpStartCompare(tk, altProvider);
       });
+    }
+    // Render Markdown into both panes using the SAME renderMd() that
+    // openReport() uses → matching look-and-feel between the two viewers.
+    if (grok.has_report) {
+      _cmpRenderMdInto(document.getElementById('cmp-grok-body'), grok.text);
+    }
+    if (alt.has_report) {
+      _cmpRenderMdInto(document.getElementById('cmp-alt-body'), alt.text);
     }
   }
 
@@ -9520,8 +9525,12 @@
             + '</div>';
         } else if (streamedLen > 0) {
           const wasAtBottom = _cmpIsAtBottom(streamBody, 40);
-          streamBody.innerHTML = _cmpMdToHtml(job.streamed_text)
-            + '<span style="display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;"></span>';
+          // Render rich markdown via the same helper as openReport, then
+          // append the blinking caret so the user can see it's still writing.
+          _cmpRenderMdInto(streamBody, job.streamed_text);
+          const caret = document.createElement('span');
+          caret.style.cssText = 'display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;';
+          streamBody.appendChild(caret);
           if (wasAtBottom) streamBody.scrollTop = streamBody.scrollHeight;
         }
       }

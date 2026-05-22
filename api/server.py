@@ -4377,29 +4377,65 @@ def get_report_comparison(ticker: str, request: Request, provider: str = "claude
 
     Either side may be missing (text=None) — frontend renders an empty-state
     on that side with an action button to generate it.
+
+    Hydration strategy (matches /api/report/{ticker}):
+      • Grok side (canonical) — try DB first (analyst_reports table),
+        fall back to filesystem. The DB read survives Railway redeploys
+        that wipe the local /stocks cache; previously the modal showed
+        'No Grok report on disk' until something else hydrated the file.
+      • Alt side — filesystem only. Alt-provider reports aren't persisted
+        to analyst_reports by design (they're side artifacts).
     """
     _claims_or_401(request)
     provider = (provider or "claude").lower().strip()
     tk = (ticker or "").strip().upper()
 
-    def _read_report(path) -> tuple[str | None, str | None]:
-        if not path.exists():
-            return None, None
-        try:
-            text = path.read_text()
-        except Exception:
-            return None, None
-        try:
-            from datetime import datetime as _dt
-            mtime = _dt.fromtimestamp(path.stat().st_mtime).isoformat()
-        except Exception:
-            mtime = None
-        return text, mtime
+    grok_text:  str | None = None
+    grok_mtime: str | None = None
+    grok_path  = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report.md"
 
-    grok_path = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report.md"
+    # ── Grok (canonical) — DB first, then filesystem ─────────────────────
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT report_md, generated_at FROM analyst_reports
+                     WHERE ticker = %s
+                """, (tk,))
+                row = cur.fetchone()
+            if row and row["report_md"]:
+                grok_text  = row["report_md"]
+                grok_mtime = row["generated_at"].isoformat() if row["generated_at"] else None
+                # Best-effort: hydrate local file so subsequent reads + the
+                # report viewer + Compare reruns find it without another DB hit.
+                try:
+                    if not grok_path.exists():
+                        grok_path.write_text(grok_text)
+                except Exception:
+                    pass
+        except Exception as _e:
+            print(f"[compare] DB read failed for {tk} (falling back to disk): {_e!s:.200}")
+
+    # Filesystem fallback if DB miss or DB unavailable
+    if grok_text is None and grok_path.exists():
+        try:
+            grok_text  = grok_path.read_text()
+            from datetime import datetime as _dt
+            grok_mtime = _dt.fromtimestamp(grok_path.stat().st_mtime).isoformat()
+        except Exception:
+            pass
+
+    # ── Alt side (Claude etc.) — filesystem only ─────────────────────────
+    alt_text:  str | None = None
+    alt_mtime: str | None = None
     alt_path  = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report_{provider}.md"
-    grok_text, grok_mtime = _read_report(grok_path)
-    alt_text,  alt_mtime  = _read_report(alt_path)
+    if alt_path.exists():
+        try:
+            alt_text  = alt_path.read_text()
+            from datetime import datetime as _dt
+            alt_mtime = _dt.fromtimestamp(alt_path.stat().st_mtime).isoformat()
+        except Exception:
+            pass
 
     def _safe_summary(text: str | None) -> dict:
         if not text:
