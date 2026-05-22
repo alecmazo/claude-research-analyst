@@ -4501,22 +4501,30 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
                 _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
                                               "label": f"{provider.title()} report ready"}
                 # ── Persist the alt-provider report to analyst_reports ──────
-                # Earlier versions of Compare were intentionally read-only;
-                # they wrote the MD file but skipped the DB. That meant Claude
-                # runs done via the 🔬 Compare button or 🔬 LLM Lab tab never
-                # showed up in Saved Reports. Fixed: persist via the new
-                # _db_upsert_report(provider='claude') path so the CLAUDE
-                # badge + Saved Reports row appear immediately.
+                # Robust ordering: prefer the report_text we just received
+                # from analyze_ticker (always present on success). Fall back
+                # to reading from disk if for some reason the response was
+                # trimmed. Empty text would have meant an empty DB row, so
+                # we guard against that explicitly.
                 try:
                     _suffix = "" if provider == "grok" else f"_{provider}"
                     _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
-                    _md_text = _md_path.read_text() if _md_path.exists() else ""
-                    _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
-                    _db_upsert_report(
-                        ticker, _md_text, _summary,
-                        has_docx=False, has_pptx=False, gamma_url=None,
-                        pptx_stale=None, provider=provider,
-                    )
+                    _md_text = (result.get("report_text") or
+                                (_md_path.read_text() if _md_path.exists() else ""))
+                    if _md_text:
+                        try:
+                            _summary = analyst.extract_summary_from_report(_md_text) or {}
+                        except Exception:
+                            _summary = {}
+                        _db_upsert_report(
+                            ticker, _md_text, _summary,
+                            has_docx=False, has_pptx=False, gamma_url=None,
+                            pptx_stale=None, provider=provider,
+                        )
+                        print(f"[compare] persisted {provider} report for {ticker} "
+                              f"({len(_md_text):,} chars; price_target={_summary.get('price_target')})")
+                    else:
+                        print(f"[compare] skip persist: no text for {ticker}/{provider}")
                 except Exception as _dbe:
                     print(f"[compare] DB persist failed for {ticker}/{provider} (non-fatal): {_dbe!s:.200}")
             else:
@@ -4585,13 +4593,12 @@ def get_report_comparison(ticker: str, request: Request, provider: str = "claude
     Either side may be missing (text=None) — frontend renders an empty-state
     on that side with an action button to generate it.
 
-    Hydration strategy (matches /api/report/{ticker}):
-      • Grok side (canonical) — try DB first (analyst_reports table),
-        fall back to filesystem. The DB read survives Railway redeploys
-        that wipe the local /stocks cache; previously the modal showed
-        'No Grok report on disk' until something else hydrated the file.
-      • Alt side — filesystem only. Alt-provider reports aren't persisted
-        to analyst_reports by design (they're side artifacts).
+    Hydration strategy:
+      Both providers — DB first (analyst_reports.report_md /
+      report_md_claude), then filesystem. The DB read survives Railway
+      redeploys that wipe /stocks; without this, Claude reports the user
+      ran via Compare or LLM Lab disappeared after every redeploy, even
+      though they were persisted to the DB by ui113.
     """
     _claims_or_401(request)
     provider = (provider or "claude").lower().strip()
@@ -4599,31 +4606,47 @@ def get_report_comparison(ticker: str, request: Request, provider: str = "claude
 
     grok_text:  str | None = None
     grok_mtime: str | None = None
+    alt_text:   str | None = None
+    alt_mtime:  str | None = None
     grok_path  = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report.md"
+    alt_path   = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report_{provider}.md"
 
-    # ── Grok (canonical) — DB first, then filesystem ─────────────────────
+    # ── Single DB read pulls BOTH providers' text + timestamps ───────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT report_md, generated_at FROM analyst_reports
+                    SELECT report_md, generated_at,
+                           report_md_claude, claude_generated_at
+                      FROM analyst_reports
                      WHERE ticker = %s
                 """, (tk,))
                 row = cur.fetchone()
-            if row and row["report_md"]:
-                grok_text  = row["report_md"]
-                grok_mtime = row["generated_at"].isoformat() if row["generated_at"] else None
-                # Best-effort: hydrate local file so subsequent reads + the
-                # report viewer + Compare reruns find it without another DB hit.
-                try:
-                    if not grok_path.exists():
-                        grok_path.write_text(grok_text)
-                except Exception:
-                    pass
+            if row:
+                if row.get("report_md"):
+                    grok_text  = row["report_md"]
+                    grok_mtime = row["generated_at"].isoformat() if row["generated_at"] else None
+                    try:
+                        if not grok_path.exists():
+                            grok_path.write_text(grok_text)
+                    except Exception:
+                        pass
+                if provider == "claude" and row.get("report_md_claude"):
+                    alt_text  = row["report_md_claude"]
+                    alt_mtime = (row["claude_generated_at"].isoformat()
+                                 if row.get("claude_generated_at") else None)
+                    # Best-effort: hydrate local file so the next read + any
+                    # _run_compare_analysis(reuse_user_msg=True) finds the
+                    # cached user_msg + can write to disk in the standard spot.
+                    try:
+                        if not alt_path.exists():
+                            alt_path.write_text(alt_text)
+                    except Exception:
+                        pass
         except Exception as _e:
             print(f"[compare] DB read failed for {tk} (falling back to disk): {_e!s:.200}")
 
-    # Filesystem fallback if DB miss or DB unavailable
+    # Filesystem fallback if DB miss or unavailable
     if grok_text is None and grok_path.exists():
         try:
             grok_text  = grok_path.read_text()
@@ -4631,12 +4654,7 @@ def get_report_comparison(ticker: str, request: Request, provider: str = "claude
             grok_mtime = _dt.fromtimestamp(grok_path.stat().st_mtime).isoformat()
         except Exception:
             pass
-
-    # ── Alt side (Claude etc.) — filesystem only ─────────────────────────
-    alt_text:  str | None = None
-    alt_mtime: str | None = None
-    alt_path  = analyst.STOCKS_FOLDER / f"{tk}_DGA_Report_{provider}.md"
-    if alt_path.exists():
+    if alt_text is None and alt_path.exists():
         try:
             alt_text  = alt_path.read_text()
             from datetime import datetime as _dt
@@ -7093,8 +7111,13 @@ def list_reports():
                 out = []
                 for r in rows:
                     # Detect which providers have a report
-                    has_grok   = bool(r["generated_at"]) and bool(r["price_target"])
-                    has_claude = bool(r["claude_generated_at"]) and bool(r["claude_price_target"])
+                    # Detect provider presence by timestamp only — requiring
+                    # price_target made Claude reports invisible whenever the
+                    # extractor's regex couldn't find one (different formatting
+                    # from Grok). The pill should always appear so the user
+                    # can click in and read the report regardless.
+                    has_grok   = bool(r["generated_at"])
+                    has_claude = bool(r["claude_generated_at"])
                     providers = []
                     if has_grok:   providers.append("grok")
                     if has_claude: providers.append("claude")
