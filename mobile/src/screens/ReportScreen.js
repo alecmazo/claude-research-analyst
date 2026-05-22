@@ -25,7 +25,9 @@ function fixMd(md) {
 const LINE_PX = 22;
 
 export default function ReportScreen({ route, navigation }) {
-  const { ticker } = route.params;
+  const { ticker, provider: routeProvider } = route.params;
+  // provider: 'grok' (default) | 'claude' — pulls the right report column
+  const provider = (routeProvider || 'grok').toLowerCase();
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -43,7 +45,7 @@ export default function ReportScreen({ route, navigation }) {
   const loadAll = async () => {
     setError(null);
     try {
-      const r = await api.getReport(ticker);
+      const r = await api.getReport(ticker, provider);
       setReport(r);
     } catch (e) {
       setError(e.message);
@@ -54,7 +56,7 @@ export default function ReportScreen({ route, navigation }) {
   useEffect(() => {
     setLoading(true);
     loadAll().finally(() => setLoading(false));
-  }, [ticker]);
+  }, [ticker, provider]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -119,7 +121,7 @@ export default function ReportScreen({ route, navigation }) {
     return (
       <View style={styles.wrapper}>
         <AppHeader
-          title={ticker}
+          title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
           showLogo={false}
           left={<BackButton onPress={() => navigation.goBack()} />}
         />
@@ -134,7 +136,7 @@ export default function ReportScreen({ route, navigation }) {
     return (
       <View style={styles.wrapper}>
         <AppHeader
-          title={ticker}
+          title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
           showLogo={false}
           left={<BackButton onPress={() => navigation.goBack()} />}
         />
@@ -157,7 +159,7 @@ export default function ReportScreen({ route, navigation }) {
   return (
     <View style={styles.wrapper}>
       <AppHeader
-        title={ticker}
+        title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
         showLogo={false}
         left={<BackButton onPress={() => navigation.goBack()} />}
         right={

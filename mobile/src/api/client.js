@@ -272,16 +272,34 @@ export const api = {
   },
 
   // ---------- Single-ticker analysis ----------
-  startAnalysis: (ticker, generateGamma = false) =>
+  // llmProvider: 'grok' (default) | 'claude' | 'both'
+  startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>
     request('/api/analyze', {
       method: 'POST',
-      body: JSON.stringify({ ticker, generate_gamma: generateGamma }),
+      body: JSON.stringify({
+        ticker,
+        generate_gamma: generateGamma,
+        llm_provider:   llmProvider,
+      }),
     }),
 
   getJobStatus: (jobId) => request(`/api/jobs/${jobId}`),
   listJobs:     ()       => request('/api/jobs'),
-  getReport:    (ticker) => request(`/api/report/${ticker}`),
+  // provider: 'grok' (default) | 'claude' — opens the right MD via ?provider=
+  getReport:    (ticker, provider = 'grok') =>
+    request(`/api/report/${ticker}?provider=${encodeURIComponent(provider)}`),
   listReports:  ()       => request('/api/reports'),
+  // Bulk re-analyze
+  startReanalyzeAll: (tickers) =>
+    request('/api/reports/reanalyze-all', {
+      method: 'POST',
+      body: tickers ? JSON.stringify({ tickers }) : undefined,
+    }),
+  getReanalyzeAllStatus: (bulkId) =>
+    request(`/api/reports/reanalyze-all/${bulkId}`),
+  getActiveReanalyzeAll: () => request('/api/reports/reanalyze-all'),
+  cancelReanalyzeAll: (bulkId) =>
+    request(`/api/reports/reanalyze-all/${bulkId}/cancel`, { method: 'POST' }),
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
   getSpyYtd:    ()       => request('/api/market/spy-ytd'),
   getTickerMeta: (ticker) => request(`/api/market/ticker-meta/${encodeURIComponent(ticker)}`),

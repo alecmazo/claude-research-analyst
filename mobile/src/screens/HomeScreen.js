@@ -188,8 +188,13 @@ export default function HomeScreen({ navigation, route }) {
   const [serverOk, setServerOk]         = useState(null);
   const [serverLatencyMs, setServerLatencyMs] = useState(null);
   const [gammaEnabled, setGammaEnabled] = useState(false);
+  // LLM engine for analyze: 'grok' (default) | 'claude' | 'both'
+  const [llmProvider, setLlmProvider]   = useState('grok');
   const [lastLoadedAt, setLastLoadedAt] = useState(null);
   const [initialLoading, setInitialLoading] = useState(true);
+  // Bulk re-analyze state (active job tracking + polling)
+  const [bulkJob, setBulkJob]           = useState(null);   // {bulk_job_id, total, completed:[], failed:[], status}
+  const [bulkPolling, setBulkPolling]   = useState(false);
 
   // Market Pulse strip
   const [pulseResults, setPulseResults] = useState([]); // [{ticker, result}]
@@ -288,7 +293,7 @@ export default function HomeScreen({ navigation, route }) {
     setLoading(true);
     setRunningTicker(t);
     try {
-      const job = await api.startAnalysis(t, gammaEnabled);
+      const job = await api.startAnalysis(t, gammaEnabled, llmProvider);
       setTicker('');
       navigation.navigate('Analysis', { jobId: job.job_id, ticker: t });
     } catch (err) {
@@ -309,16 +314,110 @@ export default function HomeScreen({ navigation, route }) {
       Alert.alert('No Reports', 'Add reports first by running analyses.');
       return;
     }
-    haptics.onPressPrimary();
-    const tickers = reports.map(r => r.ticker);
-    try {
-      await api.startScan(tickers);
-      navigation.getParent()?.navigate('Scan');
-    } catch (err) {
-      haptics.onError();
-      Alert.alert('Scan Error', err.message);
-    }
+    // Confirmation prompt with cost estimate — matches web behavior
+    const n = reports.length;
+    const lo = (n * 0.06).toFixed(2);
+    const hi = (n * 0.10).toFixed(2);
+    const mins = Math.ceil(n * 7 / 60);
+    Alert.alert(
+      'Scan all ' + n + ' saved reports?',
+      `• Each ticker hits Grok with live web/X search\n• Estimated cost: $${lo}–$${hi}\n• Estimated time: ~${mins} min\n• You can cancel mid-run from the Scan screen`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Proceed', onPress: async () => {
+          haptics.onPressPrimary();
+          const tickers = reports.map(r => r.ticker);
+          try {
+            await api.startScan(tickers);
+            navigation.getParent()?.navigate('Scan');
+          } catch (err) {
+            haptics.onError();
+            Alert.alert('Scan Error', err.message);
+          }
+        }},
+      ],
+    );
   };
+
+  // ── Bulk re-analyze all saved reports ────────────────────────────────────
+  const handleReanalyzeAll = async () => {
+    if (reports.length === 0) {
+      Alert.alert('No Reports', 'Add reports first by running analyses.');
+      return;
+    }
+    const n = reports.length;
+    const mins = Math.ceil(n * 2.5);
+    Alert.alert(
+      'Re-analyze all ' + n + ' saved reports?',
+      `• Runs sequentially in the background (~${mins} min total)\n• Existing PowerPoints kept but marked older\n• To refresh a PPT, re-run that ticker individually with the Gamma toggle\n• You can cancel mid-run from the banner`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Proceed', onPress: async () => {
+          haptics.onPressPrimary();
+          try {
+            const job = await api.startReanalyzeAll();
+            setBulkJob(job);
+            setBulkPolling(true);
+            pollBulkJob(job.bulk_job_id);
+          } catch (err) {
+            haptics.onError();
+            Alert.alert('Re-analyze Error', err.message);
+          }
+        }},
+      ],
+    );
+  };
+
+  const handleCancelReanalyze = async () => {
+    if (!bulkJob || !bulkJob.bulk_job_id) return;
+    Alert.alert(
+      'Cancel bulk re-analyze?',
+      'The current ticker will finish, then the job stops.',
+      [
+        { text: 'Keep Running', style: 'cancel' },
+        { text: 'Cancel Job', style: 'destructive', onPress: async () => {
+          try { await api.cancelReanalyzeAll(bulkJob.bulk_job_id); } catch (e) {}
+        }},
+      ],
+    );
+  };
+
+  // Poll bulk job every 5s; updates banner; refreshes reports list when done
+  const pollBulkJob = (bulkId) => {
+    const tick = async () => {
+      try {
+        const j = await api.getReanalyzeAllStatus(bulkId);
+        setBulkJob(j);
+        if (j.status === 'done' || j.status === 'cancelled' || j.status === 'failed') {
+          setBulkPolling(false);
+          // Refresh reports so new pptx_stale flags + updated dates appear
+          try { const data = await api.listReports(); setReports(data || []); } catch (e) {}
+          return;   // stop polling
+        }
+        setTimeout(tick, 5000);
+      } catch (e) {
+        setTimeout(tick, 8000);   // backoff on transient errors
+      }
+    };
+    tick();
+  };
+
+  // On screen mount: resume bulk polling if a job was already running server-side
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await api.getActiveReanalyzeAll();
+        if (cancelled) return;
+        if (d && d.active && (d.active.status === 'running' || d.active.status === 'queued')) {
+          setBulkJob(d.active);
+          setBulkPolling(true);
+          pollBulkJob(d.active.bulk_job_id);
+        }
+      } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleStatusDotPress = async () => {
     const url = await getBaseUrl();
@@ -433,7 +532,15 @@ export default function HomeScreen({ navigation, route }) {
         activeOpacity={0.7}
       >
         <View style={styles.tickerCell}>
-          <Text style={styles.reportTicker}>{item.ticker}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* Status icon — last attempt success (✅) or failed (❌) */}
+            {item.last_attempt_status === 'failed' ? (
+              <Text style={styles.statusIcon}>❌</Text>
+            ) : item.generated_at ? (
+              <Text style={styles.statusIcon}>✅</Text>
+            ) : null}
+            <Text style={styles.reportTicker}>{item.ticker}</Text>
+          </View>
           <View style={styles.formatRow}>
             {item.has_docx && (
               <View style={styles.docPill}>
@@ -444,6 +551,31 @@ export default function HomeScreen({ navigation, route }) {
               <View style={styles.pptPill}>
                 <Text style={styles.pptPillText}>PPT</Text>
               </View>
+            )}
+            {/* Tappable LLM provider pills — open that specific report */}
+            {(item.providers || []).includes('grok') && (
+              <TouchableOpacity
+                onPress={(e) => {
+                  e.stopPropagation && e.stopPropagation();
+                  navigation.navigate('Report', { ticker: item.ticker, provider: 'grok' });
+                }}
+                style={[styles.llmPill, styles.llmPillGrok]}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.llmPillText}>GROK</Text>
+              </TouchableOpacity>
+            )}
+            {(item.providers || []).includes('claude') && (
+              <TouchableOpacity
+                onPress={(e) => {
+                  e.stopPropagation && e.stopPropagation();
+                  navigation.navigate('Report', { ticker: item.ticker, provider: 'claude' });
+                }}
+                style={[styles.llmPill, styles.llmPillClaude]}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.llmPillText}>CLAUDE</Text>
+              </TouchableOpacity>
             )}
             <Text style={styles.reportDate}>{dateStr}</Text>
           </View>
@@ -546,6 +678,36 @@ export default function HomeScreen({ navigation, route }) {
             thumbColor={colors.white}
           />
         </View>
+        {/* LLM engine selector — pick Grok / Claude / Both */}
+        <View style={styles.llmRow}>
+          <Text style={styles.llmRowLabel}>ENGINE</Text>
+          <View style={styles.llmPicker}>
+            {[
+              { v: 'grok',   label: 'Grok' },
+              { v: 'claude', label: 'Claude' },
+              { v: 'both',   label: 'Both' },
+            ].map(opt => (
+              <TouchableOpacity
+                key={opt.v}
+                onPress={() => setLlmProvider(opt.v)}
+                style={[
+                  styles.llmPickerOpt,
+                  llmProvider === opt.v && (
+                    opt.v === 'claude' ? styles.llmPickerOptActiveClaude :
+                    opt.v === 'both'   ? styles.llmPickerOptActiveBoth   :
+                                          styles.llmPickerOptActiveGrok
+                  ),
+                ]}
+                activeOpacity={0.7}
+              >
+                <Text style={[
+                  styles.llmPickerOptText,
+                  llmProvider === opt.v && styles.llmPickerOptTextActive,
+                ]}>{opt.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
       </View>
 
       {/* Market Pulse strip */}
@@ -585,10 +747,47 @@ export default function HomeScreen({ navigation, route }) {
           <Text style={styles.countBadge}>{reports.length}</Text>
         )}
         <View style={{ flex: 1 }} />
+        {reports.length > 0 && (
+          <TouchableOpacity
+            style={styles.reanalyzeAllBtn}
+            onPress={handleReanalyzeAll}
+            disabled={bulkPolling}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.reanalyzeAllBtnText}>
+              {bulkPolling ? '⏳ Re-analyzing…' : '🔄 Re-analyze All'}
+            </Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
           <Text style={styles.scanAllBtnText}>⚡ Scan All</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Bulk re-analyze progress banner */}
+      {bulkJob && (bulkJob.status === 'running' || bulkJob.status === 'queued' ||
+                   bulkJob.status === 'done' || bulkJob.status === 'cancelled') && (
+        <View style={styles.reanalyzeBanner}>
+          <View style={styles.reanalyzeBannerRow}>
+            <Text style={styles.reanalyzeBannerText}>
+              {bulkJob.status === 'done'
+                ? `✓ Done · ${(bulkJob.completed||[]).length}/${bulkJob.total} succeeded · ${(bulkJob.failed||[]).length} failed`
+                : bulkJob.status === 'cancelled'
+                ? `⊘ Cancelled · ${(bulkJob.completed||[]).length}/${bulkJob.total} done before cancel`
+                : `Re-analyzing ${bulkJob.current_ticker || '…'} (${(bulkJob.current_index||0)+1}/${bulkJob.total})`}
+            </Text>
+            {(bulkJob.status === 'running' || bulkJob.status === 'queued') && (
+              <TouchableOpacity style={styles.reanalyzeCancelBtn} onPress={handleCancelReanalyze}>
+                <Text style={styles.reanalyzeCancelText}>CANCEL</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={styles.reanalyzeBarTrack}>
+            <View style={[styles.reanalyzeBarFill,
+                          { width: `${Math.min(100, Math.max(0, bulkJob.progress_pct || 0))}%` }]} />
+          </View>
+        </View>
+      )}
       {lastLoadedStr ? (
         <View style={{ marginHorizontal: 16, marginBottom: 4 }}>
           <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
@@ -705,6 +904,71 @@ const styles = StyleSheet.create({
     borderTopColor: colors.lightGray,
   },
   gammaLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
+
+  // LLM engine selector (Grok / Claude / Both)
+  llmRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  llmRowLabel: {
+    fontSize: 10, fontWeight: '800', color: colors.midGray, letterSpacing: 1,
+  },
+  llmPicker: {
+    flexDirection: 'row', backgroundColor: colors.lightGray,
+    borderRadius: 6, padding: 2, gap: 2,
+  },
+  llmPickerOpt: {
+    paddingVertical: 5, paddingHorizontal: 11, borderRadius: 4,
+  },
+  llmPickerOptActiveGrok:   { backgroundColor: '#0A1628' },
+  llmPickerOptActiveClaude: { backgroundColor: '#d97706' },
+  llmPickerOptActiveBoth:   { backgroundColor: '#475569' },
+  llmPickerOptText: {
+    fontSize: 11, fontWeight: '700', color: colors.darkGray,
+  },
+  llmPickerOptTextActive: { color: colors.white },
+
+  // Per-report provider badges (GROK / CLAUDE) — tappable
+  llmPill: {
+    borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1,
+    marginRight: 2,
+  },
+  llmPillGrok:   { backgroundColor: '#0A1628' },
+  llmPillClaude: { backgroundColor: '#d97706' },
+  llmPillText:   { fontSize: 9, fontWeight: '800', color: colors.white, letterSpacing: 0.4 },
+
+  // Status icon (✅ / ❌) before the ticker
+  statusIcon: { fontSize: 13, marginRight: 4 },
+
+  // Bulk re-analyze banner
+  reanalyzeBanner: {
+    backgroundColor: '#f3e8ff', borderColor: '#e9d5ff', borderWidth: 1,
+    borderRadius: 8, padding: 10, marginHorizontal: 16, marginBottom: 8,
+  },
+  reanalyzeBannerText: {
+    fontSize: 11, fontWeight: '600', color: '#6b21a8',
+  },
+  reanalyzeBarTrack: {
+    marginTop: 6, height: 4, backgroundColor: '#ede9fe', borderRadius: 2, overflow: 'hidden',
+  },
+  reanalyzeBarFill: { height: '100%', backgroundColor: '#9333ea' },
+  reanalyzeBannerRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  reanalyzeCancelBtn: {
+    backgroundColor: 'transparent', borderColor: '#c084fc', borderWidth: 1,
+    paddingVertical: 3, paddingHorizontal: 8, borderRadius: 3,
+  },
+  reanalyzeCancelText: {
+    fontSize: 9, fontWeight: '800', color: '#7e22ce', letterSpacing: 0.5,
+  },
+  reanalyzeAllBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4,
+  },
+  reanalyzeAllBtnText: {
+    fontSize: 10, fontWeight: '800', color: '#9333ea', letterSpacing: 0.5,
+  },
 
   // Market Pulse strip
   pulseSection: {
