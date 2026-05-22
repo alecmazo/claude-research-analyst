@@ -736,6 +736,26 @@
     height: 100%; background: #d97706; width: 0%; transition: width .4s;
   }
   @keyframes cmpBlink { 50% { opacity: 0; } }
+  /* Waiting-state pulse dot and the ... dots after the message text */
+  .cmp-wait-pulse {
+    width: 10px; height: 10px; border-radius: 50%; background: #d97706;
+    display: inline-block; animation: cmpPulse 1.4s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes cmpPulse {
+    0%, 100% { transform: scale(1);   opacity: 1; }
+    50%      { transform: scale(1.4); opacity: 0.5; }
+  }
+  .cmp-dots span {
+    display: inline-block; animation: cmpDot 1.4s infinite;
+    opacity: 0;
+  }
+  .cmp-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .cmp-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes cmpDot {
+    0%, 100% { opacity: 0; }
+    50%      { opacity: 1; }
+  }
   .rep-date { color: var(--dim); font-size: 10px; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
 
@@ -9242,6 +9262,8 @@
   var _cmpActiveJobId  = null;
   var _cmpActiveTicker = null;
   var _cmpPollTimer    = null;
+  var _cmpJobStartMs   = null;   // wall-clock start for elapsed-time display
+  var _cmpFirstTokenMs = null;   // when streaming first produced text
 
   function _cmpMdToHtml(md) {
     // Prefer the global marked library (richer); fall back to a tiny regex
@@ -9321,7 +9343,15 @@
         + '<div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmp-progress-fill"></div></div>'
         + '</div>'
         + '<div class="cmp-pane-body" id="cmp-stream-body" style="flex:1;">'
-        + '<div style="color:#94a3b8;font-style:italic;font-size:11px;">Waiting for first tokens…</div>'
+        + '<div style="padding:20px;color:#94a3b8;font-size:12px;line-height:1.6;">'
+        +   '<div style="display:flex;align-items:center;gap:8px;">'
+        +     '<span class="cmp-wait-pulse"></span>'
+        +     '<span style="font-weight:600;">Starting up</span>'
+        +   '</div>'
+        +   '<div style="margin-top:10px;">Initialising comparison job — polling for status'
+        +     '<span class="cmp-dots"><span>.</span><span>.</span><span>.</span></span>'
+        +   '</div>'
+        + '</div>'
         + '</div>'
         + '</div>';
     } else {
@@ -9397,7 +9427,9 @@
         throw new Error(err.detail || r.status);
       }
       const job = await r.json();
-      _cmpActiveJobId = job.job_id;
+      _cmpActiveJobId   = job.job_id;
+      _cmpJobStartMs    = Date.now();
+      _cmpFirstTokenMs  = null;
       // Re-render modal to show progress block
       const data = await (await window.dgaFetch('/api/reports/' + encodeURIComponent(ticker) + '/comparison?provider=' + encodeURIComponent(provider))).json();
       _cmpRenderModal(data);
@@ -9416,34 +9448,82 @@
     return (el.scrollTop + el.clientHeight) >= (el.scrollHeight - (slack || 24));
   }
 
+  function _cmpFmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m + 'm ' + (r < 10 ? '0' : '') + r + 's';
+  }
+
   async function _cmpPollCompare(ticker, provider, jobId) {
     try {
       const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(jobId));
       if (!r.ok) throw new Error('job ' + r.status);
       const job = await r.json();
 
+      const streamedLen = (job.streamed_text || '').length;
+      const elapsedMs   = _cmpJobStartMs ? (Date.now() - _cmpJobStartMs) : 0;
+      const elapsedTxt  = _cmpFmtElapsed(elapsedMs);
+
+      // Capture time-to-first-token for the streaming rate display
+      if (streamedLen > 0 && _cmpFirstTokenMs == null) {
+        _cmpFirstTokenMs = Date.now();
+      }
+
       // ── Update progress header ────────────────────────────────────────
       const lbl  = document.getElementById('cmp-progress-label');
       const fill = document.getElementById('cmp-progress-fill');
       if (lbl && job.progress) {
         const pct = Math.round((job.progress.pct || 0) * 100);
-        const streamedLen = (job.streamed_text || '').length;
-        let suffix = ' — ' + pct + '%';
+        let label = job.progress.label || 'Running';
         if (job.status === 'running' && streamedLen > 0) {
-          // Once tokens are flowing, show a live char count instead of %
-          suffix = ' — streaming · ' + streamedLen.toLocaleString() + ' chars';
+          // Streaming: char count + rough chars/sec rate
+          const streamMs = _cmpFirstTokenMs ? (Date.now() - _cmpFirstTokenMs) : 1;
+          const rate = streamMs > 0 ? Math.round((streamedLen / streamMs) * 1000) : 0;
+          lbl.textContent = label + ' — streaming · ' + streamedLen.toLocaleString() + ' chars · '
+            + rate + ' chars/s · ' + elapsedTxt + ' total';
+        } else {
+          lbl.textContent = label + ' — ' + pct + '% · ' + elapsedTxt;
         }
-        lbl.textContent = (job.progress.label || 'Running') + suffix;
       }
       if (fill && job.progress) fill.style.width = Math.round((job.progress.pct||0)*100) + '%';
 
-      // ── Live-render streamed text into the right pane body ────────────
+      // ── Right pane body: either waiting state or live-streamed text ──
       const streamBody = document.getElementById('cmp-stream-body');
-      if (streamBody && job.streamed_text) {
-        const wasAtBottom = _cmpIsAtBottom(streamBody, 40);
-        streamBody.innerHTML = _cmpMdToHtml(job.streamed_text)
-          + '<span style="display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;"></span>';
-        if (wasAtBottom) streamBody.scrollTop = streamBody.scrollHeight;
+      if (streamBody) {
+        if (streamedLen === 0 && job.status !== 'done' && job.status !== 'failed') {
+          // No tokens yet — show informative wait state that changes over time
+          const sec = Math.floor(elapsedMs / 1000);
+          let msg, color = '#94a3b8';
+          if (sec < 15) {
+            msg = 'Waiting for Claude to start generating';
+          } else if (sec < 45) {
+            msg = 'Claude is processing your prompt — Opus typically needs 30–60s before the first token on large inputs (your DGA prompt is ~50K tokens)';
+          } else if (sec < 120) {
+            msg = 'Still processing — large reasoning models can take 1–2 min on dense prompts. Hang tight, this is normal';
+            color = '#d97706';
+          } else {
+            msg = 'Taking longer than expected (>2 min with no text). The request may have stalled — if it doesn\'t start streaming in another 60s, close this modal and try again';
+            color = '#dc2626';
+          }
+          streamBody.innerHTML =
+            '<div style="padding:20px;color:' + color + ';font-size:12px;line-height:1.6;">'
+            +   '<div style="display:flex;align-items:center;gap:8px;">'
+            +     '<span class="cmp-wait-pulse"></span>'
+            +     '<span style="font-weight:600;">' + _cmpFmtElapsed(elapsedMs) + ' elapsed</span>'
+            +   '</div>'
+            +   '<div style="margin-top:10px;">' + msg + '<span class="cmp-dots"><span>.</span><span>.</span><span>.</span></span></div>'
+            +   '<div style="margin-top:14px;font-size:10px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:10px;">'
+            +     '💡 You can close this modal and keep using the site — the job is running on the server and reopening 🔬 will resume the live view.'
+            +   '</div>'
+            + '</div>';
+        } else if (streamedLen > 0) {
+          const wasAtBottom = _cmpIsAtBottom(streamBody, 40);
+          streamBody.innerHTML = _cmpMdToHtml(job.streamed_text)
+            + '<span style="display:inline-block;width:7px;height:13px;background:#d97706;margin-left:2px;vertical-align:-2px;animation:cmpBlink 1s steps(2) infinite;"></span>';
+          if (wasAtBottom) streamBody.scrollTop = streamBody.scrollHeight;
+        }
       }
 
       // ── Terminal states ───────────────────────────────────────────────
@@ -9451,9 +9531,17 @@
         clearInterval(_cmpPollTimer); _cmpPollTimer = null;
         if (job.status === 'failed') {
           if (lbl) lbl.textContent = 'Failed: ' + (job.error || 'unknown error');
+          // Show error in the pane body too
+          if (streamBody) {
+            streamBody.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">'
+              + '<strong>Claude analysis failed.</strong><br>'
+              + (job.error || 'Unknown error') + '</div>';
+          }
           return;
         }
-        _cmpActiveJobId = null;
+        _cmpActiveJobId  = null;
+        _cmpJobStartMs   = null;
+        _cmpFirstTokenMs = null;
         // Re-fetch comparison data so the summary strip + final formatted
         // text replace the streaming view (drops the blinking cursor too).
         try {
