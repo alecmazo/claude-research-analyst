@@ -3986,6 +3986,122 @@ def admin_fund_delete(request: Request, body: FundDeleteRequest):
 # Background worker
 # ---------------------------------------------------------------------------
 
+def _persist_analysis_text(
+    *,
+    ticker: str,
+    provider: str,
+    result: dict | None,
+    job_id: str | None = None,
+    generate_gamma: bool = False,
+) -> tuple[bool, int]:
+    """One source of truth for persisting any LLM-generated report.
+
+    Used by all THREE entry points so the persistence guarantee is uniform:
+      • _run_analysis           (Research hero — Grok or Claude single)
+      • _run_analysis_both      (Research hero — Both, runs persist twice)
+      • _run_compare_analysis   (🔬 Compare button + 🔬 LLM Lab)
+
+    Three-source text resolution (uses the FIRST that returns ≥200 chars):
+      1. result["report_text"]              (normal path)
+      2. {TICKER}_DGA_Report[_provider].md  (file written, code raised after)
+      3. _jobs[job_id]["streamed_text"]     (delta stream — tokens arrived
+                                              even if file write failed)
+
+    Side effects on success:
+      • Hydrates the disk file if missing (Railway redeploys wipe /stocks)
+      • Best-effort extract_summary_from_report (NULL fields are OK; the
+        provider badge only needs the timestamp now)
+      • Writes to analyst_reports via _db_upsert_report(provider=…)
+      • Logs '✅ [persist] {PROVIDER} report for {TICKER} (… chars)' on
+        success, '❌'/'⚠️' on failure — visible in Railway logs
+
+    Returns: (persisted: bool, char_count: int). Never raises.
+    """
+    if provider not in ("grok", "claude"):
+        return False, 0
+    _suffix  = "" if provider == "grok" else f"_{provider}"
+    _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
+
+    # 1. From result dict
+    text = ""
+    if isinstance(result, dict):
+        text = (result.get("report_text") or "")
+    # 2. From disk file
+    if not text and _md_path.exists():
+        try:
+            text = _md_path.read_text()
+        except Exception:
+            pass
+    # 3. From in-memory streamed_text (Claude streams; Grok doesn't, so this
+    #    only ever helps for the Claude path — but it's the lifesaver when the
+    #    file write fails or when analyze_ticker raised right before it)
+    if not text and job_id:
+        try:
+            with _jobs_lock:
+                text = (_jobs.get(job_id) or {}).get("streamed_text") or ""
+            if text:
+                print(f"[persist] using streamed_text fallback for {ticker}/{provider} "
+                      f"({len(text):,} chars)")
+        except Exception:
+            pass
+
+    if not text or len(text) < 200:
+        print(f"⚠️  [persist] no usable text for {ticker}/{provider} "
+              f"(result.ok={isinstance(result, dict) and result.get('ok')}, "
+              f"file_exists={_md_path.exists()}, len={len(text)})")
+        return False, len(text)
+
+    # Hydrate disk file if it's not there (subsequent flows + Compare reruns
+    # that use reuse_user_msg=True depend on the file)
+    try:
+        if not _md_path.exists():
+            _md_path.write_text(text)
+    except Exception:
+        pass
+
+    # Extract summary (best-effort — NULL price_target is fine, the badge
+    # only requires the timestamp)
+    try:
+        summary = analyst.extract_summary_from_report(text) or {}
+    except Exception:
+        summary = {}
+
+    if provider == "claude":
+        try:
+            _db_upsert_report(
+                ticker, text, summary,
+                has_docx=False, has_pptx=False, gamma_url=None,
+                pptx_stale=None, provider="claude",
+            )
+            print(f"✅ [persist] CLAUDE report for {ticker} "
+                  f"({len(text):,} chars · price_target={summary.get('price_target')})")
+            return True, len(text)
+        except Exception as e:
+            print(f"❌ [persist] CLAUDE DB write failed for {ticker}: {e!s:.300}")
+            return False, len(text)
+
+    # Grok path — capture artifact flags too
+    try:
+        _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
+        _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
+        _gamma_url = (result.get("gamma_url") if isinstance(result, dict) else None) or None
+        if generate_gamma:
+            _pptx_stale = False
+        else:
+            _pptx_stale = True if _has_pptx else False
+        _db_upsert_report(
+            ticker, text, summary,
+            has_docx=_has_docx, has_pptx=_has_pptx, gamma_url=_gamma_url,
+            pptx_stale=_pptx_stale, provider="grok",
+        )
+        print(f"✅ [persist] GROK report for {ticker} "
+              f"({len(text):,} chars · price_target={summary.get('price_target')})")
+        return True, len(text)
+    except Exception as e:
+        print(f"❌ [persist] GROK DB write failed for {ticker}: {e!s:.300}")
+        return False, len(text)
+
+
 def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
     """Run Grok then Claude sequentially in a single job.
 
@@ -4007,6 +4123,7 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
                 _jobs[job_id]["progress"] = {"step": step, "pct": pct, "label": label}
 
     # ── Phase 1: Grok ─────────────────────────────────────────────────
+    result_g: dict = {}
     try:
         result_g = analyst.analyze_ticker(
             ticker,
@@ -4017,32 +4134,22 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             llm_provider="grok",
             reuse_user_msg=False,
         )
-        ok_g = bool(result_g.get("ok"))
-        with _jobs_lock:
-            _jobs[job_id]["providers"]["grok"] = "done" if ok_g else "failed"
-        if ok_g:
-            try:
-                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
-                _md_text = _md_path.read_text() if _md_path.exists() else ""
-                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
-                _has_docx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report.docx").exists()
-                _has_pptx = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists()
-                _db_upsert_report(ticker, _md_text, _summary, _has_docx, _has_pptx,
-                                  result_g.get("gamma_url"),
-                                  pptx_stale=(False if generate_gamma else (_has_pptx)),
-                                  provider="grok")
-            except Exception as _de:
-                print(f"[both] Grok DB persist failed for {ticker}: {_de}")
-        else:
-            try:
-                _db_record_attempt_failure(ticker, "Grok: " + (result_g.get("error") or "?"))
-            except Exception: pass
     except BaseException as exc:  # noqa: BLE001
-        with _jobs_lock:
-            _jobs[job_id]["providers"]["grok"] = "failed"
+        result_g = {"ok": False, "error": str(exc)[:300]}
+    persisted_g, _ = _persist_analysis_text(
+        ticker=ticker, provider="grok", result=result_g,
+        job_id=job_id, generate_gamma=generate_gamma,
+    )
+    with _jobs_lock:
+        _jobs[job_id]["providers"]["grok"] = "done" if persisted_g else "failed"
+    if not persisted_g:
+        try:
+            _db_record_attempt_failure(ticker, "Grok: " + (result_g.get("error") or "?"))
+        except Exception: pass
 
     # ── Phase 2: Claude (uses Grok's cached user_msg) ──────────────────
     _phase("grok", 0.55, "Both: Grok done · starting Claude…")
+    result_c: dict = {}
     try:
         result_c = analyst.analyze_ticker(
             ticker,
@@ -4053,21 +4160,13 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             llm_provider="claude",
             reuse_user_msg=True,            # identical inputs to Grok
         )
-        ok_c = bool(result_c.get("ok"))
-        with _jobs_lock:
-            _jobs[job_id]["providers"]["claude"] = "done" if ok_c else "failed"
-        if ok_c:
-            try:
-                _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report_claude.md"
-                _md_text = _md_path.read_text() if _md_path.exists() else ""
-                _summary = _extract_summary_cached(_md_path) if _md_path.exists() else {}
-                _db_upsert_report(ticker, _md_text, _summary, False, False, None,
-                                  pptx_stale=None, provider="claude")
-            except Exception as _de:
-                print(f"[both] Claude DB persist failed for {ticker}: {_de}")
     except BaseException as exc:  # noqa: BLE001
-        with _jobs_lock:
-            _jobs[job_id]["providers"]["claude"] = "failed"
+        result_c = {"ok": False, "error": str(exc)[:300]}
+    persisted_c, _ = _persist_analysis_text(
+        ticker=ticker, provider="claude", result=result_c, job_id=job_id,
+    )
+    with _jobs_lock:
+        _jobs[job_id]["providers"]["claude"] = "done" if persisted_c else "failed"
 
     # ── Final job state ───────────────────────────────────────────────
     with _jobs_lock:
@@ -4126,12 +4225,14 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
                     "step": step, "pct": pct, "label": label,
                 }
 
+    # Run the analysis. We capture exceptions defensively so the persist
+    # helper can still try to save whatever text we have — even when the
+    # outer pipeline crashed (rendering, drive upload, etc.).
+    result: dict = {}
     try:
         system_prompt = analyst.load_system_prompt()
         # For Claude path, reuse Grok's cached user_msg so the LLMs see
         # identical inputs (the same trick the Compare button uses).
-        # If no cache exists yet, analyze_ticker falls through to fresh
-        # gathering — first-time Claude analyze on a brand-new ticker.
         result = analyst.analyze_ticker(
             ticker,
             system_prompt=system_prompt,
@@ -4141,67 +4242,42 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
             llm_provider=provider,
             reuse_user_msg=(provider == "claude"),
         )
-        with _jobs_lock:
-            if result.get("ok"):
-                _jobs[job_id]["status"] = "done"
-                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0, "label": "Report ready"}
-                # Trim the report text to avoid sending multi-MB payloads in the
-                # status response; the full text is available via /report/{ticker}.
-                _jobs[job_id]["result"] = {k: v for k, v in result.items()
-                                           if k != "report_text"}
-                _jobs[job_id]["result"]["has_report"] = bool(result.get("report_text"))
-            else:
-                _jobs[job_id]["status"] = "failed"
-                _jobs[job_id]["error"] = result.get("error", "Unknown error")
-                # Record failure in DB so it surfaces with ❌ in the reports list
-                try:
-                    _db_record_attempt_failure(ticker, result.get("error") or "Unknown error")
-                except Exception:
-                    pass
-
-        # Persist report to PostgreSQL so it survives Railway redeploys.
-        # Wrapped in try/except — a DB failure must never affect the job result.
-        if result.get("ok"):
-            try:
-                # Provider-suffixed paths: '' for grok, '_claude' for claude
-                _suffix    = "" if provider == "grok" else f"_{provider}"
-                _md_path   = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
-                _md_text   = _md_path.read_text() if _md_path.exists() else ""
-                _summary   = _extract_summary_cached(_md_path) if _md_path.exists() else {}
-                _has_docx  = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.docx").exists()
-                # PPTX is Gamma-only and Gamma only runs on the Grok path
-                _has_pptx  = (analyst.STOCKS_FOLDER / f"{ticker}_DGA_Presentation.pptx").exists() if provider == "grok" else False
-                _gamma_url = (result.get("gamma_url") or None)
-                # pptx_stale logic only relevant for the Grok columns
-                _pptx_stale: bool | None
-                if provider == "grok":
-                    _pptx_stale = False if generate_gamma else (True if _has_pptx else False)
-                else:
-                    _pptx_stale = None   # don't touch the column for Claude runs
-                _db_upsert_report(
-                    ticker, _md_text, _summary, _has_docx, _has_pptx, _gamma_url,
-                    pptx_stale=_pptx_stale,
-                    provider=provider,
-                )
-            except Exception as _dbe:
-                print(f"[analyst_reports] post-run DB persist failed for {ticker} (non-fatal): {_dbe!s:.200}")
-    except BaseException as exc:  # noqa: BLE001  # catches SystemExit from any library
-        # Log FULL traceback so we can see where the error actually happened.
+    except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
-        print(f"\n❌ Single-ticker job {job_id} ({ticker}) CRASHED:\n{tb_str}", flush=True)
-        tb_tail = tb_str.strip().splitlines()[-3:] if tb_str else []
-        err_msg = f"{exc} | {' | '.join(tb_tail)}"
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "failed"
-            # Include last line of traceback in error so the UI shows something
-            # more useful than just the message.
-            _jobs[job_id]["error"] = err_msg
-        # Persist failure for the saved-reports list
-        try:
-            _db_record_attempt_failure(ticker, err_msg)
-        except Exception:
-            pass
+        print(f"\n❌ Single-ticker job {job_id} ({ticker}) analyze_ticker raised:\n{tb_str}", flush=True)
+        result = {"ok": False, "error": str(exc)[:300]}
 
+    # ── Unified persist (outside the lock, runs even if analyze_ticker failed
+    #    downstream of the LLM call) ─────────────────────────────────────
+    persisted, _ = _persist_analysis_text(
+        ticker=ticker, provider=provider, result=result,
+        job_id=job_id, generate_gamma=generate_gamma,
+    )
+
+    # ── Final job state ────────────────────────────────────────────────
+    with _jobs_lock:
+        if not _jobs.get(job_id):
+            return
+        if result.get("ok") or persisted:
+            # Treat persisted-without-ok as a success too: the user got their
+            # report. Surface the downstream warning via _jobs[job_id]["warning"]
+            # so the UI can optionally show it, but don't mark the job 'failed'.
+            _jobs[job_id]["status"] = "done"
+            _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
+                                          "label": "Report ready"}
+            _jobs[job_id]["result"] = {k: v for k, v in result.items()
+                                       if k != "report_text"}
+            _jobs[job_id]["result"]["has_report"] = bool(result.get("report_text") or persisted)
+            if persisted and not result.get("ok"):
+                _jobs[job_id]["warning"] = str(result.get("error") or "")[:300]
+        else:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = result.get("error", "Unknown error")
+            try:
+                _db_record_attempt_failure(ticker, result.get("error") or "Unknown error")
+            except Exception:
+                pass
+    return
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Bulk re-analyze: re-run analysis for every saved report, sequentially, in
@@ -4503,74 +4579,29 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
         print(f"\n❌ Compare job {job_id} ({ticker}, {provider}) analyze_ticker crashed:\n{tb_str}", flush=True)
         result = {"ok": False, "error": str(exc)[:300]}
 
-    # ── BULLETPROOF PERSIST: try three sources of text, in order ────────────
-    # 1. result["report_text"]  (best case — full text from analyze_ticker)
-    # 2. on-disk MD file        (the LLM call succeeded, file was written,
-    #                            but something between the file write and
-    #                            this point failed)
-    # 3. streamed_text          (delta stream from the job dict — proves the
-    #                            tokens arrived; covers the case where the
-    #                            file write itself failed)
-    _suffix    = "" if provider == "grok" else f"_{provider}"
-    _md_path   = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
-    _candidate_text = result.get("report_text") or ""
-    if not _candidate_text and _md_path.exists():
-        try: _candidate_text = _md_path.read_text()
-        except Exception: pass
-    if not _candidate_text:
-        with _jobs_lock:
-            _candidate_text = (_jobs.get(job_id) or {}).get("streamed_text") or ""
-        if _candidate_text:
-            print(f"[compare] using streamed_text fallback for {ticker}/{provider} ({len(_candidate_text)} chars)")
-
-    if _candidate_text and len(_candidate_text) > 200:   # 200-char floor blocks empty/error stubs
-        # Write the disk file too if it's not there (Railway redeploys wipe it)
-        try:
-            if not _md_path.exists():
-                _md_path.write_text(_candidate_text)
-        except Exception:
-            pass
-        try:
-            _summary = analyst.extract_summary_from_report(_candidate_text) or {}
-        except Exception:
-            _summary = {}
-        try:
-            _db_upsert_report(
-                ticker, _candidate_text, _summary,
-                has_docx=False, has_pptx=False, gamma_url=None,
-                pptx_stale=None, provider=provider,
-            )
-            print(f"✅ [compare] PERSISTED {provider} report for {ticker} "
-                  f"({len(_candidate_text):,} chars; price_target={_summary.get('price_target')})")
-        except Exception as _dbe:
-            print(f"❌ [compare] DB persist failed for {ticker}/{provider}: {_dbe!s:.300}")
-    else:
-        print(f"⚠️  [compare] no usable text to persist for {ticker}/{provider} "
-              f"(result.ok={result.get('ok')}, file_exists={_md_path.exists()})")
+    # Unified persist — same helper used by /api/analyze, /api/analyze (both),
+    # and this Compare endpoint. Three-source text fallback ensures the LLM
+    # output is saved regardless of which step downstream might have failed.
+    persisted, _ = _persist_analysis_text(
+        ticker=ticker, provider=provider, result=result, job_id=job_id,
+    )
 
     # ── Now update the job's terminal state (no DB ops inside this lock) ────
     with _jobs_lock:
         if not _jobs.get(job_id):
             return
-        if result.get("ok"):
+        if result.get("ok") or persisted:
             _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["result"] = {k: v for k, v in result.items()
+            _jobs[job_id]["result"] = {k: v for k, v in (result or {}).items()
                                         if k != "report_text"}
             _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
                                           "label": f"{provider.title()} report ready"}
-        else:
-            # Even if analyze_ticker threw downstream of the LLM call, if we
-            # persisted the LLM output above, the comparison endpoint will
-            # serve it normally. Mark the job 'done' so the UI doesn't show
-            # a misleading 'failed' bubble. Only mark failed if we have no text.
-            if _candidate_text and len(_candidate_text) > 200:
-                _jobs[job_id]["status"] = "done"
-                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
-                                              "label": f"{provider.title()} report saved (downstream warning)"}
+            if persisted and not result.get("ok"):
                 _jobs[job_id]["warning"] = str(result.get("error") or "")[:300]
-            else:
-                _jobs[job_id]["status"] = "failed"
-                _jobs[job_id]["error"]  = result.get("error", "Unknown error")
+        else:
+            # No usable text from any source → genuine failure
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"]  = result.get("error", "Unknown error")
 
 
 @app.post("/api/reports/{ticker}/compare")
