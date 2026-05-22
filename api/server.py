@@ -4477,6 +4477,13 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
             if job_id in _jobs:
                 _jobs[job_id]["streamed_text"] += text
 
+    # Capture analyze_ticker's return AND any text we accumulated via streaming
+    # deltas. Persist runs OUTSIDE the jobs lock and OUTSIDE the result.ok check
+    # so it executes whenever we have ANY usable text — even if analyze_ticker
+    # threw a downstream error (rendering, drive upload, etc.). The Compare
+    # flow's whole purpose is the LLM output; downstream artifact failures
+    # must not throw that away.
+    result: dict = {}
     try:
         result = analyst.analyze_ticker(
             ticker,
@@ -4488,54 +4495,82 @@ def _run_compare_analysis(job_id: str, ticker: str, provider: str) -> None:
             on_delta=_record_delta,
             # CRITICAL for Compare: reuse the EXACT user_msg from the
             # canonical Grok run so both engines see identical inputs.
-            # Also avoids re-hitting SEC EDGAR (the root cause of
-            # "SEC XBRL extraction failed" appearing in Claude reports
-            # after a fresh Grok run had just consumed EDGAR rate-limit).
+            # Also avoids re-hitting SEC EDGAR.
             reuse_user_msg=True,
         )
-        with _jobs_lock:
-            if result.get("ok"):
-                _jobs[job_id]["status"] = "done"
-                _jobs[job_id]["result"] = {k: v for k, v in result.items()
-                                            if k != "report_text"}
-                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
-                                              "label": f"{provider.title()} report ready"}
-                # ── Persist the alt-provider report to analyst_reports ──────
-                # Robust ordering: prefer the report_text we just received
-                # from analyze_ticker (always present on success). Fall back
-                # to reading from disk if for some reason the response was
-                # trimmed. Empty text would have meant an empty DB row, so
-                # we guard against that explicitly.
-                try:
-                    _suffix = "" if provider == "grok" else f"_{provider}"
-                    _md_path = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
-                    _md_text = (result.get("report_text") or
-                                (_md_path.read_text() if _md_path.exists() else ""))
-                    if _md_text:
-                        try:
-                            _summary = analyst.extract_summary_from_report(_md_text) or {}
-                        except Exception:
-                            _summary = {}
-                        _db_upsert_report(
-                            ticker, _md_text, _summary,
-                            has_docx=False, has_pptx=False, gamma_url=None,
-                            pptx_stale=None, provider=provider,
-                        )
-                        print(f"[compare] persisted {provider} report for {ticker} "
-                              f"({len(_md_text):,} chars; price_target={_summary.get('price_target')})")
-                    else:
-                        print(f"[compare] skip persist: no text for {ticker}/{provider}")
-                except Exception as _dbe:
-                    print(f"[compare] DB persist failed for {ticker}/{provider} (non-fatal): {_dbe!s:.200}")
-            else:
-                _jobs[job_id]["status"] = "failed"
-                _jobs[job_id]["error"] = result.get("error", "Unknown error")
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
-        print(f"\n❌ Compare job {job_id} ({ticker}, {provider}) CRASHED:\n{tb_str}", flush=True)
+        print(f"\n❌ Compare job {job_id} ({ticker}, {provider}) analyze_ticker crashed:\n{tb_str}", flush=True)
+        result = {"ok": False, "error": str(exc)[:300]}
+
+    # ── BULLETPROOF PERSIST: try three sources of text, in order ────────────
+    # 1. result["report_text"]  (best case — full text from analyze_ticker)
+    # 2. on-disk MD file        (the LLM call succeeded, file was written,
+    #                            but something between the file write and
+    #                            this point failed)
+    # 3. streamed_text          (delta stream from the job dict — proves the
+    #                            tokens arrived; covers the case where the
+    #                            file write itself failed)
+    _suffix    = "" if provider == "grok" else f"_{provider}"
+    _md_path   = analyst.STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.md"
+    _candidate_text = result.get("report_text") or ""
+    if not _candidate_text and _md_path.exists():
+        try: _candidate_text = _md_path.read_text()
+        except Exception: pass
+    if not _candidate_text:
         with _jobs_lock:
-            _jobs[job_id]["status"] = "failed"
-            _jobs[job_id]["error"] = f"{exc}"[:300]
+            _candidate_text = (_jobs.get(job_id) or {}).get("streamed_text") or ""
+        if _candidate_text:
+            print(f"[compare] using streamed_text fallback for {ticker}/{provider} ({len(_candidate_text)} chars)")
+
+    if _candidate_text and len(_candidate_text) > 200:   # 200-char floor blocks empty/error stubs
+        # Write the disk file too if it's not there (Railway redeploys wipe it)
+        try:
+            if not _md_path.exists():
+                _md_path.write_text(_candidate_text)
+        except Exception:
+            pass
+        try:
+            _summary = analyst.extract_summary_from_report(_candidate_text) or {}
+        except Exception:
+            _summary = {}
+        try:
+            _db_upsert_report(
+                ticker, _candidate_text, _summary,
+                has_docx=False, has_pptx=False, gamma_url=None,
+                pptx_stale=None, provider=provider,
+            )
+            print(f"✅ [compare] PERSISTED {provider} report for {ticker} "
+                  f"({len(_candidate_text):,} chars; price_target={_summary.get('price_target')})")
+        except Exception as _dbe:
+            print(f"❌ [compare] DB persist failed for {ticker}/{provider}: {_dbe!s:.300}")
+    else:
+        print(f"⚠️  [compare] no usable text to persist for {ticker}/{provider} "
+              f"(result.ok={result.get('ok')}, file_exists={_md_path.exists()})")
+
+    # ── Now update the job's terminal state (no DB ops inside this lock) ────
+    with _jobs_lock:
+        if not _jobs.get(job_id):
+            return
+        if result.get("ok"):
+            _jobs[job_id]["status"] = "done"
+            _jobs[job_id]["result"] = {k: v for k, v in result.items()
+                                        if k != "report_text"}
+            _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
+                                          "label": f"{provider.title()} report ready"}
+        else:
+            # Even if analyze_ticker threw downstream of the LLM call, if we
+            # persisted the LLM output above, the comparison endpoint will
+            # serve it normally. Mark the job 'done' so the UI doesn't show
+            # a misleading 'failed' bubble. Only mark failed if we have no text.
+            if _candidate_text and len(_candidate_text) > 200:
+                _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
+                                              "label": f"{provider.title()} report saved (downstream warning)"}
+                _jobs[job_id]["warning"] = str(result.get("error") or "")[:300]
+            else:
+                _jobs[job_id]["status"] = "failed"
+                _jobs[job_id]["error"]  = result.get("error", "Unknown error")
 
 
 @app.post("/api/reports/{ticker}/compare")
