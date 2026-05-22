@@ -6854,6 +6854,43 @@ def delete_report(ticker: str):
 _summary_cache: dict[str, dict] = {}
 
 
+_REPORT_DATE_RE = re.compile(
+    r"^\s*\**\s*DGA\s+CAPITAL\s+RESEARCH\s*\**\s*[|:\-—–]\s*(.{4,60}?)\s*\**\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_REPORT_DATE_RE_ALT = re.compile(
+    r"^\s*DATE\s*:\s*(.{4,60}?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_report_date(md: str) -> str | None:
+    """Pull the analyst's stated 'as-of' date from a DGA report header.
+
+    Matches:
+      '**DGA CAPITAL RESEARCH** | April 19, 2026'
+      'DGA CAPITAL RESEARCH: 2026-05-22'
+      '## DGA Capital Research — May 22, 2026'
+    Falls back to a 'DATE: ...' line if no header match.
+    Returns the raw date string (display-as-is) or None.
+    """
+    if not md:
+        return None
+    # Only scan the first ~2000 chars to keep it cheap on big reports
+    head = md[:2000]
+    m = _REPORT_DATE_RE.search(head)
+    if m:
+        d = m.group(1).strip().rstrip(".,").rstrip("*").strip()
+        if d and len(d) <= 50:
+            return d
+    m2 = _REPORT_DATE_RE_ALT.search(head)
+    if m2:
+        d = m2.group(1).strip().rstrip(".,")
+        if d and len(d) <= 50:
+            return d
+    return None
+
+
 def _db_upsert_report(
     ticker: str,
     md_text: str,
@@ -6883,6 +6920,9 @@ def _db_upsert_report(
     """
     if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
         return
+    # Pull the report-header date once — surfaces under the ticker in Saved
+    # Reports so the user sees the analyst's as-of date, not the DB upload time.
+    report_date = _extract_report_date(md_text)
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             # ── Claude path: only touches the *_claude columns ──────────
@@ -6890,15 +6930,16 @@ def _db_upsert_report(
                 cur.execute("""
                     INSERT INTO analyst_reports
                         (ticker, generated_at, report_md, has_docx, has_pptx,
-                         report_md_claude, claude_generated_at,
+                         report_md_claude, claude_generated_at, claude_report_date,
                          claude_rating, claude_price_target, claude_upside_pct,
                          last_attempt_at, last_attempt_status, last_attempt_error)
                     VALUES (%s, NOW(), '', FALSE, FALSE,
-                            %s, NOW(), %s, %s, %s,
+                            %s, NOW(), %s, %s, %s, %s,
                             NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
                         report_md_claude    = EXCLUDED.report_md_claude,
                         claude_generated_at = NOW(),
+                        claude_report_date  = EXCLUDED.claude_report_date,
                         claude_rating       = EXCLUDED.claude_rating,
                         claude_price_target = EXCLUDED.claude_price_target,
                         claude_upside_pct   = EXCLUDED.claude_upside_pct,
@@ -6906,7 +6947,7 @@ def _db_upsert_report(
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
                 """, (
-                    ticker, md_text,
+                    ticker, md_text, report_date,
                     summary.get("rating"), summary.get("price_target"),
                     summary.get("upside_pct"),
                 ))
@@ -6918,33 +6959,7 @@ def _db_upsert_report(
                 cur.execute("""
                     INSERT INTO analyst_reports
                         (ticker, generated_at, report_md, has_docx, has_pptx,
-                         rating, price_target, upside_pct, gamma_url,
-                         last_attempt_at, last_attempt_status, last_attempt_error)
-                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s,
-                            NOW(), 'success', NULL)
-                    ON CONFLICT (ticker) DO UPDATE SET
-                        generated_at        = NOW(),
-                        report_md           = EXCLUDED.report_md,
-                        has_docx            = EXCLUDED.has_docx,
-                        has_pptx            = EXCLUDED.has_pptx,
-                        rating              = EXCLUDED.rating,
-                        price_target        = EXCLUDED.price_target,
-                        upside_pct          = EXCLUDED.upside_pct,
-                        gamma_url           = EXCLUDED.gamma_url,
-                        last_attempt_at     = NOW(),
-                        last_attempt_status = 'success',
-                        last_attempt_error  = NULL
-                """, (
-                    ticker, md_text, has_docx, has_pptx,
-                    summary.get("rating"), summary.get("price_target"),
-                    summary.get("upside_pct"), gamma_url,
-                ))
-            else:
-                # Path B: explicitly set pptx_stale
-                cur.execute("""
-                    INSERT INTO analyst_reports
-                        (ticker, generated_at, report_md, has_docx, has_pptx,
-                         rating, price_target, upside_pct, gamma_url, pptx_stale,
+                         rating, price_target, upside_pct, gamma_url, report_date,
                          last_attempt_at, last_attempt_status, last_attempt_error)
                     VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s,
                             NOW(), 'success', NULL)
@@ -6957,14 +6972,42 @@ def _db_upsert_report(
                         price_target        = EXCLUDED.price_target,
                         upside_pct          = EXCLUDED.upside_pct,
                         gamma_url           = EXCLUDED.gamma_url,
-                        pptx_stale          = EXCLUDED.pptx_stale,
+                        report_date         = EXCLUDED.report_date,
                         last_attempt_at     = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
                 """, (
                     ticker, md_text, has_docx, has_pptx,
                     summary.get("rating"), summary.get("price_target"),
-                    summary.get("upside_pct"), gamma_url, bool(pptx_stale),
+                    summary.get("upside_pct"), gamma_url, report_date,
+                ))
+            else:
+                # Path B: explicitly set pptx_stale
+                cur.execute("""
+                    INSERT INTO analyst_reports
+                        (ticker, generated_at, report_md, has_docx, has_pptx,
+                         rating, price_target, upside_pct, gamma_url, pptx_stale, report_date,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            NOW(), 'success', NULL)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        generated_at        = NOW(),
+                        report_md           = EXCLUDED.report_md,
+                        has_docx            = EXCLUDED.has_docx,
+                        has_pptx            = EXCLUDED.has_pptx,
+                        rating              = EXCLUDED.rating,
+                        price_target        = EXCLUDED.price_target,
+                        upside_pct          = EXCLUDED.upside_pct,
+                        gamma_url           = EXCLUDED.gamma_url,
+                        pptx_stale          = EXCLUDED.pptx_stale,
+                        report_date         = EXCLUDED.report_date,
+                        last_attempt_at     = NOW(),
+                        last_attempt_status = 'success',
+                        last_attempt_error  = NULL
+                """, (
+                    ticker, md_text, has_docx, has_pptx,
+                    summary.get("rating"), summary.get("price_target"),
+                    summary.get("upside_pct"), gamma_url, bool(pptx_stale), report_date,
                 ))
     except Exception as _e:
         print(f"[analyst_reports] upsert failed for {ticker} (non-fatal): {_e!s:.200}")
@@ -7169,6 +7212,60 @@ def restore_all_reports():
     return {"ok": True, "restored": list(set(restored))}
 
 
+def _backfill_report_dates() -> None:
+    """One-shot lazy backfill: extract the in-report date from any existing
+    rows where report_date / claude_report_date is NULL. Reads the stored
+    report_md / report_md_claude column, runs _extract_report_date(), updates
+    the row. Idempotent — only touches rows with NULL date fields.
+
+    Runs inside list_reports so the user never has to wait for a separate
+    migration; first call after deploy backfills everything, subsequent
+    calls are no-ops because all rows have dates set.
+    """
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Grok dates
+            cur.execute("""
+                SELECT ticker, report_md FROM analyst_reports
+                 WHERE report_date IS NULL AND report_md IS NOT NULL AND report_md != ''
+                 LIMIT 200
+            """)
+            grok_rows = cur.fetchall()
+            for row in grok_rows:
+                d = _extract_report_date(row["report_md"] or "")
+                if d:
+                    try:
+                        cur.execute(
+                            "UPDATE analyst_reports SET report_date = %s WHERE ticker = %s",
+                            (d, row["ticker"]),
+                        )
+                    except Exception:
+                        pass
+            # Claude dates
+            cur.execute("""
+                SELECT ticker, report_md_claude FROM analyst_reports
+                 WHERE claude_report_date IS NULL AND report_md_claude IS NOT NULL AND report_md_claude != ''
+                 LIMIT 200
+            """)
+            claude_rows = cur.fetchall()
+            for row in claude_rows:
+                d = _extract_report_date(row["report_md_claude"] or "")
+                if d:
+                    try:
+                        cur.execute(
+                            "UPDATE analyst_reports SET claude_report_date = %s WHERE ticker = %s",
+                            (d, row["ticker"]),
+                        )
+                    except Exception:
+                        pass
+            if grok_rows or claude_rows:
+                print(f"[backfill] report dates filled — {len(grok_rows)} grok + {len(claude_rows)} claude")
+    except Exception as _e:
+        print(f"[backfill] error: {_e!s:.120}")
+
+
 def _hydrate_orphaned_claude_reports() -> None:
     """One-shot: detect on-disk {TICKER}_DGA_Report_claude.md files that
     aren't yet in the analyst_reports.claude_* columns and backfill them.
@@ -7229,6 +7326,12 @@ def list_reports():
         _hydrate_orphaned_claude_reports()
     except Exception:
         pass
+    # Lazy one-shot: backfill report_date / claude_report_date for existing
+    # rows that predate the schema migration (extracts from stored markdown).
+    try:
+        _backfill_report_dates()
+    except Exception:
+        pass
 
     # ── Primary: PostgreSQL ──────────────────────────────────────────────────
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -7240,7 +7343,8 @@ def list_reports():
                            COALESCE(pptx_stale, FALSE) AS pptx_stale,
                            last_attempt_at, last_attempt_status, last_attempt_error,
                            claude_generated_at, claude_rating,
-                           claude_price_target, claude_upside_pct
+                           claude_price_target, claude_upside_pct,
+                           report_date, claude_report_date
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
                     ORDER BY COALESCE(last_attempt_at, generated_at) DESC NULLS LAST
@@ -7302,6 +7406,12 @@ def list_reports():
                         "claude_rating":       r["claude_rating"],
                         "providers":           providers,
                         "provider_badge":      provider_badge,
+                        # As-of dates pulled from each LLM's report header
+                        # ('DGA CAPITAL RESEARCH | May 22, 2026'). These are
+                        # what the user sees under the ticker — distinct from
+                        # generated_at (DB upload time).
+                        "report_date":         r.get("report_date"),
+                        "claude_report_date":  r.get("claude_report_date"),
                         "current_price":       None,
                         "last_attempt_at":     r["last_attempt_at"].isoformat() if r.get("last_attempt_at") else None,
                         "last_attempt_status": r.get("last_attempt_status"),
@@ -8999,6 +9109,19 @@ def _ensure_analyst_reports_table(conn) -> None:
         cur.execute("""
             ALTER TABLE analyst_reports
             ADD COLUMN IF NOT EXISTS claude_upside_pct   NUMERIC
+        """)
+        # report_date / claude_report_date: the date the LLM put in the report
+        # HEADER ('DGA CAPITAL RESEARCH | May 22, 2026'). Distinct from
+        # generated_at (server timestamp). Surfaced under each ticker in
+        # Saved Reports so the user sees the AS-OF date of the analysis,
+        # not the time it was uploaded to the DB.
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS report_date         TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS claude_report_date  TEXT
         """)
     conn.commit()
 

@@ -3347,7 +3347,23 @@
               + ' title="Wipe cached SEC + market data for this ticker and re-run a fresh Grok analysis. '
               + 'Use when the report has empty financial tables (cached extract was bad)."'
               + ' onclick="event.stopPropagation();">🔃</button>' +
-            '<div class="rep-date">' + dateStr + '</div>' +
+            // As-of date(s) pulled FROM the report header. When both providers
+            // ran and dates differ, show 'G May 22 · C May 23' so the user
+            // sees each engine's analysis date. When they match (or only one
+            // ran), show a single date. Falls back to the server timestamp.
+            (function() {
+              const gd = (rep.report_date || '').trim();
+              const cd = (rep.claude_report_date || '').trim();
+              if (gd && cd && gd !== cd) {
+                return '<div class="rep-date" style="line-height:1.3;">'
+                  + '<span title="Grok report as-of"><b style="color:#0A1628;">G</b> ' + _esc(gd) + '</span>'
+                  + ' · '
+                  + '<span title="Claude report as-of"><b style="color:#d97706;">C</b> ' + _esc(cd) + '</span>'
+                  + '</div>';
+              }
+              const single = gd || cd || dateStr;
+              return '<div class="rep-date">' + _esc(single) + '</div>';
+            })() +
           '</td>' +
           '<td class="rep-num">' +
             '<div style="color:#0f172a; font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + '</div>' +
