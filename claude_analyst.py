@@ -1074,6 +1074,157 @@ def _attach_pct_change(snapshot: dict) -> None:
 
 
 # ============================================================================
+# Verified peer market data — injected into user_msg so the LLM's comps
+# table uses LIVE market caps + prices instead of training-data estimates.
+# ============================================================================
+# Sector-mapped curated peer set. Keys match the canonical sector strings
+# yfinance returns (after _builder_classify_sector style normalization).
+# Each list is intentionally 8-12 of the most-traded large/mega-cap names
+# in that sector — enough that any comparable analysis will overlap.
+_PEER_SECTOR_MAP = {
+    "Technology": ["AAPL","MSFT","GOOGL","GOOG","AMZN","META","NVDA","AVGO",
+                   "ORCL","CRM","ADBE","NFLX","AMD","CSCO","IBM","INTC","TXN","QCOM"],
+    "Communication Services": ["GOOGL","GOOG","META","NFLX","DIS","CMCSA","TMUS",
+                               "VZ","T","CHTR","EA","TTWO","WBD","PINS","SNAP","RBLX"],
+    "Consumer Cyclical":      ["AMZN","TSLA","HD","NKE","MCD","SBUX","BKNG","LOW",
+                               "TJX","ABNB","CMG","ORLY","ROST","MAR","HLT","F","GM"],
+    "Consumer Discretionary": ["AMZN","TSLA","HD","NKE","MCD","SBUX","BKNG","LOW",
+                               "TJX","ABNB","CMG","ORLY","ROST","MAR","HLT","F","GM"],
+    "Consumer Defensive":     ["WMT","COST","PG","KO","PEP","PM","MO","MDLZ",
+                               "CL","KDP","KMB","STZ","GIS","KHC","TGT"],
+    "Consumer Staples":       ["WMT","COST","PG","KO","PEP","PM","MO","MDLZ",
+                               "CL","KDP","KMB","STZ","GIS","KHC","TGT"],
+    "Financial Services":     ["JPM","BAC","WFC","GS","MS","C","AXP","BLK","SPGI",
+                               "V","MA","SCHW","PYPL","COF","USB","TFC","PNC"],
+    "Financials":             ["JPM","BAC","WFC","GS","MS","C","AXP","BLK","SPGI",
+                               "V","MA","SCHW","PYPL","COF","USB","TFC","PNC"],
+    "Healthcare":             ["JNJ","UNH","LLY","ABBV","MRK","PFE","ABT","TMO",
+                               "DHR","AMGN","BMY","CVS","ELV","CI","ISRG","SYK","MDT"],
+    "Health Care":            ["JNJ","UNH","LLY","ABBV","MRK","PFE","ABT","TMO",
+                               "DHR","AMGN","BMY","CVS","ELV","CI","ISRG","SYK","MDT"],
+    "Energy":                 ["XOM","CVX","COP","OXY","EOG","SLB","MPC","PSX",
+                               "VLO","HES","PXD","DVN","FANG","WMB","KMI"],
+    "Industrials":            ["HON","RTX","GE","BA","CAT","DE","UPS","UNP","LMT",
+                               "FDX","NOC","ETN","EMR","TT","WM","CSX","NSC","ITW"],
+    "Real Estate":            ["PLD","AMT","EQIX","PSA","CCI","O","SPG","DLR",
+                               "WELL","VICI","EXR","AVB","SBAC","ARE","CSGP"],
+    "Utilities":              ["NEE","SO","DUK","AEP","EXC","D","SRE","XEL","PEG",
+                               "ED","WEC","ETR","ES","DTE","AWK"],
+    "Basic Materials":        ["LIN","SHW","FCX","APD","ECL","DD","DOW","NEM",
+                               "CTVA","NUE","STLD","ALB","IFF","MLM","VMC"],
+    "Materials":              ["LIN","SHW","FCX","APD","ECL","DD","DOW","NEM",
+                               "CTVA","NUE","STLD","ALB","IFF","MLM","VMC"],
+}
+
+# Small TTL cache so consecutive analyses in the same sector reuse the data.
+_PEER_DATA_CACHE: dict[str, tuple[float, dict]] = {}   # ticker -> (ts, snapshot)
+_PEER_DATA_TTL    = 600   # 10 min
+
+
+def _fmt_market_cap(mcap: float | None) -> str:
+    if mcap is None or mcap <= 0:
+        return "N/A"
+    if mcap >= 1e12: return f"${mcap/1e12:.2f}T"
+    if mcap >= 1e9:  return f"${mcap/1e9:.1f}B"
+    if mcap >= 1e6:  return f"${mcap/1e6:.0f}M"
+    return f"${mcap:,.0f}"
+
+
+def _fetch_peer_snapshot(ticker: str) -> dict:
+    """Lightweight per-peer snapshot — price, market_cap, PE — cached 10 min.
+
+    Uses yfinance fast_info (no full .info dict) so it's fast even when
+    pulling 15 peers in a row. Best-effort; returns empty dict on failure
+    so we can gracefully omit any peer that fails to fetch.
+    """
+    now = time.time()
+    cached = _PEER_DATA_CACHE.get(ticker)
+    if cached and (now - cached[0]) < _PEER_DATA_TTL:
+        return cached[1]
+    out: dict = {}
+    try:
+        import yfinance as yf  # type: ignore
+        t = yf.Ticker(ticker)
+        try:
+            fi = t.fast_info
+            price = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            mcap  = getattr(fi, "market_cap", None)
+            prev  = getattr(fi, "previous_close", None)
+            if price: out["price"] = float(price)
+            if mcap:  out["market_cap"] = float(mcap)
+            if prev:  out["previous_close"] = float(prev)
+        except Exception:
+            pass
+        # PE / forward PE only from full .info — skip if fast_info already gave us mcap+price
+        if not out.get("market_cap"):
+            try:
+                info = t.info or {}
+                if info.get("marketCap"): out["market_cap"] = float(info["marketCap"])
+                if info.get("regularMarketPrice"): out["price"] = float(info["regularMarketPrice"])
+                if info.get("trailingPE"): out["pe"] = float(info["trailingPE"])
+            except Exception:
+                pass
+    except Exception:
+        return {}
+    _PEER_DATA_CACHE[ticker] = (now, out)
+    return out
+
+
+def build_verified_peers_block(ticker: str, sector: str | None) -> str:
+    """Return a markdown block of LIVE peer market data for `ticker`'s sector.
+
+    The block is prepended with strong instructions: 'use these exact
+    numbers verbatim for any of these tickers in your comparables table.'
+    Returns empty string if the sector is unknown or no peer data could
+    be fetched.
+    """
+    if not sector:
+        return ""
+    sec = (sector or "").strip()
+    # Try exact match first, then a sloppy case-insensitive fallback
+    peers = _PEER_SECTOR_MAP.get(sec)
+    if not peers:
+        for k, v in _PEER_SECTOR_MAP.items():
+            if k.lower() == sec.lower():
+                peers = v
+                break
+    if not peers:
+        return ""
+
+    # Exclude the target itself + any duplicates
+    target_u = (ticker or "").strip().upper()
+    peer_set = [p for p in peers if p.upper() != target_u]
+    # Cap at 12 to keep the block bounded
+    peer_set = peer_set[:12]
+
+    rows = []
+    for sym in peer_set:
+        snap = _fetch_peer_snapshot(sym)
+        if not snap or not snap.get("market_cap"):
+            continue
+        rows.append(
+            f"| {sym} | {_fmt_market_cap(snap.get('market_cap'))} | "
+            f"${snap.get('price', 0):.2f} |"
+            + (f" {snap['pe']:.1f} |" if snap.get("pe") else " — |")
+        )
+    if not rows:
+        return ""
+
+    block = (
+        "## ✅ VERIFIED PEER MARKET DATA (use these exact figures verbatim)\n\n"
+        f"The following live market data for {sec} sector peers was pulled from Yahoo Finance "
+        f"{datetime.now().strftime('%Y-%m-%d')}. **You MUST use these EXACT market cap and price "
+        f"figures for any of these tickers in your comparables / peer-multiple analysis** — do "
+        f"NOT substitute training-data estimates. If a ticker you want to reference is not in "
+        f"this list, you may use your knowledge but flag it as `(model estimate)` in the cell.\n\n"
+        "| Ticker | Market Cap | Price | TTM P/E |\n"
+        "|--------|-----------|-------|---------|\n"
+        + "\n".join(rows)
+    )
+    return block
+
+
+# ============================================================================
 # Watchlist — persistent list of tickers to scan
 # ============================================================================
 
@@ -6419,6 +6570,19 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             mcap_str  = f"${_mcap / 1e9:.1f}Bn" if _mcap else "N/A"
             ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
             wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
+            # Verified peer market data — same as the fresh path so comp tables
+            # reflect REAL Yahoo numbers, not training-data estimates.
+            _peers_block = ""
+            try:
+                _sector = (data.get("sector") or "").strip()
+                if not _sector:
+                    try:
+                        _sector, _ = fetch_sector_and_industry(ticker)
+                    except Exception:
+                        _sector = ""
+                _peers_block = build_verified_peers_block(ticker, _sector)
+            except Exception:
+                pass
             user_msg = (
                 f"DATE: {today}\n"
                 f"TICKER: {ticker}\n"
@@ -6430,6 +6594,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
                 f"52_WEEK_RANGE: {wk52_str}\n"
                 f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
                 f"{verified_block}\n\n"
+                + (f"{_peers_block}\n\n" if _peers_block else "")
                 + (f"{analyst_block}\n\n" if analyst_block else "")
                 + f"Generate the full research report for {ticker} following every rule in your system prompt."
             )
@@ -6519,6 +6684,27 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         ev_str    = f"${_ev / 1e9:.1f}Bn"   if _ev   else "N/A"
         wk52_str  = f"${_yl:.2f}–${_yh:.2f}" if (_yh and _yl) else "N/A"
 
+        # Live peer market data for the comps table — pulls real Yahoo
+        # market caps + prices so the LLM doesn't hallucinate stale numbers
+        # for Microsoft, Google, Amazon etc.
+        peers_block = ""
+        try:
+            sector = (data.get("sector") or "").strip()
+            # Try common spots if not at top-level
+            if not sector:
+                sector = (data.get("entity_metadata", {}) or {}).get("sector", "") if isinstance(data.get("entity_metadata"), dict) else ""
+            if not sector:
+                # Fall back to fetch_sector_and_industry helper used elsewhere
+                try:
+                    sector, _ind = fetch_sector_and_industry(ticker)
+                except Exception:
+                    sector = ""
+            peers_block = build_verified_peers_block(ticker, sector)
+            if peers_block:
+                print(f"   📊 Loaded verified peer market data for {ticker} ({sector})")
+        except Exception as _pe:
+            print(f"   ⚠️  Peer-data fetch skipped ({_pe})")
+
         user_msg = (
             f"DATE: {today}\n"
             f"TICKER: {ticker}\n"
@@ -6530,6 +6716,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             f"52_WEEK_RANGE: {wk52_str}\n"
             f"LATEST_FILING_TYPE: {data.get('latest_filing_type')}\n\n"
             f"{verified_block}\n\n"
+            + (f"{peers_block}\n\n" if peers_block else "")
             + (f"{analyst_block}\n\n" if analyst_block else "")
             + f"Generate the full research report for {ticker} following every rule in your system prompt."
         )

@@ -4020,6 +4020,11 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
             else:
                 _jobs[job_id]["status"] = "failed"
                 _jobs[job_id]["error"] = result.get("error", "Unknown error")
+                # Record failure in DB so it surfaces with ❌ in the reports list
+                try:
+                    _db_record_attempt_failure(ticker, result.get("error") or "Unknown error")
+                except Exception:
+                    pass
 
         # Persist report to PostgreSQL so it survives Railway redeploys.
         # Wrapped in try/except — a DB failure must never affect the job result.
@@ -4051,12 +4056,18 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool) -> None:
         # Log FULL traceback so we can see where the error actually happened.
         tb_str = traceback.format_exc()
         print(f"\n❌ Single-ticker job {job_id} ({ticker}) CRASHED:\n{tb_str}", flush=True)
+        tb_tail = tb_str.strip().splitlines()[-3:] if tb_str else []
+        err_msg = f"{exc} | {' | '.join(tb_tail)}"
         with _jobs_lock:
             _jobs[job_id]["status"] = "failed"
             # Include last line of traceback in error so the UI shows something
             # more useful than just the message.
-            tb_tail = tb_str.strip().splitlines()[-3:] if tb_str else []
-            _jobs[job_id]["error"] = f"{exc} | {' | '.join(tb_tail)}"
+            _jobs[job_id]["error"] = err_msg
+        # Persist failure for the saved-reports list
+        try:
+            _db_record_attempt_failure(ticker, err_msg)
+        except Exception:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4113,12 +4124,34 @@ def _bulk_reanalyze_worker(bulk_id: str, tickers: list[str]) -> None:
                 if ok:
                     j["completed"].append(ticker)
                 else:
-                    j["failed"].append({"ticker": ticker, "error": sub.get("error") or "unknown"})
+                    sub_err = sub.get("error") or "unknown"
+                    j["failed"].append({"ticker": ticker, "error": sub_err})
+                    # _run_analysis already calls _db_record_attempt_failure
+                    # on the inner failure paths, but be defensive in case the
+                    # subjob got into a 'failed' state without going through them.
+                    try:
+                        _db_record_attempt_failure(ticker, sub_err)
+                    except Exception:
+                        pass
         except BaseException as exc:  # noqa: BLE001
+            err = str(exc)[:240]
             with _bulk_reanalyze_lock:
                 j = _bulk_reanalyze_jobs.get(bulk_id)
                 if j:
-                    j["failed"].append({"ticker": ticker, "error": str(exc)[:240]})
+                    j["failed"].append({"ticker": ticker, "error": err})
+            try:
+                _db_record_attempt_failure(ticker, err)
+            except Exception:
+                pass
+
+        # ── Inter-ticker breather ───────────────────────────────────────
+        # Even though analyses are sequential, SEC EDGAR can throttle hard if
+        # we churn through many tickers back-to-back. A short sleep gives the
+        # rate-limit bucket time to refill between filings downloads. This
+        # is in ADDITION to the existing cache reuse (xbrl_extract.json) so
+        # most re-runs skip SEC entirely anyway.
+        if idx < total - 1:
+            time.sleep(5)
 
     with _bulk_reanalyze_lock:
         j = _bulk_reanalyze_jobs.get(bulk_id)
@@ -4131,34 +4164,56 @@ def _bulk_reanalyze_worker(bulk_id: str, tickers: list[str]) -> None:
 
 
 @app.post("/api/reports/reanalyze-all")
-def start_reanalyze_all(request: Request):
-    """Kick off a bulk re-analysis of every saved report.
+async def start_reanalyze_all(request: Request):
+    """Kick off a bulk re-analysis of saved reports.
 
     Behaviour:
-      • Iterates saved-report tickers sequentially (NOT parallel — see header).
+      • Iterates tickers sequentially (NOT parallel) with a 5s breather
+        between each so SEC EDGAR doesn't throttle.
       • Each ticker is re-analyzed with generate_gamma=False, so:
           - The full MD report + DOCX get regenerated.
           - Existing PPTX files on disk are kept (has_pptx stays TRUE).
           - DB row is marked pptx_stale=TRUE so the UI can fade the PPT pill.
-      • Estimated 2-3 min per ticker. The whole site stays responsive — each
-        sub-analysis runs in the FastAPI threadpool, not the request loop.
+      • Estimated 2-3 min per ticker. The whole site stays responsive.
+
+    Optional JSON body: {tickers: ["AAPL", "MSFT", ...]} — if provided, only
+    those tickers are processed (used by the "Retry Failed" button).
+    Without a body, ALL non-archived saved reports are processed.
 
     Returns: {bulk_job_id, total, tickers}
     """
     _claims_or_401(request)
-    # Collect all non-archived tickers
-    tickers: list[str] = []
-    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
-        try:
-            with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT ticker FROM analyst_reports
-                     WHERE archived IS NOT TRUE
-                     ORDER BY ticker
-                """)
-                tickers = [r[0] for r in cur.fetchall() if r and r[0]]
-        except Exception as e:
-            print(f"[bulk-reanalyze] ticker fetch failed: {e}")
+
+    # Optional explicit ticker list from request body (Retry Failed flow)
+    body_tickers: list[str] | None = None
+    try:
+        ct = request.headers.get("content-type", "")
+        if "application/json" in ct:
+            body = await request.json()
+            if isinstance(body, dict) and isinstance(body.get("tickers"), list):
+                body_tickers = [
+                    str(t).strip().upper() for t in body["tickers"]
+                    if t and isinstance(t, str) and 1 <= len(str(t).strip()) <= 12
+                ]
+    except Exception:
+        body_tickers = None
+
+    if body_tickers:
+        tickers = body_tickers
+    else:
+        # Collect all non-archived tickers from DB
+        tickers: list[str] = []
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ticker FROM analyst_reports
+                         WHERE archived IS NOT TRUE
+                         ORDER BY ticker
+                    """)
+                    tickers = [r[0] for r in cur.fetchall() if r and r[0]]
+            except Exception as e:
+                print(f"[bulk-reanalyze] ticker fetch failed: {e}")
     if not tickers:
         # Fallback to filesystem
         try:
@@ -5979,17 +6034,22 @@ def _db_upsert_report(
                 cur.execute("""
                     INSERT INTO analyst_reports
                         (ticker, generated_at, report_md, has_docx, has_pptx,
-                         rating, price_target, upside_pct, gamma_url)
-                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s)
+                         rating, price_target, upside_pct, gamma_url,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s,
+                            NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
-                        generated_at = NOW(),
-                        report_md    = EXCLUDED.report_md,
-                        has_docx     = EXCLUDED.has_docx,
-                        has_pptx     = EXCLUDED.has_pptx,
-                        rating       = EXCLUDED.rating,
-                        price_target = EXCLUDED.price_target,
-                        upside_pct   = EXCLUDED.upside_pct,
-                        gamma_url    = EXCLUDED.gamma_url
+                        generated_at        = NOW(),
+                        report_md           = EXCLUDED.report_md,
+                        has_docx            = EXCLUDED.has_docx,
+                        has_pptx            = EXCLUDED.has_pptx,
+                        rating              = EXCLUDED.rating,
+                        price_target        = EXCLUDED.price_target,
+                        upside_pct          = EXCLUDED.upside_pct,
+                        gamma_url           = EXCLUDED.gamma_url,
+                        last_attempt_at     = NOW(),
+                        last_attempt_status = 'success',
+                        last_attempt_error  = NULL
                 """, (
                     ticker, md_text, has_docx, has_pptx,
                     summary.get("rating"), summary.get("price_target"),
@@ -6000,18 +6060,23 @@ def _db_upsert_report(
                 cur.execute("""
                     INSERT INTO analyst_reports
                         (ticker, generated_at, report_md, has_docx, has_pptx,
-                         rating, price_target, upside_pct, gamma_url, pptx_stale)
-                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
+                         rating, price_target, upside_pct, gamma_url, pptx_stale,
+                         last_attempt_at, last_attempt_status, last_attempt_error)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s,
+                            NOW(), 'success', NULL)
                     ON CONFLICT (ticker) DO UPDATE SET
-                        generated_at = NOW(),
-                        report_md    = EXCLUDED.report_md,
-                        has_docx     = EXCLUDED.has_docx,
-                        has_pptx     = EXCLUDED.has_pptx,
-                        rating       = EXCLUDED.rating,
-                        price_target = EXCLUDED.price_target,
-                        upside_pct   = EXCLUDED.upside_pct,
-                        gamma_url    = EXCLUDED.gamma_url,
-                        pptx_stale   = EXCLUDED.pptx_stale
+                        generated_at        = NOW(),
+                        report_md           = EXCLUDED.report_md,
+                        has_docx            = EXCLUDED.has_docx,
+                        has_pptx            = EXCLUDED.has_pptx,
+                        rating              = EXCLUDED.rating,
+                        price_target        = EXCLUDED.price_target,
+                        upside_pct          = EXCLUDED.upside_pct,
+                        gamma_url           = EXCLUDED.gamma_url,
+                        pptx_stale          = EXCLUDED.pptx_stale,
+                        last_attempt_at     = NOW(),
+                        last_attempt_status = 'success',
+                        last_attempt_error  = NULL
                 """, (
                     ticker, md_text, has_docx, has_pptx,
                     summary.get("rating"), summary.get("price_target"),
@@ -6019,6 +6084,38 @@ def _db_upsert_report(
                 ))
     except Exception as _e:
         print(f"[analyst_reports] upsert failed for {ticker} (non-fatal): {_e!s:.200}")
+
+
+def _db_record_attempt_failure(ticker: str, error: str) -> None:
+    """Mark the most-recent analyze attempt as FAILED for `ticker`.
+
+    Only updates the attempt tracking columns; leaves the existing
+    successful report (report_md, generated_at, etc.) untouched so the
+    user can still open the old report and see exactly which day's data
+    they're looking at while knowing the last refresh failed.
+
+    If no row exists yet for this ticker (failure on first-ever attempt),
+    we still create one with empty report fields so the UI can surface
+    the failure in the saved-reports list.
+    """
+    if not _PSYCOPG2_OK or not os.environ.get("DATABASE_URL"):
+        return
+    err_short = (error or "")[:500]
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO analyst_reports
+                    (ticker, generated_at, report_md, has_docx, has_pptx,
+                     last_attempt_at, last_attempt_status, last_attempt_error)
+                VALUES (%s, NOW(), '', FALSE, FALSE,
+                        NOW(), 'failed', %s)
+                ON CONFLICT (ticker) DO UPDATE SET
+                    last_attempt_at     = NOW(),
+                    last_attempt_status = 'failed',
+                    last_attempt_error  = EXCLUDED.last_attempt_error
+            """, (ticker, err_short))
+    except Exception as _e:
+        print(f"[analyst_reports] failure-record failed for {ticker} (non-fatal): {_e!s:.200}")
 
 
 def _extract_summary_cached(md_file: Path) -> dict:
@@ -6206,25 +6303,29 @@ def list_reports():
                 cur.execute("""
                     SELECT ticker, generated_at, has_docx, has_pptx,
                            rating, price_target, upside_pct, gamma_url,
-                           COALESCE(pptx_stale, FALSE) AS pptx_stale
+                           COALESCE(pptx_stale, FALSE) AS pptx_stale,
+                           last_attempt_at, last_attempt_status, last_attempt_error
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
-                    ORDER BY generated_at DESC
+                    ORDER BY COALESCE(last_attempt_at, generated_at) DESC NULLS LAST
                 """)
                 rows = cur.fetchall()
             if rows:
                 return [
                     {
-                        "ticker":        r["ticker"],
-                        "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
-                        "has_docx":      r["has_docx"],
-                        "has_pptx":      r["has_pptx"],
-                        "pptx_stale":    bool(r["pptx_stale"]),
-                        "gamma_url":     r["gamma_url"],
-                        "rating":        r["rating"],
-                        "price_target":  float(r["price_target"]) if r["price_target"] is not None else None,
-                        "current_price": None,  # not stored in DB; omit gracefully
-                        "upside_pct":    float(r["upside_pct"]) if r["upside_pct"] is not None else None,
+                        "ticker":              r["ticker"],
+                        "generated_at":        r["generated_at"].isoformat() if r["generated_at"] else None,
+                        "has_docx":            r["has_docx"],
+                        "has_pptx":            r["has_pptx"],
+                        "pptx_stale":          bool(r["pptx_stale"]),
+                        "gamma_url":           r["gamma_url"],
+                        "rating":              r["rating"],
+                        "price_target":        float(r["price_target"]) if r["price_target"] is not None else None,
+                        "current_price":       None,
+                        "upside_pct":          float(r["upside_pct"]) if r["upside_pct"] is not None else None,
+                        "last_attempt_at":     r["last_attempt_at"].isoformat() if r.get("last_attempt_at") else None,
+                        "last_attempt_status": r.get("last_attempt_status"),
+                        "last_attempt_error":  r.get("last_attempt_error"),
                     }
                     for r in rows
                 ]
@@ -7843,6 +7944,22 @@ def _ensure_analyst_reports_table(conn) -> None:
         cur.execute("""
             ALTER TABLE analyst_reports
             ADD COLUMN IF NOT EXISTS pptx_stale BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        # Attempt tracking — lets the UI show ✅/❌ next to each report so the
+        # user can tell at a glance which tickers actually refreshed during
+        # the last bulk reanalyze and which failed. generated_at still tracks
+        # the LAST SUCCESSFUL run; last_attempt_* track the most recent try.
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS last_attempt_at    TIMESTAMP
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS last_attempt_status TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE analyst_reports
+            ADD COLUMN IF NOT EXISTS last_attempt_error  TEXT
         """)
     conn.commit()
 

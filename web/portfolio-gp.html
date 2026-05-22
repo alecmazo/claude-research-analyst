@@ -640,6 +640,13 @@
     width: 5px; height: 5px; border-radius: 50%;
     background: #f59e0b; border: 1px solid #fff;
   }
+  /* Per-report ✅/❌ status indicator next to the ticker */
+  .rep-status-ok, .rep-status-fail {
+    font-size: 11px; line-height: 1; user-select: none;
+    display: inline-block; padding: 0 2px;
+  }
+  .rep-status-fail { cursor: pointer; }
+  .rep-status-fail:hover { transform: scale(1.15); }
   /* 🔬 Compare with Claude button */
   .rep-compare-btn {
     background: none; border: none; cursor: pointer;
@@ -3009,11 +3016,42 @@
   }
 
   // Sort state for reports table (persists across re-renders within the session)
-  let _repSortDir = 'desc';
+  // Default: 'date' = chronological (newest first) — user can click the
+  // TGT/Upside header to switch to upside-based sort.
+  let _repSortMode = 'date';   // 'date' | 'upside'
+  let _repSortDir  = 'desc';
+
+  // Format the "x ago" relative date used in the dateStr column. Falls back
+  // to absolute ISO date for anything older than 7 days.
+  function _repFmtRelDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const diffMs = Date.now() - d.getTime();
+    const min = Math.floor(diffMs / 60000);
+    if (min < 1)   return 'Just now';
+    if (min < 60)  return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24)  return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 2)  return 'Yesterday';
+    if (days < 7)  return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
 
   function renderReports(reports) {
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
+
+    // Chronological default: newest attempted (success OR failed) first.
+    // Falls back to generated_at when last_attempt_at is missing.
+    if (_repSortMode === 'date') {
+      reports = reports.slice().sort(function(a, b) {
+        const da = new Date(a.last_attempt_at || a.generated_at || 0).getTime();
+        const db = new Date(b.last_attempt_at || b.generated_at || 0).getTime();
+        return db - da;
+      });
+    }
 
     // Single batch quote call — one request for all tickers instead of N
     // parallel /api/quote/ calls that hammer Yahoo and trigger rate limits.
@@ -3028,12 +3066,27 @@
         const target = rep.price_target != null ? Number(rep.price_target) : null;
         const upside = (target != null && price != null && price > 0)
                        ? ((target - price) / price * 100) : (rep.upside_pct != null ? Number(rep.upside_pct) : null);
-        const dateStr = rep.generated_at ? new Date(rep.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        // Status indicator: ✅ on success, ❌ on failure (tooltip = error message).
+        // Date shown is the LATEST attempt time (success or fail), so the user
+        // can tell at a glance which reports refreshed and which are stale.
+        const attemptAt   = rep.last_attempt_at || rep.generated_at;
+        const dateStr     = _repFmtRelDate(attemptAt);
+        const attemptStat = rep.last_attempt_status || (rep.generated_at ? 'success' : null);
+        const attemptErr  = (rep.last_attempt_error || '').replace(/"/g, '&quot;');
+        let statusIcon = '';
+        if (attemptStat === 'failed') {
+          statusIcon = '<span class="rep-status-fail" title="Last attempt FAILED: '
+            + attemptErr + ' (click to retry)" data-rep-retry="' + rep.ticker + '"'
+            + ' onclick="event.stopPropagation();">❌</span>';
+        } else if (attemptStat === 'success') {
+          statusIcon = '<span class="rep-status-ok" title="Last refresh succeeded">✅</span>';
+        }
         const sortVal = upside != null ? upside.toFixed(4) : '';
         return (
-          '<tr data-ticker="' + rep.ticker + '">' +
+          '<tr data-ticker="' + rep.ticker + '" data-rep-status="' + (attemptStat || '') + '">' +
           '<td>' +
             '<span style="display:inline-flex;align-items:center;gap:5px;">' +
+              statusIcon +
               '<span class="rep-tk">' + rep.ticker + '</span>' +
               '<button data-rep-delete="' + rep.ticker + '" title="Remove report" ' +
                 'style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:12px;line-height:1;color:var(--dim);opacity:0.6;" ' +
@@ -3097,11 +3150,49 @@
         });
       });
 
+      // ❌ click → re-run analysis just for this ticker (no bulk job)
+      tbody.querySelectorAll('[data-rep-retry]').forEach(span => {
+        span.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const tk = span.getAttribute('data-rep-retry');
+          if (!confirm('Retry analysis for ' + tk + '?\nLast error: ' + (span.getAttribute('title') || ''))) return;
+          try {
+            const r = await window.dgaFetch('/api/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ticker: tk, generate_gamma: false }),
+            });
+            if (!r.ok) throw new Error('analyze ' + r.status);
+            const j = await r.json();
+            span.textContent = '⏳';
+            span.title = 'Retry in progress (job ' + j.job_id.slice(0,8) + '…)';
+            // Refresh the list every 30s while a retry is pending; loadReports
+            // will pick up the updated last_attempt_status when it lands
+            const interval = setInterval(async () => {
+              try {
+                const jr = await window.dgaFetch('/api/jobs/' + j.job_id);
+                if (!jr.ok) return;
+                const jd = await jr.json();
+                if (jd.status === 'done' || jd.status === 'failed') {
+                  clearInterval(interval);
+                  loadReports();
+                }
+              } catch (e) {}
+            }, 8000);
+          } catch (err) {
+            alert('Retry failed: ' + err.message);
+          }
+        });
+      });
+
       // Wire per-row scan buttons
       _wireRepScanButtons();
 
-      // Apply current sort direction immediately after render
-      _sortTableByCol(tbody, 2, _repSortDir);
+      // Only apply upside-sort if the user explicitly switched to it.
+      // Default 'date' mode keeps the chronological order set up top.
+      if (_repSortMode === 'upside') {
+        _sortTableByCol(tbody, 2, _repSortDir);
+      }
 
       // Wire the "TGT / Upside" column header — first call or re-wire after re-render
       const th = document.getElementById('rep-th-upside');
@@ -3111,10 +3202,15 @@
         const arrow = document.createElement('span');
         arrow.id = 'rep-sort-arrow';
         arrow.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.7;';
-        arrow.textContent = _repSortDir === 'desc' ? '▼' : '▲';
+        arrow.textContent = _repSortMode === 'upside' ? (_repSortDir === 'desc' ? '▼' : '▲') : '';
         th.appendChild(arrow);
         th.addEventListener('click', function() {
-          _repSortDir = _repSortDir === 'desc' ? 'asc' : 'desc';
+          if (_repSortMode !== 'upside') {
+            _repSortMode = 'upside';
+            _repSortDir  = 'desc';
+          } else {
+            _repSortDir = _repSortDir === 'desc' ? 'asc' : 'desc';
+          }
           document.getElementById('rep-sort-arrow').textContent = _repSortDir === 'desc' ? '▼' : '▲';
           _sortTableByCol(tbody, 2, _repSortDir);
         });
@@ -9104,6 +9200,56 @@
         bDetail.textContent = `${done} done · ${failed} failed · ETA ~${Math.max(1, (total - idx) * 2.5)} min`;
         bCancel.style.display = '';
         bFill.style.background = '#9333ea';
+      }
+
+      // ── Surface the failed list with reasons + a Retry button ──────────────
+      // Only render when the run is over (done/cancelled) and there are failures.
+      let failBlock = document.getElementById('reanalyze-banner-failed');
+      const showFailList = (j.status === 'done' || j.status === 'cancelled') && failed > 0;
+      if (showFailList) {
+        if (!failBlock) {
+          failBlock = document.createElement('div');
+          failBlock.id = 'reanalyze-banner-failed';
+          failBlock.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid #e9d5ff;font-size:10px;color:#6b21a8;max-height:160px;overflow-y:auto;';
+          banner.appendChild(failBlock);
+        }
+        const failHtml = (j.failed || []).map(function(f) {
+          const errShort = String(f.error || 'unknown').replace(/</g,'&lt;').slice(0, 140);
+          return '<div style="padding:3px 0;display:flex;gap:8px;">'
+            + '<span style="font-weight:800;min-width:60px;">' + f.ticker + '</span>'
+            + '<span style="opacity:0.8;flex:1;">' + errShort + '</span>'
+            + '</div>';
+        }).join('');
+        failBlock.innerHTML =
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+          +   '<strong>' + failed + ' failed:</strong>'
+          +   '<button id="reanalyze-retry-failed" style="background:#9333ea;border:none;color:#fff;font-size:9px;font-weight:800;letter-spacing:0.5px;padding:3px 8px;border-radius:3px;cursor:pointer;">↻ RETRY FAILED</button>'
+          + '</div>'
+          + failHtml;
+        const retryBtn = document.getElementById('reanalyze-retry-failed');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', async function() {
+            if (!confirm('Retry ' + failed + ' failed ticker(s)? Same sequential, background process.')) return;
+            retryBtn.disabled = true; retryBtn.textContent = 'STARTING…';
+            try {
+              const tks = (j.failed || []).map(function(f) { return f.ticker; });
+              const r = await window.dgaFetch('/api/reports/reanalyze-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: tks }),
+              });
+              if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.status); }
+              const job = await r.json();
+              if (failBlock) failBlock.remove();
+              _startPolling(job.bulk_job_id);
+            } catch (e) {
+              alert('Retry failed: ' + e.message);
+              retryBtn.disabled = false; retryBtn.textContent = '↻ RETRY FAILED';
+            }
+          });
+        }
+      } else if (failBlock) {
+        failBlock.remove();
       }
     }
 
