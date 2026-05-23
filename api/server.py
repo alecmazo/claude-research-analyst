@@ -15741,6 +15741,16 @@ def _ensure_podcast_table() -> None:
                 )
             """)
             conn.commit()
+            # ui133: alignment + DA brief columns (idempotent)
+            for stmt in [
+                "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS alignment_json JSONB",
+                "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS da_brief TEXT",
+                "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS episode_mode TEXT",
+            ]:
+                try:
+                    cur.execute(stmt); conn.commit()
+                except Exception as _e:
+                    print(f"⚠️  [podcast] schema ALTER skipped: {_e!s:.120}", flush=True)
     except Exception as e:
         print(f"❌ [podcast] table ensure failed: {e!s:.200}", flush=True)
 
@@ -16059,24 +16069,36 @@ def podcast_generate_script(ticker: str):
     except Exception:
         pass
 
-    # Persist script to DB so it appears in the "saved scripts" dropdown.
-    # We write to analyst_podcasts.script_json WITHOUT touching audio fields —
-    # an audio generation later will reuse this script via the cache check.
+    # Persist script + alignment + DA brief to DB so the dropdown lists it
+    # and the audio pipeline reuses everything (no double-spend).
+    alignment = result.get("alignment") or {}
     if result.get("script") and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             _ensure_podcast_table()
             with _fund_conn() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO analyst_podcasts (ticker, episode_title, script_json, generated_at)
-                    VALUES (%s, %s, %s, NOW())
+                    INSERT INTO analyst_podcasts
+                        (ticker, episode_title, script_json,
+                         alignment_json, da_brief, episode_mode, generated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (ticker) DO UPDATE SET
-                        episode_title = EXCLUDED.episode_title,
-                        script_json   = EXCLUDED.script_json,
-                        generated_at  = NOW()
+                        episode_title  = EXCLUDED.episode_title,
+                        script_json    = EXCLUDED.script_json,
+                        alignment_json = EXCLUDED.alignment_json,
+                        da_brief       = EXCLUDED.da_brief,
+                        episode_mode   = EXCLUDED.episode_mode,
+                        generated_at   = NOW()
                 """, (
                     tk,
                     (result["script"].get("episode_title") or f"{tk}: Bull vs Bear"),
                     json.dumps(result["script"]),
+                    json.dumps({
+                        "roles":         alignment.get("roles"),
+                        "rock_stance":   alignment.get("rock_stance"),
+                        "claude_stance": alignment.get("claude_stance"),
+                    }),
+                    alignment.get("da_brief") or None,
+                    (alignment.get("roles") or {}).get("episode_mode"),
                 ))
                 conn.commit()
         except Exception as e:
@@ -16087,6 +16109,7 @@ def podcast_generate_script(ticker: str):
         "ticker":      tk,
         "script":      result.get("script"),
         "validation":  result.get("validation"),
+        "alignment":   alignment,
         "transcript":  podcast_engine.script_to_transcript(result["script"]) if result.get("script") else None,
     }
 
@@ -16105,7 +16128,7 @@ def podcast_list_scripts():
         _ensure_podcast_table()
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""
-                SELECT ticker, episode_title, generated_at,
+                SELECT ticker, episode_title, generated_at, episode_mode,
                        (script_json->>'winner') AS winner,
                        (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio
                 FROM analyst_podcasts
@@ -16118,6 +16141,7 @@ def podcast_list_scripts():
                 "ticker":       r["ticker"],
                 "title":        r["episode_title"] or f"{r['ticker']}: Bull vs Bear",
                 "winner":       r["winner"],
+                "mode":         r["episode_mode"],
                 "has_audio":    bool(r["has_audio"]),
                 "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
             } for r in rows
@@ -16135,7 +16159,8 @@ def podcast_get_script(ticker: str):
         return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""SELECT script_json, episode_title, generated_at
+            cur.execute("""SELECT script_json, episode_title, generated_at,
+                                  alignment_json, da_brief, episode_mode
                            FROM analyst_podcasts WHERE ticker = %s""", (tk,))
             row = cur.fetchone()
     except Exception as e:
@@ -16152,6 +16177,9 @@ def podcast_get_script(ticker: str):
         "validation":   validation,
         "transcript":   podcast_engine.script_to_transcript(script) if isinstance(script, dict) else None,
         "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
+        "alignment":    row.get("alignment_json"),
+        "da_brief":     row.get("da_brief"),
+        "mode":         row.get("episode_mode"),
     }
 
 

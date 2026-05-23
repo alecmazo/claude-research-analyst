@@ -152,31 +152,115 @@ DO NOT include any text outside the JSON. DO NOT use markdown code fences.
 """
 
 
-def _user_prompt(ticker: str, grok_md: str, claude_md: str) -> str:
-    return f"""Generate the DGA HiTech Podcast episode for ticker {ticker}.
+def _user_prompt(
+    ticker: str, grok_md: str, claude_md: str,
+    *,
+    roles: dict | None = None,
+    rock_stance: dict | None = None,
+    claude_stance: dict | None = None,
+    da_brief: str = "",
+) -> str:
+    roles = roles or {"episode_mode": "debate", "bull_speaker": "rock", "bear_speaker": "claude"}
+    rock_stance = rock_stance or {}
+    claude_stance = claude_stance or {}
 
-Below are the two source research reports the analysts will debate. \
-Pull specific numbers (price targets, multiples, growth rates, margins) \
-from these — the debate must feel grounded in real data, not generic.
+    # Mode-specific framing for the writer
+    mode_framing = {
+        "debate": (
+            "MODE: DEBATE — the reports disagree directionally. Standard format. "
+            "Rock argues the bull case, Claude the bear (or vice-versa per role "
+            "assignment). Both stay in character."
+        ),
+        "stress_test": (
+            "MODE: STRESS TEST — BOTH analysts were directionally bullish. The "
+            "less-aggressive one is in the BEAR SEAT tonight, briefed with a "
+            "Devil's Advocate Brief (below). This is NOT fake disagreement — "
+            "they're stress-testing the consensus. The bear-seat speaker opens "
+            "with: \"I came in bullish too, but...\" The episode title reflects "
+            "that consensus is exactly when paranoia should be highest."
+        ),
+        "devils_advocate": (
+            "MODE: DEVIL'S ADVOCATE — BOTH analysts were directionally bearish. "
+            "The less-bearish one is in the BULL SEAT, briefed with a contrarian "
+            "long case. The bull-seat speaker opens with: \"Hear me out — I know "
+            "we both hated this name on the way in, but...\""
+        ),
+        "spread": (
+            "MODE: THE SPREAD — both directionally aligned, but the magnitudes "
+            "differ materially. The debate is about position sizing, time "
+            "horizon, and entry — not direction. Treat the magnitude gap AS "
+            "the disagreement."
+        ),
+        "mixed": (
+            "MODE: MIXED SIGNALS — both analysts are roughly neutral. The "
+            "debate centers on what catalysts would resolve the ambivalence "
+            "in either direction. Use the gap_analysis section heavily."
+        ),
+    }
+    framing = mode_framing.get(roles["episode_mode"], mode_framing["debate"])
+
+    bull = roles["bull_speaker"]
+    bear = roles["bear_speaker"]
+
+    da_section = ""
+    if da_brief and not da_brief.startswith("[DA brief unavailable"):
+        da_section = f"""
 
 ══════════════════════════════════════════════════════════════════════
-ROCK'S REPORT (Grok-powered, the more aggressive analyst):
+DEVIL'S ADVOCATE BRIEF (live bear research, MUST be used by the bear seat):
+══════════════════════════════════════════════════════════════════════
+{da_brief.strip()}
+
+The bear-seat speaker ({bear.upper()}) MUST naturally weave at least
+THREE bullets from this brief into the debate. Phrase them in his own
+voice — don't just read the bullets verbatim. Cite numbers and dates
+where present. This is what makes the stress test feel real and not
+performative.
+══════════════════════════════════════════════════════════════════════"""
+
+    return f"""Generate the DGA HiTech Podcast episode for ticker {ticker}.
+
+══════════════════════════════════════════════════════════════════════
+ROLE ASSIGNMENT (data-driven, do not override):
+══════════════════════════════════════════════════════════════════════
+{framing}
+
+  • BULL SEAT  → {bull.upper()}   (his actual report direction: {rock_stance.get('direction') if bull=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bull=='rock' else claude_stance.get('upside_pct')}%)
+  • BEAR SEAT  → {bear.upper()}   (his actual report direction: {rock_stance.get('direction') if bear=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bear=='rock' else claude_stance.get('upside_pct')}%)
+
+Both speakers stay in personality (Rock punchy/contrarian, Claude
+measured/skeptic-tilted). But the directional stance each ARGUES is
+assigned above. If the assignment goes against an analyst's own report
+(e.g. Claude has the bear seat despite a bullish report), the speaker
+acknowledges this naturally: "I came in bullish, but..." / "Look, my
+report's positive, but let me stress-test that..."
+
+Below are the source reports. Pull specific numbers (price targets,
+multiples, growth rates, margins) from them — the debate must feel
+grounded in real data.
+
+══════════════════════════════════════════════════════════════════════
+ROCK'S REPORT (Grok-powered):
 ══════════════════════════════════════════════════════════════════════
 {grok_md.strip()}
 
 ══════════════════════════════════════════════════════════════════════
-CLAUDE'S REPORT (Claude-powered, the more measured analyst):
+CLAUDE'S REPORT (Claude-powered):
 ══════════════════════════════════════════════════════════════════════
-{claude_md.strip()}
+{claude_md.strip()}{da_section}
 
 ══════════════════════════════════════════════════════════════════════
 
 Now write the episode. Remember:
   • JSON only, matching the schema in the system prompt exactly
   • 1,400–1,800 total words
-  • Max 5 curse words total, only from the whitelist
+  • Up to 10 curse words from the whitelist (don't be precious)
+  • Real human fillers (um/uh/y'know/look/honestly/hmm) ~1 in 4 turns
+  • Vary turn lengths constantly — no metronomic A-B-A-B pattern
   • Alex names a winner with 2 specific reasons drawn from THE DEBATE
   • "winner" field at the top must match Alex's verdict
+  • Episode title at top of JSON should match the MODE (e.g., for
+    stress_test: "{ticker}: The Bull Case Under Pressure")
 """
 
 
@@ -308,6 +392,222 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# Alignment detection + dynamic role assignment (ui133)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Problem: when both reports are bullish, a "Bull vs Bear" format becomes
+# vigorous-agreement theater. Solution: classify each report's stance,
+# then assign Bull/Bear seats DYNAMICALLY based on which analyst is more
+# aggressive — and brief the loser-seat with a Devil's Advocate Brief
+# (Grok researches the bear case via live search, Claude synthesizes).
+#
+# Episode modes:
+#   debate         — natural disagreement (one bull, one bear)
+#   stress_test    — both bullish; less-aggressive analyst plays bear with DA brief
+#   devils_advocate — both bearish; less-aggressive analyst plays bull
+#   spread         — same direction, big magnitude gap (>15% upside delta)
+#   mixed          — both neutral / unclear
+
+def classify_stance(report_md: str) -> dict[str, Any]:
+    """Pull direction + magnitude + conviction out of one report's text."""
+    import claude_analyst as _ca
+    summary = {}
+    try:
+        summary = _ca.extract_summary_from_report(report_md) or {}
+    except Exception:
+        summary = {}
+    upside  = summary.get("upside_pct")
+    rating  = (summary.get("rating") or "").lower()
+    pt      = summary.get("price_target")
+
+    if upside is None:
+        direction = "neutral"
+    elif upside > 5:
+        direction = "bull"
+    elif upside < -5:
+        direction = "bear"
+    else:
+        direction = "neutral"
+
+    mag = abs(upside or 0)
+    if "strong buy" in rating or "high conviction" in rating or mag > 25:
+        conviction = "high"
+    elif "buy" in rating or "overweight" in rating or mag > 12:
+        conviction = "medium"
+    elif "sell" in rating or "underweight" in rating:
+        conviction = "medium"
+    else:
+        conviction = "low"
+
+    return {
+        "direction":        direction,
+        "upside_pct":       upside,
+        "price_target":     pt,
+        "rating":           rating,
+        "conviction":       conviction,
+        "aggression_score": (upside or 0.0),  # signed; +25 more bullish than +5
+    }
+
+
+def assign_roles(rock_stance: dict, claude_stance: dict) -> dict[str, Any]:
+    """Decide which speaker plays Bull seat vs Bear seat + episode mode.
+
+    Personalities stay constant — Rock is always punchy/contrarian, Claude
+    always measured/skeptic-tilted. But the directional stance the
+    character is asked to *argue* is data-driven.
+
+    Examples:
+      • Rock +28%, Claude +6%  → stress_test mode; Claude in bear seat
+        (his lower upside IS the bear case — he stress-tests Rock's exuberance)
+      • Rock +25%, Claude -10% → debate mode; Rock bull, Claude bear
+      • Rock -5%, Claude +18%  → debate mode; Claude bull, Rock bear
+        (yes, this means Rock is asked to argue a bearish case — works
+        because the data is the data)
+      • Rock +6%, Claude +5%   → mixed mode; very low conviction, gap_analysis
+        becomes the centerpiece
+    """
+    r_dir = rock_stance.get("direction")
+    c_dir = claude_stance.get("direction")
+    r_agg = rock_stance.get("aggression_score") or 0
+    c_agg = claude_stance.get("aggression_score") or 0
+    gap = abs(r_agg - c_agg)
+
+    # Natural disagreement — clean bull/bear assignment
+    if r_dir == "bull" and c_dir == "bear":
+        return {"bull_speaker": "rock", "bear_speaker": "claude",
+                "episode_mode": "debate", "needs_da_brief": False}
+    if r_dir == "bear" and c_dir == "bull":
+        return {"bull_speaker": "claude", "bear_speaker": "rock",
+                "episode_mode": "debate", "needs_da_brief": False}
+
+    # Both bullish — Stress Test. Less-aggressive plays bear, gets DA brief.
+    if r_dir == "bull" and c_dir == "bull":
+        if r_agg >= c_agg:
+            bull, bear = "rock", "claude"   # Claude is the lower-conviction bull → bear seat
+        else:
+            bull, bear = "claude", "rock"
+        return {"bull_speaker": bull, "bear_speaker": bear,
+                "episode_mode": "stress_test", "needs_da_brief": True}
+
+    # Both bearish — Devil's Advocate. Less-bearish plays bull.
+    if r_dir == "bear" and c_dir == "bear":
+        if r_agg <= c_agg:   # r_agg more negative → he stays bear
+            bull, bear = "claude", "rock"
+        else:
+            bull, bear = "rock", "claude"
+        return {"bull_speaker": bull, "bear_speaker": bear,
+                "episode_mode": "devils_advocate", "needs_da_brief": True}
+
+    # One or both neutral — use the aggression score; bigger gap = "spread"
+    if r_agg >= c_agg:
+        bull, bear = "rock", "claude"
+    else:
+        bull, bear = "claude", "rock"
+    mode = "spread" if gap > 15 else "mixed"
+    return {"bull_speaker": bull, "bear_speaker": bear,
+            "episode_mode": mode, "needs_da_brief": (mode == "spread")}
+
+
+def generate_devils_advocate_brief(
+    ticker: str, grok_md: str, claude_md: str,
+    *, on_progress=None,
+) -> str:
+    """Two-pass DA brief: Grok researches via live search, Claude synthesizes.
+
+    Returns markdown — 5-8 bullets of bear-side ammunition the source
+    reports didn't address. Empty string if either pass fails (caller
+    should treat that as "no brief, proceed without").
+    """
+    import claude_analyst as _ca
+    if on_progress:
+        try: on_progress("da_research", "Grok researching bear case (live web search)…")
+        except Exception: pass
+
+    research_prompt = f"""You are a short-seller's research analyst building the bear case
+on {ticker}. The buy-side coverage on this name has converged bullish —
+your job is to surface the COUNTER-EVIDENCE the bulls likely missed.
+
+Search the live web (use your search tool) for:
+  • Recent short-seller reports on {ticker} (Hindenburg, Muddy Waters,
+    Kerrisdale, Bonitas, Spruce Point, Citron, Grizzly, etc.)
+  • SEC 10-K / 10-Q risk factors materially raised in the last 12 months
+  • Recent Form 4 insider transactions — esp. CEO/CFO selling >$5M
+  • Peer multiple compression / sector re-rating in the last 90 days
+  • Executive departures (CFO, General Counsel, Chief Compliance)
+  • Macro/regulatory headwinds (rates, FX, tariffs, antitrust, FDA, etc.)
+  • Customer concentration risk
+  • Recent negative news (earnings warnings, guidance cuts, lawsuits,
+    DOJ inquiries, accounting restatements)
+  • Patent/regulatory cliff dates
+
+Dump raw findings with citations. 600-1000 words. Be ruthless. DO NOT
+summarize or hedge — give me the source material I can use to argue
+the bear case.
+
+Today's date is {_today_str()}."""
+
+    try:
+        raw_research = _ca.call_grok(
+            system_prompt="You are a bear-side equity research analyst with web access. "
+                          "Find the strongest counter-evidence to the bullish consensus.",
+            user_content=research_prompt,
+            live_search=True,
+        )
+    except Exception as e:
+        return f"[DA brief unavailable — Grok research failed: {e!s:.120}]"
+
+    if not raw_research or len(raw_research.strip()) < 200:
+        return ""
+
+    if on_progress:
+        try: on_progress("da_synth", "Claude synthesizing DA brief…")
+        except Exception: pass
+
+    synth_prompt = f"""You are synthesizing a "Devil's Advocate Brief" for a podcast debate.
+
+Both source reports on {ticker} were directionally bullish. Your job:
+read Grok's raw bear research below and distill it into 5-8 punchy
+bullets the bear-seat speaker can fire off during the debate.
+
+Each bullet:
+  • One sentence, 12-25 words
+  • Cite source/date/data point where possible (e.g., "per 9/15 10-K")
+  • Focus on what would BREAK the bullish thesis if true — not generic risk
+  • Don't repeat anything already covered in the source reports
+
+Source reports (the bullish consensus):
+══════════════════════════════════
+ROCK'S REPORT:
+{grok_md[:8000]}
+══════════════════════════════════
+CLAUDE'S REPORT:
+{claude_md[:8000]}
+══════════════════════════════════
+
+Raw bear research from Grok (this is your ammunition):
+{raw_research[:18000]}
+══════════════════════════════════
+
+OUTPUT: just the bullets, one per line, each starting with "• ".
+No preamble, no header, no closing summary. Five to eight bullets only.
+"""
+
+    try:
+        brief = _ca.call_claude(
+            system_prompt="You synthesize bear-case research into punchy podcast-ready bullets.",
+            user_content=synth_prompt,
+        )
+        return (brief or "").strip()
+    except Exception as e:
+        return f"[DA brief unavailable — Claude synthesis failed: {e!s:.120}]"
+
+
+def _today_str() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("%B %d, %Y")
+
+
+# ════════════════════════════════════════════════════════════════════════
 # Generation
 # ════════════════════════════════════════════════════════════════════════
 
@@ -317,20 +617,25 @@ def generate_script(
     claude_md: str,
     *,
     model: str | None = None,
+    on_progress=None,
 ) -> dict[str, Any]:
     """Generate one podcast episode script from both research reports.
+
+    v1.2 (ui133): dynamic role assignment + Devil's Advocate Brief.
+      1. Classify each report's stance
+      2. Assign Bull/Bear seats to Rock and Claude based on aggression
+      3. If both agree directionally, run Grok-research → Claude-synthesis
+         to build a DA brief that the bear-seat speaker uses as ammo
+      4. Pass everything to the dialogue prompt
 
     Returns:
         {
             "ticker":       str,
             "script":       dict (the validated JSON),
             "validation":   {ok, errors, warnings, stats},
+            "alignment":    {rock_stance, claude_stance, roles, da_brief, mode},
             "raw_response": str (the LLM's raw output, for debugging),
         }
-
-    On validation failure (errors), `script` is still returned (best-effort)
-    so the UI can show what the LLM produced and the user can decide whether
-    to regenerate.
     """
     if not (grok_md and grok_md.strip()):
         raise ValueError("grok_md is empty — need both reports to generate a debate")
@@ -340,15 +645,40 @@ def generate_script(
     # Lazy import — avoids pulling claude_analyst at module load
     import claude_analyst as _ca
 
-    # Truncate each report to keep input cost reasonable (~25k char each
-    # is plenty — most reports are 15–25k anyway). Claude Opus has 200k
-    # context, so this is purely a cost guard.
+    # ── 1. Classify stances + assign roles ──────────────────────────
+    if on_progress:
+        try: on_progress("classify", "Classifying both reports + assigning Bull/Bear seats…")
+        except Exception: pass
+    rock_stance   = classify_stance(grok_md)
+    claude_stance = classify_stance(claude_md)
+    roles = assign_roles(rock_stance, claude_stance)
+
+    # ── 2. Generate DA brief if both analysts aligned ───────────────
+    da_brief = ""
+    if roles.get("needs_da_brief"):
+        da_brief = generate_devils_advocate_brief(
+            ticker, grok_md, claude_md, on_progress=on_progress,
+        )
+
+    # ── 3. Truncate for prompt cost ─────────────────────────────────
     MAX_INPUT_CHARS = 35000
     grok_trim   = grok_md[:MAX_INPUT_CHARS]
     claude_trim = claude_md[:MAX_INPUT_CHARS]
 
+    if on_progress:
+        try: on_progress("script_gen",
+                         f"Writing script (mode: {roles['episode_mode']}, "
+                         f"bull={roles['bull_speaker']}, bear={roles['bear_speaker']})…")
+        except Exception: pass
+
     system = _system_prompt()
-    user   = _user_prompt(ticker.upper(), grok_trim, claude_trim)
+    user   = _user_prompt(
+        ticker.upper(), grok_trim, claude_trim,
+        roles=roles,
+        rock_stance=rock_stance,
+        claude_stance=claude_stance,
+        da_brief=da_brief,
+    )
 
     raw = _ca.call_claude(
         system_prompt=system,
@@ -374,8 +704,28 @@ def generate_script(
 
     # Force ticker to match request (LLM occasionally lower-cases it)
     script["ticker"] = ticker.upper()
+    # Episode title varies by mode (overridable by LLM)
+    mode_titles = {
+        "debate":          f"{ticker.upper()}: Bull vs Bear",
+        "stress_test":     f"{ticker.upper()}: The Bull Case Under Pressure",
+        "devils_advocate": f"{ticker.upper()}: The Bear Trap",
+        "spread":          f"{ticker.upper()}: The Spread",
+        "mixed":           f"{ticker.upper()}: Mixed Signals",
+    }
     if "episode_title" not in script:
-        script["episode_title"] = f"{ticker.upper()}: Bull vs Bear"
+        script["episode_title"] = mode_titles.get(roles["episode_mode"],
+                                                  f"{ticker.upper()}: Bull vs Bear")
+    # Stamp the assignment metadata onto the script too — survives DB round-trip
+    script["_alignment"] = {
+        "episode_mode": roles["episode_mode"],
+        "bull_speaker": roles["bull_speaker"],
+        "bear_speaker": roles["bear_speaker"],
+        "rock_direction":   rock_stance["direction"],
+        "rock_upside_pct":  rock_stance["upside_pct"],
+        "claude_direction": claude_stance["direction"],
+        "claude_upside_pct": claude_stance["upside_pct"],
+        "da_brief_used":    bool(da_brief and not da_brief.startswith("[DA brief unavailable")),
+    }
 
     validation = validate_script(script)
     return {
@@ -383,6 +733,12 @@ def generate_script(
         "script":       script,
         "validation":   validation,
         "raw_response": raw,
+        "alignment": {
+            "rock_stance":   rock_stance,
+            "claude_stance": claude_stance,
+            "roles":         roles,
+            "da_brief":      da_brief,
+        },
     }
 
 
