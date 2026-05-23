@@ -6927,6 +6927,13 @@ def _db_upsert_report(
     # Pull the report-header date once — surfaces under the ticker in Saved
     # Reports so the user sees the analyst's as-of date, not the DB upload time.
     report_date = _extract_report_date(md_text)
+    # Defensive: ensure all schema columns this function references actually
+    # exist before INSERT. Earlier deploys may have missed a column ADD,
+    # leaving the INSERT to fail silently with 'column does not exist'.
+    try:
+        _ensure_analyst_reports_table_schema()
+    except Exception:
+        pass
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             # ── Claude path: only touches the *_claude columns ──────────
@@ -7014,7 +7021,27 @@ def _db_upsert_report(
                     summary.get("upside_pct"), gamma_url, bool(pptx_stale), report_date,
                 ))
     except Exception as _e:
-        print(f"[analyst_reports] upsert failed for {ticker} (non-fatal): {_e!s:.200}")
+        # LOUD log — easy to grep in Railway logs. Previous version used
+        # a vague 'non-fatal' message that buried real schema errors.
+        err_str = str(_e)
+        is_schema = ("does not exist" in err_str or "column" in err_str.lower())
+        prefix = "❌❌❌ SCHEMA-MISSING" if is_schema else "❌ DB-WRITE-FAILED"
+        print(f"{prefix} _db_upsert_report({ticker}/{provider}): {err_str!s:.500}", flush=True)
+        # On a schema error, force-run the table migration NOW and retry once.
+        # The migration is idempotent and cheap; if the column truly was missing
+        # this rescues the persist instead of dropping the report.
+        if is_schema:
+            try:
+                _ensure_analyst_reports_table_schema(force=True)
+                # Retry — call ourselves with the same args
+                return _db_upsert_report(
+                    ticker, md_text, summary,
+                    has_docx=has_docx, has_pptx=has_pptx,
+                    gamma_url=gamma_url, pptx_stale=pptx_stale,
+                    provider=provider,
+                )
+            except Exception as _e2:
+                print(f"❌❌❌ retry after schema-fix ALSO failed for {ticker}: {_e2!s:.300}", flush=True)
 
 
 def _db_record_attempt_failure(ticker: str, error: str) -> None:
@@ -7387,6 +7414,15 @@ def list_reports():
     Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
     Fallback: filesystem glob of *_DGA_Report.md files.
     """
+    # Defensive: ensure all schema columns this endpoint references actually
+    # exist before SELECT. Without this, a missed migration on Railway means
+    # the SELECT fails → silent fallback to empty filesystem → user sees
+    # NO reports even though they exist in the DB.
+    try:
+        _ensure_analyst_reports_table_schema()
+    except Exception:
+        pass
+
     # Lazy one-shot: hydrate any orphaned Grok reports — the typical case
     # is a Grok analysis whose file made it to disk + Drive but whose DB
     # upsert silently failed for any reason. Without this, the user sees
@@ -9114,90 +9150,92 @@ def _ensure_kv_store_table(conn) -> None:
     conn.commit()
 
 
+_ANALYST_SCHEMA_CHECKED = False
+
+def _ensure_analyst_reports_table_schema(force: bool = False) -> None:
+    """Defensive entry-point: open a DB connection and run the migration.
+
+    Guarded by an in-process flag so the once-per-startup check is cheap.
+    `force=True` re-runs unconditionally (used in the upsert retry path
+    when we hit 'column does not exist' — proves the migration is
+    out-of-date for THIS process and forces it to re-attempt).
+    """
+    global _ANALYST_SCHEMA_CHECKED
+    if _ANALYST_SCHEMA_CHECKED and not force:
+        return
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            _ensure_analyst_reports_table(conn)
+        finally:
+            conn.close()
+        _ANALYST_SCHEMA_CHECKED = True
+    except Exception as ex:
+        print(f"[migration] analyst_reports schema check failed: {ex!s:.200}", flush=True)
+
+
 def _ensure_analyst_reports_table(conn) -> None:
-    """Persist analyst reports to PostgreSQL so they survive Railway redeploys."""
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS analyst_reports (
-                ticker       VARCHAR(20) PRIMARY KEY,
-                generated_at TIMESTAMP   NOT NULL DEFAULT NOW(),
-                report_md    TEXT,
-                has_docx     BOOLEAN     NOT NULL DEFAULT FALSE,
-                has_pptx     BOOLEAN     NOT NULL DEFAULT FALSE,
-                rating       VARCHAR(30),
-                price_target NUMERIC,
-                upside_pct   NUMERIC,
-                gamma_url    TEXT,
-                archived     BOOLEAN     NOT NULL DEFAULT FALSE
-            )
-        """)
-        # Add archived column to existing tables that predate this migration
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE
-        """)
-        # pptx_stale: TRUE when the report MD was rerun without regenerating
-        # the PowerPoint. UI uses this to render the PPT pill faded so the
-        # user knows the deck reflects an earlier version of the report.
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS pptx_stale BOOLEAN NOT NULL DEFAULT FALSE
-        """)
-        # Attempt tracking — lets the UI show ✅/❌ next to each report so the
-        # user can tell at a glance which tickers actually refreshed during
-        # the last bulk reanalyze and which failed. generated_at still tracks
-        # the LAST SUCCESSFUL run; last_attempt_* track the most recent try.
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS last_attempt_at    TIMESTAMP
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS last_attempt_status TEXT
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS last_attempt_error  TEXT
-        """)
-        # Claude (alternate-LLM) parallel columns. The existing report_md /
-        # generated_at / rating / price_target / upside_pct columns hold Grok
-        # output (canonical). When the user runs the analyzer with Claude
-        # selected — or runs 'Both' — Claude's output lands in these columns
-        # alongside Grok. Both report sets coexist per ticker.
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS report_md_claude    TEXT
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS claude_generated_at TIMESTAMP
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS claude_rating       VARCHAR(30)
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS claude_price_target NUMERIC
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS claude_upside_pct   NUMERIC
-        """)
-        # report_date / claude_report_date: the date the LLM put in the report
-        # HEADER ('DGA CAPITAL RESEARCH | May 22, 2026'). Distinct from
-        # generated_at (server timestamp). Surfaced under each ticker in
-        # Saved Reports so the user sees the AS-OF date of the analysis,
-        # not the time it was uploaded to the DB.
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS report_date         TEXT
-        """)
-        cur.execute("""
-            ALTER TABLE analyst_reports
-            ADD COLUMN IF NOT EXISTS claude_report_date  TEXT
-        """)
-    conn.commit()
+    """Persist analyst reports to PostgreSQL so they survive Railway redeploys.
+
+    CRITICAL: each ALTER commits independently so a single failing statement
+    can't cascade-rollback the others. Without this, one bad migration step
+    (e.g. column type conflict from a hand-edit) would prevent every
+    subsequent ALTER in the function from taking effect — and silently:
+    INSERT/SELECT later fails with 'column does not exist' which the
+    persist layer swallows as non-fatal, making fresh reports invisible.
+    """
+    def _safe(stmt: str, label: str) -> None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+            conn.commit()
+        except Exception as ex:
+            print(f"[migration] analyst_reports.{label} skipped: {ex!s:.200}")
+            try: conn.rollback()
+            except Exception: pass
+
+    _safe("""
+        CREATE TABLE IF NOT EXISTS analyst_reports (
+            ticker       VARCHAR(20) PRIMARY KEY,
+            generated_at TIMESTAMP   NOT NULL DEFAULT NOW(),
+            report_md    TEXT,
+            has_docx     BOOLEAN     NOT NULL DEFAULT FALSE,
+            has_pptx     BOOLEAN     NOT NULL DEFAULT FALSE,
+            rating       VARCHAR(30),
+            price_target NUMERIC,
+            upside_pct   NUMERIC,
+            gamma_url    TEXT,
+            archived     BOOLEAN     NOT NULL DEFAULT FALSE
+        )
+    """, "create_table")
+
+    # Each ALTER runs in its own transaction via _safe so one failure
+    # (e.g. permission issue, column type conflict, lock contention)
+    # never prevents subsequent ALTERs from applying. This is the fix
+    # that recovers from the user's INTC scenario: previously a single
+    # broken ALTER would silently leave the table in a partial-schema
+    # state, breaking INSERT/SELECT in all downstream code paths.
+    for col_name, sql in [
+        # Legacy / pre-Claude additions
+        ("archived",            "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("pptx_stale",          "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS pptx_stale BOOLEAN NOT NULL DEFAULT FALSE"),
+        # Attempt tracking (✅/❌ in UI)
+        ("last_attempt_at",     "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMP"),
+        ("last_attempt_status", "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS last_attempt_status TEXT"),
+        ("last_attempt_error",  "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS last_attempt_error  TEXT"),
+        # Claude parallel columns
+        ("report_md_claude",    "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS report_md_claude TEXT"),
+        ("claude_generated_at", "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_generated_at TIMESTAMP"),
+        ("claude_rating",       "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_rating VARCHAR(30)"),
+        ("claude_price_target", "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_price_target NUMERIC"),
+        ("claude_upside_pct",   "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_upside_pct NUMERIC"),
+        # In-report as-of dates (UI shows under each ticker)
+        ("report_date",         "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS report_date TEXT"),
+        ("claude_report_date",  "ALTER TABLE analyst_reports ADD COLUMN IF NOT EXISTS claude_report_date TEXT"),
+    ]:
+        _safe(sql, f"add_{col_name}")
 
 
 def _ensure_watchlists_table(conn) -> None:
