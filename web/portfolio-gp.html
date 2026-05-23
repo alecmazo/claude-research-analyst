@@ -4765,6 +4765,33 @@
     document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
       b.addEventListener('click', function() { _labVote(b.dataset.winner); });
     });
+    // Wire Enter key on note input → save note by re-submitting with current winner
+    const noteInput = document.getElementById('lab-vote-note');
+    if (noteInput) {
+      noteInput.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        // Find which winner is currently cast (set in _labVote / _labLoadExistingVote)
+        const castBtn = Array.from(document.querySelectorAll('.lab-vote-btn'))
+          .find(function(b) { return b.dataset.cast === '1'; });
+        if (!castBtn) {
+          const st = document.getElementById('lab-vote-status');
+          if (st) {
+            st.style.display = 'inline';
+            st.style.color = '#d97706';
+            st.textContent = '↑ Pick a winner first (Grok / Tie / Claude), then the note saves.';
+            setTimeout(function() {
+              st.style.color = '#16a34a';
+              st.style.display = 'none';
+            }, 3500);
+          }
+          return;
+        }
+        // Re-submit vote with same winner — backend treats this as an update
+        // and persists the (possibly new) note text.
+        _labVote(castBtn.dataset.winner);
+      });
+    }
     // Wire podcast audition button (one-off)
     const audBtn = document.getElementById('podcast-audition-btn');
     const audOut = document.getElementById('podcast-audition-result');
