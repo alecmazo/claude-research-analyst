@@ -4249,10 +4249,14 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
 
     # ── Unified persist (outside the lock, runs even if analyze_ticker failed
     #    downstream of the LLM call) ─────────────────────────────────────
-    persisted, _ = _persist_analysis_text(
+    print(f"[run_analysis] post-LLM persist starting for {ticker}/{provider} "
+          f"(result.ok={result.get('ok')}, has_report_text={bool(result.get('report_text'))})", flush=True)
+    persisted, _persist_chars = _persist_analysis_text(
         ticker=ticker, provider=provider, result=result,
         job_id=job_id, generate_gamma=generate_gamma,
     )
+    print(f"[run_analysis] post-LLM persist done for {ticker}/{provider} "
+          f"(persisted={persisted}, chars={_persist_chars})", flush=True)
 
     # ── Final job state ────────────────────────────────────────────────
     with _jobs_lock:
@@ -7266,6 +7270,69 @@ def _backfill_report_dates() -> None:
         print(f"[backfill] error: {_e!s:.120}")
 
 
+def _hydrate_orphaned_grok_reports() -> None:
+    """One-shot: detect on-disk {TICKER}_DGA_Report.md files (Grok canonical)
+    that aren't in analyst_reports.report_md and backfill them.
+
+    Mirrors _hydrate_orphaned_claude_reports for the Grok side. Catches the
+    case where a Grok analysis succeeded (file written, optionally pushed to
+    Drive/Dropbox) but the DB upsert silently failed — without this, the
+    report would be invisible in Saved Reports until the user manually
+    re-ran it. Idempotent: skips rows whose report_md is already populated.
+
+    Also tries the Drive/Dropbox copy as a secondary source if disk is empty
+    (handles Railway redeploys that wiped /stocks while Drive still has it).
+    """
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    folder = analyst.STOCKS_FOLDER
+    # Local Grok files — these are *_DGA_Report.md but NOT *_DGA_Report_claude.md
+    try:
+        local_files = [p for p in folder.glob("*_DGA_Report.md")
+                       if not p.name.endswith("_DGA_Report_claude.md")]
+    except Exception:
+        local_files = []
+    if not local_files:
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            for path in local_files:
+                tk = path.name.replace("_DGA_Report.md", "").upper()
+                # Skip if DB already has Grok content for this ticker
+                cur.execute("""SELECT report_md FROM analyst_reports
+                               WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+                if row and (row["report_md"] or "").strip():
+                    continue
+                # Read disk; if too short, try Drive as a fallback
+                text = ""
+                try:
+                    text = path.read_text()
+                except Exception:
+                    pass
+                if not text or len(text) < 200:
+                    try:
+                        text = analyst.fetch_report_from_drive(tk) or ""
+                    except Exception:
+                        pass
+                if not text or len(text) < 200:
+                    continue
+                try:
+                    summary = analyst.extract_summary_from_report(text) or {}
+                    has_docx = (folder / f"{tk}_DGA_Report.docx").exists()
+                    has_pptx = (folder / f"{tk}_DGA_Presentation.pptx").exists()
+                    _db_upsert_report(
+                        tk, text, summary,
+                        has_docx=has_docx, has_pptx=has_pptx, gamma_url=None,
+                        pptx_stale=None, provider="grok",
+                    )
+                    print(f"[hydrate] backfilled Grok report for {tk} from disk ({len(text):,} chars)")
+                except Exception as _e:
+                    print(f"[hydrate] grok failed for {tk}: {_e!s:.120}")
+    except Exception as _e:
+        print(f"[hydrate] grok outer error: {_e!s:.120}")
+
+
 def _hydrate_orphaned_claude_reports() -> None:
     """One-shot: detect on-disk {TICKER}_DGA_Report_claude.md files that
     aren't yet in the analyst_reports.claude_* columns and backfill them.
@@ -7320,8 +7387,15 @@ def list_reports():
     Primary source: PostgreSQL `analyst_reports` table (survives Railway redeploys).
     Fallback: filesystem glob of *_DGA_Report.md files.
     """
-    # Lazy one-shot: hydrate any orphaned Claude reports sitting on disk
-    # so OKLO / SMR / anything Compared earlier appears in the list.
+    # Lazy one-shot: hydrate any orphaned Grok reports — the typical case
+    # is a Grok analysis whose file made it to disk + Drive but whose DB
+    # upsert silently failed for any reason. Without this, the user sees
+    # the file in Dropbox but nothing in Saved Reports.
+    try:
+        _hydrate_orphaned_grok_reports()
+    except Exception:
+        pass
+    # Same for orphaned Claude reports (Compare / LLM Lab side artifacts).
     try:
         _hydrate_orphaned_claude_reports()
     except Exception:
