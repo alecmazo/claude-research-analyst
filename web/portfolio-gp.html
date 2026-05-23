@@ -2186,6 +2186,27 @@
         </button>
       </div>
       <div id="podcast-audition-result" style="display:none;padding:12px 18px;border-top:1px solid #c7e8f3;background:#fff;font-size:12px;font-family:'SF Mono',monospace;color:#1e293b;white-space:pre-wrap;"></div>
+
+      <!-- ── Script generator (v0 — no audio yet) ─────────────────── -->
+      <div style="border-top:1px solid #c7e8f3;padding:14px 18px;background:#fafdff;">
+        <div style="font-size:12.5px;color:#475569;line-height:1.55;margin-bottom:10px;">
+          <strong style="color:#0A1628;">🎬 Episode script generator (v0)</strong> —
+          pick a ticker with BOTH Grok + Claude reports. Generates the full
+          debate dialogue (Alec/Rock/Claude) and renders it as styled chat
+          bubbles below. <em>Read 2–3 samples before we build the audio side.</em>
+          Cost per script: <strong>~$0.20</strong> (Claude Opus, no TTS yet).
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="podcast-script-ticker" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;min-width:220px;">
+            <option value="">— select a ticker (needs both Grok + Claude) —</option>
+          </select>
+          <button id="podcast-script-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
+            🎬 Generate script
+          </button>
+          <span id="podcast-script-stats" style="font-size:11px;color:#64748b;font-family:'SF Mono',monospace;"></span>
+        </div>
+        <div id="podcast-script-render" style="display:none;margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:16px;max-height:600px;overflow-y:auto;"></div>
+      </div>
     </section>
 
     <!-- ── Top row: ticker picker + leaderboard ─────────────────── -->
@@ -4778,6 +4799,94 @@
         }
       });
     }
+
+    // ── Wire podcast SCRIPT generator (v0) ─────────────────────────
+    _populatePodcastScriptPicker();
+    const scriptBtn   = document.getElementById('podcast-script-btn');
+    const scriptSel   = document.getElementById('podcast-script-ticker');
+    const scriptOut   = document.getElementById('podcast-script-render');
+    const scriptStats = document.getElementById('podcast-script-stats');
+    if (scriptBtn) {
+      scriptBtn.addEventListener('click', async function() {
+        const tk = scriptSel.value;
+        if (!tk) { alert('Pick a ticker first.'); return; }
+        scriptBtn.disabled = true;
+        scriptBtn.textContent = '⏳ Writing script (~40s)…';
+        scriptStats.textContent = '';
+        scriptOut.style.display = 'block';
+        scriptOut.innerHTML = '<div style="color:#64748b;font-size:12px;">Calling Claude Opus to write the episode for ' + tk + '…</div>';
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + tk + '/script', { method: 'POST' });
+          const d = await r.json();
+          if (!d.ok || !d.script) {
+            scriptOut.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.error || 'No script returned') +
+              (d.validation && d.validation.errors ? '<br><br>' + d.validation.errors.map(function(e){return '• '+e;}).join('<br>') : '') +
+              '</div>';
+          } else {
+            _renderPodcastScript(d.script, d.validation, scriptOut);
+            const s = d.validation && d.validation.stats || {};
+            scriptStats.textContent = '📊 ' + (s.word_count||0) + ' words · ' +
+              (s.approx_minutes||0) + ' min · ' + (s.turn_count||0) + ' turns · ' +
+              (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase();
+          }
+        } catch (e) {
+          scriptOut.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Network error: ' + e.message + '</div>';
+        } finally {
+          scriptBtn.disabled = false;
+          scriptBtn.textContent = '🎬 Generate script';
+        }
+      });
+    }
+  }
+
+  async function _populatePodcastScriptPicker() {
+    const sel = document.getElementById('podcast-script-ticker');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      const reports = await r.json();
+      const both = (reports || []).filter(function(x) {
+        return x.generated_at && x.claude_generated_at;
+      });
+      sel.innerHTML = '<option value="">— select a ticker (' + both.length + ' eligible) —</option>' +
+        both.map(function(x) { return '<option value="' + x.ticker + '">' + x.ticker + '</option>'; }).join('');
+    } catch (e) {
+      sel.innerHTML = '<option value="">— failed to load tickers —</option>';
+    }
+  }
+
+  function _renderPodcastScript(script, validation, container) {
+    const bubbleColors = {
+      alec:   { bg: '#f1f5f9', name: '#0A1628', label: 'ALEC (host)'    },
+      rock:   { bg: '#fef3c7', name: '#b45309', label: 'ROCK (Grok)'    },
+      claude: { bg: '#dbeafe', name: '#1e40af', label: 'CLAUDE'         },
+    };
+    const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
+    const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+    const parts = [];
+    parts.push('<div style="font-size:18px;font-weight:800;color:#0A1628;margin-bottom:4px;">' + esc(script.episode_title || script.ticker) + '</div>');
+    parts.push('<div style="font-size:11px;color:#64748b;margin-bottom:16px;">🏆 Winner: <strong>' + (script.winner||'?').toUpperCase() + '</strong></div>');
+    if (validation && validation.warnings && validation.warnings.length) {
+      parts.push('<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:8px 10px;margin-bottom:14px;font-size:11px;color:#78350f;">' +
+        '⚠ ' + validation.warnings.map(esc).join(' · ') + '</div>');
+    }
+    (script.sections || []).forEach(function(sec) {
+      const secLabel = (sec.id || '').replace(/_/g,' ').toUpperCase();
+      parts.push('<div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1.5px;margin:18px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px;">' + esc(secLabel) + '</div>');
+      (sec.turns || []).forEach(function(t) {
+        const c = bubbleColors[(t.speaker||'').toLowerCase()] || bubbleColors.alec;
+        const icon = intensityIcon[(t.intensity||'normal').toLowerCase()] || '';
+        parts.push(
+          '<div style="background:' + c.bg + ';border-radius:8px;padding:9px 12px;margin-bottom:7px;font-size:13px;line-height:1.5;color:#1e293b;">' +
+            '<div style="font-size:10px;font-weight:800;color:' + c.name + ';letter-spacing:0.8px;margin-bottom:3px;">' +
+              c.label + (icon ? ' ' + icon : '') +
+            '</div>' +
+            esc(t.text) +
+          '</div>'
+        );
+      });
+    });
+    container.innerHTML = parts.join('');
   }
 
   async function loadBrief() {

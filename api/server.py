@@ -15715,6 +15715,67 @@ PODCAST_AUDITION_VOICES = [
 ]
 
 
+@app.post("/api/podcast/{ticker}/script")
+def podcast_generate_script(ticker: str):
+    """Generate a podcast script for one ticker from its saved Grok + Claude reports.
+
+    Returns the structured dialogue JSON + validation. No audio yet (v0).
+    Caller must have BOTH a Grok report and a Claude report in analyst_reports.
+    """
+    import podcast_engine
+    tk = ticker.upper().strip()
+    # Pull both report texts from DB
+    grok_md = ""
+    claude_md = ""
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
+                               WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+                if row:
+                    grok_md   = row.get("report_md") or ""
+                    claude_md = row.get("report_md_claude") or ""
+        except Exception as e:
+            return JSONResponse(
+                {"ok": False, "error": f"DB read failed: {e!s:.200}"},
+                status_code=500,
+            )
+    if not grok_md.strip():
+        return JSONResponse(
+            {"ok": False, "error": f"No Grok report found for {tk}. Run analysis first."},
+            status_code=400,
+        )
+    if not claude_md.strip():
+        return JSONResponse(
+            {"ok": False, "error": f"No Claude report found for {tk}. Run Claude analysis first."},
+            status_code=400,
+        )
+    try:
+        result = podcast_engine.generate_script(tk, grok_md, claude_md)
+    except Exception as e:
+        print(f"❌ [podcast] generate_script({tk}) crashed: {e!s:.500}", flush=True)
+        return JSONResponse(
+            {"ok": False, "error": f"Script generation failed: {e!s:.300}"},
+            status_code=500,
+        )
+
+    # Persist to /stocks for inspection (cheap, lets us diff regenerations)
+    try:
+        out_path = analyst.STOCKS_FOLDER / f"{tk}_podcast_script.json"
+        out_path.write_text(json.dumps(result["script"] or {"raw": result.get("raw_response")}, indent=2))
+    except Exception:
+        pass
+
+    return {
+        "ok":          bool(result.get("script")),
+        "ticker":      tk,
+        "script":      result.get("script"),
+        "validation":  result.get("validation"),
+        "transcript":  podcast_engine.script_to_transcript(result["script"]) if result.get("script") else None,
+    }
+
+
 @app.post("/api/podcast/audition")
 def podcast_audition():
     """Generate 6 voice auditions + push to Dropbox.
