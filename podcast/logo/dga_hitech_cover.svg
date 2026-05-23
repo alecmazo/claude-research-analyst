@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 3000" width="3000" height="3000">
+  <!-- DGA HiTech Podcast cover art (3000x3000, Apple/Spotify spec) -->
+  <!-- Palette pulled from web/portfolio-gp.html:
+       navy #0A1628, navy-light #1e293b, brand blue #5BB8D4,
+       blue-light #84CCE3, blue-dark #3E9AB8 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#0A1628"/>
+      <stop offset="60%"  stop-color="#0A1628"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="mic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#84CCE3"/>
+      <stop offset="50%"  stop-color="#5BB8D4"/>
+      <stop offset="100%" stop-color="#3E9AB8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="55%">
+      <stop offset="0%"   stop-color="#5BB8D4" stop-opacity="0.18"/>
+      <stop offset="60%"  stop-color="#5BB8D4" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#5BB8D4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="3000" height="3000" fill="url(#bg)"/>
+  <rect width="3000" height="3000" fill="url(#glow)"/>
+
+  <!-- Thin brand border so cover survives Apple/Spotify cropping -->
+  <rect x="60" y="60" width="2880" height="2880" rx="80" ry="80"
+        fill="none" stroke="#5BB8D4" stroke-opacity="0.18" stroke-width="6"/>
+
+  <!-- Sound wave bars (left + right of mic, symmetric, suggesting a debate) -->
+  <g fill="#5BB8D4" fill-opacity="0.55">
+    <!-- left side -->
+    <rect x="540"  y="1380" width="32" height="240" rx="16"/>
+    <rect x="630"  y="1300" width="32" height="400" rx="16"/>
+    <rect x="720"  y="1200" width="32" height="600" rx="16"/>
+    <rect x="810"  y="1330" width="32" height="340" rx="16"/>
+    <rect x="900"  y="1410" width="32" height="180" rx="16"/>
+    <!-- right side -->
+    <rect x="2068" y="1410" width="32" height="180" rx="16"/>
+    <rect x="2158" y="1330" width="32" height="340" rx="16"/>
+    <rect x="2248" y="1200" width="32" height="600" rx="16"/>
+    <rect x="2338" y="1300" width="32" height="400" rx="16"/>
+    <rect x="2428" y="1380" width="32" height="240" rx="16"/>
+  </g>
+
+  <!-- Microphone -->
+  <g transform="translate(1500 1280)">
+    <!-- mic capsule -->
+    <rect x="-180" y="-360" width="360" height="540" rx="180" ry="180"
+          fill="url(#mic)"/>
+    <!-- subtle highlight ring -->
+    <rect x="-180" y="-360" width="360" height="540" rx="180" ry="180"
+          fill="none" stroke="#84CCE3" stroke-opacity="0.4" stroke-width="4"/>
+    <!-- mic grille lines -->
+    <g stroke="#0A1628" stroke-opacity="0.28" stroke-width="6" stroke-linecap="round">
+      <line x1="-120" y1="-260" x2="120" y2="-260"/>
+      <line x1="-120" y1="-180" x2="120" y2="-180"/>
+      <line x1="-120" y1="-100" x2="120" y2="-100"/>
+      <line x1="-120" y1="-20"  x2="120" y2="-20"/>
+      <line x1="-120" y1="60"   x2="120" y2="60"/>
+    </g>
+    <!-- yoke arc -->
+    <path d="M -320 60 Q -320 360 0 360 Q 320 360 320 60"
+          fill="none" stroke="#5BB8D4" stroke-width="22" stroke-linecap="round"/>
+    <!-- stand -->
+    <rect x="-14" y="360" width="28" height="120" fill="#5BB8D4"/>
+    <rect x="-110" y="478" width="220" height="24" rx="12" fill="#5BB8D4"/>
+  </g>
+
+  <!-- Wordmark: DGA HiTech -->
+  <text x="1500" y="2240"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="800"
+        font-size="280"
+        letter-spacing="-6"
+        fill="#FFFFFF">DGA <tspan fill="#5BB8D4">Hi</tspan>Tech</text>
+
+  <!-- Subtitle: PODCAST -->
+  <text x="1500" y="2420"
+        text-anchor="middle"
+        font-family="'SF Mono', Menlo, 'Courier New', monospace"
+        font-weight="700"
+        font-size="120"
+        letter-spacing="38"
+        fill="#84CCE3"
+        fill-opacity="0.85">PODCAST</text>
+
+  <!-- Tagline -->
+  <text x="1500" y="2620"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="500"
+        font-size="78"
+        letter-spacing="2"
+        fill="#FFFFFF"
+        fill-opacity="0.55">Rock vs Claude · Alec calls it</text>
+</svg>

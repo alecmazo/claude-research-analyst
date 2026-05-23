@@ -15690,6 +15690,127 @@ async def gp_quarterly_report_send(
 
 
 # ---------------------------------------------------------------------------
+# DGA HiTech Podcast — voice audition endpoint (v0)
+# ---------------------------------------------------------------------------
+# Generates one MP3 per OpenAI stock voice (all reading the same passage),
+# uploads them to Dropbox under /podcast/auditions/, and returns the list.
+# Lets the user A/B voices on their phone before we commit to building the
+# full TTS pipeline.
+
+PODCAST_AUDITION_TEXT = (
+    "Welcome back to the DGA HiTech Podcast. I'm Alec, and tonight Rock and Claude "
+    "are squaring off on Intel — yes, that Intel. Look, the bull case is real: "
+    "foundry orders are finally landing, and the margin trough may already be in. "
+    "But Claude's going to tell us the valuation is still bullshit, and honestly? "
+    "He might be right. Let's get into it."
+)
+
+PODCAST_AUDITION_VOICES = [
+    ("alloy",   "neutral, balanced — safe default"),
+    ("echo",    "warmer male, conversational"),
+    ("fable",   "British male, storytelling cadence"),
+    ("onyx",    "deep male, gravitas"),
+    ("nova",    "bright female, energetic"),
+    ("shimmer", "soft female, measured"),
+]
+
+
+@app.post("/api/podcast/audition")
+def podcast_audition():
+    """Generate 6 voice auditions + push to Dropbox.
+
+    Each audition is the same ~35-sec passage read by a different OpenAI
+    stock voice. Output MP3s land in Dropbox under the configured base
+    folder, subfolder 'podcast/auditions/'.
+
+    Returns:
+      { ok: true,
+        voices: [{voice, blurb, filename, bytes, dropbox_path}, ...],
+        dropbox_folder: "..." }
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return JSONResponse(
+            {"ok": False, "error": "OPENAI_API_KEY not set on server"},
+            status_code=400,
+        )
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return JSONResponse(
+            {"ok": False, "error": "openai package not installed"},
+            status_code=500,
+        )
+
+    client = OpenAI(api_key=api_key)
+
+    # Write MP3s locally first, then bulk-upload via the existing helper.
+    out_dir = analyst.STOCKS_FOLDER / "podcast_auditions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    local_paths: list[Path] = []
+    results = []
+
+    for voice, blurb in PODCAST_AUDITION_VOICES:
+        out_path = out_dir / f"audition_{voice}.mp3"
+        try:
+            with client.audio.speech.with_streaming_response.create(
+                model="gpt-4o-mini-tts",
+                voice=voice,
+                input=PODCAST_AUDITION_TEXT,
+                response_format="mp3",
+                speed=1.0,
+            ) as resp:
+                resp.stream_to_file(out_path)
+            local_paths.append(out_path)
+            results.append({
+                "voice":    voice,
+                "blurb":    blurb,
+                "filename": out_path.name,
+                "bytes":    out_path.stat().st_size,
+                "ok":       True,
+            })
+            print(f"🎙️ [audition] {voice}: {out_path.stat().st_size:,} bytes", flush=True)
+        except Exception as e:
+            results.append({"voice": voice, "blurb": blurb, "ok": False, "error": str(e)[:200]})
+            print(f"❌ [audition] {voice} failed: {e!s:.200}", flush=True)
+
+    # Upload to Dropbox under /podcast/auditions/ (separate from reports).
+    dropbox_folder = None
+    if local_paths:
+        try:
+            dbx = analyst._dropbox_client()
+            if dbx is not None:
+                import dropbox as _dbx  # type: ignore
+                base = analyst._dropbox_folder()
+                sub = f"{base}/podcast/auditions" if base else "/podcast/auditions"
+                dropbox_folder = sub
+                for p in local_paths:
+                    try:
+                        dbx.files_upload(
+                            p.read_bytes(),
+                            f"{sub}/{p.name}",
+                            mode=_dbx.files.WriteMode.overwrite,
+                            mute=True,
+                        )
+                        # Find the result row and mark dropbox path
+                        for r in results:
+                            if r.get("filename") == p.name:
+                                r["dropbox_path"] = f"{sub}/{p.name}"
+                                break
+                    except Exception as e:
+                        print(f"❌ [audition] dropbox upload {p.name}: {e!s:.200}", flush=True)
+        except Exception as e:
+            print(f"❌ [audition] dropbox outer: {e!s:.200}", flush=True)
+
+    return {
+        "ok":              any(r.get("ok") for r in results),
+        "voices":          results,
+        "dropbox_folder":  dropbox_folder,
+        "passage":         PODCAST_AUDITION_TEXT,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Static web UI — mount last so API routes take precedence.
 # ---------------------------------------------------------------------------
 
