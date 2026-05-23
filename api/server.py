@@ -6954,6 +6954,7 @@ def _db_upsert_report(
                         claude_rating       = EXCLUDED.claude_rating,
                         claude_price_target = EXCLUDED.claude_price_target,
                         claude_upside_pct   = EXCLUDED.claude_upside_pct,
+                        archived            = FALSE,
                         last_attempt_at     = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
@@ -6984,6 +6985,7 @@ def _db_upsert_report(
                         upside_pct          = EXCLUDED.upside_pct,
                         gamma_url           = EXCLUDED.gamma_url,
                         report_date         = EXCLUDED.report_date,
+                        archived            = FALSE,
                         last_attempt_at     = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
@@ -7012,6 +7014,7 @@ def _db_upsert_report(
                         gamma_url           = EXCLUDED.gamma_url,
                         pptx_stale          = EXCLUDED.pptx_stale,
                         report_date         = EXCLUDED.report_date,
+                        archived            = FALSE,
                         last_attempt_at     = NOW(),
                         last_attempt_status = 'success',
                         last_attempt_error  = NULL
@@ -7425,10 +7428,10 @@ def _hydrate_orphaned_claude_reports() -> None:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             for tk in candidates:
                 # Skip if DB already has Claude content
-                cur.execute("""SELECT claude_generated_at, claude_report_md
+                cur.execute("""SELECT claude_generated_at, report_md_claude
                                FROM analyst_reports WHERE ticker = %s""", (tk,))
                 row = cur.fetchone()
-                if row and row.get("claude_generated_at") and (row.get("claude_report_md") or "").strip():
+                if row and row.get("claude_generated_at") and (row.get("report_md_claude") or "").strip():
                     continue
                 # Pull text — disk first, then Dropbox
                 text = ""
