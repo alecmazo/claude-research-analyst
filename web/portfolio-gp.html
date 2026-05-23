@@ -2169,6 +2169,25 @@
       </div>
     </div>
 
+    <!-- ── Podcast voice audition (one-off, will move into Podcast panel) ── -->
+    <section class="builder-card" style="margin-bottom:16px;border:1px dashed #5BB8D4;background:#f0fbff;">
+      <header class="builder-card-head" style="background:#e0f4fc;color:#0A1628;">
+        🎙️ DGA HiTech Podcast — voice audition
+      </header>
+      <div class="builder-card-body" style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+        <div style="flex:1;min-width:280px;font-size:12.5px;color:#475569;line-height:1.55;">
+          Generates 6 MP3s — one per OpenAI stock voice — all reading the same
+          35-sec passage with a mild cuss for flavor. Files land in Dropbox
+          under <code style="background:#fff;padding:1px 5px;border-radius:3px;">podcast/auditions/</code>.
+          Cost: <strong>~$0.02 total</strong>. Then tell me which voice is Alec / Rock / Claude.
+        </div>
+        <button id="podcast-audition-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
+          ▶ Generate auditions
+        </button>
+      </div>
+      <div id="podcast-audition-result" style="display:none;padding:12px 18px;border-top:1px solid #c7e8f3;background:#fff;font-size:12px;font-family:'SF Mono',monospace;color:#1e293b;white-space:pre-wrap;"></div>
+    </section>
+
     <!-- ── Top row: ticker picker + leaderboard ─────────────────── -->
     <div class="lab-grid">
       <section class="builder-card" style="grid-column: span 2;">
@@ -4725,6 +4744,40 @@
     document.querySelectorAll('.lab-vote-btn').forEach(function(b) {
       b.addEventListener('click', function() { _labVote(b.dataset.winner); });
     });
+    // Wire podcast audition button (one-off)
+    const audBtn = document.getElementById('podcast-audition-btn');
+    const audOut = document.getElementById('podcast-audition-result');
+    if (audBtn) {
+      audBtn.addEventListener('click', async function() {
+        audBtn.disabled = true;
+        audBtn.textContent = '⏳ Generating 6 voices (~20s)…';
+        audOut.style.display = 'block';
+        audOut.textContent = 'Calling OpenAI TTS for: alloy, echo, fable, onyx, nova, shimmer…';
+        try {
+          const r = await window.dgaFetch('/api/podcast/audition', { method: 'POST' });
+          const d = await r.json();
+          if (!d.ok) {
+            audOut.textContent = '❌ ' + (d.error || 'Failed') + '\n' + JSON.stringify(d, null, 2);
+          } else {
+            const lines = ['✅ Done. Find these in Dropbox: ' + (d.dropbox_folder || '(not uploaded)') + '\n'];
+            (d.voices || []).forEach(function(v) {
+              if (v.ok) {
+                lines.push('  🎙️  ' + v.voice.padEnd(9) + ' ' + (v.blurb || '') + '   [' + Math.round((v.bytes||0)/1024) + ' KB]');
+              } else {
+                lines.push('  ❌  ' + v.voice + ' — ' + (v.error || ''));
+              }
+            });
+            lines.push('\nPlay them in order, then tell me your picks for Alec / Rock / Claude.');
+            audOut.textContent = lines.join('\n');
+          }
+        } catch (e) {
+          audOut.textContent = '❌ Network error: ' + e.message;
+        } finally {
+          audBtn.disabled = false;
+          audBtn.textContent = '▶ Generate auditions';
+        }
+      });
+    }
   }
 
   async function loadBrief() {
