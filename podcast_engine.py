@@ -9,7 +9,7 @@ v0 scope (this file): script generation only.
   • Per-turn `intensity` ∈ {calm, normal, heated} → maps to TTS speed in v1
 
 Cast / voice map (locked):
-    Alec   (host)            → OpenAI 'fable'
+    Alex   (host)            → OpenAI 'fable'
     Rock   (Grok analyst)    → OpenAI 'onyx'
     Claude (analyst)         → OpenAI 'echo'
 
@@ -23,9 +23,15 @@ from typing import Any
 
 # ── Cast & voice mapping ────────────────────────────────────────────────
 VOICE_MAP: dict[str, str] = {
-    "alec":   "fable",   # host
-    "rock":   "onyx",    # Grok-powered analyst
-    "claude": "echo",    # Claude-powered analyst
+    # Re-cast after user feedback (ui132):
+    #   • "alec" → "alex" + female host voice
+    #   • Rock=onyx sounded depressed in long-form → switched to echo
+    #     (warm, conversational, can carry energy)
+    #   • Claude moved to fable (British storyteller — dry-wit measured
+    #     analyst voice; better than echo at sounding skeptical)
+    "alex":   "shimmer",  # host (female)
+    "rock":   "echo",     # Grok analyst
+    "claude": "fable",    # Claude analyst
 }
 
 # Whitelisted curse words. Anything outside this set in the LLM output
@@ -34,25 +40,25 @@ CURSE_WHITELIST = {
     "damn", "damned", "hell", "shit", "shitty", "fuck", "fucking",
     "bullshit", "fucked",
 }
-MAX_CURSES_PER_EPISODE = 5
+MAX_CURSES_PER_EPISODE = 10  # ui132: bumped from 5 — user wanted more punch
 
 # Intensity → playback speed (used by v1 TTS layer)
 INTENSITY_SPEED = {"calm": 0.95, "normal": 1.0, "heated": 1.10}
 
-VALID_SPEAKERS = {"alec", "rock", "claude"}
+VALID_SPEAKERS = {"alex", "rock", "claude"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
 # Section ids the LLM MUST produce in order.
 REQUIRED_SECTIONS = [
-    "cold_open",            # Alec, ~15s
-    "company_in_60",        # Alec, ~60s
+    "cold_open",            # Alex, ~15s
+    "company_in_60",        # Alex, ~60s
     "opening_pitch_rock",   # Rock, ~60s
     "opening_pitch_claude", # Claude, ~60s
     "round_thesis",         # debate, ~90s
     "round_valuation",      # debate, ~90s
     "round_catalysts",      # debate, ~90s
     "round_steelman",       # each defends the OTHER's case, ~60s
-    "verdict",              # Alec names a winner, ~45s
+    "verdict",              # Alex names a winner, ~45s
 ]
 
 
@@ -66,35 +72,48 @@ investment debate show in the style of Animal Spirits (banter, interruptions, \
 strong opinions). Each episode debates ONE public company.
 
 CAST (the three speakers, never invent a fourth):
-  • Alec   — host. Even-keeled, sharp, calls bullshit on either side. \
+  • Alex   — host. FEMALE. Sharp, even-keeled, calls bullshit on either side. \
 Sets up the company, runs the rounds, names a winner at the end. \
 Does NOT take a side until the verdict.
   • Rock   — analyst. Punchy, contrarian, momentum + narrative lean. \
-Higher conviction. Speeds up when selling upside. Willing to swear \
-when something is dumb or exciting. Powered by Grok.
+Higher conviction. Energetic — speeds up when selling upside, gets \
+loud when defending. Cusses regularly when something is dumb or \
+exciting. Powered by Grok.
   • Claude — analyst. Measured, valuation-disciplined, base-rates guy. \
-Drier wit. Cusses rarely, only for emphasis on a real risk. \
+Drier wit, skeptic tilt. Cusses occasionally for emphasis on real risk. \
 Powered by Claude.
 
-TONE
-  • Animal Spirits pacing — short turns, callbacks, occasional interruptions \
-("Hold on—") rendered as a single line ending with em-dash.
+TONE & HUMAN FEEL
+  • Animal Spirits pacing — vary turn lengths constantly. Some long pitches, \
+some 4-word reactions ("That's nuts." / "Show me the cash flow."). \
+Mix it up — never two consecutive turns of similar length.
+  • Real human filler is encouraged, sparingly — sprinkle in things like \
+"um", "uh", "y'know", "I mean", "look,", "honestly,", "right,", "hmm". \
+Use these for naturalness, NOT in every turn — maybe 1 in 4. \
+Especially good when a speaker is thinking mid-sentence or pivoting.
+  • Interruptions render as a single line ending in em-dash: \
+"Hold on — that math doesn't —" then the other speaker cuts in on the next turn.
   • Heated mid-episode (valuation + catalysts), calmer at intro + verdict.
-  • Cursing is allowed but RARE — max 5 instances per episode, only from \
-{damn, hell, shit, fuck, bullshit, fucking, fucked}. Use only for \
-punctuation, never gratuitously. Never use any other profanity, slurs, \
-or anything brand-unsafe.
+  • Cursing is allowed and ENCOURAGED for punch — up to 10 instances per \
+episode, only from {damn, damned, hell, shit, shitty, fuck, fucking, \
+fucked, bullshit}. Don't be precious about it — when Rock or Claude \
+genuinely think something is dumb or risky, let them say so with bite. \
+Rock should drop one or two in his opening pitch. Never any other \
+profanity, slurs, or brand-unsafe content.
+  • DO NOT fall into a metronomic A-B-A-B pattern. Mix it up: sometimes \
+Alex chimes in mid-round, sometimes one analyst gets 2 turns in a row \
+landing a point, sometimes a single-word reaction breaks the rhythm.
 
 STRUCTURE (you MUST produce these sections in this order, each as a list of turns):
-  1. cold_open            — Alec only, 1 turn, ~35–45 words. One-line hook + name ticker.
-  2. company_in_60        — Alec only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
+  1. cold_open            — Alex only, 1 turn, ~35–45 words. One-line hook + name ticker.
+  2. company_in_60        — Alex only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
   3. opening_pitch_rock   — Rock only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
   4. opening_pitch_claude — Claude only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claude, with Alec injecting 1–2 follow-ups.
+  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claude, with Alex injecting 1–2 follow-ups.
   6. round_valuation      — 4–6 turns. THIS IS THE HOTTEST ROUND — multiples, comps, peer math, target math. Mark turns intensity=heated.
   7. round_catalysts      — 4–6 turns. Near-term catalysts, risks, what could break the thesis.
   8. round_steelman       — exactly 2 turns: Rock argues Claude's bear case in his own words, then Claude argues Rock's bull case. 60–80 words each.
-  9. verdict              — Alec only, 1–2 turns, ~110–140 words. Must explicitly say \
+  9. verdict              — Alex only, 1–2 turns, ~110–140 words. Must explicitly say \
 "the more convincing pitch tonight was Rock" or "...was Claude" and give 2 specific reasons \
 drawn from THE DEBATE (not from the reports). No ties, no cop-outs.
 
@@ -103,7 +122,7 @@ This produces an 8–10 min episode at conversational TTS pacing. \
 If the source reports are thin, CUT length — do not pad with filler.
 
 PER-TURN FIELDS (every turn is an object with exactly these keys):
-  • "speaker"   ∈ "alec" | "rock" | "claude"
+  • "speaker"   ∈ "alex" | "rock" | "claude"
   • "text"      — the spoken line. Plain prose. No markdown, no asterisks, no bullets. \
 Use natural contractions ("it's", "we're"). For an interruption, end the line with " —"
   • "intensity" ∈ "calm" | "normal" | "heated"
@@ -127,7 +146,7 @@ OUTPUT FORMAT — return ONLY valid JSON, no preamble, no code fences, matching 
   ]
 }
 
-The "winner" field MUST match whoever Alec names in the verdict section.
+The "winner" field MUST match whoever Alex names in the verdict section.
 
 DO NOT include any text outside the JSON. DO NOT use markdown code fences.
 """
@@ -156,8 +175,8 @@ Now write the episode. Remember:
   • JSON only, matching the schema in the system prompt exactly
   • 1,400–1,800 total words
   • Max 5 curse words total, only from the whitelist
-  • Alec names a winner with 2 specific reasons drawn from THE DEBATE
-  • "winner" field at the top must match Alec's verdict
+  • Alex names a winner with 2 specific reasons drawn from THE DEBATE
+  • "winner" field at the top must match Alex's verdict
 """
 
 
@@ -237,9 +256,9 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
         sid = sec.get("id")
         turns = sec.get("turns") or []
         if sid in ("cold_open", "company_in_60", "verdict"):
-            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "alec"]
+            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "alex"]
             if non_alec:
-                errors.append(f"{sid} should be Alec only — found {len(non_alec)} other speakers")
+                errors.append(f"{sid} should be Alex only — found {len(non_alec)} other speakers")
         if sid == "opening_pitch_rock":
             if not turns or (turns[0].get("speaker") or "").lower() != "rock":
                 errors.append("opening_pitch_rock must start with Rock")
@@ -403,21 +422,25 @@ GAP_BEFORE_VERDICT = 850
 
 # Music sting paths (generated on first use, then cached)
 _STING_DIR = Path(__file__).parent / "podcast" / "stings"
-INTRO_STING_PATH = _STING_DIR / "intro_3s.mp3"
-OUTRO_STING_PATH = _STING_DIR / "outro_2s.mp3"
+# v2 stings (Succession-vibe, 5s each). Different filenames so the old
+# 3s/2s files don't get re-served from cache after the upgrade.
+INTRO_STING_PATH = _STING_DIR / "intro_v2_succession_5s.mp3"
+OUTRO_STING_PATH = _STING_DIR / "outro_v2_succession_5s.mp3"
 
 
 def _ensure_stings() -> tuple[Path, Path]:
-    """Generate the brand intro/outro music stings if they don't exist yet.
+    """Generate brand intro/outro music stings (5 sec each).
 
-    Style: minimalist DGA HiTech vibe — a soft rising 3-note arpeggio
-    on the intro (E5 → A5 → C#6, ~major chord, warm sine timbre + fade
-    in/out), and a single low resolving tone on the outro. We're not
-    making a Suno-quality jingle — just a clean, branded "we're starting"
-    and "we're done" cue.
+    v2 style: Succession-inspired — F minor key, piano-like timbre via
+    summed harmonics, melancholy-but-elegant tension chord progression.
 
-    Cached to disk after first generation. Cheap to regenerate if you
-    want to tune them: just delete the files.
+    INTRO (5s): low Db pad swells → minor piano chord stab → melodic
+                motif (Ab→C→Db→C, the Db5 is the tension note) → sustained
+                Fm ringout under the host's first words.
+    OUTRO (5s): descending walk-down C5→Ab4→F4→C4→F3 over a held F2 pad,
+                resolving to silence.
+
+    Cached to disk after first generation. Delete the files to regenerate.
     """
     _STING_DIR.mkdir(parents=True, exist_ok=True)
     if INTRO_STING_PATH.exists() and OUTRO_STING_PATH.exists():
@@ -426,33 +449,73 @@ def _ensure_stings() -> tuple[Path, Path]:
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    def _tone(freq: float, ms: int, gain_db: float = -8.0) -> AudioSegment:
-        # Two sine layers (fundamental + octave below at lower gain) for warmth
-        a = Sine(freq).to_audio_segment(duration=ms).apply_gain(gain_db)
-        b = Sine(freq / 2).to_audio_segment(duration=ms).apply_gain(gain_db - 6)
-        return a.overlay(b)
+    # ── Piano-like timbre via harmonic stacking ──────────────────────
+    # Real piano: 1× fundamental + 2× at -7dB + 3× at -14dB + 4× at -20dB
+    # gives a tone that the ear reads as "struck string" not "sine beep".
+    def _piano(freq: float, ms: int, gain_db: float = -8.0) -> AudioSegment:
+        layers = [
+            (1.0,  0.0),
+            (2.0, -7.0),
+            (3.0, -14.0),
+            (4.0, -20.0),
+            (5.0, -28.0),
+        ]
+        out = AudioSegment.silent(duration=ms)
+        for ratio, db in layers:
+            tone = Sine(freq * ratio).to_audio_segment(duration=ms)
+            out = out.overlay(tone.apply_gain(db + gain_db))
+        # Piano envelope: sharp attack (8ms) + long linear decay
+        attack = min(15, ms // 30)
+        decay  = max(ms - attack - 5, ms // 2)
+        return out.fade_in(attack).fade_out(decay)
 
-    # ── INTRO (3 sec): rising arpeggio E5 → A5 → C#6, overlapping ───
-    e5  = _tone(659.25, 1400).fade_in(120).fade_out(900)
-    a5  = _tone(880.00, 1400).fade_in(120).fade_out(900)
-    cs6 = _tone(1108.73, 1800).fade_in(180).fade_out(1400)
-    intro = AudioSegment.silent(duration=3000)
-    intro = intro.overlay(e5,  position=0)
-    intro = intro.overlay(a5,  position=400)
-    intro = intro.overlay(cs6, position=900)
-    # gentle low pad underneath (A2 sustained, very quiet) for body
-    pad = _tone(110.0, 3000, gain_db=-22).fade_in(300).fade_out(800)
-    intro = intro.overlay(pad)
-    intro = intro.fade_out(200).normalize(headroom=2.0)
+    # ── String-like sustained pad (slightly detuned doubled sine) ────
+    def _pad(freq: float, ms: int, gain_db: float = -22.0) -> AudioSegment:
+        a = Sine(freq).to_audio_segment(duration=ms)
+        b = Sine(freq * 1.0035).to_audio_segment(duration=ms)  # chorus detune
+        c = Sine(freq * 2).to_audio_segment(duration=ms)
+        pad = (a.apply_gain(gain_db)
+               .overlay(b.apply_gain(gain_db - 3))
+               .overlay(c.apply_gain(gain_db - 10)))
+        fade = ms // 3
+        return pad.fade_in(fade).fade_out(fade)
+
+    # F minor scale notes (Succession-ish key signature)
+    F2, F3, Ab3, C4, Db4, F4, Ab4, C5, Db5 = (
+        87.31, 174.61, 207.65, 261.63, 277.18, 349.23, 415.30, 523.25, 554.37
+    )
+
+    # ── INTRO (5s): brooding piano + low pad ─────────────────────────
+    intro = AudioSegment.silent(duration=5000)
+    intro = intro.overlay(_pad(F2, 5000, gain_db=-20))            # held low pad
+    intro = intro.overlay(_pad(C4, 4800, gain_db=-30), position=200)  # mid pad
+    # Opening Fm chord stab @ 200ms (F-Ab-C minor triad)
+    intro = intro.overlay(_piano(F3,  3800, -7),  position=200)
+    intro = intro.overlay(_piano(Ab3, 3800, -8),  position=200)
+    intro = intro.overlay(_piano(C4,  3800, -9),  position=200)
+    # Melodic motif w/ tension — Ab4 → C5 → Db5 (the dread note) → resolve to C5
+    intro = intro.overlay(_piano(Ab4,  900, -8),  position=1500)
+    intro = intro.overlay(_piano(C5,   900, -8),  position=2200)
+    intro = intro.overlay(_piano(Db5,  900, -7),  position=2900)
+    intro = intro.overlay(_piano(C5,  2000, -8),  position=3700)
+    # Final ringout — Fm chord sustained under host's cold open
+    intro = intro.overlay(_piano(F4,  1300, -9),  position=3700)
+    intro = intro.overlay(_piano(Ab4, 1300, -10), position=3700)
+    intro = intro.fade_out(400).normalize(headroom=1.5)
     intro.export(INTRO_STING_PATH, format="mp3", bitrate="128k")
 
-    # ── OUTRO (2 sec): single A4 → A3 resolving tone ────────────────
-    a4 = _tone(440.0, 1200).fade_in(60).fade_out(600)
-    a3 = _tone(220.0, 2000).fade_in(60).fade_out(1200)
-    outro = AudioSegment.silent(duration=2000)
-    outro = outro.overlay(a4, position=0)
-    outro = outro.overlay(a3, position=300)
-    outro = outro.fade_out(400).normalize(headroom=2.0)
+    # ── OUTRO (5s): descending resolve ───────────────────────────────
+    outro = AudioSegment.silent(duration=5000)
+    outro = outro.overlay(_pad(F2, 5000, gain_db=-22))
+    # Walking descent: C5 → Ab4 → F4 → C4 → F3, slowing as it falls
+    outro = outro.overlay(_piano(C5,   800, -7),  position=200)
+    outro = outro.overlay(_piano(Ab4,  900, -8),  position=900)
+    outro = outro.overlay(_piano(F4,  1100, -9),  position=1700)
+    outro = outro.overlay(_piano(C4,  1500, -10), position=2700)
+    outro = outro.overlay(_piano(F3,  2000, -10), position=3500)
+    # Final low resting tone under the fade
+    outro = outro.overlay(_piano(F2, 1500, -12), position=3500)
+    outro = outro.fade_out(700).normalize(headroom=1.5)
     outro.export(OUTRO_STING_PATH, format="mp3", bitrate="128k")
 
     return INTRO_STING_PATH, OUTRO_STING_PATH
@@ -537,7 +600,7 @@ def synthesize_episode(
     segs: list[AudioSegment] = []
     prev_section: str | None = None
     for i, (sid, turn) in enumerate(flat, start=1):
-        sp = (turn.get("speaker") or "alec").lower()
+        sp = (turn.get("speaker") or "alex").lower()
         text = (turn.get("text") or "").strip()
         intensity = (turn.get("intensity") or "normal").lower()
         if on_progress:
@@ -548,13 +611,20 @@ def synthesize_episode(
         seg = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
         # Inter-turn gap depends on whether we're crossing a section boundary
         if prev_section is not None:
+            # ui132: jitter each gap ±25% so transitions don't feel
+            # metronomic. User feedback: "transitions get monotonous".
+            import random as _r
             if sid == "verdict" and prev_section != "verdict":
-                gap = GAP_BEFORE_VERDICT
+                gap = GAP_BEFORE_VERDICT + _r.randint(-120, 200)
             elif sid != prev_section:
-                gap = GAP_BETWEEN_SECTIONS
+                gap = GAP_BETWEEN_SECTIONS + _r.randint(-110, 180)
             else:
-                gap = GAP_INTRA_SECTION
-            segs.append(AudioSegment.silent(duration=gap))
+                gap = GAP_INTRA_SECTION + _r.randint(-70, 110)
+                # 1-in-6 chance of an extra micro-beat (160ms) for
+                # natural mid-section "let that land" feel
+                if _r.random() < 0.16:
+                    gap += 160
+            segs.append(AudioSegment.silent(duration=max(80, gap)))
         segs.append(seg)
         prev_section = sid
 
