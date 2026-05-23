@@ -16059,12 +16059,99 @@ def podcast_generate_script(ticker: str):
     except Exception:
         pass
 
+    # Persist script to DB so it appears in the "saved scripts" dropdown.
+    # We write to analyst_podcasts.script_json WITHOUT touching audio fields —
+    # an audio generation later will reuse this script via the cache check.
+    if result.get("script") and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            _ensure_podcast_table()
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO analyst_podcasts (ticker, episode_title, script_json, generated_at)
+                    VALUES (%s, %s, %s, NOW())
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        episode_title = EXCLUDED.episode_title,
+                        script_json   = EXCLUDED.script_json,
+                        generated_at  = NOW()
+                """, (
+                    tk,
+                    (result["script"].get("episode_title") or f"{tk}: Bull vs Bear"),
+                    json.dumps(result["script"]),
+                ))
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️  [podcast] script DB persist failed for {tk}: {e!s:.200}", flush=True)
+
     return {
         "ok":          bool(result.get("script")),
         "ticker":      tk,
         "script":      result.get("script"),
         "validation":  result.get("validation"),
         "transcript":  podcast_engine.script_to_transcript(result["script"]) if result.get("script") else None,
+    }
+
+
+@app.get("/api/podcast/scripts")
+def podcast_list_scripts():
+    """List all saved podcast scripts (ticker + title + when generated).
+
+    Powers the "Saved scripts" dropdown next to the Generate Script button
+    in LLM Lab — lets the user re-open any past script without paying
+    Claude to regenerate.
+    """
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "scripts": []}
+    try:
+        _ensure_podcast_table()
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ticker, episode_title, generated_at,
+                       (script_json->>'winner') AS winner,
+                       (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio
+                FROM analyst_podcasts
+                WHERE script_json IS NOT NULL
+                ORDER BY generated_at DESC
+            """)
+            rows = cur.fetchall()
+        return {"ok": True, "scripts": [
+            {
+                "ticker":       r["ticker"],
+                "title":        r["episode_title"] or f"{r['ticker']}: Bull vs Bear",
+                "winner":       r["winner"],
+                "has_audio":    bool(r["has_audio"]),
+                "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
+            } for r in rows
+        ]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/podcast/{ticker}/script")
+def podcast_get_script(ticker: str):
+    """Fetch a previously-generated podcast script (no regeneration, no spend)."""
+    import podcast_engine
+    tk = ticker.upper().strip()
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT script_json, episode_title, generated_at
+                           FROM analyst_podcasts WHERE ticker = %s""", (tk,))
+            row = cur.fetchone()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    if not row or not row.get("script_json"):
+        return JSONResponse({"ok": False, "error": f"No saved script for {tk}"}, status_code=404)
+    script = row["script_json"]
+    # Re-validate so stats display the same way as a fresh generation
+    validation = podcast_engine.validate_script(script) if isinstance(script, dict) else {}
+    return {
+        "ok":           True,
+        "ticker":       tk,
+        "script":       script,
+        "validation":   validation,
+        "transcript":   podcast_engine.script_to_transcript(script) if isinstance(script, dict) else None,
+        "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
     }
 
 
