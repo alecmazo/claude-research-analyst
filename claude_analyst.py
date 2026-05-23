@@ -8881,8 +8881,11 @@ def push_to_dropbox(file_paths: list[Path | str]) -> dict:
     }
 
 
-def fetch_from_dropbox(ticker: str) -> str | None:
-    """Download `{TICKER}_DGA_Report.md` from Dropbox, or None.
+def fetch_from_dropbox(ticker: str, provider: str = "grok") -> str | None:
+    """Download `{TICKER}_DGA_Report[_provider].md` from Dropbox, or None.
+
+    provider='grok' (default) loads {TICKER}_DGA_Report.md.
+    provider='claude' loads {TICKER}_DGA_Report_claude.md.
 
     Looks first in the `MD cached/` subfolder (current layout), then falls
     back to the base folder so old reports stored before the reorganisation
@@ -8892,7 +8895,8 @@ def fetch_from_dropbox(ticker: str) -> str | None:
     if dbx is None:
         return None
     folder = _dropbox_folder()
-    filename = f"{ticker}_DGA_Report.md"
+    suffix = "" if provider == "grok" else f"_{provider}"
+    filename = f"{ticker}_DGA_Report{suffix}.md"
 
     # Primary: new subfolder location
     md_sub = (f"{folder}/{DROPBOX_MD_SUBFOLDER}/{filename}"
@@ -8907,6 +8911,61 @@ def fetch_from_dropbox(ticker: str) -> str | None:
         except Exception:
             continue
     return None
+
+
+def list_dropbox_report_tickers() -> dict[str, list[str]]:
+    """Enumerate which DGA reports exist in Dropbox (Grok + Claude).
+
+    Returns: {'grok': [TICKER1, TICKER2, ...], 'claude': [TICKER1, ...]}
+    Empty lists when Dropbox isn't configured or the folder is empty.
+
+    Used by the orphan-hydration to find reports that:
+      • Exist in Dropbox (uploaded by a prior successful analysis)
+      • Are NOT in the local /stocks cache (Railway dyno wiped on restart)
+      • Are NOT in the analyst_reports DB (persist failed somehow)
+    All three of these are common Railway failure modes; this helper +
+    the hydration recover the report without the user having to re-pay.
+    """
+    out = {"grok": [], "claude": []}
+    dbx = _dropbox_client()
+    if dbx is None:
+        return out
+    folder = _dropbox_folder()
+    # Two candidate paths: the new 'MD cached/' subfolder + the legacy base
+    candidate_paths = []
+    if folder:
+        candidate_paths.append(f"{folder}/{DROPBOX_MD_SUBFOLDER}")
+        candidate_paths.append(folder)
+    else:
+        candidate_paths.append(f"/{DROPBOX_MD_SUBFOLDER}")
+        candidate_paths.append("")   # API root
+
+    seen_grok, seen_claude = set(), set()
+    for path in candidate_paths:
+        try:
+            res = dbx.files_list_folder(path, recursive=False)
+        except Exception:
+            continue
+        # Walk all entries (handle has_more pagination)
+        while True:
+            for entry in (getattr(res, "entries", []) or []):
+                name = getattr(entry, "name", "") or ""
+                # Claude variant must be checked FIRST since it shares the suffix
+                if name.endswith("_DGA_Report_claude.md"):
+                    tk = name[: -len("_DGA_Report_claude.md")].upper()
+                    if tk and tk not in seen_claude:
+                        seen_claude.add(tk); out["claude"].append(tk)
+                elif name.endswith("_DGA_Report.md"):
+                    tk = name[: -len("_DGA_Report.md")].upper()
+                    if tk and tk not in seen_grok:
+                        seen_grok.add(tk); out["grok"].append(tk)
+            if not getattr(res, "has_more", False):
+                break
+            try:
+                res = dbx.files_list_folder_continue(res.cursor)
+            except Exception:
+                break
+    return out
 
 
 def _is_drive_quota_error(exc: Exception) -> bool:
@@ -9135,15 +9194,17 @@ def push_to_google_drive(
     return result
 
 
-def fetch_report_from_drive(ticker: str) -> str | None:
-    """Try to load a cached `{TICKER}_DGA_Report.md`.
+def fetch_report_from_drive(ticker: str, provider: str = "grok") -> str | None:
+    """Try to load a cached `{TICKER}_DGA_Report[_provider].md`.
 
     Checks Dropbox first (preferred, works on personal accounts), then the
     shared Drive folder (requires Workspace), then the Sheets-tab archive.
     Returns markdown text if found, else None.
+
+    provider: 'grok' (default) or 'claude'.
     """
     # --- Dropbox first (preferred) ---
-    dbx_text = fetch_from_dropbox(ticker)
+    dbx_text = fetch_from_dropbox(ticker, provider=provider)
     if dbx_text:
         return dbx_text
 
@@ -9151,7 +9212,8 @@ def fetch_report_from_drive(ticker: str) -> str | None:
     svc = _drive_service()
     folder_id = _drive_folder_id()
     if svc is not None and folder_id:
-        filename = f"{ticker}_DGA_Report.md"
+        suffix = "" if provider == "grok" else f"_{provider}"
+        filename = f"{ticker}_DGA_Report{suffix}.md"
         file_id = _drive_find_file(svc, folder_id, filename)
         if file_id:
             try:

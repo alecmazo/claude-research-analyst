@@ -7298,51 +7298,70 @@ def _backfill_report_dates() -> None:
 
 
 def _hydrate_orphaned_grok_reports() -> None:
-    """One-shot: detect on-disk {TICKER}_DGA_Report.md files (Grok canonical)
-    that aren't in analyst_reports.report_md and backfill them.
+    """One-shot: backfill any DGA Grok report that's missing from the DB.
 
-    Mirrors _hydrate_orphaned_claude_reports for the Grok side. Catches the
-    case where a Grok analysis succeeded (file written, optionally pushed to
-    Drive/Dropbox) but the DB upsert silently failed — without this, the
-    report would be invisible in Saved Reports until the user manually
-    re-ran it. Idempotent: skips rows whose report_md is already populated.
+    Sources scanned, in order:
+      1. Local /stocks/{TICKER}_DGA_Report.md files
+      2. Dropbox folder listing — recovers reports whose local file was
+         wiped by a Railway dyno restart (the original failure mode for
+         the user's INTC report). Calls list_dropbox_report_tickers().
 
-    Also tries the Drive/Dropbox copy as a secondary source if disk is empty
-    (handles Railway redeploys that wiped /stocks while Drive still has it).
+    For each candidate ticker NOT already in analyst_reports.report_md,
+    pulls the markdown (disk → Dropbox → Drive → Sheets) and persists via
+    _db_upsert_report(provider='grok'). Idempotent: rows with non-empty
+    report_md are skipped.
     """
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
     folder = analyst.STOCKS_FOLDER
-    # Local Grok files — these are *_DGA_Report.md but NOT *_DGA_Report_claude.md
+
+    # ── Source 1: local disk ───────────────────────────────────────────
+    local_tickers: set[str] = set()
     try:
-        local_files = [p for p in folder.glob("*_DGA_Report.md")
-                       if not p.name.endswith("_DGA_Report_claude.md")]
+        for p in folder.glob("*_DGA_Report.md"):
+            if p.name.endswith("_DGA_Report_claude.md"):
+                continue
+            tk = p.name.replace("_DGA_Report.md", "").upper()
+            if tk:
+                local_tickers.add(tk)
     except Exception:
-        local_files = []
-    if not local_files:
+        pass
+
+    # ── Source 2: Dropbox listing (RECOVERY for Railway-wiped /stocks) ─
+    dropbox_grok: set[str] = set()
+    try:
+        listings = analyst.list_dropbox_report_tickers()
+        dropbox_grok = set(listings.get("grok") or [])
+        if dropbox_grok and not local_tickers:
+            print(f"[hydrate] /stocks empty; found {len(dropbox_grok)} Grok report(s) in Dropbox", flush=True)
+    except Exception as _e:
+        print(f"[hydrate] dropbox listing failed: {_e!s:.120}", flush=True)
+
+    candidates = local_tickers | dropbox_grok
+    if not candidates:
         return
+
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            for path in local_files:
-                tk = path.name.replace("_DGA_Report.md", "").upper()
-                # Skip if DB already has Grok content for this ticker
+            for tk in candidates:
+                # Skip if DB already has Grok content
                 cur.execute("""SELECT report_md FROM analyst_reports
                                WHERE ticker = %s""", (tk,))
                 row = cur.fetchone()
                 if row and (row["report_md"] or "").strip():
                     continue
-                # Read disk; if too short, try Drive as a fallback
+                # Pull text — disk first, then Drive/Dropbox/Sheets
                 text = ""
-                try:
-                    text = path.read_text()
-                except Exception:
-                    pass
+                local_path = folder / f"{tk}_DGA_Report.md"
+                if local_path.exists():
+                    try: text = local_path.read_text()
+                    except Exception: pass
                 if not text or len(text) < 200:
                     try:
-                        text = analyst.fetch_report_from_drive(tk) or ""
-                    except Exception:
-                        pass
+                        text = analyst.fetch_report_from_drive(tk, provider="grok") or ""
+                    except Exception: pass
                 if not text or len(text) < 200:
+                    print(f"[hydrate] could not source Grok report for {tk} (no disk + no Drive)", flush=True)
                     continue
                 try:
                     summary = analyst.extract_summary_from_report(text) or {}
@@ -7353,54 +7372,90 @@ def _hydrate_orphaned_grok_reports() -> None:
                         has_docx=has_docx, has_pptx=has_pptx, gamma_url=None,
                         pptx_stale=None, provider="grok",
                     )
-                    print(f"[hydrate] backfilled Grok report for {tk} from disk ({len(text):,} chars)")
+                    src = "disk" if local_path.exists() else "Dropbox"
+                    print(f"✅ [hydrate] backfilled Grok report for {tk} from {src} ({len(text):,} chars)", flush=True)
                 except Exception as _e:
-                    print(f"[hydrate] grok failed for {tk}: {_e!s:.120}")
+                    print(f"❌ [hydrate] grok failed for {tk}: {_e!s:.200}", flush=True)
     except Exception as _e:
-        print(f"[hydrate] grok outer error: {_e!s:.120}")
+        print(f"❌ [hydrate] grok outer error: {_e!s:.200}", flush=True)
 
 
 def _hydrate_orphaned_claude_reports() -> None:
-    """One-shot: detect on-disk {TICKER}_DGA_Report_claude.md files that
-    aren't yet in the analyst_reports.claude_* columns and backfill them.
+    """One-shot: backfill any DGA Claude report that's missing from the DB.
 
-    Targets Claude reports that were generated via the early Compare button
-    (before ui112 added DB persistence). Idempotent — skips tickers whose
-    claude_generated_at is already populated. Runs lazily inside list_reports
-    so the user never has to wait on a separate migration.
+    Sources scanned, in order:
+      1. Local /stocks/{TICKER}_DGA_Report_claude.md files
+      2. Dropbox folder listing — recovers reports whose local file was
+         wiped by a Railway dyno restart (the original failure mode for
+         the user's INTC Claude report). Calls list_dropbox_report_tickers().
+
+    For each candidate ticker whose claude_generated_at is NULL (or
+    claude_report_md is empty), pulls the markdown (disk → Dropbox) and
+    persists via _db_upsert_report(provider='claude'). Idempotent.
     """
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
     folder = analyst.STOCKS_FOLDER
+
+    # ── Source 1: local disk ───────────────────────────────────────────
+    local_tickers: set[str] = set()
     try:
-        files = list(folder.glob("*_DGA_Report_claude.md"))
+        for p in folder.glob("*_DGA_Report_claude.md"):
+            tk = p.name.replace("_DGA_Report_claude.md", "").upper()
+            if tk:
+                local_tickers.add(tk)
     except Exception:
+        pass
+
+    # ── Source 2: Dropbox listing (RECOVERY for Railway-wiped /stocks) ─
+    dropbox_claude: set[str] = set()
+    try:
+        listings = analyst.list_dropbox_report_tickers()
+        dropbox_claude = set(listings.get("claude") or [])
+        if dropbox_claude and not local_tickers:
+            print(f"[hydrate] /stocks empty; found {len(dropbox_claude)} Claude report(s) in Dropbox", flush=True)
+    except Exception as _e:
+        print(f"[hydrate] dropbox listing failed: {_e!s:.120}", flush=True)
+
+    candidates = local_tickers | dropbox_claude
+    if not candidates:
         return
-    if not files:
-        return
+
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            for path in files:
-                tk = path.name.replace("_DGA_Report_claude.md", "").upper()
-                # Skip if already in DB
-                cur.execute("""SELECT claude_generated_at FROM analyst_reports
-                               WHERE ticker = %s""", (tk,))
+            for tk in candidates:
+                # Skip if DB already has Claude content
+                cur.execute("""SELECT claude_generated_at, claude_report_md
+                               FROM analyst_reports WHERE ticker = %s""", (tk,))
                 row = cur.fetchone()
-                if row and row["claude_generated_at"]:
+                if row and row.get("claude_generated_at") and (row.get("claude_report_md") or "").strip():
+                    continue
+                # Pull text — disk first, then Dropbox
+                text = ""
+                local_path = folder / f"{tk}_DGA_Report_claude.md"
+                if local_path.exists():
+                    try: text = local_path.read_text()
+                    except Exception: pass
+                if not text or len(text) < 200:
+                    try:
+                        text = analyst.fetch_report_from_drive(tk, provider="claude") or ""
+                    except Exception: pass
+                if not text or len(text) < 200:
+                    print(f"[hydrate] could not source Claude report for {tk} (no disk + no Dropbox)", flush=True)
                     continue
                 try:
-                    md = path.read_text()
-                    summary = _extract_summary_cached(path) or {}
+                    summary = analyst.extract_summary_from_report(text) or {}
                     _db_upsert_report(
-                        tk, md, summary,
+                        tk, text, summary,
                         has_docx=False, has_pptx=False, gamma_url=None,
                         pptx_stale=None, provider="claude",
                     )
-                    print(f"[hydrate] backfilled Claude report for {tk} from disk")
+                    src = "disk" if local_path.exists() else "Dropbox"
+                    print(f"✅ [hydrate] backfilled Claude report for {tk} from {src} ({len(text):,} chars)", flush=True)
                 except Exception as _e:
-                    print(f"[hydrate] failed for {tk}: {_e!s:.120}")
+                    print(f"❌ [hydrate] claude failed for {tk}: {_e!s:.200}", flush=True)
     except Exception as _e:
-        print(f"[hydrate] outer error: {_e!s:.120}")
+        print(f"❌ [hydrate] claude outer error: {_e!s:.200}", flush=True)
 
 
 @app.get("/api/reports")
