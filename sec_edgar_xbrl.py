@@ -644,8 +644,15 @@ def extract_financials(
             quarterly["prior_year_same_q"] = _build_quarter_row(
                 facts, cur_fy - 1, cur_fp, is_ytd=False
             )
-            # YTD current + prior (only meaningful for Q2+)
-            if cur_fp in ("Q2", "Q3"):
+            # YTD current + prior — populate for Q1, Q2, Q3 so the TTM bridge
+            # formula (last_FY + cy_ytd − py_ytd) works year-round. For Q1,
+            # YTD-at-Q1 is just the Q1 value itself (3 months = YTD-to-date
+            # at end of Q1), and the bridge math is still correct:
+            #   TTM = FY + Q1_current − Q1_prior
+            # Without this, TTM at a Q1 filing fell back to last-FY values
+            # verbatim (Tesla showed FY2025 numbers in the TTM column even
+            # though Q1 2026 results were reported).
+            if cur_fp in ("Q1", "Q2", "Q3"):
                 quarterly["current_ytd"] = _build_quarter_row(
                     facts, cur_fy, cur_fp, is_ytd=True
                 )
