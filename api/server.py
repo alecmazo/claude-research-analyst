@@ -1185,7 +1185,11 @@ async def auth_middleware(request: Request, call_next):
     if (path in _PUBLIC_PATHS
             or path.startswith("/app/")
             or path.startswith("/branding/")
-            or not path.startswith("/api/")):
+            or not path.startswith("/api/")
+            # Podcast audio + RSS feed must be public so <audio> tags and
+            # podcast platforms (Apple/Spotify) can stream without auth.
+            or path.endswith("/audio.mp3")
+            or path == "/api/podcast/rss.xml"):
         return await call_next(request)
 
     # ── v2 token (email+password JWT) — accepted on every /api/* path.
@@ -15713,6 +15717,294 @@ PODCAST_AUDITION_VOICES = [
     ("nova",    "bright female, energetic"),
     ("shimmer", "soft female, measured"),
 ]
+
+
+# ── Podcast DB schema ──────────────────────────────────────────────────
+def _ensure_podcast_table() -> None:
+    """Create analyst_podcasts if missing. Idempotent, per-ALTER commits."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS analyst_podcasts (
+                    ticker             TEXT PRIMARY KEY,
+                    episode_title      TEXT,
+                    script_json        JSONB,
+                    audio_local_path   TEXT,
+                    audio_dropbox_path TEXT,
+                    duration_sec       REAL,
+                    tts_model          TEXT,
+                    voice_map          JSONB,
+                    generated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    cost_usd           REAL
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        print(f"❌ [podcast] table ensure failed: {e!s:.200}", flush=True)
+
+
+# Build-time hook (best-effort)
+try:
+    _ensure_podcast_table()
+except Exception:
+    pass
+
+
+# Track in-progress podcast generation jobs for UI progress polling.
+# Key: ticker → {stage, current, total, label, started_at, status, error?}
+_podcast_jobs: dict[str, dict] = {}
+_podcast_jobs_lock = threading.Lock()
+
+
+def _podcast_progress(ticker: str):
+    """Return a closure that records progress for one ticker job."""
+    def _record(stage: str, current: int, total: int, label: str) -> None:
+        try:
+            _podcast_jobs[ticker.upper()] = {
+                **(_podcast_jobs.get(ticker.upper()) or {}),
+                "stage":      stage,
+                "current":    current,
+                "total":      total,
+                "label":      label,
+                "updated_at": time.time(),
+            }
+        except Exception:
+            pass
+    return _record
+
+
+def _run_podcast_generation(ticker: str, tts_model: str) -> None:
+    """Background worker: pull script (or generate one), synthesize audio,
+    upload to Dropbox, update DB."""
+    import podcast_engine as pe
+    tk = ticker.upper()
+    _podcast_jobs[tk] = {
+        "stage": "queued", "current": 0, "total": 0,
+        "label": "Loading reports…", "status": "running",
+        "started_at": time.time(),
+    }
+    try:
+        # 1. Load both reports
+        grok_md, claude_md = "", ""
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
+                           WHERE ticker = %s""", (tk,))
+            row = cur.fetchone()
+            if row:
+                grok_md   = row.get("report_md") or ""
+                claude_md = row.get("report_md_claude") or ""
+        if not (grok_md.strip() and claude_md.strip()):
+            raise RuntimeError(
+                f"{tk} needs BOTH Grok + Claude reports — generate them first."
+            )
+
+        # 2. Re-use existing script if one is cached, else generate fresh
+        cached_script = None
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT script_json FROM analyst_podcasts
+                               WHERE ticker = %s""", (tk,))
+                pr = cur.fetchone()
+                if pr and pr.get("script_json"):
+                    cached_script = pr["script_json"]
+        except Exception:
+            pass
+
+        if cached_script:
+            script = cached_script
+            _podcast_jobs[tk] = {**_podcast_jobs[tk],
+                "label": "Re-using cached script (regenerating audio only)…"}
+        else:
+            _podcast_jobs[tk] = {**_podcast_jobs[tk],
+                "label": "Writing script with Claude Opus (~40s)…"}
+            result = pe.generate_script(tk, grok_md, claude_md)
+            if not result.get("script"):
+                raise RuntimeError("Script generation failed: " +
+                    ", ".join(result.get("validation", {}).get("errors", []) or ["unknown"]))
+            script = result["script"]
+
+        # 3. Synthesize audio
+        out_dir = analyst.STOCKS_FOLDER / "podcasts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{tk}_podcast.mp3"
+        syn = pe.synthesize_episode(
+            script,
+            out_path=out_path,
+            tts_model=tts_model,
+            on_progress=_podcast_progress(tk),
+        )
+
+        # 4. Upload to Dropbox under /podcast/episodes/
+        dropbox_path = None
+        try:
+            dbx = analyst._dropbox_client()
+            if dbx is not None:
+                import dropbox as _dbx
+                base = analyst._dropbox_folder()
+                sub = f"{base}/podcast/episodes" if base else "/podcast/episodes"
+                dropbox_path = f"{sub}/{tk}_podcast.mp3"
+                dbx.files_upload(
+                    out_path.read_bytes(),
+                    dropbox_path,
+                    mode=_dbx.files.WriteMode.overwrite,
+                    mute=True,
+                )
+                print(f"✅ [podcast] uploaded {tk} → {dropbox_path}", flush=True)
+        except Exception as e:
+            print(f"⚠️  [podcast] dropbox upload failed for {tk}: {e!s:.200}", flush=True)
+
+        # 5. Persist row
+        cost = pe.estimate_tts_cost(script, tts_model)
+        try:
+            _ensure_podcast_table()
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO analyst_podcasts
+                        (ticker, episode_title, script_json, audio_local_path,
+                         audio_dropbox_path, duration_sec, tts_model, voice_map,
+                         generated_at, cost_usd)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        episode_title      = EXCLUDED.episode_title,
+                        script_json        = EXCLUDED.script_json,
+                        audio_local_path   = EXCLUDED.audio_local_path,
+                        audio_dropbox_path = EXCLUDED.audio_dropbox_path,
+                        duration_sec       = EXCLUDED.duration_sec,
+                        tts_model          = EXCLUDED.tts_model,
+                        voice_map          = EXCLUDED.voice_map,
+                        generated_at       = NOW(),
+                        cost_usd           = EXCLUDED.cost_usd
+                """, (
+                    tk,
+                    script.get("episode_title") or f"{tk}: Bull vs Bear",
+                    json.dumps(script),
+                    str(out_path),
+                    dropbox_path,
+                    syn.get("duration_sec"),
+                    syn.get("tts_model"),
+                    json.dumps(syn.get("voice_map") or {}),
+                    cost.get("estimated_usd"),
+                ))
+                conn.commit()
+        except Exception as e:
+            print(f"❌ [podcast] DB persist failed for {tk}: {e!s:.200}", flush=True)
+
+        _podcast_jobs[tk] = {
+            **_podcast_jobs[tk],
+            "stage": "done", "status": "done",
+            "label": f"✓ Done — {syn['duration_sec']:.0f}s episode",
+            "duration_sec": syn.get("duration_sec"),
+            "audio_url": f"/api/podcast/{tk}/audio.mp3",
+            "dropbox_path": dropbox_path,
+            "cost_usd": cost.get("estimated_usd"),
+        }
+    except Exception as e:
+        print(f"❌ [podcast] generation failed for {tk}: {e!s:.500}", flush=True)
+        _podcast_jobs[tk] = {
+            **(_podcast_jobs.get(tk) or {}),
+            "stage": "error", "status": "error",
+            "label": f"❌ {e!s:.200}", "error": str(e),
+        }
+
+
+@app.post("/api/podcast/{ticker}/generate")
+def podcast_generate(ticker: str, background_tasks: BackgroundTasks,
+                     tts_model: str = "tts-1-hd"):
+    """Kick off podcast audio generation in the background.
+
+    Poll progress via GET /api/podcast/{ticker}/status.
+    When status.stage='done', play GET /api/podcast/{ticker}/audio.mp3.
+    """
+    tk = ticker.upper().strip()
+    if not os.environ.get("OPENAI_API_KEY"):
+        return JSONResponse({"ok": False, "error": "OPENAI_API_KEY not set on server"},
+                            status_code=400)
+    existing = _podcast_jobs.get(tk)
+    if existing and existing.get("status") == "running":
+        return {"ok": True, "ticker": tk, "already_running": True}
+    background_tasks.add_task(_run_podcast_generation, tk, tts_model)
+    return {"ok": True, "ticker": tk, "tts_model": tts_model}
+
+
+@app.get("/api/podcast/{ticker}/status")
+def podcast_status(ticker: str):
+    tk = ticker.upper().strip()
+    job = _podcast_jobs.get(tk) or {"stage": "idle", "status": "idle"}
+    return {"ok": True, "ticker": tk, **job}
+
+
+@app.get("/api/podcast/{ticker}/audio.mp3")
+def podcast_audio(ticker: str):
+    """Stream the most recent MP3 for this ticker (DB row → local file)."""
+    from fastapi.responses import FileResponse
+    tk = ticker.upper().strip()
+    # 1. Try DB (canonical source — survives Railway restarts via Dropbox fallback)
+    local_path: str | None = None
+    dropbox_path: str | None = None
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT audio_local_path, audio_dropbox_path
+                               FROM analyst_podcasts WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+                if row:
+                    local_path   = row.get("audio_local_path")
+                    dropbox_path = row.get("audio_dropbox_path")
+        except Exception:
+            pass
+    # 2. Local file (fast path)
+    if local_path:
+        p = Path(local_path)
+        if p.exists():
+            return FileResponse(p, media_type="audio/mpeg", filename=p.name)
+    # 3. Fallback to expected location
+    fallback = analyst.STOCKS_FOLDER / "podcasts" / f"{tk}_podcast.mp3"
+    if fallback.exists():
+        return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
+    # 4. Dropbox fallback (rehydrate then serve)
+    if dropbox_path:
+        try:
+            dbx = analyst._dropbox_client()
+            if dbx is not None:
+                _, res = dbx.files_download(dropbox_path)
+                fallback.parent.mkdir(parents=True, exist_ok=True)
+                fallback.write_bytes(res.content)
+                return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
+        except Exception as e:
+            print(f"⚠️  [podcast] dropbox rehydrate failed for {tk}: {e!s:.200}", flush=True)
+    return JSONResponse({"ok": False, "error": f"No podcast audio found for {tk}"},
+                        status_code=404)
+
+
+@app.get("/api/podcast/list")
+def podcast_list():
+    """All episodes — used by the in-app player + (later) the RSS feed."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "episodes": []}
+    try:
+        _ensure_podcast_table()
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT ticker, episode_title, duration_sec, generated_at,
+                                  tts_model, cost_usd, audio_dropbox_path
+                           FROM analyst_podcasts
+                           ORDER BY generated_at DESC""")
+            rows = cur.fetchall()
+        return {"ok": True, "episodes": [
+            {
+                "ticker": r["ticker"],
+                "title":  r["episode_title"],
+                "duration_sec": r["duration_sec"],
+                "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
+                "tts_model":    r["tts_model"],
+                "cost_usd":     r["cost_usd"],
+                "audio_url":    f"/api/podcast/{r['ticker']}/audio.mp3",
+                "dropbox_path": r["audio_dropbox_path"],
+            } for r in rows
+        ]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
 @app.post("/api/podcast/{ticker}/script")

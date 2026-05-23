@@ -371,6 +371,253 @@ def generate_script(
 # Pretty-print helpers (for the UI / CLI)
 # ════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════
+# Audio synthesis (v1) — TTS + stitching + music sting
+# ════════════════════════════════════════════════════════════════════════
+#
+# Flow:
+#   1. For each turn → call OpenAI TTS (voice from VOICE_MAP, speed from
+#      INTENSITY_SPEED). Returns MP3 bytes per turn.
+#   2. Decode each MP3 to a pydub AudioSegment.
+#   3. Concatenate with small gaps (200ms intra-section, 500ms between
+#      sections, 800ms before the verdict for dramatic effect).
+#   4. Pre-pend a 3-sec intro sting + append a 2-sec outro sting (both
+#      generated procedurally on first use, cached to disk).
+#   5. Apply gentle compression + normalize, export as 128k MP3.
+#
+# Requires:
+#   • OPENAI_API_KEY in env
+#   • pydub installed (pip)
+#   • ffmpeg on PATH (declared in nixpacks.toml for Railway)
+
+import io
+from pathlib import Path
+
+TTS_MODEL_DEFAULT = "tts-1-hd"   # higher quality than gpt-4o-mini-tts for final episodes
+TTS_FORMAT        = "mp3"
+
+# Pacing (milliseconds)
+GAP_INTRA_SECTION = 220
+GAP_BETWEEN_SECTIONS = 520
+GAP_BEFORE_VERDICT = 850
+
+# Music sting paths (generated on first use, then cached)
+_STING_DIR = Path(__file__).parent / "podcast" / "stings"
+INTRO_STING_PATH = _STING_DIR / "intro_3s.mp3"
+OUTRO_STING_PATH = _STING_DIR / "outro_2s.mp3"
+
+
+def _ensure_stings() -> tuple[Path, Path]:
+    """Generate the brand intro/outro music stings if they don't exist yet.
+
+    Style: minimalist DGA HiTech vibe — a soft rising 3-note arpeggio
+    on the intro (E5 → A5 → C#6, ~major chord, warm sine timbre + fade
+    in/out), and a single low resolving tone on the outro. We're not
+    making a Suno-quality jingle — just a clean, branded "we're starting"
+    and "we're done" cue.
+
+    Cached to disk after first generation. Cheap to regenerate if you
+    want to tune them: just delete the files.
+    """
+    _STING_DIR.mkdir(parents=True, exist_ok=True)
+    if INTRO_STING_PATH.exists() and OUTRO_STING_PATH.exists():
+        return INTRO_STING_PATH, OUTRO_STING_PATH
+
+    from pydub import AudioSegment
+    from pydub.generators import Sine
+
+    def _tone(freq: float, ms: int, gain_db: float = -8.0) -> AudioSegment:
+        # Two sine layers (fundamental + octave below at lower gain) for warmth
+        a = Sine(freq).to_audio_segment(duration=ms).apply_gain(gain_db)
+        b = Sine(freq / 2).to_audio_segment(duration=ms).apply_gain(gain_db - 6)
+        return a.overlay(b)
+
+    # ── INTRO (3 sec): rising arpeggio E5 → A5 → C#6, overlapping ───
+    e5  = _tone(659.25, 1400).fade_in(120).fade_out(900)
+    a5  = _tone(880.00, 1400).fade_in(120).fade_out(900)
+    cs6 = _tone(1108.73, 1800).fade_in(180).fade_out(1400)
+    intro = AudioSegment.silent(duration=3000)
+    intro = intro.overlay(e5,  position=0)
+    intro = intro.overlay(a5,  position=400)
+    intro = intro.overlay(cs6, position=900)
+    # gentle low pad underneath (A2 sustained, very quiet) for body
+    pad = _tone(110.0, 3000, gain_db=-22).fade_in(300).fade_out(800)
+    intro = intro.overlay(pad)
+    intro = intro.fade_out(200).normalize(headroom=2.0)
+    intro.export(INTRO_STING_PATH, format="mp3", bitrate="128k")
+
+    # ── OUTRO (2 sec): single A4 → A3 resolving tone ────────────────
+    a4 = _tone(440.0, 1200).fade_in(60).fade_out(600)
+    a3 = _tone(220.0, 2000).fade_in(60).fade_out(1200)
+    outro = AudioSegment.silent(duration=2000)
+    outro = outro.overlay(a4, position=0)
+    outro = outro.overlay(a3, position=300)
+    outro = outro.fade_out(400).normalize(headroom=2.0)
+    outro.export(OUTRO_STING_PATH, format="mp3", bitrate="128k")
+
+    return INTRO_STING_PATH, OUTRO_STING_PATH
+
+
+def _tts_turn(client, speaker: str, text: str, intensity: str,
+              model: str = TTS_MODEL_DEFAULT) -> bytes:
+    """Synthesize one turn via OpenAI TTS. Returns raw MP3 bytes."""
+    voice = VOICE_MAP.get(speaker.lower(), "alloy")
+    speed = INTENSITY_SPEED.get(intensity.lower(), 1.0)
+    # OpenAI speed range is 0.25–4.0; we stay in 0.95–1.10 per our spec.
+    resp = client.audio.speech.create(
+        model=model,
+        voice=voice,
+        input=text,
+        response_format=TTS_FORMAT,
+        speed=speed,
+    )
+    # Newer openai sdk: resp.read() returns bytes
+    if hasattr(resp, "read"):
+        return resp.read()
+    if hasattr(resp, "content"):
+        return resp.content
+    return bytes(resp)
+
+
+def synthesize_episode(
+    script: dict[str, Any],
+    *,
+    out_path: Path,
+    tts_model: str = TTS_MODEL_DEFAULT,
+    on_progress=None,
+) -> dict[str, Any]:
+    """Synthesize a full episode from a validated script. Writes MP3 to `out_path`.
+
+    Returns: {ok, duration_sec, turn_count, mp3_bytes, voice_map, model}.
+
+    on_progress: optional callable(stage, current, total, label) — called
+    at script start, before each turn, and at the final stitch step. Lets
+    the UI render a progress bar without polling.
+    """
+    import os as _os
+    api_key = _os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package missing") from e
+    try:
+        from pydub import AudioSegment
+    except ImportError as e:
+        raise RuntimeError(
+            "pydub missing — pip install pydub (and ensure ffmpeg on PATH)"
+        ) from e
+
+    client = OpenAI(api_key=api_key)
+    sections = script.get("sections") or []
+
+    # Flatten all turns with the section they came from so we can insert
+    # the right inter-segment gaps.
+    flat: list[tuple[str, dict]] = []
+    for sec in sections:
+        sid = sec.get("id") or "?"
+        for t in (sec.get("turns") or []):
+            if (t.get("text") or "").strip():
+                flat.append((sid, t))
+
+    total = len(flat)
+    if total == 0:
+        raise ValueError("Script has no turns to synthesize")
+
+    if on_progress:
+        try: on_progress("start", 0, total, "Generating intro music…")
+        except Exception: pass
+
+    intro_path, outro_path = _ensure_stings()
+    intro = AudioSegment.from_file(intro_path, format="mp3")
+    outro = AudioSegment.from_file(outro_path, format="mp3")
+
+    # Synthesize each turn → AudioSegment
+    segs: list[AudioSegment] = []
+    prev_section: str | None = None
+    for i, (sid, turn) in enumerate(flat, start=1):
+        sp = (turn.get("speaker") or "alec").lower()
+        text = (turn.get("text") or "").strip()
+        intensity = (turn.get("intensity") or "normal").lower()
+        if on_progress:
+            try: on_progress("turn", i, total,
+                             f"{sp.upper()} ({intensity}) · {sid} · turn {i}/{total}")
+            except Exception: pass
+        mp3_bytes = _tts_turn(client, sp, text, intensity, model=tts_model)
+        seg = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
+        # Inter-turn gap depends on whether we're crossing a section boundary
+        if prev_section is not None:
+            if sid == "verdict" and prev_section != "verdict":
+                gap = GAP_BEFORE_VERDICT
+            elif sid != prev_section:
+                gap = GAP_BETWEEN_SECTIONS
+            else:
+                gap = GAP_INTRA_SECTION
+            segs.append(AudioSegment.silent(duration=gap))
+        segs.append(seg)
+        prev_section = sid
+
+    if on_progress:
+        try: on_progress("stitch", total, total, "Stitching audio + music bumpers…")
+        except Exception: pass
+
+    # Build final timeline
+    body = sum(segs, AudioSegment.silent(duration=0))
+    # Cross-fade body in/out for a smoother transition from intro/outro music
+    body = body.fade_in(60)
+    full = intro + AudioSegment.silent(duration=350) + body + \
+           AudioSegment.silent(duration=400) + outro
+    full = full.normalize(headroom=1.5)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    full.export(out_path, format="mp3", bitrate="128k",
+                tags={
+                    "title":  script.get("episode_title") or script.get("ticker") or "DGA HiTech",
+                    "artist": "DGA HiTech Podcast",
+                    "album":  "DGA HiTech Podcast",
+                    "genre":  "Business",
+                })
+
+    duration_sec = len(full) / 1000.0
+    return {
+        "ok":            True,
+        "duration_sec":  round(duration_sec, 1),
+        "turn_count":    total,
+        "out_path":      str(out_path),
+        "bytes":         out_path.stat().st_size,
+        "voice_map":     dict(VOICE_MAP),
+        "tts_model":     tts_model,
+    }
+
+
+def estimate_tts_cost(script: dict[str, Any], model: str = TTS_MODEL_DEFAULT) -> dict[str, Any]:
+    """Estimate OpenAI TTS cost for an episode (so the UI can warn before spend).
+
+    Pricing (May 2026, OpenAI):
+      • tts-1       — $15 / 1M chars
+      • tts-1-hd    — $30 / 1M chars
+      • gpt-4o-mini-tts — $0.60 / 1M chars
+    """
+    rates_per_million = {
+        "tts-1":            15.0,
+        "tts-1-hd":         30.0,
+        "gpt-4o-mini-tts":   0.60,
+    }
+    rate = rates_per_million.get(model, 30.0)
+    chars = 0
+    for sec in script.get("sections") or []:
+        for t in sec.get("turns") or []:
+            chars += len((t.get("text") or ""))
+    cost = (chars / 1_000_000) * rate
+    return {"chars": chars, "model": model, "rate_per_million_usd": rate,
+            "estimated_usd": round(cost, 4)}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Pretty-print helpers (for the UI / CLI)
+# ════════════════════════════════════════════════════════════════════════
+
 def script_to_transcript(script: dict[str, Any]) -> str:
     """Render a validated script as a plain-text transcript for previewing."""
     out: list[str] = []

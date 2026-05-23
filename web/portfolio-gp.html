@@ -2207,6 +2207,41 @@
         </div>
         <div id="podcast-script-render" style="display:none;margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:16px;max-height:600px;overflow-y:auto;"></div>
       </div>
+
+      <!-- ── Audio generator (v1) ─────────────────────────────────── -->
+      <div style="border-top:1px solid #c7e8f3;padding:14px 18px;background:#f4fafd;">
+        <div style="font-size:12.5px;color:#475569;line-height:1.55;margin-bottom:10px;">
+          <strong style="color:#0A1628;">🎧 Audio episode (v1)</strong> —
+          synthesizes the dialogue with OpenAI TTS (Alec=fable, Rock=onyx,
+          Claude=echo), adds 3s intro + 2s outro music stings, exports MP3.
+          Cost: <strong>~$0.35–0.55</strong> per 8–10 min episode (tts-1-hd).
+          Audio mirrors to Dropbox <code style="background:#fff;padding:1px 5px;border-radius:3px;">podcast/episodes/</code>.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="podcast-audio-ticker" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;min-width:220px;">
+            <option value="">— select a ticker (needs both reports) —</option>
+          </select>
+          <select id="podcast-audio-model" style="font-size:12px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;" title="tts-1-hd is broadcast-quality; tts-1 is half cost; gpt-4o-mini-tts is cheapest">
+            <option value="tts-1-hd" selected>tts-1-hd (best, ~$0.50)</option>
+            <option value="tts-1">tts-1 (good, ~$0.25)</option>
+            <option value="gpt-4o-mini-tts">gpt-4o-mini-tts (draft, ~$0.01)</option>
+          </select>
+          <button id="podcast-audio-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
+            🎧 Generate audio
+          </button>
+        </div>
+        <div id="podcast-audio-progress" style="display:none;margin-top:10px;padding:10px 14px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;font-size:12px;color:#1e293b;">
+          <div id="podcast-audio-progress-label" style="font-family:'SF Mono',monospace;margin-bottom:6px;">Starting…</div>
+          <div style="height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+            <div id="podcast-audio-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#3E9AB8);transition:width 0.4s ease;"></div>
+          </div>
+        </div>
+        <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
+          <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;margin-bottom:8px;">—</div>
+          <audio id="podcast-audio-el" controls preload="metadata" style="width:100%;"></audio>
+          <div id="podcast-audio-player-meta" style="margin-top:8px;font-size:11px;color:#84CCE3;font-family:'SF Mono',monospace;">—</div>
+        </div>
+      </div>
     </section>
 
     <!-- ── Top row: ticker picker + leaderboard ─────────────────── -->
@@ -4827,8 +4862,9 @@
       });
     }
 
-    // ── Wire podcast SCRIPT generator (v0) ─────────────────────────
+    // ── Wire podcast SCRIPT generator (v0) + AUDIO generator (v1) ──
     _populatePodcastScriptPicker();
+    _wirePodcastAudio();
     const scriptBtn   = document.getElementById('podcast-script-btn');
     const scriptSel   = document.getElementById('podcast-script-ticker');
     const scriptOut   = document.getElementById('podcast-script-render');
@@ -4867,18 +4903,109 @@
   }
 
   async function _populatePodcastScriptPicker() {
-    const sel = document.getElementById('podcast-script-ticker');
-    if (!sel) return;
+    const sels = ['podcast-script-ticker', 'podcast-audio-ticker']
+      .map(function(id) { return document.getElementById(id); })
+      .filter(Boolean);
+    if (!sels.length) return;
     try {
       const r = await window.dgaFetch('/api/reports');
       const reports = await r.json();
       const both = (reports || []).filter(function(x) {
         return x.generated_at && x.claude_generated_at;
       });
-      sel.innerHTML = '<option value="">— select a ticker (' + both.length + ' eligible) —</option>' +
-        both.map(function(x) { return '<option value="' + x.ticker + '">' + x.ticker + '</option>'; }).join('');
+      sels.forEach(function(sel) {
+        sel.innerHTML = '<option value="">— select a ticker (' + both.length + ' eligible) —</option>' +
+          both.map(function(x) { return '<option value="' + x.ticker + '">' + x.ticker + '</option>'; }).join('');
+      });
     } catch (e) {
-      sel.innerHTML = '<option value="">— failed to load tickers —</option>';
+      sels.forEach(function(sel) {
+        sel.innerHTML = '<option value="">— failed to load tickers —</option>';
+      });
+    }
+  }
+
+  // ── Podcast AUDIO generator (v1) ─────────────────────────────────
+  let _podcastAudioPoll = null;
+
+  function _wirePodcastAudio() {
+    const btn = document.getElementById('podcast-audio-btn');
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async function() {
+      const tk = document.getElementById('podcast-audio-ticker').value;
+      const model = document.getElementById('podcast-audio-model').value || 'tts-1-hd';
+      if (!tk) { alert('Pick a ticker first.'); return; }
+      btn.disabled = true;
+      btn.textContent = '⏳ Generating…';
+      document.getElementById('podcast-audio-progress').style.display = 'block';
+      document.getElementById('podcast-audio-player').style.display = 'none';
+      _setPodcastProgress('Starting…', 0);
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + tk + '/generate?tts_model=' + encodeURIComponent(model), { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'Failed to start');
+        _startPodcastProgressPoll(tk);
+      } catch (e) {
+        _setPodcastProgress('❌ ' + e.message, 0);
+        btn.disabled = false;
+        btn.textContent = '🎧 Generate audio';
+      }
+    });
+  }
+
+  function _setPodcastProgress(label, pct) {
+    const lbl = document.getElementById('podcast-audio-progress-label');
+    const bar = document.getElementById('podcast-audio-progress-bar');
+    if (lbl) lbl.textContent = label || '';
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function _startPodcastProgressPoll(ticker) {
+    if (_podcastAudioPoll) clearInterval(_podcastAudioPoll);
+    const btn = document.getElementById('podcast-audio-btn');
+    const tick = async function() {
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + ticker + '/status');
+        const d = await r.json();
+        const pct = (d.total && d.current)
+          ? Math.min(96, (d.current / d.total) * 95)
+          : (d.stage === 'queued' ? 4 : d.stage === 'start' ? 8 : d.stage === 'stitch' ? 97 : 12);
+        _setPodcastProgress(d.label || d.stage || 'Working…', pct);
+        if (d.status === 'done') {
+          clearInterval(_podcastAudioPoll); _podcastAudioPoll = null;
+          _setPodcastProgress(d.label || '✓ Done', 100);
+          _showPodcastPlayer(ticker, d);
+          if (btn) { btn.disabled = false; btn.textContent = '🎧 Generate audio'; }
+        } else if (d.status === 'error') {
+          clearInterval(_podcastAudioPoll); _podcastAudioPoll = null;
+          _setPodcastProgress(d.label || '❌ Failed', 0);
+          if (btn) { btn.disabled = false; btn.textContent = '🎧 Generate audio'; }
+        }
+      } catch (e) {
+        // transient — keep polling
+      }
+    };
+    tick();
+    _podcastAudioPoll = setInterval(tick, 1800);
+  }
+
+  function _showPodcastPlayer(ticker, status) {
+    const wrap  = document.getElementById('podcast-audio-player');
+    const title = document.getElementById('podcast-audio-player-title');
+    const meta  = document.getElementById('podcast-audio-player-meta');
+    const el    = document.getElementById('podcast-audio-el');
+    if (!wrap || !el) return;
+    wrap.style.display = 'block';
+    if (title) title.textContent = '🎙️ ' + ticker + ': Bull vs Bear';
+    // Cache-bust so a fresh regeneration plays the new file
+    el.src = '/api/podcast/' + ticker + '/audio.mp3?t=' + Date.now();
+    el.load();
+    if (meta) {
+      const parts = [];
+      if (status && status.duration_sec) parts.push(Math.round(status.duration_sec) + 's');
+      if (status && status.cost_usd != null) parts.push('$' + Number(status.cost_usd).toFixed(3));
+      if (status && status.dropbox_path) parts.push('Dropbox ✓');
+      meta.textContent = parts.length ? parts.join(' · ') : 'Ready';
     }
   }
 

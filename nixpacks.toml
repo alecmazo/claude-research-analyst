@@ -1,0 +1,8 @@
+# Railway / Nixpacks build configuration.
+#
+# We need ffmpeg system-wide for the DGA HiTech Podcast pipeline
+# (TTS chunk stitching + intro/outro music + MP3 export via pydub).
+# Without this, pydub raises "Couldn't find ffprobe or ffmpeg" at runtime.
+
+[phases.setup]
+nixPkgs = ["python311", "ffmpeg"]
