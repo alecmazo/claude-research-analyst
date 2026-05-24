@@ -16857,6 +16857,7 @@ async def podcast_generate_portfolio_roundup(req: Request, background_tasks: Bac
         "status": "running", "started_at": time.time(),
         "updated_at": time.time(),
     }
+    print(f"🎙️ [portfolio-roundup] WROTE job_key={job_key!r} ({len(tickers)} tickers)", flush=True)
     background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions)
     return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
 
@@ -16866,7 +16867,13 @@ def podcast_script_status(ticker: str):
     """Return the current state of a script-generation job for `ticker`.
     Includes the full result payload once stage == 'done'."""
     tk = ticker.upper().strip()
-    job = _podcast_script_jobs.get(tk) or {"stage": "idle", "status": "idle"}
+    job = _podcast_script_jobs.get(tk)
+    if not job:
+        # LOUD log so we can diagnose orphan-poll bugs in Railway logs
+        # by comparing what the frontend asked for vs what keys we have.
+        all_keys = list(_podcast_script_jobs.keys())
+        print(f"🔍 [script-status] MISS for {tk!r} — current dict keys ({len(all_keys)}): {all_keys[:10]}{'...' if len(all_keys) > 10 else ''}", flush=True)
+        job = {"stage": "idle", "status": "idle"}
     return {"ok": True, "ticker": tk, **job}
 
 
