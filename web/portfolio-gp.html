@@ -2234,6 +2234,16 @@
             <div id="podcast-audio-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#3E9AB8);transition:width 0.4s ease;"></div>
           </div>
         </div>
+        <!-- ── Cast picker (who voices which character) ─────────────── -->
+        <details id="podcast-voice-cfg" style="margin-top:12px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;" open>
+          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
+            🎭 Cast — pick the voice for each character  <span style="color:#64748b;font-weight:500;">— applied at next audio generation</span>
+          </summary>
+          <div id="podcast-voice-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
+            <div style="color:#64748b;font-size:11px;">Loading…</div>
+          </div>
+        </details>
+
         <!-- ── Voice speed table (UI override of TTS-generation speeds) ── -->
         <details id="podcast-speed-cfg" style="margin-top:12px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;">
           <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
@@ -4852,6 +4862,7 @@
     _populatePodcastSavedAudio();
     _wirePodcastAudio();
     _loadPodcastSpeedTable();
+    _loadPodcastVoiceTable();
     // Wire "open saved episode" — picks an existing MP3 + opens the player
     const savedAud = document.getElementById('podcast-audio-saved');
     if (savedAud) {
@@ -5045,6 +5056,92 @@
     } catch (e) {
       sel.innerHTML = '<option value="">— failed to load saved scripts —</option>';
     }
+  }
+
+  async function _loadPodcastVoiceTable() {
+    const el = document.getElementById('podcast-voice-table');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/voice-config');
+      const d = await r.json();
+      _renderPodcastVoiceTable(d, el);
+    } catch (e) {
+      el.innerHTML = '<div style="color:#dc2626;font-size:11px;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  function _renderPodcastVoiceTable(cfg, container) {
+    const voices = cfg.voices || {};
+    const available = cfg.available || [];
+    const speakers = Object.keys(voices);   // ['opus', 'rock', 'claudia']
+    const voiceBlurbs = {
+      alloy:   'neutral, balanced',
+      ash:     'rich, slightly raspy male',
+      ballad:  'soft, melodic',
+      coral:   'warm female',
+      echo:    'warm, conversational male',
+      fable:   'British male, storyteller cadence',
+      nova:    'bright, energetic female',
+      onyx:    'deep male, gravitas',
+      sage:    'wise, measured',
+      shimmer: 'soft, measured female',
+      verse:   'expressive, modern',
+    };
+    const speakerLabels = {
+      opus:    'Opus (host) — sets up the show, runs the rounds, calls a winner',
+      rock:    'Rock (Grok analyst) — British, punchy, contrarian',
+      claudia: 'Claudia (Claude analyst) — female, measured, skeptic',
+    };
+    let html = '';
+    speakers.forEach(function(sp) {
+      const opts = available.map(function(v) {
+        const blurb = voiceBlurbs[v] ? ' — ' + voiceBlurbs[v] : '';
+        return '<option value="' + v + '"' + (v===voices[sp]?' selected':'') + '>' + v + blurb + '</option>';
+      }).join('');
+      html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">' +
+        '<div style="min-width:180px;">' +
+          '<div style="font-weight:800;text-transform:capitalize;color:#0A1628;font-size:13px;">' + sp + '</div>' +
+          '<div style="font-size:10.5px;color:#64748b;line-height:1.4;">' + (speakerLabels[sp] || '') + '</div>' +
+        '</div>' +
+        '<select data-speaker="' + sp + '" style="flex:1;min-width:240px;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;">' + opts + '</select>' +
+      '</div>';
+    });
+    html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+      '<button id="podcast-voice-save" class="builder-btn-primary" style="width:auto;padding:8px 14px;font-size:12px;">💾 Save cast</button>' +
+      '<button id="podcast-voice-reset" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">↺ Reset to defaults</button>' +
+      '<span id="podcast-voice-status" style="font-size:11px;color:#16a34a;font-weight:600;"></span>' +
+      '<span style="font-size:10.5px;color:#94a3b8;margin-left:auto;">Changes apply to the NEXT generated audio.</span>' +
+      '</div>';
+    container.innerHTML = html;
+
+    document.getElementById('podcast-voice-save').addEventListener('click', async function() {
+      const body = { voices: {} };
+      container.querySelectorAll('select[data-speaker]').forEach(function(sel) {
+        body.voices[sel.dataset.speaker] = sel.value;
+      });
+      const st = document.getElementById('podcast-voice-status');
+      st.textContent = '⏳ Saving…'; st.style.color = '#64748b';
+      try {
+        const r = await window.dgaFetch('/api/podcast/voice-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(r.status);
+        st.style.color = '#16a34a';
+        st.textContent = '✓ Saved · used on next generate';
+        setTimeout(function(){ st.textContent = ''; }, 4000);
+      } catch (e) {
+        st.style.color = '#dc2626';
+        st.textContent = '❌ ' + e.message;
+      }
+    });
+    document.getElementById('podcast-voice-reset').addEventListener('click', async function() {
+      if (!confirm('Reset cast to default voices (Opus=onyx, Rock=fable, Claudia=nova)?')) return;
+      const r = await window.dgaFetch('/api/podcast/voice-config/reset', { method: 'POST' });
+      const d = await r.json();
+      _renderPodcastVoiceTable(d, container);
+    });
   }
 
   async function _loadPodcastSpeedTable() {
@@ -5289,7 +5386,13 @@
     const el    = document.getElementById('podcast-audio-el');
     if (!wrap || !el) return;
     wrap.style.display = 'block';
-    if (title) title.textContent = '🎙️ ' + ticker + ': Bull vs Bear';
+    // Use the actual stored episode title (mode-aware: "TICKER: The Bull Case
+    // Under Pressure" / "TICKER: The Bear Trap" / etc.) — falls back only if
+    // we genuinely don't have one cached
+    const epTitle = (status && status.title) ||
+                    (window._podcastEpisodes || []).find(function(e){return e.ticker===ticker;})?.title ||
+                    (ticker + ': Bull vs Bear');
+    if (title) title.textContent = '🎙️ ' + epTitle;
     // Cache-bust so a fresh regeneration plays the new file
     el.src = '/api/podcast/' + ticker + '/audio.mp3?t=' + Date.now();
     el.load();
@@ -5337,12 +5440,13 @@
 
   function _renderPodcastScript(script, validation, container) {
     const bubbleColors = {
-      // ui134 cast: Alec (male, host) / Rock (British, Grok) / Claudia (female, Claude)
-      alec:    { bg: '#f1f5f9', name: '#0A1628', label: 'ALEC (host)'        },
+      // ui142 cast: Opus (host) / Rock (British, Grok) / Claudia (female, Claude)
+      opus:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
       rock:    { bg: '#fef3c7', name: '#b45309', label: 'ROCK 🇬🇧 (Grok)'   },
       claudia: { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
       // Legacy fallbacks for older saved scripts
-      alex:    { bg: '#f1f5f9', name: '#0A1628', label: 'ALEC (host)'        },
+      alec:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
+      alex:    { bg: '#f1f5f9', name: '#0A1628', label: 'OPUS (host)'        },
       claude:  { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
     };
     const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
@@ -5433,10 +5537,10 @@
   function _renderPodcastScriptEditor(originalScript, validation, container) {
     // Work on a deep clone so cancel reverts cleanly
     const script = JSON.parse(JSON.stringify(originalScript || {}));
-    const speakers = ['alec', 'rock', 'claudia'];
+    const speakers = ['opus', 'rock', 'claudia'];
     const intensities = ['calm', 'normal', 'heated'];
     const speakerColors = {
-      alec:    { bg: '#f1f5f9', name: '#0A1628' },
+      opus:    { bg: '#f1f5f9', name: '#0A1628' },
       rock:    { bg: '#fef3c7', name: '#b45309' },
       claudia: { bg: '#fce7f3', name: '#9d174d' },
     };

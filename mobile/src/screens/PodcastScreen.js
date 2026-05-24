@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v10-speed-20260523';
+const PODCAST_BUILD = 'pc-v11-opus-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -11,7 +11,7 @@ const PODCAST_BUILD = 'pc-v10-speed-20260523';
  * so the player doesn't need to attach tokens to the audio URL).
  *
  * Cast (display only — backend owns the voice mapping):
- *   Alec    — host         (onyx)
+ *   Opus    — host         (onyx)
  *   Rock    — Grok analyst (fable, British inflection)
  *   Claudia — Claude analyst (nova)
  */
@@ -273,7 +273,7 @@ export default function PodcastScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.brand}>🎙️  DGA HiTech</Text>
-        <Text style={styles.brandSub}>Rock vs Claudia · Alec calls it · {PODCAST_BUILD}</Text>
+        <Text style={styles.brandSub}>Rock vs Claudia · Opus calls it · {PODCAST_BUILD}</Text>
       </View>
 
       {/* Active episode player (sticky at top once a ticker is selected) */}

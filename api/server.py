@@ -15835,16 +15835,18 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                     ", ".join(result.get("validation", {}).get("errors", []) or ["unknown"]))
             script = result["script"]
 
-        # 3. Synthesize audio (apply UI-edited speed config first)
+        # 3. Synthesize audio (apply UI-edited speed + voice config first)
         try:
             cfg = _kv_get("podcast.speed_config") or {}
             pe.apply_speed_overrides(
                 intensity=cfg.get("intensity"),
                 speaker=cfg.get("speaker"),
             )
-            print(f"🎙️ [podcast/audio {tk}] speed config: {pe.get_speed_config()}", flush=True)
+            vcfg = _kv_get("podcast.voice_config") or {}
+            pe.apply_voice_overrides(voices=vcfg.get("voices"))
+            print(f"🎙️ [podcast/audio {tk}] speed={pe.get_speed_config()} voices={pe.get_voice_config()['voices']}", flush=True)
         except Exception as _e:
-            print(f"⚠️  [podcast/audio {tk}] speed override load failed: {_e!s:.120}", flush=True)
+            print(f"⚠️  [podcast/audio {tk}] config override load failed: {_e!s:.120}", flush=True)
         out_dir = analyst.STOCKS_FOLDER / "podcasts"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{tk}_podcast.mp3"
@@ -16038,9 +16040,8 @@ async def podcast_set_speed_config(req: Request):
 
 @app.post("/api/podcast/speed-config/reset")
 def podcast_reset_speed_config():
-    """Reset the table back to engine defaults (Alec 1.06× etc)."""
+    """Reset the table back to engine defaults (Opus 1.06× etc)."""
     import podcast_engine as pe
-    # Defaults live in the module constants
     pe._RUNTIME_INTENSITY = dict(pe.INTENSITY_SPEED)
     pe._RUNTIME_SPEAKER   = dict(pe.SPEAKER_SPEED_OFFSET)
     _kv_put("podcast.speed_config", {
@@ -16048,8 +16049,43 @@ def podcast_reset_speed_config():
         "speaker":   dict(pe.SPEAKER_SPEED_OFFSET),
     })
     cfg = pe.get_speed_config()
-    cfg["voices"] = dict(pe.VOICE_MAP)
+    cfg["voices"] = dict(pe._RUNTIME_VOICE_MAP)
     return {"ok": True, **cfg}
+
+
+@app.get("/api/podcast/voice-config")
+def podcast_get_voice_config():
+    """Return current voice assignments + the list of available OpenAI voices."""
+    import podcast_engine as pe
+    saved = _kv_get("podcast.voice_config") or {}
+    pe.apply_voice_overrides(voices=saved.get("voices"))
+    return {"ok": True, **pe.get_voice_config()}
+
+
+@app.post("/api/podcast/voice-config")
+async def podcast_set_voice_config(req: Request):
+    """Persist UI edits to the cast voice assignments.
+
+    Body: { voices: { opus: 'onyx', rock: 'fable', claudia: 'nova' } }
+    """
+    import podcast_engine as pe
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    pe.apply_voice_overrides(voices=(body or {}).get("voices"))
+    cfg = pe.get_voice_config()
+    _kv_put("podcast.voice_config", {"voices": cfg["voices"]})
+    return {"ok": True, **cfg}
+
+
+@app.post("/api/podcast/voice-config/reset")
+def podcast_reset_voice_config():
+    """Reset voice assignments to engine defaults (Opus=onyx etc)."""
+    import podcast_engine as pe
+    pe._RUNTIME_VOICE_MAP = dict(pe.VOICE_MAP)
+    _kv_put("podcast.voice_config", {"voices": dict(pe.VOICE_MAP)})
+    return {"ok": True, **pe.get_voice_config()}
 
 
 @app.get("/api/podcast/list")

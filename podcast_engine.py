@@ -9,7 +9,7 @@ v0 scope (this file): script generation only.
   • Per-turn `intensity` ∈ {calm, normal, heated} → maps to TTS speed in v1
 
 Cast / voice map (locked):
-    Alec   (host)            → OpenAI 'fable'
+    Opus   (host)            → OpenAI 'fable'
     Rock   (Grok analyst)    → OpenAI 'onyx'
     Claude (analyst)         → OpenAI 'echo'
 
@@ -24,13 +24,13 @@ from typing import Any
 # ── Cast & voice mapping ────────────────────────────────────────────────
 VOICE_MAP: dict[str, str] = {
     # ui134 cast:
-    #   • Alec    — host, male       → onyx  (deep moderator gravitas)
+    #   • Opus    — host, male       → onyx  (deep moderator gravitas)
     #   • Rock    — Grok analyst, British male → fable (storyteller cadence,
     #                                            dry wit, can punch up)
     #   • Claudia — Claude analyst, female → nova  (bright, energetic;
     #                                              carries skeptical bite
     #                                              without sounding flat)
-    "alec":    "onyx",
+    "opus":    "onyx",
     "rock":    "fable",
     "claudia": "nova",
 }
@@ -48,10 +48,10 @@ INTENSITY_SPEED = {"calm": 0.95, "normal": 1.0, "heated": 1.10}
 
 # Per-speaker baseline speed offset (multiplied with INTENSITY_SPEED).
 # Lets us brighten/calm individual voices without changing intensity logic.
-#   • Alec (onyx) skews somber at 1.0× — +6% makes him noticeably more
+#   • Opus (onyx) skews somber at 1.0× — +6% makes him noticeably more
 #     upbeat without rushing the moderator role.
 SPEAKER_SPEED_OFFSET = {
-    "alec":    1.06,   # bump for energy (onyx can sound flat at 1.0)
+    "opus":    1.06,   # bump for energy (onyx can sound flat at 1.0)
     "rock":    1.00,
     "claudia": 1.00,
 }
@@ -63,6 +63,11 @@ SPEED_MIN, SPEED_MAX = 0.85, 1.20
 # table replaces hard-coded baselines.
 _RUNTIME_INTENSITY  = dict(INTENSITY_SPEED)
 _RUNTIME_SPEAKER    = dict(SPEAKER_SPEED_OFFSET)
+_RUNTIME_VOICE_MAP  = dict(VOICE_MAP)
+
+# Valid OpenAI TTS voices (the ones we offer in the UI picker)
+AVAILABLE_VOICES = ["alloy", "ash", "ballad", "coral", "echo",
+                    "fable", "nova", "onyx", "sage", "shimmer", "verse"]
 
 
 def get_speed_config() -> dict:
@@ -70,9 +75,28 @@ def get_speed_config() -> dict:
     return {
         "intensity": dict(_RUNTIME_INTENSITY),
         "speaker":   dict(_RUNTIME_SPEAKER),
+        "voices":    dict(_RUNTIME_VOICE_MAP),
         "min":       SPEED_MIN,
         "max":       SPEED_MAX,
     }
+
+
+def get_voice_config() -> dict:
+    """Return the current voice assignments + available voices for the UI."""
+    return {
+        "voices":    dict(_RUNTIME_VOICE_MAP),
+        "available": list(AVAILABLE_VOICES),
+    }
+
+
+def apply_voice_overrides(voices: dict | None = None):
+    """Apply user-edited voice picks. Silently ignores unknown voices."""
+    if not voices:
+        return
+    for speaker_key, v in voices.items():
+        v = (v or "").lower()
+        if speaker_key in _RUNTIME_VOICE_MAP and v in AVAILABLE_VOICES:
+            _RUNTIME_VOICE_MAP[speaker_key] = v
 
 
 def apply_speed_overrides(intensity: dict | None = None, speaker: dict | None = None):
@@ -98,20 +122,20 @@ def apply_speed_overrides(intensity: dict | None = None, speaker: dict | None = 
             except (TypeError, ValueError):
                 pass
 
-VALID_SPEAKERS = {"alec", "rock", "claudia"}
+VALID_SPEAKERS = {"opus", "rock", "claudia"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
 # Section ids the LLM MUST produce in order.
 REQUIRED_SECTIONS = [
-    "cold_open",            # Alec, ~15s
-    "company_in_60",        # Alec, ~60s
+    "cold_open",            # Opus, ~15s
+    "company_in_60",        # Opus, ~60s
     "opening_pitch_rock",   # Rock, ~60s
     "opening_pitch_claudia", # Claudia, ~60s
     "round_thesis",         # debate, ~90s
     "round_valuation",      # debate, ~90s
     "round_catalysts",      # debate, ~90s
     "round_steelman",       # each defends the OTHER's case, ~60s
-    "verdict",              # Alec names a winner, ~45s
+    "verdict",              # Opus names a winner, ~45s
 ]
 
 
@@ -125,11 +149,11 @@ investment debate show in the style of Animal Spirits (banter, interruptions, \
 strong opinions). Each episode debates ONE public company.
 
 CAST (the three speakers, never invent a fourth):
-  • Alec    — host. MALE. Sharp, even-keeled, calls bullshit on either side. \
+  • Opus    — host. MALE. Sharp, even-keeled, calls bullshit on either side. \
 Sets up the company, runs the rounds, names a winner at the end. \
 Does NOT take a side until the verdict. Speaks American English. \
-IMPORTANT: refer to the host ONLY as "Alec" — never invent a last name. \
-He has no surname in the show. "I'm Alec" / "Alec here" / never "Alec [anything]".
+IMPORTANT: refer to the host ONLY as "Opus" — never invent a last name. \
+He has no surname in the show. "I'm Opus" / "Opus here" / never "Opus [anything]".
   • Rock    — analyst. BRITISH MALE — speaks with light British inflection \
 (occasional "right then", "bloody", "look here", "mate", "lot of rubbish", \
 "spot on"). Punchy contrarian, momentum + narrative lean. Higher conviction. \
@@ -160,7 +184,7 @@ genuinely thinks something is dumb or risky, let them say so with bite. \
 Rock should drop one or two in his opening pitch. Never any other \
 profanity, slurs, or brand-unsafe content.
   • DO NOT fall into a metronomic A-B-A-B pattern. Mix it up: sometimes \
-Alec chimes in mid-round, sometimes one analyst gets 2 turns in a row \
+Opus chimes in mid-round, sometimes one analyst gets 2 turns in a row \
 landing a point, sometimes a single-word reaction breaks the rhythm.
 
 FACTUAL GUARDRAILS — read this twice. The reports below contain real \
@@ -187,15 +211,42 @@ explicitly call out the discrepancy ("you've got revenue at $12B, I've got \
 $10B — where's the spread coming from?").
 
 STRUCTURE (you MUST produce these sections in this order, each as a list of turns):
-  1. cold_open            — Alec only, 1 turn, ~35–45 words. One-line hook + name ticker.
-  2. company_in_60        — Alec only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
+  1. cold_open            — Opus only, 1 turn, ~35–45 words. ONE-LINE HOOK that names the ticker.
+     CRITICAL — vary the SHAPE of the cold open episode-to-episode. DO NOT start
+     every episode with "Welcome back to the DGA HiTech Podcast, I'm Opus, and
+     tonight..." That pattern gets monotonous instantly. Pick a DIFFERENT structure
+     for each episode, rotating freely between forms like these (don't copy
+     verbatim — adapt to the ticker's actual story):
+       • Data shock:    "Down 47% YTD. Up 31% in three months. {TICKER} is
+                         the most polarizing name in {sector} right now."
+       • Question:      "Is {TICKER} a generational compounder or a melting
+                         ice cube? Rock and Claudia disagree. Welcome to the
+                         show — I'm Opus."
+       • News tease:    "{Recent specific catalyst from the report}. So tonight:
+                         is it priced in? {TICKER}, on DGA HiTech."
+       • Contrarian:    "The Street's lined up bullish on {TICKER}. We're going
+                         to stress-test that. I'm Opus."
+       • Cold fact:     "{Surprising one-line fact from the company / report}.
+                         That's the whole pitch. Tonight: {TICKER}."
+       • Direct quote:  "'{Provocative line from one of the analysts' reports}'
+                         — that's where we start. {TICKER}, DGA HiTech."
+       • Personal beat: "I've been thinking about {TICKER} all week.
+                         Rock, Claudia — let's go."
+       • Sector frame:  "{Sector} is on fire / under siege / mid-cycle.
+                         {TICKER} is right at the center."
+     The host should NAME the ticker, but the welcome / show-name boilerplate is
+     OPTIONAL — sometimes skip it entirely and jump straight into the hook.
+     Mode (debate / stress test / devil's advocate / spread / mixed) should color
+     the cold open's energy — stress test reads more cautious, devil's advocate
+     reads more curious / contrarian, debate reads more combative.
+  2. company_in_60        — Opus only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
   3. opening_pitch_rock   — Rock only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
   4. opening_pitch_claudia — Claudia only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claudia, with Alec injecting 1–2 follow-ups.
+  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claudia, with Opus injecting 1–2 follow-ups.
   6. round_valuation      — 4–6 turns. THIS IS THE HOTTEST ROUND — multiples, comps, peer math, target math. Mark turns intensity=heated.
   7. round_catalysts      — 4–6 turns. Near-term catalysts, risks, what could break the thesis.
   8. round_steelman       — exactly 2 turns: Rock argues Claudia's bear case in his own words, then Claudia argues Rock's bull case. 60–80 words each.
-  9. verdict              — Alec only, 1–2 turns, ~110–140 words. Must explicitly say \
+  9. verdict              — Opus only, 1–2 turns, ~110–140 words. Must explicitly say \
 "the more convincing pitch tonight was Rock" or "...was Claudia" and give 2 specific reasons \
 drawn from THE DEBATE (not from the reports). No ties, no cop-outs.
 
@@ -204,7 +255,7 @@ This produces an 8–10 min episode at conversational TTS pacing. \
 If the source reports are thin, CUT length — do not pad with filler.
 
 PER-TURN FIELDS (every turn is an object with exactly these keys):
-  • "speaker"   ∈ "alec" | "rock" | "claudia"
+  • "speaker"   ∈ "opus" | "rock" | "claudia"
   • "text"      — the spoken line. Plain prose. No markdown, no asterisks, no bullets. \
 Use natural contractions ("it's", "we're"). For an interruption, end the line with " —"
   • "intensity" ∈ "calm" | "normal" | "heated"
@@ -228,7 +279,7 @@ OUTPUT FORMAT — return ONLY valid JSON, no preamble, no code fences, matching 
   ]
 }
 
-The "winner" field MUST match whoever Alec names in the verdict section.
+The "winner" field MUST match whoever Opus names in the verdict section.
 
 DO NOT include any text outside the JSON. DO NOT use markdown code fences.
 """
@@ -339,8 +390,8 @@ Now write the episode. Remember:
   • Up to 10 curse words from the whitelist (don't be precious)
   • Real human fillers (um/uh/y'know/look/honestly/hmm) ~1 in 4 turns
   • Vary turn lengths constantly — no metronomic A-B-A-B pattern
-  • Alec names a winner with 2 specific reasons drawn from THE DEBATE
-  • "winner" field at the top must match Alec's verdict
+  • Opus names a winner with 2 specific reasons drawn from THE DEBATE
+  • "winner" field at the top must match Opus's verdict
   • Episode title at top of JSON should match the MODE (e.g., for
     stress_test: "{ticker}: The Bull Case Under Pressure")
 """
@@ -422,9 +473,9 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
         sid = sec.get("id")
         turns = sec.get("turns") or []
         if sid in ("cold_open", "company_in_60", "verdict"):
-            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "alec"]
+            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "opus"]
             if non_alec:
-                errors.append(f"{sid} should be Alec only — found {len(non_alec)} other speakers")
+                errors.append(f"{sid} should be Opus only — found {len(non_alec)} other speakers")
         if sid == "opening_pitch_rock":
             if not turns or (turns[0].get("speaker") or "").lower() != "rock":
                 errors.append("opening_pitch_rock must start with Rock")
@@ -832,9 +883,22 @@ def generate_script(
         "spread":          f"{ticker.upper()}: The Spread",
         "mixed":           f"{ticker.upper()}: Mixed Signals",
     }
-    if "episode_title" not in script:
-        script["episode_title"] = mode_titles.get(roles["episode_mode"],
-                                                  f"{ticker.upper()}: Bull vs Bear")
+    # ENFORCE mode-aware title. The LLM tends to default to "Bull vs Bear"
+    # even on stress_test / devils_advocate runs because the example in the
+    # prompt uses that string. We override server-side so the saved-episode
+    # list accurately reflects what kind of debate it was.
+    mode_default = mode_titles.get(roles["episode_mode"], f"{ticker.upper()}: Bull vs Bear")
+    llm_title = (script.get("episode_title") or "").strip()
+    # Accept the LLM's title ONLY if it didn't fall back to the generic
+    # "Bull vs Bear" pattern AND the mode is non-debate. For debate mode,
+    # respect the LLM's creativity. For all other modes, force the mode title
+    # unless the LLM produced something genuinely different (not the default).
+    if not llm_title:
+        script["episode_title"] = mode_default
+    elif roles["episode_mode"] != "debate" and "bull vs bear" in llm_title.lower():
+        # LLM ignored mode and used the generic — override
+        script["episode_title"] = mode_default
+    # else: keep the LLM's title
     # Stamp the assignment metadata onto the script too — survives DB round-trip
     script["_alignment"] = {
         "episode_mode": roles["episode_mode"],
@@ -1008,9 +1072,11 @@ def _tts_turn(client, speaker: str, text: str, intensity: str,
               model: str = TTS_MODEL_DEFAULT) -> bytes:
     """Synthesize one turn via OpenAI TTS. Returns raw MP3 bytes."""
     sp_l = speaker.lower()
-    voice = VOICE_MAP.get(sp_l, "alloy")
-    # Final speed = intensity multiplier × per-speaker baseline, clamped.
-    # Reads from the RUNTIME tables so UI edits take effect immediately.
+    # Legacy speaker-key aliases — old scripts may have "alec"/"alex"/"claude"
+    # before the cast rename to opus / claudia. Map them so they keep working.
+    sp_l = {"alec": "opus", "alex": "opus", "claude": "claudia"}.get(sp_l, sp_l)
+    # Read voice + speed from the RUNTIME tables so UI edits take effect immediately.
+    voice = _RUNTIME_VOICE_MAP.get(sp_l, "alloy")
     intensity_mult = _RUNTIME_INTENSITY.get(intensity.lower(), 1.0)
     speaker_mult   = _RUNTIME_SPEAKER.get(sp_l, 1.0)
     speed = max(SPEED_MIN, min(SPEED_MAX, intensity_mult * speaker_mult))
@@ -1092,7 +1158,7 @@ def synthesize_episode(
     segs: list[AudioSegment] = []
     prev_section: str | None = None
     for i, (sid, turn) in enumerate(flat, start=1):
-        sp = (turn.get("speaker") or "alec").lower()
+        sp = (turn.get("speaker") or "opus").lower()
         text = (turn.get("text") or "").strip()
         intensity = (turn.get("intensity") or "normal").lower()
         if on_progress:
