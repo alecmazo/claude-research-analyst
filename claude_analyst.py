@@ -5914,11 +5914,17 @@ CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-1-20250805")
 # Check the latest aliases at https://docs.anthropic.com/en/docs/about-claude/models
 
 # Cheap screening tier — used for "which of these N tickers actually
-# deserves an Opus-quality full report this week?" Sonnet 4.6 is the
-# 2026 sweet spot: ~80% of Opus quality on structured analysis, ~20%
-# of the cost. Don't use this for final reports — use it to PRIORITIZE
-# which tickers get the Opus treatment.
-CLAUDE_SCREEN_MODEL = _optional_env("CLAUDE_SCREEN_MODEL", "claude-sonnet-4-6-20260214")
+# deserves an Opus-quality full report this week?" Sonnet sits at the
+# sweet spot: ~80% of Opus quality on structured analysis, ~20% of the
+# cost ($3/$15 per Mtok). Don't use this for final reports — use it
+# to PRIORITIZE which tickers get the Opus treatment.
+#
+# Default is the latest VERIFIED Sonnet identifier. If a newer Sonnet
+# has shipped (e.g. 4.6) you can override via Railway env without a
+# redeploy:  CLAUDE_SCREEN_MODEL=claude-sonnet-4-6-<date>
+# Check the latest identifier here:
+#   https://docs.anthropic.com/en/docs/about-claude/models
+CLAUDE_SCREEN_MODEL = _optional_env("CLAUDE_SCREEN_MODEL", "claude-sonnet-4-5-20250929")
 
 
 def get_claude_api_key() -> str:
@@ -5977,7 +5983,14 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
             model=CLAUDE_SCREEN_MODEL,
         )
     except Exception as e:
-        return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": str(e)[:300]}
+        err = str(e)
+        # 'not_found_error' from Anthropic → bad model identifier. Surface a
+        # clear actionable message instead of the raw API blob.
+        if "not_found_error" in err or "model:" in err:
+            err = (f"Screen model '{CLAUDE_SCREEN_MODEL}' not found on your Anthropic account. "
+                   "Set CLAUDE_SCREEN_MODEL env var to a valid identifier "
+                   "(see https://docs.anthropic.com/en/docs/about-claude/models).")
+        return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": err[:400]}
 
     # Strip stray code fences if model misbehaves
     cleaned = raw.strip()
