@@ -22,7 +22,6 @@ import { haptics } from '../design/haptics';
 // Keeps internal navigation names stable while showing friendlier UI labels.
 const LABEL_OVERRIDE = {
   Positions: 'Positions',
-  Portfolio: 'Portfolio',
   Podcast:   'Podcast',
 };
 
@@ -47,11 +46,6 @@ const TAB_CONFIG = {
     // Microphone — DGA HiTech Podcast
     inactive: { family: 'mci', name: 'microphone-outline' },
     active:   { family: 'mci', name: 'microphone' },
-  },
-  Portfolio: {
-    // Pie chart — live portfolio overview
-    inactive: { family: 'mci', name: 'chart-pie' },
-    active:   { family: 'mci', name: 'chart-pie' },
   },
   Fund: {
     // Briefcase — fund administration / GP operations

@@ -9,7 +9,6 @@ import * as Updates from 'expo-updates';
 import HomeScreen             from './src/screens/HomeScreen';
 import AnalysisScreen         from './src/screens/AnalysisScreen';
 import ReportScreen           from './src/screens/ReportScreen';
-import PortfolioScreen        from './src/screens/PortfolioScreen';
 import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
 import PaperTrackerScreen     from './src/screens/PaperTrackerScreen';
 import PodcastScreen          from './src/screens/PodcastScreen';
@@ -60,11 +59,10 @@ function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen name="Positions" component={WatchlistScreen} />
       <Tab.Screen name="Research"  component={HomeStack} />
       <Tab.Screen name="Podcast"   component={PodcastScreen} />
       <Tab.Screen name="Fund"      component={FundStack} />
-      <Tab.Screen name="Portfolio" component={PortfolioScreen} />
+      <Tab.Screen name="Positions" component={WatchlistScreen} />
       <Tab.Screen name="Settings">
         {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
       </Tab.Screen>
