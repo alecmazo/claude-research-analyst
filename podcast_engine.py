@@ -66,10 +66,11 @@ _RUNTIME_SPEAKER    = dict(SPEAKER_SPEED_OFFSET)
 _RUNTIME_VOICE_MAP  = dict(VOICE_MAP)
 
 # Valid OpenAI TTS voices for the tts-1 / tts-1-hd models we use.
-# IMPORTANT: 'verse' is gpt-4o-mini-tts only and gets rejected (HTTP 400)
-# by tts-1-hd, so it's deliberately NOT in this list.
-AVAILABLE_VOICES = ["alloy", "ash", "ballad", "coral", "echo",
-                    "fable", "nova", "onyx", "sage", "shimmer"]
+# Empirically tested via the API error response — these 8 are what
+# tts-1-hd accepts. 'ballad', 'coral', and 'verse' are gpt-4o-mini-tts
+# only and return HTTP 400 from tts-1-hd despite what some docs imply.
+AVAILABLE_VOICES = ["alloy", "ash", "echo", "fable",
+                    "nova", "onyx", "sage", "shimmer"]
 
 
 def get_speed_config() -> dict:
