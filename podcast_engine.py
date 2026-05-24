@@ -65,9 +65,11 @@ _RUNTIME_INTENSITY  = dict(INTENSITY_SPEED)
 _RUNTIME_SPEAKER    = dict(SPEAKER_SPEED_OFFSET)
 _RUNTIME_VOICE_MAP  = dict(VOICE_MAP)
 
-# Valid OpenAI TTS voices (the ones we offer in the UI picker)
+# Valid OpenAI TTS voices for the tts-1 / tts-1-hd models we use.
+# IMPORTANT: 'verse' is gpt-4o-mini-tts only and gets rejected (HTTP 400)
+# by tts-1-hd, so it's deliberately NOT in this list.
 AVAILABLE_VOICES = ["alloy", "ash", "ballad", "coral", "echo",
-                    "fable", "nova", "onyx", "sage", "shimmer", "verse"]
+                    "fable", "nova", "onyx", "sage", "shimmer"]
 
 
 def get_speed_config() -> dict:
@@ -90,13 +92,20 @@ def get_voice_config() -> dict:
 
 
 def apply_voice_overrides(voices: dict | None = None):
-    """Apply user-edited voice picks. Silently ignores unknown voices."""
-    if not voices:
-        return
-    for speaker_key, v in voices.items():
-        v = (v or "").lower()
-        if speaker_key in _RUNTIME_VOICE_MAP and v in AVAILABLE_VOICES:
-            _RUNTIME_VOICE_MAP[speaker_key] = v
+    """Apply user-edited voice picks. Ignores unknown voices AND reverts
+    any currently-loaded voice that's no longer in AVAILABLE_VOICES back
+    to the engine default (so a previously-saved-but-now-removed voice
+    like 'verse' can't crash future TTS calls)."""
+    if voices:
+        for speaker_key, v in voices.items():
+            v = (v or "").lower()
+            if speaker_key in _RUNTIME_VOICE_MAP and v in AVAILABLE_VOICES:
+                _RUNTIME_VOICE_MAP[speaker_key] = v
+    # Sweep: if any runtime voice is now invalid (e.g., we removed it from
+    # AVAILABLE_VOICES in a later build), revert to engine default.
+    for sp_key, cur in list(_RUNTIME_VOICE_MAP.items()):
+        if cur not in AVAILABLE_VOICES:
+            _RUNTIME_VOICE_MAP[sp_key] = VOICE_MAP.get(sp_key, "alloy")
 
 
 def apply_speed_overrides(intensity: dict | None = None, speaker: dict | None = None):
@@ -1077,6 +1086,14 @@ def _tts_turn(client, speaker: str, text: str, intensity: str,
     sp_l = {"alec": "opus", "alex": "opus", "claude": "claudia"}.get(sp_l, sp_l)
     # Read voice + speed from the RUNTIME tables so UI edits take effect immediately.
     voice = _RUNTIME_VOICE_MAP.get(sp_l, "alloy")
+    # Safety net: if the saved voice was valid earlier but is no longer in
+    # AVAILABLE_VOICES (e.g., user previously picked 'verse' before we
+    # learned tts-1-hd rejects it), fall back to a sane default for this
+    # speaker rather than crashing the whole episode generation.
+    if voice not in AVAILABLE_VOICES:
+        safe_default = VOICE_MAP.get(sp_l, "alloy")
+        print(f"⚠️  [tts] {sp_l!r} had unsupported voice {voice!r}; falling back to {safe_default!r}", flush=True)
+        voice = safe_default
     intensity_mult = _RUNTIME_INTENSITY.get(intensity.lower(), 1.0)
     speaker_mult   = _RUNTIME_SPEAKER.get(sp_l, 1.0)
     speed = max(SPEED_MIN, min(SPEED_MAX, intensity_mult * speaker_mult))
