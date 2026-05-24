@@ -1093,7 +1093,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
 
     return out, economics, fund_established_year
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16596,8 +16596,18 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
 
 
 @app.post("/api/podcast/{ticker}/script")
-def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks,
-                            format: str = "debate"):
+def podcast_generate_script(
+    # Negative lookahead — reject reserved path segments so FastAPI falls
+    # through to the dedicated endpoints (POST /api/podcast/roundup/script
+    # and POST /api/podcast/portfolio-roundup/script). Without this, a
+    # request for /api/podcast/portfolio-roundup/script gets matched by
+    # THIS handler with ticker='portfolio-roundup' → tries to look up
+    # Grok reports for "PORTFOLIO-ROUNDUP" → fails silently. The bug
+    # the user actually hit.
+    ticker: str = Path(..., pattern=r"^(?!roundup$)(?!portfolio-roundup$).+$"),
+    background_tasks: BackgroundTasks = None,
+    format: str = "debate",
+):
     """Kick off podcast script generation in the background.
 
     format: 'debate' (default) | 'pre_mortem' | 'memo' | 'catalysts' | 'quick_hit'
