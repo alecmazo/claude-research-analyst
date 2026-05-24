@@ -16258,7 +16258,7 @@ def podcast_list():
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
-def _run_script_generation(ticker: str) -> None:
+def _run_script_generation(ticker: str, format: str = "debate") -> None:
     """Background worker for /api/podcast/{ticker}/script.
     Updates _podcast_script_jobs as it progresses so the UI can poll."""
     import podcast_engine
@@ -16297,6 +16297,7 @@ def _run_script_generation(ticker: str) -> None:
         #    da_research / da_synth / script_gen stages)
         result = podcast_engine.generate_script(
             tk, grok_md, claude_md, on_progress=_on_progress,
+            format=format,
         )
 
         if not result.get("script"):
@@ -16360,8 +16361,12 @@ def _run_script_generation(ticker: str) -> None:
 
 
 @app.post("/api/podcast/{ticker}/script")
-def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks):
+def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks,
+                            format: str = "debate"):
     """Kick off podcast script generation in the background.
+
+    format: 'debate' (default) | 'pre_mortem' | 'memo' | 'catalysts' | 'quick_hit'
+    Roundup uses a separate endpoint: POST /api/podcast/roundup/script.
 
     Returns immediately with {ok, started}. Poll GET .../script-status
     for live stage updates; the final {script, validation, alignment,
@@ -16371,8 +16376,112 @@ def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks):
     existing = _podcast_script_jobs.get(tk)
     if existing and existing.get("status") == "running":
         return {"ok": True, "ticker": tk, "started": False, "already_running": True}
-    background_tasks.add_task(_run_script_generation, tk)
-    return {"ok": True, "ticker": tk, "started": True}
+    background_tasks.add_task(_run_script_generation, tk, format)
+    return {"ok": True, "ticker": tk, "format": format, "started": True}
+
+
+# Roundup runs through its own background worker (multi-ticker pipeline).
+def _run_roundup_generation(tickers: list[str]) -> None:
+    """Background worker for the Roundup format. Pulls each ticker's
+    Grok+Claude reports, runs generate_roundup_script, persists to DB
+    under synthetic key ROUNDUP_<tickers>."""
+    import podcast_engine
+    job_key = "ROUNDUP_" + ",".join([t.upper() for t in tickers])
+
+    def _set(**kw):
+        _podcast_script_jobs[job_key] = {**(_podcast_script_jobs.get(job_key) or {}), **kw,
+                                          "updated_at": time.time()}
+    def _on_progress(stage, *args):
+        label = args[0] if args else stage
+        _set(stage=stage, label=str(label))
+
+    _set(stage="queued", current=0, total=0, label="Queued…",
+         status="running", started_at=time.time())
+    try:
+        _set(stage="load", label=f"Loading {len(tickers)} tickers' reports…")
+        reports = {}
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                for t in tickers:
+                    tk = t.upper().strip()
+                    cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
+                                   WHERE ticker = %s""", (tk,))
+                    row = cur.fetchone()
+                    reports[tk] = {
+                        "grok":   (row or {}).get("report_md") or "",
+                        "claude": (row or {}).get("report_md_claude") or "",
+                    }
+        result = podcast_engine.generate_roundup_script(
+            tickers, reports, on_progress=_on_progress,
+        )
+        if not result.get("script"):
+            errs = (result.get("validation") or {}).get("errors", []) or ["unknown"]
+            raise RuntimeError("Roundup generation failed: " + "; ".join(errs))
+
+        _set(stage="persist", label="Saving roundup…")
+        synthetic = result["ticker"]
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                _ensure_podcast_table()
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO analyst_podcasts
+                            (ticker, episode_title, script_json, episode_mode, generated_at)
+                        VALUES (%s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            episode_title = EXCLUDED.episode_title,
+                            script_json   = EXCLUDED.script_json,
+                            episode_mode  = EXCLUDED.episode_mode,
+                            generated_at  = NOW()
+                    """, (
+                        synthetic,
+                        result["script"].get("episode_title") or "Roundup",
+                        json.dumps(result["script"]),
+                        "roundup",
+                    ))
+                    conn.commit()
+            except Exception as e:
+                print(f"⚠️  [podcast] roundup persist failed for {synthetic}: {e!s:.200}", flush=True)
+
+        _set(stage="done", status="done", label="✓ Roundup ready",
+             result={
+                "ok":         True,
+                "ticker":     synthetic,
+                "script":     result["script"],
+                "validation": result["validation"],
+                "alignment":  result.get("alignment"),
+                "transcript": podcast_engine.script_to_transcript(result["script"]),
+             })
+    except Exception as e:
+        print(f"❌ [podcast/roundup {tickers}] failed: {e!s:.500}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/podcast/roundup/script")
+async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTasks):
+    """Kick off a multi-ticker Roundup script.
+
+    Body: { "tickers": ["NVDA","INTC","MSFT"] }   (2-4 tickers; all must have
+    both Grok + Claude reports)
+
+    Same status polling pattern as /script — poll
+    GET /api/podcast/{ROUNDUP_NVDA,INTC,MSFT}/script-status.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    tickers = [t.upper().strip() for t in (body or {}).get("tickers", []) if t and t.strip()]
+    if len(tickers) < 2:
+        return JSONResponse({"ok": False, "error": "Need at least 2 tickers"}, status_code=400)
+    if len(tickers) > 4:
+        tickers = tickers[:4]
+    job_key = "ROUNDUP_" + ",".join(tickers)
+    existing = _podcast_script_jobs.get(job_key)
+    if existing and existing.get("status") == "running":
+        return {"ok": True, "ticker": job_key, "started": False, "already_running": True}
+    background_tasks.add_task(_run_roundup_generation, tickers)
+    return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
 
 
 @app.get("/api/podcast/{ticker}/script-status")
@@ -16400,6 +16509,7 @@ def podcast_list_scripts():
             cur.execute("""
                 SELECT ticker, episode_title, generated_at, episode_mode,
                        (script_json->>'winner') AS winner,
+                       (script_json->>'format') AS format,
                        (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio
                 FROM analyst_podcasts
                 WHERE script_json IS NOT NULL
@@ -16412,6 +16522,7 @@ def podcast_list_scripts():
                 "title":        r["episode_title"] or f"{r['ticker']}: Bull vs Bear",
                 "winner":       r["winner"],
                 "mode":         r["episode_mode"],
+                "format":       r["format"] or "debate",
                 "has_audio":    bool(r["has_audio"]),
                 "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
             } for r in rows

@@ -136,27 +136,160 @@ VALID_SPEAKERS = {"opus", "rock", "claudia"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
 # Section ids the LLM MUST produce in order.
-REQUIRED_SECTIONS = [
-    "cold_open",            # Opus, ~15s
-    "company_in_60",        # Opus, ~60s
-    "opening_pitch_rock",   # Rock, ~60s
-    "opening_pitch_claudia", # Claudia, ~60s
-    "round_thesis",         # debate, ~90s
-    "round_valuation",      # debate, ~90s
-    "round_catalysts",      # debate, ~90s
-    "round_steelman",       # each defends the OTHER's case, ~60s
-    "verdict",              # Opus names a winner, ~45s
-]
+# ════════════════════════════════════════════════════════════════════════
+# Episode FORMATS — orthogonal to episode_mode (which controls TONE/ROLES).
+# format controls STRUCTURE: what sections exist, how long, who speaks.
+#
+# Default format is "debate" (the original Bull vs Bear show). Each other
+# format swaps in a different REQUIRED_SECTIONS list + system+user prompt.
+# Dynamic role assignment (Bull/Bear seats based on report aggression)
+# still applies on top — formats are STRUCTURE, modes are ROLES.
+# ════════════════════════════════════════════════════════════════════════
+
+EPISODE_FORMATS = {
+    "debate": {
+        "label":   "Debate",
+        "icon":    "⚔️",
+        "tagline": "Bull vs Bear, with a verdict",
+        "multi_ticker":     False,
+        "word_budget_low":  1400,
+        "word_budget_high": 1800,
+        "approx_minutes":   "8-10",
+        "title_pattern":    "{TICKER}: Bull vs Bear",
+    },
+    "pre_mortem": {
+        "label":   "Pre-Mortem",
+        "icon":    "🪦",
+        "tagline": "It's 2 years from now. The stock collapsed. What killed it?",
+        "multi_ticker":     False,
+        "word_budget_low":  1300,
+        "word_budget_high": 1700,
+        "approx_minutes":   "8-10",
+        "title_pattern":    "{TICKER}: The Pre-Mortem",
+    },
+    "memo": {
+        "label":   "Investment Memo",
+        "icon":    "📋",
+        "tagline": "IC-style walk-through — exec summary, thesis, valuation, risks, rec",
+        "multi_ticker":     False,
+        "word_budget_low":  1500,
+        "word_budget_high": 1900,
+        "approx_minutes":   "9-11",
+        "title_pattern":    "{TICKER}: Investment Memo",
+    },
+    "catalysts": {
+        "label":   "Catalysts Calendar",
+        "icon":    "📅",
+        "tagline": "12 months of catalysts ranked + the one trade that matters",
+        "multi_ticker":     False,
+        "word_budget_low":  1400,
+        "word_budget_high": 1800,
+        "approx_minutes":   "8-10",
+        "title_pattern":    "{TICKER}: 12-Month Catalysts",
+    },
+    "quick_hit": {
+        "label":   "Quick Hit",
+        "icon":    "⚡",
+        "tagline": "5-min sharp summary — one take from each, then verdict",
+        "multi_ticker":     False,
+        "word_budget_low":  600,
+        "word_budget_high": 900,
+        "approx_minutes":   "4-5",
+        "title_pattern":    "{TICKER}: Quick Hit",
+    },
+    "roundup": {
+        "label":   "Roundup",
+        "icon":    "📰",
+        "tagline": "3-4 tickers in one episode — quick takes + cross-name sector wrap",
+        "multi_ticker":     True,
+        "word_budget_low":  1200,
+        "word_budget_high": 1600,
+        "approx_minutes":   "7-9",
+        "title_pattern":    "Roundup: {TICKERS}",
+    },
+}
+
+# Per-format required-sections lists. Validator and renderers consult these.
+FORMAT_SECTIONS = {
+    "debate": [
+        "cold_open", "company_in_60",
+        "opening_pitch_rock", "opening_pitch_claudia",
+        "round_thesis", "round_valuation", "round_catalysts", "round_steelman",
+        "verdict",
+    ],
+    "pre_mortem": [
+        "cold_open",                # Opus: hook — "It's 2027. Stock down 60%."
+        "scenario_setup",           # Opus: paints the failed state in detail
+        "rock_failure_path",        # Rock: how he sees the collapse happening
+        "claudia_failure_path",     # Claudia: her version of the collapse
+        "round_root_causes",        # debate: 3-4 root causes argued + ranked
+        "round_pattern",            # both: which historical analogue fits (Cisco '00? Teva '17?)
+        "underpriced_risk",         # both: which failure path is most under-priced by current bulls
+        "verdict",                  # Opus: highest-conviction failure path + what would falsify the bull case
+    ],
+    "memo": [
+        "cold_open",                # Opus: ~30 words, hook + ticker
+        "executive_summary",        # Opus: rating, target, 3-sentence thesis
+        "business_overview",        # Opus: what the company does, segments, drivers
+        "bull_thesis",              # Rock: top 3 bull points (his report)
+        "bear_thesis",              # Claudia: top 3 bear points
+        "valuation_section",        # mixed: multiples, comps, what's priced in
+        "catalysts_and_risks",      # mixed: near-term catalysts + key risks
+        "recommendation",           # Opus: action with sizing, time horizon, stop level
+    ],
+    "catalysts": [
+        "cold_open",                # Opus: "Tonight: 12 months of catalysts, ranked"
+        "setup_quarter",            # Opus: where we are now
+        "catalyst_1",               # debate: nearest event (earnings, product, FDA)
+        "catalyst_2",               # debate: ~3 months out
+        "catalyst_3",               # debate: ~6 months out
+        "catalyst_4",               # debate: ~12 months out
+        "wildcard",                 # debate: low probability / high impact
+        "ranking",                  # Opus + both: rank by importance × probability
+        "verdict",                  # Opus: which catalyst is the actual trade
+    ],
+    "quick_hit": [
+        "cold_open",                # Opus: 1 turn, ~30 words
+        "company_one_breath",       # Opus: 1 turn, ~60 words
+        "rock_take",                # Rock: 1 turn, ~80 words
+        "claudia_take",             # Claudia: 1 turn, ~80 words
+        "single_round",             # mixed: 3-4 turn debate
+        "verdict",                  # Opus: 1 turn, ~80 words
+    ],
+    # Roundup sections are generated dynamically based on ticker list
+    # (cold_open + per-ticker segments + wrap). Validator handles it
+    # via the multi_ticker flag and a relaxed section check.
+    "roundup": [
+        "cold_open",
+        # "ticker_1_intro", "ticker_1_take", "ticker_1_rebuttal", ... (dynamic)
+        "wrap",
+    ],
+}
+
+# Backward-compat alias for any legacy code still importing REQUIRED_SECTIONS.
+REQUIRED_SECTIONS = FORMAT_SECTIONS["debate"]
 
 
 # ════════════════════════════════════════════════════════════════════════
 # Prompting
 # ════════════════════════════════════════════════════════════════════════
 
-def _system_prompt() -> str:
+def _system_prompt(format: str = "debate") -> str:
+    """Return the system prompt for the requested format.
+
+    All formats share the CAST + TONE + CURSING + FACTUAL guardrails
+    common base, then layer a format-specific STRUCTURE block on top.
+    """
+    base = _system_prompt_common()
+    addendum = _format_addendum(format)
+    return base + "\n\n" + addendum
+
+
+def _system_prompt_common() -> str:
+    """Shared base — cast, tone, cursing, factual guardrails, per-turn rules.
+    Format-specific STRUCTURE + OUTPUT shape are appended by _format_addendum()."""
     return """You are the producer-writer for the DGA HiTech Podcast — a fast-paced \
-investment debate show in the style of Animal Spirits (banter, interruptions, \
-strong opinions). Each episode debates ONE public company.
+investment show. Each episode covers ONE public company unless told otherwise.
 
 CAST (the three speakers, never invent a fourth):
   • Opus    — host. MALE. Sharp, even-keeled, calls bullshit on either side. \
@@ -220,79 +353,142 @@ representing — Rock cites Rock's number, Claudia cites Claudia's. They can \
 explicitly call out the discrepancy ("you've got revenue at $12B, I've got \
 $10B — where's the spread coming from?").
 
-STRUCTURE (you MUST produce these sections in this order, each as a list of turns):
-  1. cold_open            — Opus only, 1 turn, ~35–45 words. ONE-LINE HOOK that names the ticker.
-     CRITICAL — vary the SHAPE of the cold open episode-to-episode. DO NOT start
-     every episode with "Welcome back to the DGA HiTech Podcast, I'm Opus, and
-     tonight..." That pattern gets monotonous instantly. Pick a DIFFERENT structure
-     for each episode, rotating freely between forms like these (don't copy
-     verbatim — adapt to the ticker's actual story):
-       • Data shock:    "Down 47% YTD. Up 31% in three months. {TICKER} is
-                         the most polarizing name in {sector} right now."
-       • Question:      "Is {TICKER} a generational compounder or a melting
-                         ice cube? Rock and Claudia disagree. Welcome to the
-                         show — I'm Opus."
-       • News tease:    "{Recent specific catalyst from the report}. So tonight:
-                         is it priced in? {TICKER}, on DGA HiTech."
-       • Contrarian:    "The Street's lined up bullish on {TICKER}. We're going
-                         to stress-test that. I'm Opus."
-       • Cold fact:     "{Surprising one-line fact from the company / report}.
-                         That's the whole pitch. Tonight: {TICKER}."
-       • Direct quote:  "'{Provocative line from one of the analysts' reports}'
-                         — that's where we start. {TICKER}, DGA HiTech."
-       • Personal beat: "I've been thinking about {TICKER} all week.
-                         Rock, Claudia — let's go."
-       • Sector frame:  "{Sector} is on fire / under siege / mid-cycle.
-                         {TICKER} is right at the center."
-     The host should NAME the ticker, but the welcome / show-name boilerplate is
-     OPTIONAL — sometimes skip it entirely and jump straight into the hook.
-     Mode (debate / stress test / devil's advocate / spread / mixed) should color
-     the cold open's energy — stress test reads more cautious, devil's advocate
-     reads more curious / contrarian, debate reads more combative.
-  2. company_in_60        — Opus only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
-  3. opening_pitch_rock   — Rock only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  4. opening_pitch_claudia — Claudia only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claudia, with Opus injecting 1–2 follow-ups.
-  6. round_valuation      — 4–6 turns. THIS IS THE HOTTEST ROUND — multiples, comps, peer math, target math. Mark turns intensity=heated.
-  7. round_catalysts      — 4–6 turns. Near-term catalysts, risks, what could break the thesis.
-  8. round_steelman       — exactly 2 turns: Rock argues Claudia's bear case in his own words, then Claudia argues Rock's bull case. 60–80 words each.
-  9. verdict              — Opus only, 1–2 turns, ~110–140 words. Must explicitly say \
-"the more convincing pitch tonight was Rock" or "...was Claudia" and give 2 specific reasons \
-drawn from THE DEBATE (not from the reports). No ties, no cop-outs.
-
-TOTAL WORD COUNT TARGET: 1,400–1,800 words across all sections combined. \
-This produces an 8–10 min episode at conversational TTS pacing. \
-If the source reports are thin, CUT length — do not pad with filler.
+COLD OPEN VARIETY — applies to every format
+  CRITICAL — vary the SHAPE of the cold open episode-to-episode. DO NOT start
+  every episode with "Welcome back to the DGA HiTech Podcast, I'm Opus, and
+  tonight..." That pattern gets monotonous instantly. Pick a DIFFERENT structure
+  for each episode, rotating freely between forms like:
+    • Data shock, Question, News tease, Contrarian, Cold fact, Direct quote,
+      Personal beat, Sector frame.
+  The host should NAME the ticker, but welcome/show-name boilerplate is OPTIONAL.
 
 PER-TURN FIELDS (every turn is an object with exactly these keys):
   • "speaker"   ∈ "opus" | "rock" | "claudia"
-  • "text"      — the spoken line. Plain prose. No markdown, no asterisks, no bullets. \
-Use natural contractions ("it's", "we're"). For an interruption, end the line with " —"
+  • "text"      — plain prose. No markdown / asterisks / bullets. Natural
+                  contractions. For an interruption, end the line with " —"
   • "intensity" ∈ "calm" | "normal" | "heated"
 
-OUTPUT FORMAT — return ONLY valid JSON, no preamble, no code fences, matching this shape exactly:
-
-{
-  "ticker": "<TICKER>",
-  "episode_title": "<TICKER>: Bull vs Bear",
-  "winner": "rock" | "claudia",
-  "sections": [
-    {"id": "cold_open",             "turns": [...]},
-    {"id": "company_in_60",         "turns": [...]},
-    {"id": "opening_pitch_rock",    "turns": [...]},
-    {"id": "opening_pitch_claudia", "turns": [...]},
-    {"id": "round_thesis",         "turns": [...]},
-    {"id": "round_valuation",      "turns": [...]},
-    {"id": "round_catalysts",      "turns": [...]},
-    {"id": "round_steelman",       "turns": [...]},
-    {"id": "verdict",              "turns": [...]}
-  ]
-}
-
-The "winner" field MUST match whoever Opus names in the verdict section.
-
 DO NOT include any text outside the JSON. DO NOT use markdown code fences.
+DO NOT invent a fourth speaker.
+
+[FORMAT-SPECIFIC STRUCTURE + OUTPUT SHAPE FOLLOW BELOW]
 """
+
+
+def _format_addendum(format: str) -> str:
+    """Per-format STRUCTURE block + word budget + OUTPUT shape."""
+    fmt = EPISODE_FORMATS.get(format)
+    if not fmt:
+        return _format_addendum("debate")
+    sections = FORMAT_SECTIONS.get(format, [])
+    wb_lo, wb_hi = fmt["word_budget_low"], fmt["word_budget_high"]
+    minutes = fmt["approx_minutes"]
+
+    if format == "debate":
+        structure = """STRUCTURE — produce these sections IN ORDER, each as a list of turns:
+  1. cold_open            — Opus only, ~35–45 words. ONE-LINE hook + ticker.
+  2. company_in_60        — Opus only, ~120–150 words. Plain-English what the company does.
+  3. opening_pitch_rock   — Rock only, ~140–170 words. Bull/bear stance + specific price target.
+  4. opening_pitch_claudia — Claudia only, ~140–170 words. Bull/bear stance + specific price target.
+  5. round_thesis         — 4–6 turns, mostly Rock + Claudia, Opus 1–2 follow-ups.
+  6. round_valuation      — 4–6 turns. HOTTEST round — multiples, comps, target math. intensity=heated.
+  7. round_catalysts      — 4–6 turns. Near-term catalysts + risks.
+  8. round_steelman       — EXACTLY 2 turns: Rock argues Claudia's bear case, then vice versa. 60–80 words each.
+  9. verdict              — Opus only, 1–2 turns, ~110–140 words. Must say "the more convincing pitch tonight was Rock" or "...was Claudia" with 2 specific reasons from THE DEBATE. No ties."""
+        winner_field = '  "winner": "rock" | "claudia",\n'
+
+    elif format == "pre_mortem":
+        structure = """STRUCTURE — Pre-Mortem format. Frame: it's 2 years from now, the stock is down 60%+, you're doing the autopsy.
+
+  1. cold_open            — Opus only, ~35–50 words. Hook MUST establish: "It's [year + 2]. {TICKER} is down [60-80]%. What killed it?"
+  2. scenario_setup       — Opus only, ~130–160 words. Paint the failed state in vivid detail: stock price, what the news headlines look like, who got fired, what the bulls now say in hindsight.
+  3. rock_failure_path    — Rock only, ~150–180 words. His specific theory of the collapse — must cite REAL risk factors from the source reports + the DA brief if present.
+  4. claudia_failure_path — Claudia only, ~150–180 words. Her DIFFERENT theory of the collapse (different root cause, not just more pessimistic).
+  5. round_root_causes    — 5–7 turns. Debate which 3 root causes are most LIKELY (not most catastrophic). Both speakers must agree on 1 surprising cause they hadn't considered until this conversation.
+  6. round_pattern        — 3–4 turns. Which historical analogue does this most resemble? (Cisco 2000? Teva 2017? Peloton 2022? Valeant 2015? GE 2018?) Argue + pick.
+  7. underpriced_risk     — 3–4 turns. Of all the failure paths discussed, which is MOST under-priced by current bulls? Both speakers vote.
+  8. verdict              — Opus only, 1–2 turns, ~120–150 words. Names the HIGHEST-CONVICTION failure path + one falsification test ("if X happens within 6 months, the bears are wrong")."""
+        winner_field = '  "winner": "rock" | "claudia",  // whoever Opus names as having the most-likely failure thesis\n'
+
+    elif format == "memo":
+        structure = """STRUCTURE — Investment Memo Walk-Through. Treat this like a real IC presentation: structured, sober, conclusive.
+
+  1. cold_open            — Opus only, ~30–45 words. Crisp hook + ticker + rating preview.
+  2. executive_summary    — Opus only, ~130–160 words. Rating, 12-mo target, 3-sentence thesis, sizing recommendation.
+  3. business_overview    — Opus only, ~160–200 words. Segments, key drivers, customer base, geographic mix.
+  4. bull_thesis          — Rock only, ~230–280 words. Top 3 bull points with supporting data from his report.
+  5. bear_thesis          — Claudia only, ~230–280 words. Top 3 bear points with supporting data from her report.
+  6. valuation_section    — 4–6 mixed turns. Multiples, comps, sum-of-parts if relevant, what's priced in / what's not. Cite real numbers.
+  7. catalysts_and_risks  — 4–6 mixed turns. Near-term catalysts (next 6 mo) + top 3 risks ranked by likelihood × severity.
+  8. recommendation       — Opus only, 1–2 turns, ~140–170 words. Action with: SIZING (% of book), TIME HORIZON, STOP-LOSS or hedge structure. End with "the committee recommends..." or "this analyst recommends..."
+
+This format does NOT use a 'winner' field — it ends with a recommendation, not a debate result."""
+        winner_field = '  "winner": "rock" | "claudia",  // for memo format, set to whoever Opus\'s recommendation aligns with directionally\n'
+
+    elif format == "catalysts":
+        structure = """STRUCTURE — Catalysts Calendar. Forward-looking 12-month walk through what's actually on the schedule.
+
+  1. cold_open            — Opus only, ~30–45 words. "Tonight: 12 months of catalysts, ranked." + ticker.
+  2. setup_quarter        — Opus only, ~80–110 words. Where the stock is now. Recent earnings, momentum, sentiment one-liner.
+  3. catalyst_1           — 3–5 mixed turns. NEAREST event (next 30–90 days). Rock + Claudia argue: priced in or not? Long or short into it?
+  4. catalyst_2           — 3–5 mixed turns. ~3 months out. Same treatment.
+  5. catalyst_3           — 3–5 mixed turns. ~6 months out.
+  6. catalyst_4           — 3–5 mixed turns. ~12 months out (annual investor day / refresh / regulatory cycle).
+  7. wildcard             — 2–3 mixed turns. Low-probability, high-impact event (M&A, restructure, lawsuit settlement, accounting issue). Both must engage even if they think it's unlikely.
+  8. ranking              — 3–5 turns. Both speakers + Opus assemble a ranked list of the 7 events by IMPORTANCE × PROBABILITY. Explicit ranking, no hedging.
+  9. verdict              — Opus only, 1–2 turns, ~100–130 words. Which SINGLE catalyst is the actual trade. Specific entry timing.
+
+Use real catalyst dates from the source reports where possible. If a date isn't stated, use "~Q2" / "late spring" — DON'T invent specific dates."""
+        winner_field = '  "winner": "rock" | "claudia",  // for catalysts format, set to whoever Opus\'s "the trade" recommendation aligns with\n'
+
+    elif format == "quick_hit":
+        structure = """STRUCTURE — Quick Hit. 5-min sharp summary. No round-robin, no steelman. Just: hook → setup → one take each → short debate → verdict.
+
+  1. cold_open            — Opus only, 1 turn, ~25–35 words. ONE punchy hook.
+  2. company_one_breath   — Opus only, 1 turn, ~50–70 words. The company explained in 60 sec.
+  3. rock_take            — Rock only, 1 turn, ~70–100 words. His ONE sharpest take — bull or bear, with price target.
+  4. claudia_take         — Claudia only, 1 turn, ~70–100 words. Her counter-take, with target.
+  5. single_round         — 3–5 mixed turns. Brief, punchy back-and-forth on the SINGLE most contested point.
+  6. verdict              — Opus only, 1 turn, ~70–100 words. Calls the winner with one tight reason.
+
+Total ~600–900 words. ~5 min episode. DO NOT pad — short is the whole point."""
+        winner_field = '  "winner": "rock" | "claudia",\n'
+
+    elif format == "roundup":
+        structure = """STRUCTURE — Roundup. Multi-ticker show covering 3-4 names in one episode.
+
+The user_prompt will give you the list of tickers and each one's report data.
+You MUST produce sections in this order (using actual section IDs as listed):
+
+  1. cold_open                — Opus only, ~35–50 words. "Tonight: 3 names — [tickers]. Quick takes, then a wrap."
+  2. For EACH ticker in order, produce 3 sections:
+     {N}_intro       — Opus only, ~30–50 words. Sets up that ticker's story in one paragraph.
+     {N}_take        — One analyst only (pick Rock if more bullish report exists, Claudia if more bearish), ~110–140 words. Punchy take with price target.
+     {N}_rebuttal    — Other analyst, ~80–110 words. Concise counter-view.
+     Replace {N} with the ticker symbol lowercased — e.g. "nvda_intro", "nvda_take", "nvda_rebuttal".
+  3. wrap                    — All three voices, 3–5 turns. Cross-ticker sector takeaway. What ties these names together? What's the actionable read?
+
+No per-ticker verdict; the wrap delivers a synthesized portfolio-level conclusion."""
+        winner_field = '  "winner": "rock" | "claudia",  // for roundup, set to whichever analyst had the better overall read across the names\n'
+
+    else:
+        # Fallback — should never hit
+        return _format_addendum("debate")
+
+    # Common closing for every format
+    output_shape = '{\n  "ticker": "<TICKER>",\n  "episode_title": "...",\n' + winner_field + \
+        '  "sections": [\n' + \
+        '    ' + ',\n    '.join(['{"id": "' + s + '", "turns": [...]}' for s in sections]) + \
+        '\n  ]\n}'
+
+    return (
+        structure + "\n\n" +
+        f"TOTAL WORD COUNT TARGET: {wb_lo:,}–{wb_hi:,} words (≈ {minutes} min episode).\n"
+        "If source reports are thin, CUT length — do not pad with filler.\n\n"
+        "OUTPUT — return ONLY valid JSON matching this shape exactly:\n\n"
+        + output_shape
+    )
+
 
 
 def _user_prompt(
@@ -302,7 +498,10 @@ def _user_prompt(
     rock_stance: dict | None = None,
     claude_stance: dict | None = None,
     da_brief: str = "",
+    format: str = "debate",
 ) -> str:
+    fmt = EPISODE_FORMATS.get(format) or EPISODE_FORMATS["debate"]
+    format_intro = f"\nEPISODE FORMAT: {fmt['icon']} {fmt['label'].upper()} — {fmt['tagline']}\n"
     roles = roles or {"episode_mode": "debate", "bull_speaker": "rock", "bear_speaker": "claudia"}
     rock_stance = rock_stance or {}
     claude_stance = claude_stance or {}
@@ -362,7 +561,7 @@ performative.
 ══════════════════════════════════════════════════════════════════════"""
 
     return f"""Generate the DGA HiTech Podcast episode for ticker {ticker}.
-
+{format_intro}
 ══════════════════════════════════════════════════════════════════════
 ROLE ASSIGNMENT (data-driven, do not override):
 ══════════════════════════════════════════════════════════════════════
@@ -452,9 +651,24 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
 
     sections = script.get("sections") or []
     section_ids = [s.get("id") for s in sections]
-    for required in REQUIRED_SECTIONS:
-        if required not in section_ids:
-            errors.append(f"missing required section: {required}")
+    # Format-aware required sections. Falls back to debate format for
+    # legacy scripts that don't include a 'format' field.
+    fmt_name = (script.get("format") or "debate").lower()
+    required_secs = FORMAT_SECTIONS.get(fmt_name, FORMAT_SECTIONS["debate"])
+    fmt_meta = EPISODE_FORMATS.get(fmt_name, EPISODE_FORMATS["debate"])
+    is_multi_ticker = bool(fmt_meta.get("multi_ticker"))
+
+    if is_multi_ticker:
+        # Roundup: require cold_open + wrap; per-ticker sections are dynamic
+        # (e.g. nvda_intro/nvda_take/nvda_rebuttal) and validated separately
+        # by the caller against the actual ticker list.
+        for required in ("cold_open", "wrap"):
+            if required not in section_ids:
+                errors.append(f"missing required section: {required}")
+    else:
+        for required in required_secs:
+            if required not in section_ids:
+                errors.append(f"missing required section: {required}")
 
     # Per-turn validation + stats
     total_words = 0
@@ -478,14 +692,24 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
             all_text_chunks.append(text)
             total_words += _word_count(text)
 
-    # Section-specific speaker rules
+    # Per-section speaker rules. Opus-only sections vary by format.
+    OPUS_ONLY_BY_FORMAT = {
+        "debate":     {"cold_open", "company_in_60", "verdict"},
+        "pre_mortem": {"cold_open", "scenario_setup", "verdict"},
+        "memo":       {"cold_open", "executive_summary", "business_overview", "recommendation"},
+        "catalysts":  {"cold_open", "setup_quarter", "verdict"},
+        "quick_hit":  {"cold_open", "company_one_breath", "verdict"},
+        "roundup":    {"cold_open"},   # per-ticker intros are dynamic
+    }
+    opus_only_ids = OPUS_ONLY_BY_FORMAT.get(fmt_name, OPUS_ONLY_BY_FORMAT["debate"])
+
     for sec in sections:
         sid = sec.get("id")
         turns = sec.get("turns") or []
-        if sid in ("cold_open", "company_in_60", "verdict"):
-            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "opus"]
-            if non_alec:
-                errors.append(f"{sid} should be Opus only — found {len(non_alec)} other speakers")
+        if sid in opus_only_ids:
+            non_opus = [t for t in turns if (t.get("speaker") or "").lower() != "opus"]
+            if non_opus:
+                errors.append(f"{sid} should be Opus only — found {len(non_opus)} other speakers")
         if sid == "opening_pitch_rock":
             if not turns or (turns[0].get("speaker") or "").lower() != "rock":
                 errors.append("opening_pitch_rock must start with Rock")
@@ -495,6 +719,12 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
         if sid == "round_steelman":
             if len(turns) != 2:
                 warnings.append(f"round_steelman should be exactly 2 turns, got {len(turns)}")
+        if sid == "rock_take" or sid == "rock_failure_path" or sid == "bull_thesis":
+            if not turns or (turns[0].get("speaker") or "").lower() != "rock":
+                warnings.append(f"{sid} should start with Rock")
+        if sid == "claudia_take" or sid == "claudia_failure_path" or sid == "bear_thesis":
+            if not turns or (turns[0].get("speaker") or "").lower() != "claudia":
+                warnings.append(f"{sid} should start with Claudia")
 
     full_text = " ".join(all_text_chunks)
     total_curses = _count_curses(full_text)
@@ -504,11 +734,13 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
             "consider regenerating or hand-trimming"
         )
 
-    # Word budget
-    if total_words < 1200:
-        warnings.append(f"word count {total_words} below 1,400–1,800 target — episode may run short of 8 min")
-    elif total_words > 2000:
-        warnings.append(f"word count {total_words} above 1,400–1,800 target — episode may overshoot 10 min")
+    # Word budget — pull from the format's defined band
+    wb_lo = fmt_meta.get("word_budget_low", 1400)
+    wb_hi = fmt_meta.get("word_budget_high", 1800)
+    if total_words < wb_lo * 0.85:
+        warnings.append(f"word count {total_words} below {wb_lo:,}–{wb_hi:,} target — episode may run short")
+    elif total_words > wb_hi * 1.15:
+        warnings.append(f"word count {total_words} above {wb_lo:,}–{wb_hi:,} target — episode may overshoot")
 
     # Verdict must contain winner name
     verdict_text = ""
@@ -761,6 +993,7 @@ def generate_script(
     *,
     model: str | None = None,
     on_progress=None,
+    format: str = "debate",
 ) -> dict[str, Any]:
     """Generate one podcast episode script from both research reports.
 
@@ -839,9 +1072,10 @@ def generate_script(
                          f"bull={roles['bull_speaker']}, bear={roles['bear_speaker']})…")
         except Exception: pass
 
-    system = _system_prompt()
+    system = _system_prompt(format=format)
     user   = _user_prompt(
         ticker.upper(), grok_trim, claude_trim,
+        format=format,
         roles=roles,
         rock_stance=rock_stance,
         claude_stance=claude_stance,
@@ -883,9 +1117,12 @@ def generate_script(
             "raw_response": raw,
         }
 
-    # Force ticker to match request (LLM occasionally lower-cases it)
+    # Force ticker + format onto the script (LLM may lower-case or omit them)
     script["ticker"] = ticker.upper()
-    # Episode title varies by mode (overridable by LLM)
+    script["format"] = format
+
+    # Title selection: format-specific title pattern wins over mode-based
+    # default for non-debate formats. For debate format, mode still drives.
     mode_titles = {
         "debate":          f"{ticker.upper()}: Bull vs Bear",
         "stress_test":     f"{ticker.upper()}: The Bull Case Under Pressure",
@@ -893,22 +1130,24 @@ def generate_script(
         "spread":          f"{ticker.upper()}: The Spread",
         "mixed":           f"{ticker.upper()}: Mixed Signals",
     }
-    # ENFORCE mode-aware title. The LLM tends to default to "Bull vs Bear"
-    # even on stress_test / devils_advocate runs because the example in the
-    # prompt uses that string. We override server-side so the saved-episode
-    # list accurately reflects what kind of debate it was.
-    mode_default = mode_titles.get(roles["episode_mode"], f"{ticker.upper()}: Bull vs Bear")
+    fmt_meta = EPISODE_FORMATS.get(format, EPISODE_FORMATS["debate"])
+    format_title = fmt_meta["title_pattern"].replace("{TICKER}", ticker.upper())
+
+    if format == "debate":
+        default_title = mode_titles.get(roles["episode_mode"], format_title)
+    else:
+        default_title = format_title
+
     llm_title = (script.get("episode_title") or "").strip()
-    # Accept the LLM's title ONLY if it didn't fall back to the generic
-    # "Bull vs Bear" pattern AND the mode is non-debate. For debate mode,
-    # respect the LLM's creativity. For all other modes, force the mode title
-    # unless the LLM produced something genuinely different (not the default).
+    # Accept LLM title only if it's not the generic "Bull vs Bear" fallback
+    # (or empty). For non-debate formats, also reject if the LLM ignored the
+    # format and used the debate title.
     if not llm_title:
-        script["episode_title"] = mode_default
-    elif roles["episode_mode"] != "debate" and "bull vs bear" in llm_title.lower():
-        # LLM ignored mode and used the generic — override
-        script["episode_title"] = mode_default
-    # else: keep the LLM's title
+        script["episode_title"] = default_title
+    elif format != "debate" and "bull vs bear" in llm_title.lower():
+        script["episode_title"] = default_title
+    elif format == "debate" and roles["episode_mode"] != "debate" and "bull vs bear" in llm_title.lower():
+        script["episode_title"] = default_title
     # Stamp the assignment metadata onto the script too — survives DB round-trip
     script["_alignment"] = {
         "episode_mode": roles["episode_mode"],
@@ -1247,6 +1486,135 @@ def synthesize_episode(
         "bytes":         out_path.stat().st_size,
         "voice_map":     dict(VOICE_MAP),
         "tts_model":     tts_model,
+    }
+
+
+def generate_roundup_script(
+    tickers: list[str],
+    reports_by_ticker: dict[str, dict[str, str]],
+    *,
+    model: str | None = None,
+    on_progress=None,
+) -> dict[str, Any]:
+    """Roundup format — single episode covering 3-4 tickers.
+
+    Args:
+        tickers: ordered list of ticker symbols (3-4 recommended)
+        reports_by_ticker: { "NVDA": {"grok": "...", "claude": "..."}, ... }
+        model / on_progress: same as generate_script
+
+    Returns the same shape as generate_script: {ticker (synthetic),
+    script, validation, alignment, raw_response}. The synthetic ticker
+    is "ROUNDUP_<comma-list>" so the DB row key is unique.
+    """
+    import claude_analyst as _ca
+    import time as _t
+
+    if not tickers or len(tickers) < 2:
+        raise ValueError("Roundup needs at least 2 tickers")
+    tickers = [t.upper() for t in tickers if t and t.strip()][:4]
+    missing = [t for t in tickers if not (reports_by_ticker.get(t, {}).get("grok", "").strip()
+                                         and reports_by_ticker.get(t, {}).get("claude", "").strip())]
+    if missing:
+        raise ValueError(f"Missing Grok+Claude reports for: {', '.join(missing)}")
+
+    if on_progress:
+        try: on_progress("classify", f"Setting up roundup for {len(tickers)} tickers…")
+        except Exception: pass
+
+    # Build dynamic required sections for THIS roundup
+    dyn_sections = ["cold_open"]
+    for tk in tickers:
+        slug = tk.lower()
+        dyn_sections.extend([f"{slug}_intro", f"{slug}_take", f"{slug}_rebuttal"])
+    dyn_sections.append("wrap")
+
+    # Build the user prompt — pack all reports compactly
+    MAX_CHARS_PER_REPORT = 12000   # tighter than single-ticker since we have N
+    reports_block = ""
+    for tk in tickers:
+        rep = reports_by_ticker[tk]
+        reports_block += (
+            f"\n══════════════════════════════════════════════════════════════\n"
+            f"TICKER: {tk}\n"
+            f"──────────────────────────────────────────────────────────────\n"
+            f"ROCK'S REPORT (Grok):\n{(rep.get('grok','') or '')[:MAX_CHARS_PER_REPORT]}\n"
+            f"──────────────────────────────────────────────────────────────\n"
+            f"CLAUDIA'S REPORT (Claude):\n{(rep.get('claude','') or '')[:MAX_CHARS_PER_REPORT]}\n"
+        )
+
+    fmt_meta = EPISODE_FORMATS["roundup"]
+    expected_ids = ", ".join([f'"{s}"' for s in dyn_sections])
+
+    system = _system_prompt(format="roundup")
+    user = f"""Generate a DGA HiTech Podcast ROUNDUP episode covering {len(tickers)} tickers.
+
+TICKERS (in order): {', '.join(tickers)}
+
+For EACH ticker, you must produce 3 sections following the naming convention
+in the system prompt (use the lowercased symbol — e.g. for NVDA, use
+"nvda_intro" / "nvda_take" / "nvda_rebuttal"). Pick whichever analyst's
+report is more directionally aggressive to take the lead "take" for that
+ticker; the other gets the "rebuttal".
+
+The full ordered section list you MUST produce is:
+{expected_ids}
+
+REPORTS:
+{reports_block}
+
+══════════════════════════════════════════════════════════════════════
+Now write the episode. Remember:
+  • JSON only matching the system-prompt shape
+  • {fmt_meta['word_budget_low']:,}–{fmt_meta['word_budget_high']:,} total words
+  • No per-ticker verdict; wrap delivers the cross-name takeaway
+  • "winner" field: pick the analyst whose overall read across these names
+    you found more convincing
+"""
+
+    print(f"🎙️ [podcast/roundup {tickers}] calling Claude Opus  user={len(user):,}ch", flush=True)
+    _tc = _t.time()
+    raw = _ca.call_claude(
+        system_prompt=system, user_content=user,
+        model=model or _ca.CLAUDE_MODEL,
+    )
+    print(f"🎙️ [podcast/roundup {tickers}] Claude returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
+
+    cleaned = _strip_code_fence(raw)
+    try:
+        script = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        head = cleaned[:300].replace("\n", "\\n")
+        print(f"❌ [podcast/roundup] JSON parse failed at pos {e.pos}: {head}", flush=True)
+        return {
+            "ticker": "ROUNDUP_" + ",".join(tickers),
+            "script": None,
+            "validation": {"ok": False, "errors": [f"LLM returned invalid JSON: {e!s:.200}"],
+                           "warnings": [], "stats": {}},
+            "raw_response": raw,
+        }
+
+    synthetic_ticker = "ROUNDUP_" + ",".join(tickers)
+    script["ticker"] = synthetic_ticker
+    script["format"] = "roundup"
+    script["tickers"] = tickers      # explicit list for the UI to render
+    if not script.get("episode_title"):
+        script["episode_title"] = fmt_meta["title_pattern"].replace("{TICKERS}", " · ".join(tickers))
+    script["_alignment"] = {
+        "episode_mode": "roundup",
+        "bull_speaker": "rock",
+        "bear_speaker": "claudia",
+        "tickers":      tickers,
+        "da_brief_used": False,
+    }
+
+    validation = validate_script(script)
+    return {
+        "ticker":     synthetic_ticker,
+        "script":     script,
+        "validation": validation,
+        "raw_response": raw,
+        "alignment":  script["_alignment"],
     }
 
 

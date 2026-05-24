@@ -2196,9 +2196,23 @@
           Cost per script: <strong>~$0.20</strong> (Claude Opus, no TTS yet).
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="podcast-script-format" title="Choose the episode structure"
+                  style="font-size:13px;padding:8px 10px;border:1px solid #c7e8f3;border-radius:4px;background:#fffbeb;font-weight:700;min-width:180px;">
+            <option value="debate"     selected>⚔️ Debate (Bull vs Bear)</option>
+            <option value="pre_mortem">🪦 Pre-Mortem (it failed — why?)</option>
+            <option value="memo">📋 Investment Memo</option>
+            <option value="catalysts">📅 Catalysts Calendar</option>
+            <option value="quick_hit">⚡ Quick Hit (5 min)</option>
+            <option value="roundup">📰 Roundup (multi-ticker)</option>
+          </select>
           <select id="podcast-script-ticker" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;min-width:220px;">
             <option value="">— select a ticker (needs both Grok + Claude) —</option>
           </select>
+          <!-- Roundup multi-select (hidden by default; appears when format=roundup) -->
+          <select id="podcast-script-tickers-multi" multiple
+                  size="4"
+                  title="Hold ⌘/Ctrl to pick 2-4 tickers for a Roundup"
+                  style="display:none;font-size:13px;padding:6px 10px;border:1px solid #fde68a;border-radius:4px;background:#fffbeb;min-width:260px;min-height:90px;"></select>
           <button id="podcast-script-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
             🎬 Generate script
           </button>
@@ -5100,11 +5114,33 @@
     const scriptSel   = document.getElementById('podcast-script-ticker');
     const scriptOut   = document.getElementById('podcast-script-render');
     const scriptStats = document.getElementById('podcast-script-stats');
+    // Format dropdown — switches between single-ticker picker and Roundup multi-select
+    const fmtSel = document.getElementById('podcast-script-format');
+    const multiSel = document.getElementById('podcast-script-tickers-multi');
+    if (fmtSel) {
+      const applyFormatMode = function() {
+        const isRoundup = fmtSel.value === 'roundup';
+        if (multiSel) multiSel.style.display = isRoundup ? '' : 'none';
+        if (scriptSel) scriptSel.style.display = isRoundup ? 'none' : '';
+        if (isRoundup) _populatePodcastRoundupTickers();
+      };
+      fmtSel.addEventListener('change', applyFormatMode);
+      applyFormatMode();
+    }
+
     if (scriptBtn) {
       scriptBtn.addEventListener('click', async function() {
-        const tk = scriptSel.value;
-        if (!tk) { alert('Pick a ticker first.'); return; }
-        _startPodcastScriptJob(tk, scriptBtn, scriptOut, scriptStats);
+        const format = (fmtSel && fmtSel.value) || 'debate';
+        if (format === 'roundup') {
+          const picks = Array.from(multiSel.selectedOptions).map(function(o){ return o.value; });
+          if (picks.length < 2) { alert('Pick 2-4 tickers for a Roundup.'); return; }
+          if (picks.length > 4) { alert('Max 4 tickers for a Roundup.'); return; }
+          _startPodcastRoundupJob(picks, scriptBtn, scriptOut, scriptStats);
+        } else {
+          const tk = scriptSel.value;
+          if (!tk) { alert('Pick a ticker first.'); return; }
+          _startPodcastScriptJob(tk, scriptBtn, scriptOut, scriptStats, format);
+        }
       });
     }
   }
@@ -5123,7 +5159,21 @@
     error:       0,
   };
 
-  function _startPodcastScriptJob(ticker, btn, out, statsEl) {
+  async function _populatePodcastRoundupTickers() {
+    const sel = document.getElementById('podcast-script-tickers-multi');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/reports');
+      const reports = await r.json();
+      const both = (reports || []).filter(function(x){ return x.generated_at && x.claude_generated_at; });
+      sel.innerHTML = both.map(function(x){ return '<option value="' + x.ticker + '">' + x.ticker + '</option>'; }).join('');
+    } catch (e) {
+      sel.innerHTML = '<option disabled>failed to load</option>';
+    }
+  }
+
+  function _startPodcastScriptJob(ticker, btn, out, statsEl, format) {
+    format = format || 'debate';
     btn.disabled = true;
     btn.textContent = '⏳ Working…';
     if (statsEl) statsEl.textContent = '';
@@ -5159,7 +5209,7 @@
 
     (async function() {
       try {
-        const r0 = await window.dgaFetch('/api/podcast/' + ticker + '/script', { method: 'POST' });
+        const r0 = await window.dgaFetch('/api/podcast/' + ticker + '/script?format=' + encodeURIComponent(format), { method: 'POST' });
         const d0 = await r0.json();
         if (!d0.ok) throw new Error(d0.error || 'Failed to start');
       } catch (e) {
@@ -5187,6 +5237,68 @@
         } catch (e) {
           // Transient network blip — keep polling
         }
+      }, 1500);
+    })();
+  }
+
+  function _startPodcastRoundupJob(tickers, btn, out, statsEl) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Working…';
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;margin-bottom:8px;">📰 Roundup: ' + tickers.join(' · ') + ' — Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed</div>' +
+        '</div>' +
+      '</div>';
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const t0 = Date.now();
+    const tickerKey = 'ROUNDUP_' + tickers.map(function(t){return t.toUpperCase();}).join(',');
+    const elapsedTimer = setInterval(function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    }, 1000);
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      btn.disabled = false;
+      btn.textContent = '🎬 Generate script';
+    };
+    (async function() {
+      try {
+        const r0 = await window.dgaFetch('/api/podcast/roundup/script', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tickers: tickers }),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start roundup');
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
+        finish(); return;
+      }
+      pollTimer = setInterval(async function() {
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
+          const d = await r.json();
+          const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+          if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+          if (barEl)   barEl.style.width = pct + '%';
+          if (d.status === 'done' && d.result) {
+            finish();
+            _onPodcastScriptDone(d.result, out, statsEl);
+          } else if (d.status === 'error') {
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.label || d.error || 'failed') + '</div>';
+            finish();
+          }
+        } catch (e) { /* transient — keep polling */ }
       }, 1500);
     })();
   }
@@ -5261,12 +5373,19 @@
         return Math.round(mins/1440) + 'd ago';
       };
       const modeIcons = { debate:'⚔️', stress_test:'🔬', devils_advocate:'😈', spread:'📏', mixed:'❓' };
+      // Format icons take priority over mode icons when the script has a format
+      const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰' };
       sel.innerHTML = '<option value="">📂 Open a saved script… (' + scripts.length + ')</option>' +
         scripts.map(function(s) {
-          const modeIcon = (s.mode && modeIcons[s.mode]) ? (' · ' + modeIcons[s.mode]) : '';
+          // Roundup tickers are stored as "ROUNDUP_NVDA,INTC,MSFT" — show prettier
+          const displayTk = s.ticker.startsWith('ROUNDUP_')
+            ? '📰 ' + s.ticker.replace('ROUNDUP_', '').split(',').join('·')
+            : s.ticker;
+          const fmtIcon = (s.format && fmtIcons[s.format]) ? (' ' + fmtIcons[s.format]) :
+                          ((s.mode && modeIcons[s.mode]) ? (' ' + modeIcons[s.mode]) : '');
           const winner = s.winner ? (' · 🏆 ' + s.winner.toUpperCase()) : '';
           const audio  = s.has_audio ? ' · 🎧' : '';
-          return '<option value="' + s.ticker + '">' + s.ticker + modeIcon +
+          return '<option value="' + s.ticker + '">' + displayTk + fmtIcon +
                  winner + audio + ' · ' + fmtAgo(s.generated_at) + '</option>';
         }).join('');
     } catch (e) {
