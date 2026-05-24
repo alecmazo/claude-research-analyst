@@ -15835,7 +15835,16 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                     ", ".join(result.get("validation", {}).get("errors", []) or ["unknown"]))
             script = result["script"]
 
-        # 3. Synthesize audio
+        # 3. Synthesize audio (apply UI-edited speed config first)
+        try:
+            cfg = _kv_get("podcast.speed_config") or {}
+            pe.apply_speed_overrides(
+                intensity=cfg.get("intensity"),
+                speaker=cfg.get("speaker"),
+            )
+            print(f"🎙️ [podcast/audio {tk}] speed config: {pe.get_speed_config()}", flush=True)
+        except Exception as _e:
+            print(f"⚠️  [podcast/audio {tk}] speed override load failed: {_e!s:.120}", flush=True)
         out_dir = analyst.STOCKS_FOLDER / "podcasts"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{tk}_podcast.mp3"
@@ -15986,6 +15995,61 @@ def podcast_audio(ticker: str):
             print(f"⚠️  [podcast] dropbox rehydrate failed for {tk}: {e!s:.200}", flush=True)
     return JSONResponse({"ok": False, "error": f"No podcast audio found for {tk}"},
                         status_code=404)
+
+
+@app.get("/api/podcast/speed-config")
+def podcast_get_speed_config():
+    """Return the current voice-speed table (defaults + UI overrides merged)."""
+    import podcast_engine as pe
+    saved = _kv_get("podcast.speed_config") or {}
+    # Apply saved overrides into the engine so what we return matches reality
+    pe.apply_speed_overrides(intensity=saved.get("intensity"),
+                             speaker=saved.get("speaker"))
+    cfg = pe.get_speed_config()
+    cfg["voices"] = dict(pe.VOICE_MAP)   # so UI can label rows nicely
+    return {"ok": True, **cfg}
+
+
+@app.post("/api/podcast/speed-config")
+async def podcast_set_speed_config(req: Request):
+    """Persist UI edits to the voice-speed table.
+
+    Body: { intensity: {calm,normal,heated: float}, speaker: {alec,rock,claudia: float} }
+    Values are clamped to SPEED_MIN..SPEED_MAX inside apply_speed_overrides.
+    """
+    import podcast_engine as pe
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    pe.apply_speed_overrides(
+        intensity=(body or {}).get("intensity"),
+        speaker=(body or {}).get("speaker"),
+    )
+    saved = pe.get_speed_config()
+    # Persist only the editable parts
+    _kv_put("podcast.speed_config", {
+        "intensity": saved["intensity"],
+        "speaker":   saved["speaker"],
+    })
+    saved["voices"] = dict(pe.VOICE_MAP)
+    return {"ok": True, **saved}
+
+
+@app.post("/api/podcast/speed-config/reset")
+def podcast_reset_speed_config():
+    """Reset the table back to engine defaults (Alec 1.06× etc)."""
+    import podcast_engine as pe
+    # Defaults live in the module constants
+    pe._RUNTIME_INTENSITY = dict(pe.INTENSITY_SPEED)
+    pe._RUNTIME_SPEAKER   = dict(pe.SPEAKER_SPEED_OFFSET)
+    _kv_put("podcast.speed_config", {
+        "intensity": dict(pe.INTENSITY_SPEED),
+        "speaker":   dict(pe.SPEAKER_SPEED_OFFSET),
+    })
+    cfg = pe.get_speed_config()
+    cfg["voices"] = dict(pe.VOICE_MAP)
+    return {"ok": True, **cfg}
 
 
 @app.get("/api/podcast/list")

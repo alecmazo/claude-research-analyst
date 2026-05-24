@@ -58,6 +58,46 @@ SPEAKER_SPEED_OFFSET = {
 # OpenAI TTS hard limits — clamp so we never send an out-of-range speed.
 SPEED_MIN, SPEED_MAX = 0.85, 1.20
 
+# Mutable runtime overrides — populated by load_speed_overrides() right
+# before each TTS run from kv_store key 'podcast.speed_config'. UI-editable
+# table replaces hard-coded baselines.
+_RUNTIME_INTENSITY  = dict(INTENSITY_SPEED)
+_RUNTIME_SPEAKER    = dict(SPEAKER_SPEED_OFFSET)
+
+
+def get_speed_config() -> dict:
+    """Return the current effective speed config (runtime overrides applied)."""
+    return {
+        "intensity": dict(_RUNTIME_INTENSITY),
+        "speaker":   dict(_RUNTIME_SPEAKER),
+        "min":       SPEED_MIN,
+        "max":       SPEED_MAX,
+    }
+
+
+def apply_speed_overrides(intensity: dict | None = None, speaker: dict | None = None):
+    """Apply user-edited overrides on top of the defaults.
+
+    Anything passed is merged in; anything omitted keeps its current
+    runtime value. Out-of-range numbers are clamped.
+    """
+    if intensity:
+        for k, v in intensity.items():
+            try:
+                vf = float(v)
+                if k in _RUNTIME_INTENSITY and SPEED_MIN <= vf <= SPEED_MAX:
+                    _RUNTIME_INTENSITY[k] = vf
+            except (TypeError, ValueError):
+                pass
+    if speaker:
+        for k, v in speaker.items():
+            try:
+                vf = float(v)
+                if k in _RUNTIME_SPEAKER and SPEED_MIN <= vf <= SPEED_MAX:
+                    _RUNTIME_SPEAKER[k] = vf
+            except (TypeError, ValueError):
+                pass
+
 VALID_SPEAKERS = {"alec", "rock", "claudia"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
@@ -969,9 +1009,10 @@ def _tts_turn(client, speaker: str, text: str, intensity: str,
     """Synthesize one turn via OpenAI TTS. Returns raw MP3 bytes."""
     sp_l = speaker.lower()
     voice = VOICE_MAP.get(sp_l, "alloy")
-    # Final speed = intensity speed × per-speaker baseline, clamped to API range
-    intensity_mult = INTENSITY_SPEED.get(intensity.lower(), 1.0)
-    speaker_mult   = SPEAKER_SPEED_OFFSET.get(sp_l, 1.0)
+    # Final speed = intensity multiplier × per-speaker baseline, clamped.
+    # Reads from the RUNTIME tables so UI edits take effect immediately.
+    intensity_mult = _RUNTIME_INTENSITY.get(intensity.lower(), 1.0)
+    speaker_mult   = _RUNTIME_SPEAKER.get(sp_l, 1.0)
     speed = max(SPEED_MIN, min(SPEED_MAX, intensity_mult * speaker_mult))
     resp = client.audio.speech.create(
         model=model,

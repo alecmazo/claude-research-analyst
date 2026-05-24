@@ -2234,6 +2234,16 @@
             <div id="podcast-audio-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#3E9AB8);transition:width 0.4s ease;"></div>
           </div>
         </div>
+        <!-- ── Voice speed table (UI override of TTS-generation speeds) ── -->
+        <details id="podcast-speed-cfg" style="margin-top:12px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;">
+          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
+            🎚 Voice speed table  <span style="color:#64748b;font-weight:500;">— per-speaker × intensity (applied at TTS generation)</span>
+          </summary>
+          <div id="podcast-speed-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
+            <div style="color:#64748b;font-size:11px;">Loading…</div>
+          </div>
+        </details>
+
         <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
           <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;margin-bottom:8px;">—</div>
           <audio id="podcast-audio-el" controls preload="metadata" style="width:100%;"></audio>
@@ -4841,6 +4851,7 @@
     _populatePodcastSavedScripts();
     _populatePodcastSavedAudio();
     _wirePodcastAudio();
+    _loadPodcastSpeedTable();
     // Wire "open saved episode" — picks an existing MP3 + opens the player
     const savedAud = document.getElementById('podcast-audio-saved');
     if (savedAud) {
@@ -5034,6 +5045,146 @@
     } catch (e) {
       sel.innerHTML = '<option value="">— failed to load saved scripts —</option>';
     }
+  }
+
+  async function _loadPodcastSpeedTable() {
+    const el = document.getElementById('podcast-speed-table');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/speed-config');
+      const d = await r.json();
+      _renderPodcastSpeedTable(d, el);
+    } catch (e) {
+      el.innerHTML = '<div style="color:#dc2626;font-size:11px;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+
+  function _renderPodcastSpeedTable(cfg, container) {
+    const speakers   = Object.keys(cfg.speaker || {});           // ['alec','rock','claudia']
+    const intensities = Object.keys(cfg.intensity || {});         // ['calm','normal','heated']
+    const voices = cfg.voices || {};
+    const fmt = function(n) { return Number(n).toFixed(2); };
+
+    const speakerCell = function(sp) {
+      const v = cfg.speaker[sp];
+      return '<input data-kind="speaker" data-key="' + sp + '" type="number" step="0.01" ' +
+        'min="' + cfg.min + '" max="' + cfg.max + '" value="' + fmt(v) + '" ' +
+        'style="width:64px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;font-family:\'SF Mono\',monospace;text-align:center;">';
+    };
+    const intensityCell = function(it) {
+      const v = cfg.intensity[it];
+      return '<input data-kind="intensity" data-key="' + it + '" type="number" step="0.01" ' +
+        'min="' + cfg.min + '" max="' + cfg.max + '" value="' + fmt(v) + '" ' +
+        'style="width:64px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;font-family:\'SF Mono\',monospace;text-align:center;">';
+    };
+
+    let html = '<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">';
+    // Intensity column
+    html += '<div><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">INTENSITY</div>';
+    intensities.forEach(function(it) {
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<span style="display:inline-block;width:62px;text-transform:capitalize;font-weight:600;">' + it + '</span>' +
+        intensityCell(it) + '</div>';
+    });
+    html += '</div>';
+
+    // Speaker column
+    html += '<div><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">SPEAKER BASELINE</div>';
+    speakers.forEach(function(sp) {
+      const voice = voices[sp] ? (' (' + voices[sp] + ')') : '';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<span style="display:inline-block;width:100px;text-transform:capitalize;font-weight:600;">' + sp + '<span style="color:#94a3b8;font-weight:500;font-size:11px;">' + voice + '</span></span>' +
+        speakerCell(sp) + '</div>';
+    });
+    html += '</div>';
+
+    // Computed grid: speaker × intensity = final speed
+    html += '<div style="flex:1;min-width:280px;"><div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1px;margin-bottom:6px;">COMPUTED FINAL SPEED (clamped ' + cfg.min + '–' + cfg.max + ')</div>';
+    html += '<table style="border-collapse:collapse;font-size:11px;font-family:\'SF Mono\',monospace;">';
+    html += '<tr><th style="padding:4px 8px;color:#64748b;font-weight:600;text-align:left;"></th>';
+    intensities.forEach(function(it) {
+      html += '<th style="padding:4px 10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + it + '</th>';
+    });
+    html += '</tr>';
+    speakers.forEach(function(sp) {
+      html += '<tr><td style="padding:4px 8px;font-weight:700;color:#0A1628;text-transform:capitalize;">' + sp + '</td>';
+      intensities.forEach(function(it) {
+        const raw = cfg.intensity[it] * cfg.speaker[sp];
+        const clamped = Math.max(cfg.min, Math.min(cfg.max, raw));
+        const isClamped = Math.abs(raw - clamped) > 0.001;
+        html += '<td data-cell="' + sp + ':' + it + '" style="padding:4px 10px;text-align:center;' +
+          (isClamped ? 'color:#d97706;font-weight:700;' : 'color:#1e293b;') + '">' +
+          fmt(clamped) + (isClamped ? ' ⚠' : '') + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table></div>';
+    html += '</div>';
+
+    html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+      '<button id="podcast-speed-save" class="builder-btn-primary" style="width:auto;padding:8px 14px;font-size:12px;">💾 Save</button>' +
+      '<button id="podcast-speed-reset" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">↺ Reset to defaults</button>' +
+      '<span id="podcast-speed-status" style="font-size:11px;color:#16a34a;font-weight:600;"></span>' +
+      '<span style="font-size:10.5px;color:#94a3b8;margin-left:auto;">Changes apply to the NEXT generated audio (cached scripts skip Claude — only TTS spend ~$0.35–0.50).</span>' +
+      '</div>';
+
+    container.innerHTML = html;
+
+    // Live recompute when any input changes
+    const recompute = function() {
+      const newCfg = { intensity: {}, speaker: {}, min: cfg.min, max: cfg.max, voices: cfg.voices };
+      container.querySelectorAll('input').forEach(function(inp) {
+        const v = parseFloat(inp.value);
+        if (!isFinite(v)) return;
+        newCfg[inp.dataset.kind][inp.dataset.key] = v;
+      });
+      // Re-render only the computed grid cells, not the whole table
+      speakers.forEach(function(sp) {
+        intensities.forEach(function(it) {
+          const cell = container.querySelector('td[data-cell="' + sp + ':' + it + '"]');
+          if (!cell) return;
+          const raw = newCfg.intensity[it] * newCfg.speaker[sp];
+          const clamped = Math.max(cfg.min, Math.min(cfg.max, raw));
+          const isClamped = Math.abs(raw - clamped) > 0.001;
+          cell.textContent = fmt(clamped) + (isClamped ? ' ⚠' : '');
+          cell.style.color = isClamped ? '#d97706' : '#1e293b';
+          cell.style.fontWeight = isClamped ? '700' : 'normal';
+        });
+      });
+    };
+    container.querySelectorAll('input').forEach(function(inp) {
+      inp.addEventListener('input', recompute);
+    });
+
+    document.getElementById('podcast-speed-save').addEventListener('click', async function() {
+      const body = { intensity: {}, speaker: {} };
+      container.querySelectorAll('input').forEach(function(inp) {
+        const v = parseFloat(inp.value);
+        if (isFinite(v)) body[inp.dataset.kind][inp.dataset.key] = v;
+      });
+      const st = document.getElementById('podcast-speed-status');
+      st.textContent = '⏳ Saving…';
+      try {
+        const r = await window.dgaFetch('/api/podcast/speed-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(r.status);
+        st.textContent = '✓ Saved · used on next generate';
+        setTimeout(function(){ st.textContent = ''; }, 4000);
+      } catch (e) {
+        st.style.color = '#dc2626';
+        st.textContent = '❌ ' + e.message;
+      }
+    });
+
+    document.getElementById('podcast-speed-reset').addEventListener('click', async function() {
+      if (!confirm('Reset all speed values to engine defaults?')) return;
+      const r = await window.dgaFetch('/api/podcast/speed-config/reset', { method: 'POST' });
+      const d = await r.json();
+      _renderPodcastSpeedTable(d, container);
+    });
   }
 
   async function _populatePodcastSavedAudio() {
