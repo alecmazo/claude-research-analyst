@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v3-tap-debug-20260523';
+const PODCAST_BUILD = 'pc-v4-no-head-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -109,34 +109,18 @@ export default function PodcastScreen() {
       } catch (e) { setLastErr(`toggle: ${e?.message || e}`); }
       return;
     }
-    // New episode: build URL, probe reachability, then replace + play
-    // (setSelectedTicker already called at function top)
+    // New episode: build URL → replace → play. NO HEAD probe (FileResponse
+    // rejects HEAD with 405; we let expo-audio surface any GET-time errors).
     const url = await api.getPodcastAudioUrl(ep.ticker);
     setAudioUrl(url);
     console.log('[podcast] loading', ep.ticker, '→', url);
 
-    // Probe with HEAD so we can show user a precise error if it 404s/401s
-    try {
-      const r = await fetch(url, { method: 'HEAD' });
-      console.log('[podcast] HEAD', r.status, 'ct=', r.headers?.get?.('content-type'));
-      if (!r.ok) {
-        setLastErr(`HTTP ${r.status} fetching audio`);
-        return;
-      }
-    } catch (e) {
-      setLastErr(`net: ${e?.message || e}`);
-      return;
-    }
-
-    // Hand the new URL to the existing player + play
     try {
       player.replace({ uri: url });
     } catch (e) {
       setLastErr(`replace: ${e?.message || e}`);
       return;
     }
-    // play() is safe to call right after replace() in expo-audio v1 —
-    // the player buffers + starts when ready
     try {
       player.play();
     } catch (e) {

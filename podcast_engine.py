@@ -650,20 +650,45 @@ def generate_script(
     # Lazy import — avoids pulling claude_analyst at module load
     import claude_analyst as _ca
 
+    import time as _t
+    _t0 = _t.time()
+    print(f"🎙️ [podcast/script {ticker}] START  grok={len(grok_md):,}ch  claude={len(claude_md):,}ch", flush=True)
+
     # ── 1. Classify stances + assign roles ──────────────────────────
     if on_progress:
         try: on_progress("classify", "Classifying both reports + assigning Bull/Bear seats…")
         except Exception: pass
-    rock_stance   = classify_stance(grok_md)
-    claude_stance = classify_stance(claude_md)
-    roles = assign_roles(rock_stance, claude_stance)
+    try:
+        rock_stance   = classify_stance(grok_md)
+        claude_stance = classify_stance(claude_md)
+        roles = assign_roles(rock_stance, claude_stance)
+        print(f"🎙️ [podcast/script {ticker}] roles={roles['episode_mode']} "
+              f"bull={roles['bull_speaker']} bear={roles['bear_speaker']} "
+              f"rock_dir={rock_stance['direction']}({rock_stance['upside_pct']}) "
+              f"claude_dir={claude_stance['direction']}({claude_stance['upside_pct']}) "
+              f"needs_brief={roles['needs_da_brief']}", flush=True)
+    except Exception as e:
+        print(f"❌ [podcast/script {ticker}] classify/assign failed: {e!s:.300}", flush=True)
+        # Fall back to neutral debate so we never block on this step
+        rock_stance   = {"direction": "neutral", "upside_pct": 0, "aggression_score": 0}
+        claude_stance = {"direction": "neutral", "upside_pct": 0, "aggression_score": 0}
+        roles = {"bull_speaker": "rock", "bear_speaker": "claudia",
+                 "episode_mode": "debate", "needs_da_brief": False}
 
-    # ── 2. Generate DA brief if both analysts aligned ───────────────
+    # ── 2. DA brief (best-effort — never blocks script gen) ─────────
     da_brief = ""
     if roles.get("needs_da_brief"):
-        da_brief = generate_devils_advocate_brief(
-            ticker, grok_md, claude_md, on_progress=on_progress,
-        )
+        _tb = _t.time()
+        try:
+            print(f"🎙️ [podcast/script {ticker}] DA brief: Grok research…", flush=True)
+            da_brief = generate_devils_advocate_brief(
+                ticker, grok_md, claude_md, on_progress=on_progress,
+            )
+            print(f"🎙️ [podcast/script {ticker}] DA brief done ({_t.time()-_tb:.1f}s, {len(da_brief)} chars)", flush=True)
+        except Exception as e:
+            # DA brief failure must NEVER kill the episode. Drop it + carry on.
+            print(f"⚠️  [podcast/script {ticker}] DA brief failed, continuing without it: {e!s:.300}", flush=True)
+            da_brief = ""
 
     # ── 3. Truncate for prompt cost ─────────────────────────────────
     MAX_INPUT_CHARS = 35000
@@ -684,17 +709,30 @@ def generate_script(
         claude_stance=claude_stance,
         da_brief=da_brief,
     )
-
-    raw = _ca.call_claude(
-        system_prompt=system,
-        user_content=user,
-        model=model or _ca.CLAUDE_MODEL,
-    )
+    print(f"🎙️ [podcast/script {ticker}] calling Claude Opus  sys={len(system):,}ch  user={len(user):,}ch", flush=True)
+    _tc = _t.time()
+    try:
+        raw = _ca.call_claude(
+            system_prompt=system,
+            user_content=user,
+            model=model or _ca.CLAUDE_MODEL,
+        )
+    except Exception as e:
+        print(f"❌ [podcast/script {ticker}] Claude call failed: {e!s:.500}", flush=True)
+        raise
+    print(f"🎙️ [podcast/script {ticker}] Claude returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
 
     cleaned = _strip_code_fence(raw)
     try:
         script = json.loads(cleaned)
     except json.JSONDecodeError as e:
+        # Dump the first + last 300 chars so we can see if it was truncated or
+        # just had a stray comma. Crucial for diagnosing "No script returned".
+        head = cleaned[:300].replace("\n", "\\n")
+        tail = cleaned[-300:].replace("\n", "\\n") if len(cleaned) > 300 else ""
+        print(f"❌ [podcast/script {ticker}] JSON parse failed at pos {e.pos}: {e!s:.200}", flush=True)
+        print(f"❌ [podcast/script {ticker}] HEAD: {head}", flush=True)
+        if tail: print(f"❌ [podcast/script {ticker}] TAIL: {tail}", flush=True)
         return {
             "ticker": ticker.upper(),
             "script": None,
