@@ -9,7 +9,7 @@ v0 scope (this file): script generation only.
   • Per-turn `intensity` ∈ {calm, normal, heated} → maps to TTS speed in v1
 
 Cast / voice map (locked):
-    Alex   (host)            → OpenAI 'fable'
+    Alec   (host)            → OpenAI 'fable'
     Rock   (Grok analyst)    → OpenAI 'onyx'
     Claude (analyst)         → OpenAI 'echo'
 
@@ -23,15 +23,16 @@ from typing import Any
 
 # ── Cast & voice mapping ────────────────────────────────────────────────
 VOICE_MAP: dict[str, str] = {
-    # Re-cast after user feedback (ui132):
-    #   • "alec" → "alex" + female host voice
-    #   • Rock=onyx sounded depressed in long-form → switched to echo
-    #     (warm, conversational, can carry energy)
-    #   • Claude moved to fable (British storyteller — dry-wit measured
-    #     analyst voice; better than echo at sounding skeptical)
-    "alex":   "shimmer",  # host (female)
-    "rock":   "echo",     # Grok analyst
-    "claude": "fable",    # Claude analyst
+    # ui134 cast:
+    #   • Alec    — host, male       → onyx  (deep moderator gravitas)
+    #   • Rock    — Grok analyst, British male → fable (storyteller cadence,
+    #                                            dry wit, can punch up)
+    #   • Claudia — Claude analyst, female → nova  (bright, energetic;
+    #                                              carries skeptical bite
+    #                                              without sounding flat)
+    "alec":    "onyx",
+    "rock":    "fable",
+    "claudia": "nova",
 }
 
 # Whitelisted curse words. Anything outside this set in the LLM output
@@ -45,20 +46,20 @@ MAX_CURSES_PER_EPISODE = 10  # ui132: bumped from 5 — user wanted more punch
 # Intensity → playback speed (used by v1 TTS layer)
 INTENSITY_SPEED = {"calm": 0.95, "normal": 1.0, "heated": 1.10}
 
-VALID_SPEAKERS = {"alex", "rock", "claude"}
+VALID_SPEAKERS = {"alec", "rock", "claudia"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
 # Section ids the LLM MUST produce in order.
 REQUIRED_SECTIONS = [
-    "cold_open",            # Alex, ~15s
-    "company_in_60",        # Alex, ~60s
+    "cold_open",            # Alec, ~15s
+    "company_in_60",        # Alec, ~60s
     "opening_pitch_rock",   # Rock, ~60s
-    "opening_pitch_claude", # Claude, ~60s
+    "opening_pitch_claudia", # Claudia, ~60s
     "round_thesis",         # debate, ~90s
     "round_valuation",      # debate, ~90s
     "round_catalysts",      # debate, ~90s
     "round_steelman",       # each defends the OTHER's case, ~60s
-    "verdict",              # Alex names a winner, ~45s
+    "verdict",              # Alec names a winner, ~45s
 ]
 
 
@@ -72,15 +73,19 @@ investment debate show in the style of Animal Spirits (banter, interruptions, \
 strong opinions). Each episode debates ONE public company.
 
 CAST (the three speakers, never invent a fourth):
-  • Alex   — host. FEMALE. Sharp, even-keeled, calls bullshit on either side. \
+  • Alec    — host. MALE. Sharp, even-keeled, calls bullshit on either side. \
 Sets up the company, runs the rounds, names a winner at the end. \
-Does NOT take a side until the verdict.
-  • Rock   — analyst. Punchy, contrarian, momentum + narrative lean. \
-Higher conviction. Energetic — speeds up when selling upside, gets \
-loud when defending. Cusses regularly when something is dumb or \
-exciting. Powered by Grok.
-  • Claude — analyst. Measured, valuation-disciplined, base-rates guy. \
-Drier wit, skeptic tilt. Cusses occasionally for emphasis on real risk. \
+Does NOT take a side until the verdict. Speaks American English.
+  • Rock    — analyst. BRITISH MALE — speaks with light British inflection \
+(occasional "right then", "bloody", "look here", "mate", "lot of rubbish", \
+"spot on"). Punchy contrarian, momentum + narrative lean. Higher conviction. \
+Dry British wit, but can get FIERY when defending the thesis — gets loud, \
+swears regularly when something is dumb or exciting. The Britishness is \
+flavor, NOT a caricature: a sentence or two per turn, not every line. \
+Powered by Grok.
+  • Claudia — analyst. FEMALE. Measured, valuation-disciplined, base-rates \
+person. Drier wit, skeptic tilt. Confident — not soft-spoken. Cusses \
+occasionally for emphasis on real risk. Speaks American English. \
 Powered by Claude.
 
 TONE & HUMAN FEEL
@@ -96,25 +101,25 @@ Especially good when a speaker is thinking mid-sentence or pivoting.
   • Heated mid-episode (valuation + catalysts), calmer at intro + verdict.
   • Cursing is allowed and ENCOURAGED for punch — up to 10 instances per \
 episode, only from {damn, damned, hell, shit, shitty, fuck, fucking, \
-fucked, bullshit}. Don't be precious about it — when Rock or Claude \
-genuinely think something is dumb or risky, let them say so with bite. \
+fucked, bullshit}. Don't be precious about it — when Rock or Claudia \
+genuinely thinks something is dumb or risky, let them say so with bite. \
 Rock should drop one or two in his opening pitch. Never any other \
 profanity, slurs, or brand-unsafe content.
   • DO NOT fall into a metronomic A-B-A-B pattern. Mix it up: sometimes \
-Alex chimes in mid-round, sometimes one analyst gets 2 turns in a row \
+Alec chimes in mid-round, sometimes one analyst gets 2 turns in a row \
 landing a point, sometimes a single-word reaction breaks the rhythm.
 
 STRUCTURE (you MUST produce these sections in this order, each as a list of turns):
-  1. cold_open            — Alex only, 1 turn, ~35–45 words. One-line hook + name ticker.
-  2. company_in_60        — Alex only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
+  1. cold_open            — Alec only, 1 turn, ~35–45 words. One-line hook + name ticker.
+  2. company_in_60        — Alec only, 1 turn, ~120–150 words. Plain-English: what the company does, why we care today.
   3. opening_pitch_rock   — Rock only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  4. opening_pitch_claude — Claude only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
-  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claude, with Alex injecting 1–2 follow-ups.
+  4. opening_pitch_claudia — Claudia only, 1 turn, ~140–170 words. Bull/bear stance + specific price target.
+  5. round_thesis         — 4–6 turns alternating, mostly Rock + Claudia, with Alec injecting 1–2 follow-ups.
   6. round_valuation      — 4–6 turns. THIS IS THE HOTTEST ROUND — multiples, comps, peer math, target math. Mark turns intensity=heated.
   7. round_catalysts      — 4–6 turns. Near-term catalysts, risks, what could break the thesis.
-  8. round_steelman       — exactly 2 turns: Rock argues Claude's bear case in his own words, then Claude argues Rock's bull case. 60–80 words each.
-  9. verdict              — Alex only, 1–2 turns, ~110–140 words. Must explicitly say \
-"the more convincing pitch tonight was Rock" or "...was Claude" and give 2 specific reasons \
+  8. round_steelman       — exactly 2 turns: Rock argues Claudia's bear case in his own words, then Claudia argues Rock's bull case. 60–80 words each.
+  9. verdict              — Alec only, 1–2 turns, ~110–140 words. Must explicitly say \
+"the more convincing pitch tonight was Rock" or "...was Claudia" and give 2 specific reasons \
 drawn from THE DEBATE (not from the reports). No ties, no cop-outs.
 
 TOTAL WORD COUNT TARGET: 1,400–1,800 words across all sections combined. \
@@ -122,7 +127,7 @@ This produces an 8–10 min episode at conversational TTS pacing. \
 If the source reports are thin, CUT length — do not pad with filler.
 
 PER-TURN FIELDS (every turn is an object with exactly these keys):
-  • "speaker"   ∈ "alex" | "rock" | "claude"
+  • "speaker"   ∈ "alec" | "rock" | "claudia"
   • "text"      — the spoken line. Plain prose. No markdown, no asterisks, no bullets. \
 Use natural contractions ("it's", "we're"). For an interruption, end the line with " —"
   • "intensity" ∈ "calm" | "normal" | "heated"
@@ -132,12 +137,12 @@ OUTPUT FORMAT — return ONLY valid JSON, no preamble, no code fences, matching 
 {
   "ticker": "<TICKER>",
   "episode_title": "<TICKER>: Bull vs Bear",
-  "winner": "rock" | "claude",
+  "winner": "rock" | "claudia",
   "sections": [
-    {"id": "cold_open",            "turns": [...]},
-    {"id": "company_in_60",        "turns": [...]},
-    {"id": "opening_pitch_rock",   "turns": [...]},
-    {"id": "opening_pitch_claude", "turns": [...]},
+    {"id": "cold_open",             "turns": [...]},
+    {"id": "company_in_60",         "turns": [...]},
+    {"id": "opening_pitch_rock",    "turns": [...]},
+    {"id": "opening_pitch_claudia", "turns": [...]},
     {"id": "round_thesis",         "turns": [...]},
     {"id": "round_valuation",      "turns": [...]},
     {"id": "round_catalysts",      "turns": [...]},
@@ -146,7 +151,7 @@ OUTPUT FORMAT — return ONLY valid JSON, no preamble, no code fences, matching 
   ]
 }
 
-The "winner" field MUST match whoever Alex names in the verdict section.
+The "winner" field MUST match whoever Alec names in the verdict section.
 
 DO NOT include any text outside the JSON. DO NOT use markdown code fences.
 """
@@ -160,7 +165,7 @@ def _user_prompt(
     claude_stance: dict | None = None,
     da_brief: str = "",
 ) -> str:
-    roles = roles or {"episode_mode": "debate", "bull_speaker": "rock", "bear_speaker": "claude"}
+    roles = roles or {"episode_mode": "debate", "bull_speaker": "rock", "bear_speaker": "claudia"}
     rock_stance = rock_stance or {}
     claude_stance = claude_stance or {}
 
@@ -168,7 +173,7 @@ def _user_prompt(
     mode_framing = {
         "debate": (
             "MODE: DEBATE — the reports disagree directionally. Standard format. "
-            "Rock argues the bull case, Claude the bear (or vice-versa per role "
+            "Rock argues the bull case, Claudia the bear (or vice-versa per role "
             "assignment). Both stay in character."
         ),
         "stress_test": (
@@ -228,10 +233,10 @@ ROLE ASSIGNMENT (data-driven, do not override):
   • BULL SEAT  → {bull.upper()}   (his actual report direction: {rock_stance.get('direction') if bull=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bull=='rock' else claude_stance.get('upside_pct')}%)
   • BEAR SEAT  → {bear.upper()}   (his actual report direction: {rock_stance.get('direction') if bear=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bear=='rock' else claude_stance.get('upside_pct')}%)
 
-Both speakers stay in personality (Rock punchy/contrarian, Claude
+Both speakers stay in personality (Rock punchy/British-contrarian, Claudia
 measured/skeptic-tilted). But the directional stance each ARGUES is
 assigned above. If the assignment goes against an analyst's own report
-(e.g. Claude has the bear seat despite a bullish report), the speaker
+(e.g. Claudia has the bear seat despite a bullish report), the speaker
 acknowledges this naturally: "I came in bullish, but..." / "Look, my
 report's positive, but let me stress-test that..."
 
@@ -245,7 +250,7 @@ ROCK'S REPORT (Grok-powered):
 {grok_md.strip()}
 
 ══════════════════════════════════════════════════════════════════════
-CLAUDE'S REPORT (Claude-powered):
+CLAUDIA'S REPORT (Claude-powered):
 ══════════════════════════════════════════════════════════════════════
 {claude_md.strip()}{da_section}
 
@@ -257,8 +262,8 @@ Now write the episode. Remember:
   • Up to 10 curse words from the whitelist (don't be precious)
   • Real human fillers (um/uh/y'know/look/honestly/hmm) ~1 in 4 turns
   • Vary turn lengths constantly — no metronomic A-B-A-B pattern
-  • Alex names a winner with 2 specific reasons drawn from THE DEBATE
-  • "winner" field at the top must match Alex's verdict
+  • Alec names a winner with 2 specific reasons drawn from THE DEBATE
+  • "winner" field at the top must match Alec's verdict
   • Episode title at top of JSON should match the MODE (e.g., for
     stress_test: "{ticker}: The Bull Case Under Pressure")
 """
@@ -304,8 +309,8 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
             errors.append(f"missing top-level key: {k}")
 
     winner = (script.get("winner") or "").lower()
-    if winner not in ("rock", "claude"):
-        errors.append(f"winner must be 'rock' or 'claude', got: {winner!r}")
+    if winner not in ("rock", "claudia"):
+        errors.append(f"winner must be 'rock' or 'claudia', got: {winner!r}")
 
     sections = script.get("sections") or []
     section_ids = [s.get("id") for s in sections]
@@ -340,15 +345,15 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
         sid = sec.get("id")
         turns = sec.get("turns") or []
         if sid in ("cold_open", "company_in_60", "verdict"):
-            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "alex"]
+            non_alec = [t for t in turns if (t.get("speaker") or "").lower() != "alec"]
             if non_alec:
-                errors.append(f"{sid} should be Alex only — found {len(non_alec)} other speakers")
+                errors.append(f"{sid} should be Alec only — found {len(non_alec)} other speakers")
         if sid == "opening_pitch_rock":
             if not turns or (turns[0].get("speaker") or "").lower() != "rock":
                 errors.append("opening_pitch_rock must start with Rock")
-        if sid == "opening_pitch_claude":
-            if not turns or (turns[0].get("speaker") or "").lower() != "claude":
-                errors.append("opening_pitch_claude must start with Claude")
+        if sid == "opening_pitch_claudia":
+            if not turns or (turns[0].get("speaker") or "").lower() != "claudia":
+                errors.append("opening_pitch_claudia must start with Claudia")
         if sid == "round_steelman":
             if len(turns) != 2:
                 warnings.append(f"round_steelman should be exactly 2 turns, got {len(turns)}")
@@ -474,35 +479,35 @@ def assign_roles(rock_stance: dict, claude_stance: dict) -> dict[str, Any]:
 
     # Natural disagreement — clean bull/bear assignment
     if r_dir == "bull" and c_dir == "bear":
-        return {"bull_speaker": "rock", "bear_speaker": "claude",
+        return {"bull_speaker": "rock", "bear_speaker": "claudia",
                 "episode_mode": "debate", "needs_da_brief": False}
     if r_dir == "bear" and c_dir == "bull":
-        return {"bull_speaker": "claude", "bear_speaker": "rock",
+        return {"bull_speaker": "claudia", "bear_speaker": "rock",
                 "episode_mode": "debate", "needs_da_brief": False}
 
     # Both bullish — Stress Test. Less-aggressive plays bear, gets DA brief.
     if r_dir == "bull" and c_dir == "bull":
         if r_agg >= c_agg:
-            bull, bear = "rock", "claude"   # Claude is the lower-conviction bull → bear seat
+            bull, bear = "rock", "claudia"   # Claude is the lower-conviction bull → bear seat
         else:
-            bull, bear = "claude", "rock"
+            bull, bear = "claudia", "rock"
         return {"bull_speaker": bull, "bear_speaker": bear,
                 "episode_mode": "stress_test", "needs_da_brief": True}
 
     # Both bearish — Devil's Advocate. Less-bearish plays bull.
     if r_dir == "bear" and c_dir == "bear":
         if r_agg <= c_agg:   # r_agg more negative → he stays bear
-            bull, bear = "claude", "rock"
+            bull, bear = "claudia", "rock"
         else:
-            bull, bear = "rock", "claude"
+            bull, bear = "rock", "claudia"
         return {"bull_speaker": bull, "bear_speaker": bear,
                 "episode_mode": "devils_advocate", "needs_da_brief": True}
 
     # One or both neutral — use the aggression score; bigger gap = "spread"
     if r_agg >= c_agg:
-        bull, bear = "rock", "claude"
+        bull, bear = "rock", "claudia"
     else:
-        bull, bear = "claude", "rock"
+        bull, bear = "claudia", "rock"
     mode = "spread" if gap > 15 else "mixed"
     return {"bull_speaker": bull, "bear_speaker": bear,
             "episode_mode": mode, "needs_da_brief": (mode == "spread")}
@@ -956,7 +961,7 @@ def synthesize_episode(
     segs: list[AudioSegment] = []
     prev_section: str | None = None
     for i, (sid, turn) in enumerate(flat, start=1):
-        sp = (turn.get("speaker") or "alex").lower()
+        sp = (turn.get("speaker") or "alec").lower()
         text = (turn.get("text") or "").strip()
         intensity = (turn.get("intensity") or "normal").lower()
         if on_progress:

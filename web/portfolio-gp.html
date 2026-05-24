@@ -5138,11 +5138,13 @@
 
   function _renderPodcastScript(script, validation, container) {
     const bubbleColors = {
-      alex:   { bg: '#fce7f3', name: '#9d174d', label: 'ALEX (host)'    },
-      rock:   { bg: '#fef3c7', name: '#b45309', label: 'ROCK (Grok)'    },
-      claude: { bg: '#dbeafe', name: '#1e40af', label: 'CLAUDE'         },
-      // Legacy fallback for any script generated before ui132 (speaker: "alec")
-      alec:   { bg: '#fce7f3', name: '#9d174d', label: 'ALEX (host)'    },
+      // ui134 cast: Alec (male, host) / Rock (British, Grok) / Claudia (female, Claude)
+      alec:    { bg: '#f1f5f9', name: '#0A1628', label: 'ALEC (host)'        },
+      rock:    { bg: '#fef3c7', name: '#b45309', label: 'ROCK 🇬🇧 (Grok)'   },
+      claudia: { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
+      // Legacy fallbacks for older saved scripts
+      alex:    { bg: '#f1f5f9', name: '#0A1628', label: 'ALEC (host)'        },
+      claude:  { bg: '#fce7f3', name: '#9d174d', label: 'CLAUDIA (Claude)'   },
     };
     const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
     const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
