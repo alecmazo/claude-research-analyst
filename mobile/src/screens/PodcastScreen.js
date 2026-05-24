@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v7-safe-toggle-20260523';
+const PODCAST_BUILD = 'pc-v8-bg-audio-on-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -95,14 +95,14 @@ export default function PodcastScreen() {
   // ── Enable iOS silent-mode playback (otherwise nothing plays when the
   //    ringer switch is off).
   useEffect(() => {
-    // Background playback request is GATED on build 19+ — pre-19
-    // binaries (incl. user's currently-installed build 17) crash
-    // when audio starts with shouldPlayInBackground:true because
-    // they lack UIBackgroundModes:['audio'] in Info.plist. The flag
-    // gets re-added in the post-build-19-install OTA.
+    // Build 19+ has UIBackgroundModes:['audio'] in Info.plist, so iOS
+    // allows audio to continue when the screen locks or the app
+    // backgrounds. shouldPlayInBackground tells expo-audio to configure
+    // the audio session accordingly.
     setAudioModeAsync({
       playsInSilentMode: true,
       allowsRecording: false,
+      shouldPlayInBackground: true,
     })
       .then(() => console.log('[podcast] audio mode set'))
       .catch((e) => {
