@@ -5274,11 +5274,31 @@
         return;
       }
 
-      // Poll the status endpoint every 1.5s until done/error
+      // Poll the status endpoint every 1.5s until done/error.
+      // Guard rails (added ui151):
+      //   • If stage stays 'idle' for >30s, the job dict has no entry —
+      //     almost certainly a server restart between POST and poll. Bail.
+      //   • Hard timeout at 8 min total so we can never run for 56 minutes
+      //     into the void like the user just experienced.
+      let idleSince = null;
       pollTimer = setInterval(async function() {
+        const elapsed = (Date.now() - t0) / 1000;
+        if (elapsed > 480) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 8 min — the worker likely crashed or stalled. Check Railway logs and try Generate again.</div>';
+          finish(); return;
+        }
         try {
           const r = await window.dgaFetch('/api/podcast/' + ticker + '/script-status');
           const d = await r.json();
+          if (d.stage === 'idle') {
+            idleSince = idleSince || Date.now();
+            if ((Date.now() - idleSince) > 30000) {
+              out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Job not found on server (was Railway redeployed mid-job?). Click <strong>🎬 Generate script</strong> again to retry.</div>';
+              finish(); return;
+            }
+          } else {
+            idleSince = null;
+          }
           const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
           if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
           if (barEl)   barEl.style.width   = pct + '%';
@@ -5340,10 +5360,25 @@
         out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + e.message + '</div>';
         finish(); return;
       }
+      let idleSince = null;
       pollTimer = setInterval(async function() {
+        const elapsed = (Date.now() - t0) / 1000;
+        if (elapsed > 480) {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Roundup timed out after 8 min. Worker likely crashed or stalled. Try Generate again.</div>';
+          finish(); return;
+        }
         try {
           const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
           const d = await r.json();
+          if (d.stage === 'idle') {
+            idleSince = idleSince || Date.now();
+            if ((Date.now() - idleSince) > 30000) {
+              out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Roundup job not found on server (was Railway redeployed mid-job?). Click <strong>🎬 Generate script</strong> again.</div>';
+              finish(); return;
+            }
+          } else {
+            idleSince = null;
+          }
           const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
           if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
           if (barEl)   barEl.style.width = pct + '%';
