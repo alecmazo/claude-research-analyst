@@ -2234,6 +2234,11 @@
           <button id="podcast-audio-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
             🎧 Generate audio
           </button>
+          <span style="font-size:11px;color:#94a3b8;font-weight:600;">or</span>
+          <select id="podcast-audio-saved" title="Open a previously-generated episode"
+                  style="font-size:13px;padding:8px 10px;border:1px solid #c7e8f3;border-radius:4px;background:#fff;min-width:260px;">
+            <option value="">🎧 Open a saved episode…</option>
+          </select>
         </div>
         <div id="podcast-audio-progress" style="display:none;margin-top:10px;padding:10px 14px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;font-size:12px;color:#1e293b;">
           <div id="podcast-audio-progress-label" style="font-family:'SF Mono',monospace;margin-bottom:6px;">Starting…</div>
@@ -4870,7 +4875,23 @@
     // ── Wire podcast SCRIPT generator (v0) + AUDIO generator (v1) ──
     _populatePodcastScriptPicker();
     _populatePodcastSavedScripts();
+    _populatePodcastSavedAudio();
     _wirePodcastAudio();
+    // Wire "open saved episode" — picks an existing MP3 + opens the player
+    const savedAud = document.getElementById('podcast-audio-saved');
+    if (savedAud) {
+      savedAud.addEventListener('change', function() {
+        const tk = savedAud.value;
+        if (!tk) return;
+        // Find the episode's metadata from the cached list (populated below)
+        const ep = (window._podcastEpisodes || []).find(function(e){ return e.ticker === tk; });
+        _showPodcastPlayer(tk, ep || {});
+        const player = document.getElementById('podcast-audio-player');
+        if (player && player.scrollIntoView) {
+          player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    }
     // Bi-directional ticker sync: pick once in either dropdown, both update
     const sScript = document.getElementById('podcast-script-ticker');
     const sAudio  = document.getElementById('podcast-audio-ticker');
@@ -5051,6 +5072,34 @@
     }
   }
 
+  async function _populatePodcastSavedAudio() {
+    const sel = document.getElementById('podcast-audio-saved');
+    if (!sel) return;
+    try {
+      const r = await window.dgaFetch('/api/podcast/list');
+      const d = await r.json();
+      const eps = (d && d.episodes) || [];
+      window._podcastEpisodes = eps;   // cache for the change-handler
+      const fmtAgo = function(iso) {
+        if (!iso) return '';
+        const t = new Date(iso).getTime();
+        if (!t) return '';
+        const mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 60) return mins + 'm ago';
+        if (mins < 1440) return Math.round(mins/60) + 'h ago';
+        return Math.round(mins/1440) + 'd ago';
+      };
+      sel.innerHTML = '<option value="">🎧 Open a saved episode… (' + eps.length + ')</option>' +
+        eps.map(function(e) {
+          const dur = e.duration_sec ? (' · ' + Math.round(e.duration_sec) + 's') : '';
+          const cost = (e.cost_usd != null) ? (' · $' + Number(e.cost_usd).toFixed(2)) : '';
+          return '<option value="' + e.ticker + '">' + e.ticker + dur + cost + ' · ' + fmtAgo(e.generated_at) + '</option>';
+        }).join('');
+    } catch (e) {
+      sel.innerHTML = '<option value="">— failed to load episodes —</option>';
+    }
+  }
+
   // ── Podcast AUDIO generator (v1) ─────────────────────────────────
   let _podcastAudioPoll = null;
 
@@ -5103,6 +5152,8 @@
           _setPodcastProgress(d.label || '✓ Done', 100);
           _showPodcastPlayer(ticker, d);
           if (btn) { btn.disabled = false; btn.textContent = '🎧 Generate audio'; }
+          // Refresh the saved-episodes dropdown so the new ep appears
+          _populatePodcastSavedAudio();
         } else if (d.status === 'error') {
           clearInterval(_podcastAudioPoll); _podcastAudioPoll = null;
           _setPodcastProgress(d.label || '❌ Failed', 0);

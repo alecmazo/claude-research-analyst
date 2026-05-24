@@ -783,10 +783,17 @@ GAP_BEFORE_VERDICT = 850
 
 # Music sting paths (generated on first use, then cached)
 _STING_DIR = Path(__file__).parent / "podcast" / "stings"
-# v2 stings (Succession-vibe, 5s each). Different filenames so the old
-# 3s/2s files don't get re-served from cache after the upgrade.
-INTRO_STING_PATH = _STING_DIR / "intro_v2_succession_5s.mp3"
-OUTRO_STING_PATH = _STING_DIR / "outro_v2_succession_5s.mp3"
+# v3 stings (Succession walking-bass, 5s each). Re-generated with a
+# different musical idea (driving bass + syncopated right-hand piano
+# motif) AND mixed quieter so they sit underneath the speech instead
+# of overpowering it.
+INTRO_STING_PATH = _STING_DIR / "intro_v3_walkbass_5s.mp3"
+OUTRO_STING_PATH = _STING_DIR / "outro_v3_walkbass_5s.mp3"
+
+# Music gain offset applied AFTER normalization, so the stings sit
+# perceptually quieter than the dialogue. -7 dB ≈ half the loudness
+# of the TTS body.
+MUSIC_GAIN_OFFSET_DB = -7.0
 
 
 def _ensure_stings() -> tuple[Path, Path]:
@@ -810,73 +817,73 @@ def _ensure_stings() -> tuple[Path, Path]:
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    # ── Piano-like timbre via harmonic stacking ──────────────────────
-    # Real piano: 1× fundamental + 2× at -7dB + 3× at -14dB + 4× at -20dB
-    # gives a tone that the ear reads as "struck string" not "sine beep".
+    # Piano-like timbre — fundamental + harmonics at falling dB
     def _piano(freq: float, ms: int, gain_db: float = -8.0) -> AudioSegment:
-        layers = [
-            (1.0,  0.0),
-            (2.0, -7.0),
-            (3.0, -14.0),
-            (4.0, -20.0),
-            (5.0, -28.0),
-        ]
+        layers = [(1.0, 0.0), (2.0, -7.0), (3.0, -14.0),
+                  (4.0, -20.0), (5.0, -28.0), (6.0, -34.0)]
         out = AudioSegment.silent(duration=ms)
         for ratio, db in layers:
             tone = Sine(freq * ratio).to_audio_segment(duration=ms)
             out = out.overlay(tone.apply_gain(db + gain_db))
-        # Piano envelope: sharp attack (8ms) + long linear decay
         attack = min(15, ms // 30)
-        decay  = max(ms - attack - 5, ms // 2)
-        return out.fade_in(attack).fade_out(decay)
+        return out.fade_in(attack).fade_out(max(ms - attack - 5, ms // 2))
 
-    # ── String-like sustained pad (slightly detuned doubled sine) ────
-    def _pad(freq: float, ms: int, gain_db: float = -22.0) -> AudioSegment:
-        a = Sine(freq).to_audio_segment(duration=ms)
-        b = Sine(freq * 1.0035).to_audio_segment(duration=ms)  # chorus detune
-        c = Sine(freq * 2).to_audio_segment(duration=ms)
-        pad = (a.apply_gain(gain_db)
-               .overlay(b.apply_gain(gain_db - 3))
-               .overlay(c.apply_gain(gain_db - 10)))
-        fade = ms // 3
-        return pad.fade_in(fade).fade_out(fade)
+    # Plucked-bass: heavier low-end emphasis, faster decay
+    def _bass(freq: float, ms: int, gain_db: float = -10.0) -> AudioSegment:
+        layers = [(1.0, 0.0), (2.0, -5.0), (3.0, -12.0), (4.0, -22.0)]
+        out = AudioSegment.silent(duration=ms)
+        for ratio, db in layers:
+            tone = Sine(freq * ratio).to_audio_segment(duration=ms)
+            out = out.overlay(tone.apply_gain(db + gain_db))
+        return out.fade_in(4).fade_out(ms - 30)
 
-    # F minor scale notes (Succession-ish key signature)
-    F2, F3, Ab3, C4, Db4, F4, Ab4, C5, Db5 = (
-        87.31, 174.61, 207.65, 261.63, 277.18, 349.23, 415.30, 523.25, 554.37
+    # F minor notes (Succession-ish)
+    F1, C2, Db2, Eb2, F2, F3, Ab3, C4, Db4, Eb4, F4, Ab4, C5 = (
+        43.65, 65.41, 69.30, 77.78, 87.31,
+        174.61, 207.65, 261.63, 277.18, 311.13, 349.23, 415.30, 523.25
     )
 
-    # ── INTRO (5s): brooding piano + low pad ─────────────────────────
+    # ── INTRO (5s): walking bass + syncopated right-hand stabs ───────
+    # Quarter-note bass at ~80bpm = 750ms/beat. 4 beats = 3000ms,
+    # then a 2s sustained landing chord under the cold open.
+    BEAT = 750
     intro = AudioSegment.silent(duration=5000)
-    intro = intro.overlay(_pad(F2, 5000, gain_db=-20))            # held low pad
-    intro = intro.overlay(_pad(C4, 4800, gain_db=-30), position=200)  # mid pad
-    # Opening Fm chord stab @ 200ms (F-Ab-C minor triad)
-    intro = intro.overlay(_piano(F3,  3800, -7),  position=200)
-    intro = intro.overlay(_piano(Ab3, 3800, -8),  position=200)
-    intro = intro.overlay(_piano(C4,  3800, -9),  position=200)
-    # Melodic motif w/ tension — Ab4 → C5 → Db5 (the dread note) → resolve to C5
-    intro = intro.overlay(_piano(Ab4,  900, -8),  position=1500)
-    intro = intro.overlay(_piano(C5,   900, -8),  position=2200)
-    intro = intro.overlay(_piano(Db5,  900, -7),  position=2900)
-    intro = intro.overlay(_piano(C5,  2000, -8),  position=3700)
-    # Final ringout — Fm chord sustained under host's cold open
-    intro = intro.overlay(_piano(F4,  1300, -9),  position=3700)
-    intro = intro.overlay(_piano(Ab4, 1300, -10), position=3700)
-    intro = intro.fade_out(400).normalize(headroom=1.5)
+
+    # Walking bass: F → Eb → Db → C → resolve to low F
+    for freq, pos in [(F2, 0), (Eb2, BEAT), (Db2, BEAT*2), (C2, BEAT*3)]:
+        intro = intro.overlay(_bass(freq, 720, gain_db=-6), position=pos)
+    intro = intro.overlay(_bass(F1, 1800, gain_db=-3), position=int(BEAT*3.8))
+
+    # Right-hand: 3 syncopated stabs (on the off-beats), each a small chord
+    for pos, chord in [
+        (BEAT//2 + 80,        [F4, Ab4, C5]),    # Fm over F bass
+        (BEAT + BEAT//2 + 60, [Eb4, F4, Ab4]),   # over Eb
+        (BEAT*2 + BEAT//2 + 40,[Db4, F4, Ab4]),  # over Db
+    ]:
+        for note in chord:
+            intro = intro.overlay(_piano(note, 600, -12), position=pos)
+    # Landing chord under cold open: sustained Fm
+    for note in (F3, Ab3, C4, F4):
+        intro = intro.overlay(_piano(note, 1600, -8), position=BEAT*3 + 40)
+
+    intro = intro.fade_out(500).normalize(headroom=2.0)
     intro.export(INTRO_STING_PATH, format="mp3", bitrate="128k")
 
-    # ── OUTRO (5s): descending resolve ───────────────────────────────
+    # ── OUTRO (5s): mirror — walk down + suspended resolve ──────────
     outro = AudioSegment.silent(duration=5000)
-    outro = outro.overlay(_pad(F2, 5000, gain_db=-22))
-    # Walking descent: C5 → Ab4 → F4 → C4 → F3, slowing as it falls
-    outro = outro.overlay(_piano(C5,   800, -7),  position=200)
-    outro = outro.overlay(_piano(Ab4,  900, -8),  position=900)
-    outro = outro.overlay(_piano(F4,  1100, -9),  position=1700)
-    outro = outro.overlay(_piano(C4,  1500, -10), position=2700)
-    outro = outro.overlay(_piano(F3,  2000, -10), position=3500)
-    # Final low resting tone under the fade
-    outro = outro.overlay(_piano(F2, 1500, -12), position=3500)
-    outro = outro.fade_out(700).normalize(headroom=1.5)
+    for freq, pos in [(F2, 0), (Db2, BEAT), (C2, BEAT*2), (Db2, BEAT*3)]:
+        outro = outro.overlay(_bass(freq, 700, gain_db=-6), position=pos)
+    outro = outro.overlay(_bass(F2, 1500, gain_db=-5), position=int(BEAT*3.9))
+
+    # Right-hand descending motif
+    for note, pos in [(C5, 200), (Ab4, BEAT + 100),
+                      (F4, BEAT*2 + 60), (Eb4, BEAT*3 + 40)]:
+        outro = outro.overlay(_piano(note, 1000, -11), position=pos)
+    # Suspended Db-major-over-F = unresolved minor 6th → "to be continued" feel
+    for note in (F3, Ab3, Db4):
+        outro = outro.overlay(_piano(note, 1500, -10), position=BEAT*3 + 60)
+
+    outro = outro.fade_out(900).normalize(headroom=2.0)
     outro.export(OUTRO_STING_PATH, format="mp3", bitrate="128k")
 
     return INTRO_STING_PATH, OUTRO_STING_PATH
@@ -956,6 +963,11 @@ def synthesize_episode(
     intro_path, outro_path = _ensure_stings()
     intro = AudioSegment.from_file(intro_path, format="mp3")
     outro = AudioSegment.from_file(outro_path, format="mp3")
+    # ui135: level-match stings to dialogue. We first equalize the music
+    # to the dialogue's perceived loudness (so episodes don't ship with
+    # one being noticeably louder than the other), THEN apply a fixed
+    # offset to sit the music a bit underneath the voice.
+    # The actual body loudness is computed after we build it below.
 
     # Synthesize each turn → AudioSegment
     segs: list[AudioSegment] = []
@@ -995,11 +1007,24 @@ def synthesize_episode(
 
     # Build final timeline
     body = sum(segs, AudioSegment.silent(duration=0))
-    # Cross-fade body in/out for a smoother transition from intro/outro music
-    body = body.fade_in(60)
+    body = body.normalize(headroom=1.5)
+    body = body.fade_in(60).fade_out(200)
+
+    # Level-match the music to the dialogue body, then drop it MUSIC_GAIN_OFFSET_DB
+    # below so it sits perceptually quieter than the speech. dBFS is negative
+    # (closer to 0 = louder); we shift the music to match the body's dBFS then
+    # apply the offset.
+    body_dbfs  = body.dBFS  if body.dBFS  != float("-inf") else -16.0
+    intro_dbfs = intro.dBFS if intro.dBFS != float("-inf") else -16.0
+    outro_dbfs = outro.dBFS if outro.dBFS != float("-inf") else -16.0
+    intro = intro.apply_gain((body_dbfs - intro_dbfs) + MUSIC_GAIN_OFFSET_DB)
+    outro = outro.apply_gain((body_dbfs - outro_dbfs) + MUSIC_GAIN_OFFSET_DB)
+
     full = intro + AudioSegment.silent(duration=350) + body + \
            AudioSegment.silent(duration=400) + outro
-    full = full.normalize(headroom=1.5)
+    # Final mastering normalize — gentle (headroom 1.0 dB) so the level-match
+    # we just did isn't undone by an aggressive normalize on the full mix.
+    full = full.normalize(headroom=1.0)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     full.export(out_path, format="mp3", bitrate="128k",
