@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v8-bg-audio-on-20260523';
+const PODCAST_BUILD = 'pc-v9-safe-seek-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -46,6 +46,39 @@ function fmtAgo(iso) {
 //     the next one
 //   • surfaces any failure to the on-screen diag strip so we can debug
 //     without needing Metro logs
+function safeSeek(player, status, deltaSec, setLastErr) {
+  if (!player || typeof player !== 'object') {
+    try { setLastErr('seek: no player'); } catch {}
+    return;
+  }
+  if (!status || status.isLoaded !== true) {
+    try { setLastErr('seek: still loading…'); } catch {}
+    return;
+  }
+  const dur = typeof status.duration === 'number' ? status.duration : 0;
+  if (!dur) {
+    try { setLastErr('seek: no duration'); } catch {}
+    return;
+  }
+  const cur = typeof status.currentTime === 'number' ? status.currentTime : 0;
+  const target = Math.max(0, Math.min(dur, cur + deltaSec));
+  if (typeof player.seekTo !== 'function') {
+    try { setLastErr('seek: no seekTo method'); } catch {}
+    return;
+  }
+  try {
+    // expo-audio's seekTo returns a Promise — if we don't catch its
+    // rejection it would surface as an unhandled native exception and
+    // crash the app on iOS.
+    const r = player.seekTo(target);
+    if (r && typeof r.catch === 'function') {
+      r.catch((e) => { try { setLastErr(`seek: ${e?.message || e}`); } catch {} });
+    }
+  } catch (e) {
+    try { setLastErr(`seek: ${e?.message || e}`); } catch {}
+  }
+}
+
 function safeToggle(player, status, setLastErr) {
   if (!player || typeof player !== 'object') {
     try { setLastErr('toggle: no player'); } catch {}
@@ -160,10 +193,8 @@ export default function PodcastScreen() {
   }, [selectedTicker, player, status]);
 
   const handleSeek = useCallback((deltaSec) => {
-    if (!status || !status.duration) return;
-    const target = Math.max(0, Math.min(status.duration, (status.currentTime || 0) + deltaSec));
-    try { player.seekTo(target); } catch (e) { console.warn('[podcast] seek failed:', e?.message); }
-    haptics.light();
+    try { haptics.light(); } catch {}
+    safeSeek(player, status, deltaSec, setLastErr);
   }, [player, status]);
 
   const handleTogglePlay = useCallback(() => {
