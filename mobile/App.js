@@ -81,6 +81,7 @@ function LPTabs({ onLogout, isDemo, onSwitchToAdmin }) {
       <Tab.Screen name="Performance">
         {() => <LPPerformanceScreen onLogout={onLogout} isDemo={isDemo} onSwitchToAdmin={onSwitchToAdmin} />}
       </Tab.Screen>
+      <Tab.Screen name="Podcast"   component={PodcastScreen} />
       <Tab.Screen name="Settings">
         {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={null} isLpMode={true} onSwitchToAdmin={onSwitchToAdmin} />}
       </Tab.Screen>
