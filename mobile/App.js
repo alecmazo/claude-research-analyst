@@ -9,11 +9,10 @@ import * as Updates from 'expo-updates';
 import HomeScreen             from './src/screens/HomeScreen';
 import AnalysisScreen         from './src/screens/AnalysisScreen';
 import ReportScreen           from './src/screens/ReportScreen';
-import ScanScreen             from './src/screens/ScanScreen';
 import PortfolioScreen        from './src/screens/PortfolioScreen';
 import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
 import PaperTrackerScreen     from './src/screens/PaperTrackerScreen';
-import IntelligenceScreen     from './src/screens/IntelligenceScreen';
+import PodcastScreen          from './src/screens/PodcastScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
 import FundScreen             from './src/screens/FundScreen';
 import LoginScreen            from './src/screens/LoginScreen';
@@ -45,15 +44,6 @@ function TrackerStack() {
   );
 }
 
-function IntelligenceStack() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="IntelligenceHome" component={IntelligenceScreen} />
-      <Stack.Screen name="PaperTracker"     component={PaperTrackerScreen} />
-    </Stack.Navigator>
-  );
-}
-
 function FundStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -70,11 +60,11 @@ function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen name="Positions"    component={WatchlistScreen} />
-      <Tab.Screen name="Research"     component={HomeStack} />
-      <Tab.Screen name="Intelligence" component={IntelligenceStack} />
-      <Tab.Screen name="Scan"         component={ScanScreen} />
-      <Tab.Screen name="Fund"         component={FundStack} />
+      <Tab.Screen name="Positions" component={WatchlistScreen} />
+      <Tab.Screen name="Research"  component={HomeStack} />
+      <Tab.Screen name="Podcast"   component={PodcastScreen} />
+      <Tab.Screen name="Fund"      component={FundStack} />
+      <Tab.Screen name="Portfolio" component={PortfolioScreen} />
       <Tab.Screen name="Settings">
         {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
       </Tab.Screen>

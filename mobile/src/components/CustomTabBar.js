@@ -21,9 +21,9 @@ import { haptics } from '../design/haptics';
 // ── Display-label overrides (route.name → shown label) ───────────────────────
 // Keeps internal navigation names stable while showing friendlier UI labels.
 const LABEL_OVERRIDE = {
-  Intelligence: 'Ideas',
-  Portfolio:    'Tracker',
-  Positions:    'Positions',
+  Positions: 'Positions',
+  Portfolio: 'Portfolio',
+  Podcast:   'Podcast',
 };
 
 // ── Icon config per route name ────────────────────────────────────────────────
@@ -43,20 +43,15 @@ const TAB_CONFIG = {
     inactive: { family: 'mci', name: 'chart-areaspline-variant' },
     active:   { family: 'mci', name: 'chart-areaspline' },
   },
-  Intelligence: {
-    // Lightbulb — idea generation / market intelligence
-    inactive: { family: 'mci', name: 'lightbulb-outline' },
-    active:   { family: 'mci', name: 'lightbulb' },
-  },
-  Scan: {
-    // Radar sweep — high-tech, immediately reads as "scanning"
-    inactive: { family: 'mci', name: 'radar' },
-    active:   { family: 'mci', name: 'radar' },
+  Podcast: {
+    // Microphone — DGA HiTech Podcast
+    inactive: { family: 'mci', name: 'microphone-outline' },
+    active:   { family: 'mci', name: 'microphone' },
   },
   Portfolio: {
-    // Chart-line + bookmark — paper portfolio tracker
-    inactive: { family: 'mci', name: 'bookmark-multiple-outline' },
-    active:   { family: 'mci', name: 'bookmark-multiple' },
+    // Pie chart — live portfolio overview
+    inactive: { family: 'mci', name: 'chart-pie' },
+    active:   { family: 'mci', name: 'chart-pie' },
   },
   Fund: {
     // Briefcase — fund administration / GP operations

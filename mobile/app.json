@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.dgacapital.research",
-      "buildNumber": "15",
+      "buildNumber": "16",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -31,7 +31,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-document-picker"
+      "expo-document-picker",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false
+        }
+      ]
     ],
     "runtimeVersion": {
       "policy": "appVersion"

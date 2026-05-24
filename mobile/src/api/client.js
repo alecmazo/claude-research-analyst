@@ -271,6 +271,20 @@ export const api = {
     return resp.json();
   },
 
+  // ---------- DGA HiTech Podcast ----------
+  listPodcastEpisodes: async () => {
+    const r = await v2Fetch('/api/podcast/list');
+    if (!r.ok) throw new Error(`podcast/list ${r.status}`);
+    return r.json();
+  },
+  // Build the public audio URL — the /audio.mp3 endpoint is auth-bypassed
+  // (whitelisted in the server's auth middleware) so <Audio.Sound> can stream
+  // without sending custom headers.
+  getPodcastAudioUrl: async (ticker) => {
+    const base = await getBaseUrl();
+    return `${base}/api/podcast/${ticker}/audio.mp3`;
+  },
+
   // ---------- Single-ticker analysis ----------
   // llmProvider: 'grok' (default) | 'claude' | 'both'
   startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>
