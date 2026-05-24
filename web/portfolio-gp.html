@@ -5348,8 +5348,9 @@
     const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
     const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
     const parts = [];
-    parts.push('<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">' +
-      '<div style="font-size:18px;font-weight:800;color:#0A1628;flex:1;">' + esc(script.episode_title || script.ticker) + '</div>' +
+    parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">' +
+      '<div style="font-size:18px;font-weight:800;color:#0A1628;flex:1;min-width:200px;">' + esc(script.episode_title || script.ticker) + '</div>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" class="podcast-edit-script" style="background:transparent;color:#0A1628;border:1px solid #0A1628;padding:8px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">✏️ Edit script</button>' +
       '<button data-tk="' + esc(script.ticker || '') + '" class="podcast-make-audio-inline" style="background:#0A1628;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;">🎧 Make audio for this script →</button>' +
     '</div>');
     // Mode badge + winner line
@@ -5402,8 +5403,6 @@
         // Sync to the audio-row ticker picker + scroll there
         const audSel = document.getElementById('podcast-audio-ticker');
         if (audSel) {
-          // Ensure the ticker exists in the picker (it's filtered to "has both reports";
-          // we got here from a script render which proves both exist)
           if (!Array.from(audSel.options).some(function(o){ return o.value === tk; })) {
             const opt = document.createElement('option');
             opt.value = tk; opt.textContent = tk;
@@ -5419,6 +5418,152 @@
         if (audBtn) audBtn.click();
       });
     });
+    // Wire the "Edit script" button — switches into editable form
+    container.querySelectorAll('.podcast-edit-script').forEach(function(b) {
+      b.addEventListener('click', function() {
+        _renderPodcastScriptEditor(script, validation, container);
+      });
+    });
+  }
+
+  // ── Editable view: same script structure, every turn becomes
+  //    (speaker dropdown) + (intensity dropdown) + (textarea) + (× delete).
+  //    "+ Add turn" button at the end of each section. Save → PUT
+  //    /api/podcast/{ticker}/script → re-render in read mode.
+  function _renderPodcastScriptEditor(originalScript, validation, container) {
+    // Work on a deep clone so cancel reverts cleanly
+    const script = JSON.parse(JSON.stringify(originalScript || {}));
+    const speakers = ['alec', 'rock', 'claudia'];
+    const intensities = ['calm', 'normal', 'heated'];
+    const speakerColors = {
+      alec:    { bg: '#f1f5f9', name: '#0A1628' },
+      rock:    { bg: '#fef3c7', name: '#b45309' },
+      claudia: { bg: '#fce7f3', name: '#9d174d' },
+    };
+    const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+
+    function rebuild() {
+      const parts = [];
+      parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<input id="ps-ed-title" value="' + esc(script.episode_title || '') + '" placeholder="Episode title" ' +
+          'style="flex:1;min-width:200px;font-size:16px;font-weight:800;color:#0A1628;border:1px solid #cbd5e1;border-radius:5px;padding:6px 10px;">' +
+        '<select id="ps-ed-winner" style="font-size:12px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;">' +
+          '<option value="rock"' + (script.winner==='rock'?' selected':'') + '>🏆 Winner: ROCK</option>' +
+          '<option value="claudia"' + (script.winner==='claudia'?' selected':'') + '>🏆 Winner: CLAUDIA</option>' +
+        '</select>' +
+        '<button id="ps-ed-save" style="background:#16a34a;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">💾 Save</button>' +
+        '<button id="ps-ed-cancel" style="background:transparent;color:#64748b;border:1px solid #cbd5e1;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>' +
+      '</div>');
+      parts.push('<div id="ps-ed-status" style="font-size:11px;color:#64748b;margin-bottom:10px;">Editing — changes apply to the next audio generation only.</div>');
+
+      (script.sections || []).forEach(function(sec, secIdx) {
+        const secLabel = (sec.id || '').replace(/_/g,' ').toUpperCase();
+        parts.push('<div style="font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:1.5px;margin:14px 0 6px;border-bottom:1px solid #e2e8f0;padding-bottom:4px;">' + esc(secLabel) + '</div>');
+        (sec.turns || []).forEach(function(t, turnIdx) {
+          const sp = (t.speaker || 'alec').toLowerCase();
+          const c = speakerColors[sp] || speakerColors.alec;
+          const speakerOpts = speakers.map(function(s){
+            return '<option value="' + s + '"' + (s===sp?' selected':'') + '>' + s.toUpperCase() + '</option>';
+          }).join('');
+          const intensityOpts = intensities.map(function(i){
+            const cur = (t.intensity || 'normal').toLowerCase();
+            return '<option value="' + i + '"' + (i===cur?' selected':'') + '>' + i + '</option>';
+          }).join('');
+          parts.push(
+            '<div data-sec="' + secIdx + '" data-turn="' + turnIdx + '" ' +
+                 'style="background:' + c.bg + ';border-radius:8px;padding:8px 10px;margin-bottom:6px;border:1px solid ' + c.name + '22;">' +
+              '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">' +
+                '<select class="ps-ed-speaker" style="font-size:10px;font-weight:800;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;color:' + c.name + ';letter-spacing:0.5px;">' + speakerOpts + '</select>' +
+                '<select class="ps-ed-intensity" style="font-size:10px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;color:#475569;">' + intensityOpts + '</select>' +
+                '<button class="ps-ed-del" title="Delete this turn" style="margin-left:auto;background:transparent;color:#dc2626;border:none;font-size:14px;cursor:pointer;padding:2px 6px;">×</button>' +
+              '</div>' +
+              '<textarea class="ps-ed-text" rows="2" ' +
+                'style="width:100%;border:1px solid #cbd5e1;border-radius:4px;padding:6px 8px;font-size:13px;line-height:1.45;color:#1e293b;font-family:inherit;resize:vertical;">' + esc(t.text || '') + '</textarea>' +
+            '</div>'
+          );
+        });
+        parts.push('<button class="ps-ed-add" data-sec="' + secIdx + '" style="background:transparent;border:1px dashed #cbd5e1;color:#64748b;padding:6px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;margin-bottom:6px;">+ Add turn</button>');
+      });
+
+      container.innerHTML = parts.join('');
+      attachHandlers();
+    }
+
+    function collectFromDOM() {
+      // Sync DOM values back into the script object
+      script.episode_title = document.getElementById('ps-ed-title').value.trim();
+      script.winner = document.getElementById('ps-ed-winner').value;
+      container.querySelectorAll('[data-sec][data-turn]').forEach(function(node) {
+        const sIdx = parseInt(node.dataset.sec, 10);
+        const tIdx = parseInt(node.dataset.turn, 10);
+        const t = script.sections[sIdx].turns[tIdx];
+        if (!t) return;
+        t.speaker   = node.querySelector('.ps-ed-speaker').value;
+        t.intensity = node.querySelector('.ps-ed-intensity').value;
+        t.text      = node.querySelector('.ps-ed-text').value.trim();
+      });
+    }
+
+    function attachHandlers() {
+      // Delete turn
+      container.querySelectorAll('.ps-ed-del').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          collectFromDOM();
+          const node = btn.closest('[data-sec][data-turn]');
+          const sIdx = parseInt(node.dataset.sec, 10);
+          const tIdx = parseInt(node.dataset.turn, 10);
+          script.sections[sIdx].turns.splice(tIdx, 1);
+          rebuild();
+        });
+      });
+      // Add turn
+      container.querySelectorAll('.ps-ed-add').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          collectFromDOM();
+          const sIdx = parseInt(btn.dataset.sec, 10);
+          const sec = script.sections[sIdx];
+          // Default speaker = whatever the LAST turn in this section was, or alec
+          const lastSp = (sec.turns && sec.turns.length)
+            ? sec.turns[sec.turns.length-1].speaker
+            : 'alec';
+          sec.turns.push({ speaker: lastSp, intensity: 'normal', text: '' });
+          rebuild();
+        });
+      });
+      // Save
+      document.getElementById('ps-ed-save').addEventListener('click', async function() {
+        collectFromDOM();
+        const st = document.getElementById('ps-ed-status');
+        st.textContent = '⏳ Saving…'; st.style.color = '#64748b';
+        try {
+          const r = await window.dgaFetch('/api/podcast/' + script.ticker + '/script', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script: script }),
+          });
+          const d = await r.json();
+          if (!r.ok || !d.ok) {
+            st.style.color = '#dc2626';
+            st.textContent = '❌ ' + (d.error || (d.validation && d.validation.errors && d.validation.errors.join(' · ')) || ('HTTP ' + r.status));
+            return;
+          }
+          // Re-render in read mode
+          if (script._alignment && !d.script._alignment) d.script._alignment = script._alignment;
+          _renderPodcastScript(d.script, d.validation, container);
+          // Refresh saved-scripts dropdown so updated_at reorders it
+          _populatePodcastSavedScripts();
+        } catch (e) {
+          st.style.color = '#dc2626';
+          st.textContent = '❌ ' + e.message;
+        }
+      });
+      // Cancel
+      document.getElementById('ps-ed-cancel').addEventListener('click', function() {
+        _renderPodcastScript(originalScript, validation, container);
+      });
+    }
+
+    rebuild();
   }
 
   async function loadBrief() {

@@ -16214,6 +16214,69 @@ def podcast_list_scripts():
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
+@app.put("/api/podcast/{ticker}/script")
+async def podcast_update_script(ticker: str, req: Request):
+    """Save a user-edited podcast script. Replaces the cached script_json
+    so the next audio generation uses the edited dialogue (no Claude spend).
+
+    Body shape:
+      { script: {ticker, episode_title, winner, sections: [...]} }
+      — or the script object directly at the top level.
+
+    Returns: { ok, script, validation }
+      ok=True even if validation has warnings (saving is permissive);
+      only blocking errors return 400.
+    """
+    import podcast_engine
+    tk = ticker.upper().strip()
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+    script = (body or {}).get("script") if isinstance(body, dict) and "script" in body else body
+    if not isinstance(script, dict):
+        return JSONResponse({"ok": False, "error": "Script payload must be an object"},
+                            status_code=400)
+    # Lock in canonical ticker
+    script["ticker"] = tk
+
+    validation = podcast_engine.validate_script(script)
+    if not validation.get("ok"):
+        # Hard validation errors block the save (would break audio gen)
+        return JSONResponse({"ok": False, "validation": validation, "script": script},
+                            status_code=400)
+
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
+    try:
+        _ensure_podcast_table()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO analyst_podcasts (ticker, episode_title, script_json, generated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (ticker) DO UPDATE SET
+                    episode_title = EXCLUDED.episode_title,
+                    script_json   = EXCLUDED.script_json,
+                    generated_at  = NOW()
+            """, (
+                tk,
+                (script.get("episode_title") or f"{tk}: Bull vs Bear"),
+                json.dumps(script),
+            ))
+            conn.commit()
+    except Exception as e:
+        print(f"❌ [podcast] script edit save failed for {tk}: {e!s:.300}", flush=True)
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+    return {
+        "ok":         True,
+        "ticker":     tk,
+        "script":     script,
+        "validation": validation,
+        "transcript": podcast_engine.script_to_transcript(script),
+    }
+
+
 @app.get("/api/podcast/{ticker}/script")
 def podcast_get_script(ticker: str):
     """Fetch a previously-generated podcast script (no regeneration, no spend)."""
