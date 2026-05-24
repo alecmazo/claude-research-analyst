@@ -2237,7 +2237,18 @@
         <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
           <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;margin-bottom:8px;">—</div>
           <audio id="podcast-audio-el" controls preload="metadata" style="width:100%;"></audio>
-          <div id="podcast-audio-player-meta" style="margin-top:8px;font-size:11px;color:#84CCE3;font-family:'SF Mono',monospace;">—</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+            <span style="font-size:10.5px;color:#84CCE3;letter-spacing:1px;font-weight:700;">SPEED</span>
+            <div id="podcast-audio-speed" style="display:flex;gap:4px;">
+              <button data-rate="0.75" class="podcast-speed-btn" style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">0.75×</button>
+              <button data-rate="1"    class="podcast-speed-btn podcast-speed-active" style="background:#5BB8D4;color:#0A1628;border:1px solid #5BB8D4;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">1×</button>
+              <button data-rate="1.25" class="podcast-speed-btn" style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">1.25×</button>
+              <button data-rate="1.5"  class="podcast-speed-btn" style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">1.5×</button>
+              <button data-rate="1.75" class="podcast-speed-btn" style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">1.75×</button>
+              <button data-rate="2"    class="podcast-speed-btn" style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">2×</button>
+            </div>
+            <span id="podcast-audio-player-meta" style="font-size:11px;color:#84CCE3;font-family:'SF Mono',monospace;margin-left:auto;">—</span>
+          </div>
         </div>
       </div>
     </section>
@@ -5131,6 +5142,15 @@
     // Cache-bust so a fresh regeneration plays the new file
     el.src = '/api/podcast/' + ticker + '/audio.mp3?t=' + Date.now();
     el.load();
+    // Apply remembered playback rate (and re-apply once metadata loads —
+    // some browsers reset the rate on src change)
+    const savedRate = parseFloat(localStorage.getItem('dga_podcast_rate') || '1') || 1;
+    el.playbackRate = savedRate;
+    el.addEventListener('loadedmetadata', function once() {
+      el.playbackRate = savedRate;
+      el.removeEventListener('loadedmetadata', once);
+    });
+    _setPodcastSpeedActive(savedRate);
     if (meta) {
       const parts = [];
       if (status && status.duration_sec) parts.push(Math.round(status.duration_sec) + 's');
@@ -5138,6 +5158,30 @@
       if (status && status.dropbox_path) parts.push('Dropbox ✓');
       meta.textContent = parts.length ? parts.join(' · ') : 'Ready';
     }
+    _wirePodcastSpeedButtons();
+  }
+
+  function _setPodcastSpeedActive(rate) {
+    document.querySelectorAll('.podcast-speed-btn').forEach(function(b) {
+      const isActive = Math.abs(parseFloat(b.dataset.rate) - rate) < 0.01;
+      b.classList.toggle('podcast-speed-active', isActive);
+      b.style.background = isActive ? '#5BB8D4' : 'transparent';
+      b.style.color      = isActive ? '#0A1628' : '#84CCE3';
+    });
+  }
+
+  function _wirePodcastSpeedButtons() {
+    if (window._podcastSpeedWired) return;
+    window._podcastSpeedWired = true;
+    document.querySelectorAll('.podcast-speed-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        const rate = parseFloat(b.dataset.rate) || 1;
+        const el = document.getElementById('podcast-audio-el');
+        if (el) el.playbackRate = rate;
+        localStorage.setItem('dga_podcast_rate', String(rate));
+        _setPodcastSpeedActive(rate);
+      });
+    });
   }
 
   function _renderPodcastScript(script, validation, container) {

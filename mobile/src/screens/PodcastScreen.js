@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v9-safe-seek-20260523';
+const PODCAST_BUILD = 'pc-v10-speed-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -23,6 +23,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { api } from '../api/client';
 import { colors, spacing, radius, shadow, fontSize, letterSpacing, Card, haptics } from '../design';
@@ -117,6 +118,7 @@ export default function PodcastScreen() {
   const [selectedTicker, setSelectedTicker] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
   const [lastErr,  setLastErr]  = useState(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   // Create player ONCE with null source — we'll feed it new URLs via
   // player.replace(). This is more reliable than re-running useAudioPlayer
@@ -124,6 +126,37 @@ export default function PodcastScreen() {
   // and was the leading suspect for "tap but nothing happens").
   const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
+
+  // ── Load saved playback rate on mount ──────────────────────────
+  useEffect(() => {
+    AsyncStorage.getItem('dga_podcast_rate')
+      .then((v) => {
+        const n = parseFloat(v || '1');
+        if (n && n >= 0.5 && n <= 2.5) setPlaybackRate(n);
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Apply rate to player whenever it changes (or audio reloads) ──
+  useEffect(() => {
+    if (!player) return;
+    try {
+      if (typeof player.setPlaybackRate === 'function') {
+        // expo-audio v1: setPlaybackRate(rate, pitchCorrection?)
+        player.setPlaybackRate(playbackRate, 'high');
+      } else if ('playbackRate' in player) {
+        player.playbackRate = playbackRate;
+      }
+    } catch (e) {
+      console.warn('[podcast] setPlaybackRate failed:', e?.message);
+    }
+  }, [player, playbackRate, audioUrl, status?.isLoaded]);
+
+  const changeRate = useCallback((rate) => {
+    setPlaybackRate(rate);
+    AsyncStorage.setItem('dga_podcast_rate', String(rate)).catch(() => {});
+    try { haptics.light(); } catch {}
+  }, []);
 
   // ── Enable iOS silent-mode playback (otherwise nothing plays when the
   //    ringer switch is off).
@@ -285,6 +318,25 @@ export default function PodcastScreen() {
               <MaterialCommunityIcons name="fast-forward-30" size={28} color={colors.white} />
             </TouchableOpacity>
           </View>
+
+          {/* Playback speed control */}
+          <View style={styles.speedRow}>
+            <Text style={styles.speedLabel}>SPEED</Text>
+            {[0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => {
+              const active = Math.abs(playbackRate - r) < 0.01;
+              return (
+                <TouchableOpacity
+                  key={r}
+                  onPress={() => changeRate(r)}
+                  style={[styles.speedBtn, active && styles.speedBtnActive]}
+                >
+                  <Text style={[styles.speedBtnTxt, active && styles.speedBtnTxtActive]}>
+                    {r}×
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </Card>
       ) : null}
 
@@ -386,6 +438,23 @@ const styles = StyleSheet.create({
     width: 64, height: 64, borderRadius: 32, backgroundColor: colors.gold,
     alignItems: 'center', justifyContent: 'center', ...shadow.card,
   },
+
+  // Speed buttons
+  speedRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: spacing.lg, gap: 6, flexWrap: 'wrap',
+  },
+  speedLabel: {
+    color: '#84CCE3', fontSize: 10, fontWeight: '700',
+    letterSpacing: 1, marginRight: 4,
+  },
+  speedBtn: {
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4,
+    borderWidth: 1, borderColor: '#84CCE3', backgroundColor: 'transparent',
+  },
+  speedBtnActive: { backgroundColor: '#5BB8D4', borderColor: '#5BB8D4' },
+  speedBtnTxt: { color: '#84CCE3', fontSize: 11, fontWeight: '700' },
+  speedBtnTxtActive: { color: '#0A1628' },
 
   // Episode rows
   epRow: {
