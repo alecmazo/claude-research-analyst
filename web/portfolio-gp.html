@@ -1833,9 +1833,13 @@
         <button id="idea-gen-refresh" type="button"
                 title="Refresh idea feed now (bypass 5-min cache)"
                 style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
+        <button id="idea-gen-prioritize" type="button"
+                title="Cheap Sonnet 4.6 pre-screen — rank top tickers worth a full Opus analysis (~$0.02)"
+                style="margin-left:4px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">🎯 Prioritize</button>
         <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
       </header>
       <div class="panel-body" id="idea-gen-body" style="padding:0;display:none;border-top:1px solid var(--panel-edge);">
+        <div id="idea-gen-prioritize-result" style="display:none;padding:10px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#78350f;"></div>
         <div id="idea-gen-note" style="display:none;padding:10px 14px;font-size:11px;color:#94a3b8;background:#fafbfc;border-bottom:1px solid var(--panel-edge);"></div>
         <div id="idea-gen-list"></div>
       </div>
@@ -4049,6 +4053,67 @@
         }
         try { await loadIdeaFeed(true); }
         finally { refBtn.disabled = false; refBtn.textContent = orig; }
+      });
+    }
+    const prioBtn = document.getElementById('idea-gen-prioritize');
+    const prioOut = document.getElementById('idea-gen-prioritize-result');
+    if (prioBtn) {
+      prioBtn.addEventListener('click', async function(ev) {
+        ev.stopPropagation();
+        const orig = prioBtn.textContent;
+        prioBtn.disabled = true; prioBtn.textContent = '⏳ ranking…';
+        if (!_ideaFeedPanelOpen && body && panel) {
+          _ideaFeedPanelOpen = true;
+          body.style.display = 'block';
+          panel.dataset.open = '1';
+        }
+        prioOut.style.display = 'block';
+        prioOut.innerHTML = '<em style="color:#92400e;">Sonnet 4.6 is screening your universe…</em>';
+        try {
+          const r = await window.dgaFetch('/api/v2/research/prioritize?top_n=5', { method: 'POST' });
+          const d = await r.json();
+          if (!d.ok) { prioOut.innerHTML = '❌ ' + (d.error || 'failed'); return; }
+          if (!d.picks || !d.picks.length) {
+            prioOut.innerHTML = '<em>' + (d.note || 'No picks returned.') + '</em>';
+            return;
+          }
+          const priColor = function(p) {
+            return p === 'high' ? '#dc2626' : p === 'med' ? '#d97706' : '#64748b';
+          };
+          const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
+          let html = '<div style="font-weight:800;font-size:11px;letter-spacing:0.5px;color:#92400e;margin-bottom:6px;">' +
+            '🎯 SONNET 4.6 RECOMMENDS (' + d.considered + ' considered, ' + d.picks.length + ' picks)</div>';
+          d.picks.forEach(function(p) {
+            const tk = esc(p.ticker || '');
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #fde68a;">' +
+              '<span style="font-weight:800;color:#0A1628;min-width:60px;letter-spacing:0.5px;">' + tk + '</span>' +
+              '<span style="background:' + priColor(p.priority) + ';color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:3px;letter-spacing:0.5px;text-transform:uppercase;">' + esc(p.priority || 'med') + '</span>' +
+              '<span style="color:#a16207;font-weight:700;font-family:\'SF Mono\',monospace;font-size:11px;">' + (p.score != null ? p.score : '—') + '</span>' +
+              '<span style="flex:1;color:#78350f;font-size:11.5px;">' + esc(p.reason || '') + '</span>' +
+              '<button class="idea-prio-run" data-tk="' + tk + '" style="background:#0A1628;color:#fff;border:none;padding:4px 9px;border-radius:4px;font-size:10.5px;font-weight:700;cursor:pointer;">▶ Opus</button>' +
+              '</div>';
+          });
+          if (d.skipped && d.skipped.length) {
+            html += '<div style="margin-top:8px;font-size:10.5px;color:#a16207;"><strong>Skipped:</strong> ' +
+              d.skipped.map(function(s){ return esc(s.ticker) + ' (' + esc(s.reason || '') + ')'; }).join(' · ') + '</div>';
+          }
+          prioOut.innerHTML = html;
+          // Wire ▶ Opus buttons — drop ticker into the hero analyze input + fire
+          prioOut.querySelectorAll('.idea-prio-run').forEach(function(b) {
+            b.addEventListener('click', function() {
+              const tk = b.dataset.tk;
+              const input = document.getElementById('hero-ticker');
+              const runBtn = document.getElementById('hero-run-btn');
+              if (input) input.value = tk;
+              if (runBtn) runBtn.click();
+              if (input && input.scrollIntoView) input.scrollIntoView({ behavior:'smooth', block:'center' });
+            });
+          });
+        } catch (e) {
+          prioOut.innerHTML = '❌ ' + e.message;
+        } finally {
+          prioBtn.disabled = false; prioBtn.textContent = orig;
+        }
       });
     }
     if (head && body && panel) {

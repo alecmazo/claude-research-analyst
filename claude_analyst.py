@@ -5913,12 +5913,91 @@ CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-1-20250805")
 #   Railway env var → CLAUDE_MODEL=claude-sonnet-4-5-20250929    (~5× cheaper)
 # Check the latest aliases at https://docs.anthropic.com/en/docs/about-claude/models
 
+# Cheap screening tier — used for "which of these N tickers actually
+# deserves an Opus-quality full report this week?" Sonnet 4.6 is the
+# 2026 sweet spot: ~80% of Opus quality on structured analysis, ~20%
+# of the cost. Don't use this for final reports — use it to PRIORITIZE
+# which tickers get the Opus treatment.
+CLAUDE_SCREEN_MODEL = _optional_env("CLAUDE_SCREEN_MODEL", "claude-sonnet-4-6-20260214")
+
 
 def get_claude_api_key() -> str:
     return _require_env(
         "ANTHROPIC_API_KEY",
         hint="Get one at https://console.anthropic.com/",
     )
+
+
+def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
+    """Sonnet-4.6 screening pass — rank N tickers by "deserves a full Opus report this week".
+
+    Args:
+        candidates: list of {ticker, name?, sector?, pct_change?, price?,
+                             market_cap?, has_existing_report?, recent_news?, ...}
+                    Anything light + relevant. The screener uses whatever is provided.
+        top_n: how many top picks to surface back (default 5).
+
+    Returns:
+        {
+          "ok":   bool,
+          "picks": [{ticker, score (0-100), reason (1 sentence), priority (high|med|low)}],
+          "skipped": [{ticker, reason}],   # tickers NOT worth the Opus spend
+          "raw":  str,                      # raw JSON the LLM returned (debug)
+        }
+
+    Cost: ~$0.01-0.03 per 20-ticker pass (input is tiny, output ~1KB).
+    Saves $0.10-0.30 of unnecessary Opus calls per skipped ticker.
+    """
+    import json as _json
+    if not candidates:
+        return {"ok": True, "picks": [], "skipped": [], "raw": ""}
+
+    today = _today_local_str() if "_today_local_str" in globals() else ""
+    sys_prompt = (
+        "You are a hedge-fund research director triaging a universe of stocks. "
+        "Decide which deserve a FULL Opus-quality research report this week and "
+        "which can wait. You're cost-conscious — every Opus report costs ~$2 and "
+        "an analyst-day of review time. Don't recommend tickers where the recent "
+        "data doesn't suggest anything actionable.\n\n"
+        "Return STRICT JSON. No prose, no code fences. Schema:\n"
+        '{ "picks":   [{"ticker":"X", "score":0-100, "reason":"≤20 words", "priority":"high|med|low"}],\n'
+        '  "skipped": [{"ticker":"X", "reason":"≤15 words why no full report needed"}] }'
+    )
+    user = (
+        f"Today: {today}\n"
+        f"Top {top_n} picks back, with reasoning. Skip the rest with one-liner why.\n\n"
+        f"Candidates ({len(candidates)} total):\n"
+        f"{_json.dumps(candidates, indent=2, default=str)}"
+    )
+
+    try:
+        raw = call_claude(
+            system_prompt=sys_prompt,
+            user_content=user,
+            model=CLAUDE_SCREEN_MODEL,
+        )
+    except Exception as e:
+        return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": str(e)[:300]}
+
+    # Strip stray code fences if model misbehaves
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        import re as _re
+        cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = _re.sub(r"\s*```\s*$", "", cleaned)
+    try:
+        parsed = _json.loads(cleaned)
+    except _json.JSONDecodeError:
+        return {"ok": False, "picks": [], "skipped": [], "raw": raw,
+                "error": "screener returned invalid JSON"}
+
+    return {
+        "ok":      True,
+        "picks":   parsed.get("picks") or [],
+        "skipped": parsed.get("skipped") or [],
+        "model":   CLAUDE_SCREEN_MODEL,
+        "raw":     raw,
+    }
 
 
 def call_claude(system_prompt: str, user_content: str,

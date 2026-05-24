@@ -5722,6 +5722,80 @@ _SECTOR_ETF_MAP = {
 }
 
 
+@app.post("/api/v2/research/prioritize")
+def research_prioritize(request: Request, top_n: int = 5):
+    """Cheap Sonnet-4.6 pre-screen — rank the user's universe by which
+    tickers deserve a full Opus report this week.
+
+    Pulls the same universe as /idea-feed (watchlist ∪ positions ∪ saved
+    reports), enriches each candidate with light market data + recency of
+    last report, and asks Sonnet to rank top_n picks with one-line reasoning.
+
+    Cost: ~$0.02 per call. Saves $0.10-0.30 per ticker the screener
+    rejects (an Opus full report not run).
+    """
+    claims = _claims_or_401(request)
+    lp_id = claims.get("lp_id") or claims.get("email") or "anon"
+
+    # 1) Reuse the same universe builder as idea-feed for consistency
+    try:
+        feed = research_idea_feed(request, threshold=2.5, limit=40, force=False)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"universe build failed: {e!s:.200}"},
+                            status_code=500)
+    movers = (feed or {}).get("movers") or []
+    if not movers:
+        return {"ok": True, "picks": [], "skipped": [],
+                "note": "Universe is quiet — no movers in the |Δ| ≥ 2.5% band today."}
+
+    # 2) Pull existing-report freshness so the screener can deprioritize
+    #    tickers we already analyzed in the last 7 days
+    recent_reports: dict[str, str] = {}
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT ticker, generated_at FROM analyst_reports
+                               WHERE archived IS NOT TRUE
+                                 AND generated_at > NOW() - INTERVAL '14 days'""")
+                for r in cur.fetchall():
+                    recent_reports[r["ticker"]] = r["generated_at"].isoformat() if r["generated_at"] else None
+        except Exception as _e:
+            print(f"⚠️ [prioritize] recent_reports query failed: {_e!s:.120}", flush=True)
+
+    # 3) Build a slim candidate payload — keep it short for cheap input tokens
+    candidates = []
+    for m in movers[:40]:
+        tk = m.get("ticker") or ""
+        if not tk: continue
+        candidates.append({
+            "ticker":               tk,
+            "name":                 m.get("name"),
+            "sector":               m.get("sector"),
+            "pct_change_today":     m.get("pct_change"),
+            "sector_etf_change":    m.get("sector_etf_change"),
+            "reason_class":         m.get("reason_class"),
+            "headline_count":       len(m.get("news") or []),
+            "top_headline":         ((m.get("news") or [{}])[0] or {}).get("title"),
+            "last_report_at":       recent_reports.get(tk),
+        })
+
+    if not candidates:
+        return {"ok": True, "picks": [], "skipped": [], "note": "No candidates after enrichment."}
+
+    print(f"🎯 [prioritize {lp_id}] screening {len(candidates)} tickers via Sonnet 4.6", flush=True)
+    result = analyst.screen_universe(candidates, top_n=top_n)
+    if not result.get("ok"):
+        return JSONResponse({"ok": False, "error": result.get("error", "screen failed")},
+                            status_code=500)
+    return {
+        "ok":      True,
+        "model":   result.get("model"),
+        "picks":   result["picks"],
+        "skipped": result["skipped"],
+        "considered": len(candidates),
+    }
+
+
 @app.get("/api/v2/research/idea-feed")
 def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12, force: bool = False):
     """Return today's notable movers from the user's universe.
