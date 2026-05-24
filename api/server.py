@@ -16053,6 +16053,64 @@ def podcast_reset_speed_config():
     return {"ok": True, **cfg}
 
 
+# ── Per-character sample lines used by the Cast picker preview ─────────
+# Short, character-flavored so the user can hear how a candidate voice
+# delivers that character's typical line. ~10–15 words each.
+PODCAST_SAMPLE_LINES = {
+    "opus":    "Welcome to the show — I'm Opus. Rock and Claudia disagree on this one.",
+    "rock":    "Right then, mate — the consensus is dead wrong, and the chart's a coiled spring.",
+    "claudia": "Look, honestly — the multiple's stretched and the catalysts are weaker than the bulls claim.",
+}
+
+
+@app.get("/api/podcast/voice-sample")
+def podcast_voice_sample(speaker: str, voice: str):
+    """Return a ~3-sec MP3 sample of `voice` reading `speaker`'s sample line.
+
+    File-cached on disk so repeat clicks are instant. Cache key:
+    voice_samples/sample_{speaker}_{voice}.mp3.
+    """
+    from fastapi.responses import FileResponse
+    import podcast_engine as pe
+    sp_l = (speaker or "").lower().strip()
+    v    = (voice   or "").lower().strip()
+    if sp_l not in PODCAST_SAMPLE_LINES:
+        return JSONResponse({"ok": False, "error": f"unknown speaker {speaker!r}"}, status_code=400)
+    if v not in pe.AVAILABLE_VOICES:
+        return JSONResponse({"ok": False, "error": f"unknown voice {voice!r}"}, status_code=400)
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return JSONResponse({"ok": False, "error": "OPENAI_API_KEY not set"}, status_code=500)
+
+    cache_dir = analyst.STOCKS_FOLDER / "voice_samples"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out_path = cache_dir / f"sample_{sp_l}_{v}.mp3"
+
+    if not out_path.exists():
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            # Apply the same speaker-baseline speed so the sample sounds like
+            # what the actual episode would (e.g., Opus's 1.06× lilt).
+            speed = max(pe.SPEED_MIN, min(pe.SPEED_MAX,
+                        pe._RUNTIME_SPEAKER.get(sp_l, 1.0)))
+            with client.audio.speech.with_streaming_response.create(
+                model="gpt-4o-mini-tts",   # cheap; samples don't need HD
+                voice=v,
+                input=PODCAST_SAMPLE_LINES[sp_l],
+                response_format="mp3",
+                speed=speed,
+            ) as resp:
+                resp.stream_to_file(out_path)
+            print(f"🎙️ [voice-sample] cached {sp_l}/{v} → {out_path.stat().st_size}b", flush=True)
+        except Exception as e:
+            print(f"❌ [voice-sample] {sp_l}/{v}: {e!s:.300}", flush=True)
+            return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+    return FileResponse(out_path, media_type="audio/mpeg", filename=out_path.name)
+
+
 @app.get("/api/podcast/voice-config")
 def podcast_get_voice_config():
     """Return current voice assignments + the list of available OpenAI voices."""

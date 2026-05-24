@@ -5104,8 +5104,11 @@
           '<div style="font-size:10.5px;color:#64748b;line-height:1.4;">' + (speakerLabels[sp] || '') + '</div>' +
         '</div>' +
         '<select data-speaker="' + sp + '" style="flex:1;min-width:240px;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;">' + opts + '</select>' +
+        '<button class="podcast-voice-sample" data-speaker="' + sp + '" title="Play a sample of the selected voice" ' +
+          'style="background:#0A1628;color:#fff;border:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;min-width:78px;">▶ Sample</button>' +
       '</div>';
     });
+    html += '<audio id="podcast-voice-sample-el" style="display:none;"></audio>';
     html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
       '<button id="podcast-voice-save" class="builder-btn-primary" style="width:auto;padding:8px 14px;font-size:12px;">💾 Save cast</button>' +
       '<button id="podcast-voice-reset" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">↺ Reset to defaults</button>' +
@@ -5113,6 +5116,37 @@
       '<span style="font-size:10.5px;color:#94a3b8;margin-left:auto;">Changes apply to the NEXT generated audio.</span>' +
       '</div>';
     container.innerHTML = html;
+
+    // ▶ Sample buttons — fetch the cached MP3 for the currently-selected
+    //   (speaker, voice) combo and play it via the hidden <audio> element.
+    //   Uses dgaFetch so the auth token is attached; converts blob → object URL.
+    container.querySelectorAll('.podcast-voice-sample').forEach(function(btn) {
+      btn.addEventListener('click', async function() {
+        const sp = btn.dataset.speaker;
+        const sel = container.querySelector('select[data-speaker="' + sp + '"]');
+        if (!sel) return;
+        const v = sel.value;
+        const origLabel = btn.textContent;
+        btn.disabled = true; btn.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch('/api/podcast/voice-sample?speaker=' +
+            encodeURIComponent(sp) + '&voice=' + encodeURIComponent(v));
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          const el = document.getElementById('podcast-voice-sample-el');
+          // Stop any currently-playing sample
+          el.pause(); el.currentTime = 0;
+          el.src = url;
+          el.onended = function() { URL.revokeObjectURL(url); };
+          await el.play();
+        } catch (e) {
+          alert('Sample failed: ' + e.message);
+        } finally {
+          btn.disabled = false; btn.textContent = origLabel;
+        }
+      });
+    });
 
     document.getElementById('podcast-voice-save').addEventListener('click', async function() {
       const body = { voices: {} };
