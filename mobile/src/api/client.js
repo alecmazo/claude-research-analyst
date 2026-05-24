@@ -280,9 +280,12 @@ export const api = {
   // Build the public audio URL — the /audio.mp3 endpoint is auth-bypassed
   // (whitelisted in the server's auth middleware) so <Audio.Sound> can stream
   // without sending custom headers.
-  getPodcastAudioUrl: async (ticker) => {
+  // format scopes the lookup: one ticker can have multiple episodes
+  // (debate / pre_mortem / memo / catalysts / quick_hit). Server falls
+  // back to the latest row for the ticker if the exact format is missing.
+  getPodcastAudioUrl: async (ticker, format = 'debate') => {
     const base = await getBaseUrl();
-    return `${base}/api/podcast/${ticker}/audio.mp3`;
+    return `${base}/api/podcast/${ticker}/audio.mp3?format=${encodeURIComponent(format)}`;
   },
 
   // ---------- Single-ticker analysis ----------

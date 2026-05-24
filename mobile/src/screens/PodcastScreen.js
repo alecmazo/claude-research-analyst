@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v11-opus-20260523';
+const PODCAST_BUILD = 'pc-v12-format-aware-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -115,10 +115,20 @@ export default function PodcastScreen() {
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedTicker, setSelectedTicker] = useState(null);
+  // Compound key — ticker AND format. A single ticker can have multiple
+  // episodes (one per format: debate, pre_mortem, memo, catalysts, quick_hit,
+  // portfolio_roundup). Keying off ticker alone made the screen highlight
+  // ALL formats for the same ticker on tap.
+  const [selectedKey, setSelectedKey] = useState(null);   // "TICKER::format"
   const [audioUrl, setAudioUrl] = useState(null);
   const [lastErr,  setLastErr]  = useState(null);
   const [playbackRate, setPlaybackRate] = useState(1);
+
+  // Helper — compound key builder. Falls back to 'debate' for legacy rows
+  // that don't have a format yet.
+  const epKey = (ep) => (ep ? `${ep.ticker}::${ep.format || 'debate'}` : null);
+  const selectedEp = () =>
+    episodes.find((e) => epKey(e) === selectedKey) || null;
 
   // Create player ONCE with null source — we'll feed it new URLs via
   // player.replace(). This is more reliable than re-running useAudioPlayer
@@ -196,21 +206,22 @@ export default function PodcastScreen() {
   }, [loadEpisodes]);
 
   const handleSelect = useCallback(async (ep) => {
+    const key = epKey(ep);
+    const fmt = ep.format || 'debate';
     // FIRST LINE: force player card visible + show tap feedback so we know
     // the touch registered, even if everything downstream fails.
-    setSelectedTicker(ep.ticker);
-    setLastErr(`TAP ${ep.ticker} · ${PODCAST_BUILD}`);
+    setSelectedKey(key);
+    setLastErr(`TAP ${ep.ticker} (${fmt})`);
     try { haptics.light(); } catch {}
-    // Tap the SAME row → toggle play/pause (delegate to the bulletproof helper)
-    if (selectedTicker === ep.ticker) {
+    // Tap the SAME (ticker, format) → toggle play/pause
+    if (selectedKey === key) {
       safeToggle(player, status, setLastErr);
       return;
     }
-    // New episode: build URL → replace → play. NO HEAD probe (FileResponse
-    // rejects HEAD with 405; we let expo-audio surface any GET-time errors).
-    const url = await api.getPodcastAudioUrl(ep.ticker);
+    // New episode: build format-aware URL → replace → play
+    const url = await api.getPodcastAudioUrl(ep.ticker, fmt);
     setAudioUrl(url);
-    console.log('[podcast] loading', ep.ticker, '→', url);
+    console.log('[podcast] loading', key, '→', url);
 
     try {
       player.replace({ uri: url });
@@ -223,7 +234,7 @@ export default function PodcastScreen() {
     } catch (e) {
       setLastErr(`play: ${e?.message || e}`);
     }
-  }, [selectedTicker, player, status]);
+  }, [selectedKey, player, status, episodes]);
 
   const handleSeek = useCallback((deltaSec) => {
     try { haptics.light(); } catch {}
@@ -235,8 +246,23 @@ export default function PodcastScreen() {
     safeToggle(player, status, setLastErr);
   }, [player, status]);
 
+  // Format icon for the row label — visually distinguishes Debate / Pre-Mortem
+  // / Memo / Catalysts / Quick Hit / Roundup / Portfolio Roundup at a glance.
+  const FORMAT_ICON = {
+    debate:            '⚔️',
+    pre_mortem:        '🪦',
+    memo:              '📋',
+    catalysts:         '📅',
+    quick_hit:         '⚡',
+    roundup:           '📰',
+    portfolio_roundup: '🧰',
+  };
+
   const renderEpisode = ({ item }) => {
-    const isActive = item.ticker === selectedTicker;
+    const key = epKey(item);
+    const isActive = key === selectedKey;
+    const fmt = item.format || 'debate';
+    const ic = FORMAT_ICON[fmt] || '';
     return (
       <TouchableOpacity
         onPress={() => handleSelect(item)}
@@ -252,7 +278,7 @@ export default function PodcastScreen() {
         </View>
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <Text style={styles.epTicker}>
-            {item.ticker}
+            {item.ticker} {ic}
             {item.duration_sec ? (
               <Text style={styles.epMeta}>  ·  {fmtDuration(item.duration_sec)}</Text>
             ) : null}
@@ -276,12 +302,18 @@ export default function PodcastScreen() {
         <Text style={styles.brandSub}>Rock vs Claudia · Opus calls it · {PODCAST_BUILD}</Text>
       </View>
 
-      {/* Active episode player (sticky at top once a ticker is selected) */}
-      {selectedTicker ? (
+      {/* Active episode player (sticky at top once an episode is selected) */}
+      {selectedKey ? (
         <Card style={styles.playerCard}>
-          <Text style={styles.playerTicker}>{selectedTicker}</Text>
+          <Text style={styles.playerTicker}>
+            {selectedEp()?.ticker || selectedKey.split('::')[0]}
+            {'  '}
+            <Text style={{ fontSize: 12, opacity: 0.7 }}>
+              {FORMAT_ICON[selectedEp()?.format || 'debate'] || ''}
+            </Text>
+          </Text>
           <Text style={styles.playerTitle} numberOfLines={1}>
-            {(episodes.find(e => e.ticker === selectedTicker)?.title) || `${selectedTicker}: Bull vs Bear`}
+            {selectedEp()?.title || `${selectedEp()?.ticker || ''}: ${selectedEp()?.format || 'Bull vs Bear'}`}
           </Text>
           {/* Diagnostic strip — temporary until playback is reliable */}
           <Text style={styles.diag} numberOfLines={2}>
@@ -363,7 +395,7 @@ export default function PodcastScreen() {
       ) : (
         <FlatList
           data={episodes}
-          keyExtractor={(item) => item.ticker}
+          keyExtractor={(item) => epKey(item)}
           renderItem={renderEpisode}
           contentContainerStyle={{ paddingBottom: 120 }}
           refreshControl={
