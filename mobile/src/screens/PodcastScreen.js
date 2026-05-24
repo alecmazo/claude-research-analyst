@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v4-no-head-20260523';
+const PODCAST_BUILD = 'pc-v5-no-bg-audio-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -64,11 +64,14 @@ export default function PodcastScreen() {
   // ── Enable iOS silent-mode playback (otherwise nothing plays when the
   //    ringer switch is off).
   useEffect(() => {
+    // Only options safe with our current installed binary. Background
+    // playback needs UIBackgroundModes:["audio"] in Info.plist, which
+    // hasn't shipped in a native build yet — requesting it causes iOS
+    // to kill the app as soon as audio starts. Adding it back after the
+    // next EAS build.
     setAudioModeAsync({
       playsInSilentMode: true,
       allowsRecording: false,
-      shouldPlayInBackground: true,
-      interruptionMode: 'mixWithOthers',
     })
       .then(() => console.log('[podcast] audio mode set'))
       .catch((e) => {
