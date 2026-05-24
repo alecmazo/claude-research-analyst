@@ -1830,6 +1830,9 @@
         <span class="panel-title">🔔 Idea Generator</span>
         <span class="panel-badge" id="idea-gen-count" style="background:#fde68a;color:#92400e;">—</span>
         <span id="idea-gen-asof" style="margin-left:auto;font-size:9px;color:var(--dim);font-weight:400;letter-spacing:0;">—</span>
+        <button id="idea-gen-refresh" type="button"
+                title="Refresh idea feed now (bypass 5-min cache)"
+                style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
         <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
       </header>
       <div class="panel-body" id="idea-gen-body" style="padding:0;display:none;border-top:1px solid var(--panel-edge);">
@@ -4012,7 +4015,8 @@
       return;
     }
     try {
-      const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold);
+      const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold)
+        + (force ? '&force=true' : '');
       const r = await window.dgaFetch(url);
       if (!r.ok) throw new Error('idea-feed ' + r.status);
       const data = await r.json();
@@ -4030,6 +4034,22 @@
     const head  = document.getElementById('idea-gen-head');
     const body  = document.getElementById('idea-gen-body');
     const panel = document.getElementById('idea-gen-panel');
+    const refBtn = document.getElementById('idea-gen-refresh');
+    if (refBtn) {
+      refBtn.addEventListener('click', async function(ev) {
+        ev.stopPropagation();      // don't toggle expand/collapse
+        const orig = refBtn.textContent;
+        refBtn.disabled = true; refBtn.textContent = '⏳';
+        // Ensure the panel is open so the user sees the refreshed list
+        if (!_ideaFeedPanelOpen && body && panel) {
+          _ideaFeedPanelOpen = true;
+          body.style.display = 'block';
+          panel.dataset.open = '1';
+        }
+        try { await loadIdeaFeed(true); }
+        finally { refBtn.disabled = false; refBtn.textContent = orig; }
+      });
+    }
     if (head && body && panel) {
       head.addEventListener('click', function() {
         _ideaFeedPanelOpen = !_ideaFeedPanelOpen;

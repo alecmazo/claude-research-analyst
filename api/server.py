@@ -5723,7 +5723,7 @@ _SECTOR_ETF_MAP = {
 
 
 @app.get("/api/v2/research/idea-feed")
-def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12):
+def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12, force: bool = False):
     """Return today's notable movers from the user's universe.
 
     Universe = watchlist ∪ open positions (tax_lots) ∪ saved-report subjects.
@@ -5742,8 +5742,12 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12
     # Cache key includes the request shape; user-scoped to be safe.
     cache_key = (str(lp_id), float(threshold), int(limit), is_priv)
     cached = _IDEA_FEED_CACHE.get(cache_key)
-    if cached and (time.time() - cached["ts"]) < _IDEA_FEED_TTL:
+    # ?force=true bypasses the in-memory TTL cache so the user's manual
+    # refresh button actually pulls fresh quotes + news.
+    if not force and cached and (time.time() - cached["ts"]) < _IDEA_FEED_TTL:
         return cached["data"]
+    if force and cached:
+        print(f"[idea-feed] force=true → bypassing cache for {lp_id}", flush=True)
 
     # ── 1. Build universe ─────────────────────────────────────────────────────
     universe: set[str] = set()
