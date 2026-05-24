@@ -16611,6 +16611,13 @@ def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks,
     existing = _podcast_script_jobs.get(tk)
     if existing and existing.get("status") == "running":
         return {"ok": True, "ticker": tk, "started": False, "already_running": True}
+    # ui154: sync queued state — kills the race against the poll
+    _podcast_script_jobs[tk] = {
+        "stage": "queued", "current": 0, "total": 0,
+        "label": f"Queued · {format}",
+        "status": "running", "started_at": time.time(),
+        "updated_at": time.time(),
+    }
     background_tasks.add_task(_run_script_generation, tk, format)
     return {"ok": True, "ticker": tk, "format": format, "started": True}
 
@@ -16715,6 +16722,13 @@ async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTas
     existing = _podcast_script_jobs.get(job_key)
     if existing and existing.get("status") == "running":
         return {"ok": True, "ticker": job_key, "started": False, "already_running": True}
+    # ui154: sync queued state — kills the race against the poll
+    _podcast_script_jobs[job_key] = {
+        "stage": "queued", "current": 0, "total": 0,
+        "label": f"Queued · {len(tickers)} tickers",
+        "status": "running", "started_at": time.time(),
+        "updated_at": time.time(),
+    }
     background_tasks.add_task(_run_roundup_generation, tickers)
     return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
 
@@ -16834,6 +16848,15 @@ async def podcast_generate_portfolio_roundup(req: Request, background_tasks: Bac
     existing = _podcast_script_jobs.get(job_key)
     if existing and existing.get("status") == "running":
         return {"ok": True, "ticker": job_key, "started": False, "already_running": True}
+    # ui154: write the 'queued' state SYNCHRONOUSLY before scheduling the
+    # background task. Eliminates the orphan-poll race where the frontend
+    # starts polling before the worker writes its first state update.
+    _podcast_script_jobs[job_key] = {
+        "stage": "queued", "current": 0, "total": 0,
+        "label": f"Queued · {len(tickers)} tickers",
+        "status": "running", "started_at": time.time(),
+        "updated_at": time.time(),
+    }
     background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions)
     return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
 
