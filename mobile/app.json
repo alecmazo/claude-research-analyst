@@ -16,7 +16,8 @@
       "bundleIdentifier": "com.dgacapital.research",
       "buildNumber": "17",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio"]
       }
     },
     "android": {

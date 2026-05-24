@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 
 import { api } from '../api/client';
 import { colors, spacing, radius, shadow, fontSize, letterSpacing, Card, haptics } from '../design';
@@ -48,10 +48,33 @@ export default function PodcastScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
+  const [pendingPlay, setPendingPlay] = useState(false);
 
   // expo-audio: useAudioPlayer takes a source object or null (no playback)
   const player = useAudioPlayer(audioUrl ? { uri: audioUrl } : null);
   const status = useAudioPlayerStatus(player);
+
+  // ── Enable iOS silent-mode playback (otherwise nothing plays when the
+  //    ringer switch is off). Must be called BEFORE play().
+  useEffect(() => {
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: false,
+      shouldPlayInBackground: true,
+      interruptionMode: 'mixWithOthers',
+    }).catch((e) => console.warn('[podcast] setAudioModeAsync failed:', e?.message));
+  }, []);
+
+  // ── Once the new audio finishes loading, fire play() if requested.
+  //    Calling play() before isLoaded silently no-ops on expo-audio,
+  //    which is why our earlier setTimeout-based approach felt broken.
+  useEffect(() => {
+    if (!pendingPlay) return;
+    if (status?.isLoaded) {
+      try { player.play(); } catch (e) { console.warn('[podcast] play failed:', e?.message); }
+      setPendingPlay(false);
+    }
+  }, [pendingPlay, status?.isLoaded, player]);
 
   const loadEpisodes = useCallback(async () => {
     try {
@@ -74,37 +97,33 @@ export default function PodcastScreen() {
     haptics.light();
     if (selectedTicker === ep.ticker) {
       // Tapping the active episode toggles play/pause
-      if (status?.playing) {
-        await player.pause();
-      } else {
-        await player.play();
-      }
+      try {
+        if (status?.playing) player.pause();
+        else player.play();
+      } catch (e) { console.warn('[podcast] toggle failed:', e?.message); }
       return;
     }
     setSelectedTicker(ep.ticker);
     const url = await api.getPodcastAudioUrl(ep.ticker);
+    console.log('[podcast] loading', ep.ticker, '→', url);
     setAudioUrl(url);
-    // The new player will auto-create on next render; trigger play on next tick
-    setTimeout(async () => {
-      try { await player.play(); } catch (e) { /* will play after load */ }
-    }, 250);
+    setPendingPlay(true);   // useEffect above will play once status.isLoaded
   }, [selectedTicker, player, status]);
 
-  const handleSeek = useCallback(async (deltaSec) => {
+  const handleSeek = useCallback((deltaSec) => {
     if (!status || !status.duration) return;
     const target = Math.max(0, Math.min(status.duration, (status.currentTime || 0) + deltaSec));
-    await player.seekTo(target);
+    try { player.seekTo(target); } catch (e) { console.warn('[podcast] seek failed:', e?.message); }
     haptics.light();
   }, [player, status]);
 
-  const handleTogglePlay = useCallback(async () => {
+  const handleTogglePlay = useCallback(() => {
     if (!player) return;
     haptics.light();
-    if (status?.playing) {
-      await player.pause();
-    } else {
-      await player.play();
-    }
+    try {
+      if (status?.playing) player.pause();
+      else                 player.play();
+    } catch (e) { console.warn('[podcast] toggle failed:', e?.message); }
   }, [player, status]);
 
   const renderEpisode = ({ item }) => {
