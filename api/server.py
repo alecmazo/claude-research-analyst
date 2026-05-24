@@ -16539,6 +16539,125 @@ async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTas
     return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
 
 
+# ─── Portfolio Roundup (PM-style review of the whole book) ──────────────
+def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] | None) -> None:
+    """Background worker for /api/podcast/portfolio-roundup/script.
+    Heaviest format: Grok macro pull + Sonnet bolt-on screen + Opus script.
+    Expect 2-4 min total wall time."""
+    import podcast_engine
+    job_key = "PORTFOLIO_" + ",".join([t.upper() for t in tickers])
+
+    def _set(**kw):
+        _podcast_script_jobs[job_key] = {**(_podcast_script_jobs.get(job_key) or {}), **kw,
+                                          "updated_at": time.time()}
+    def _on_progress(stage, *args):
+        label = args[0] if args else stage
+        _set(stage=stage, label=str(label))
+
+    _set(stage="queued", current=0, total=0, label="Queued…",
+         status="running", started_at=time.time())
+    try:
+        _set(stage="load", label=f"Loading reports for {len(tickers)} positions…")
+        reports = {}
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                for t in tickers:
+                    tk = t.upper().strip()
+                    cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
+                                   WHERE ticker = %s""", (tk,))
+                    row = cur.fetchone()
+                    reports[tk] = {
+                        "grok":   (row or {}).get("report_md") or "",
+                        "claude": (row or {}).get("report_md_claude") or "",
+                    }
+
+        result = podcast_engine.generate_portfolio_roundup_script(
+            tickers, reports, positions=positions, on_progress=_on_progress,
+        )
+        if not result.get("script"):
+            errs = (result.get("validation") or {}).get("errors", []) or ["unknown"]
+            raise RuntimeError("Portfolio Roundup generation failed: " + "; ".join(errs))
+
+        _set(stage="persist", label="Saving portfolio roundup…")
+        synthetic = result["ticker"]
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                _ensure_podcast_table()
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO analyst_podcasts
+                            (ticker, format, episode_title, script_json,
+                             alignment_json, episode_mode, generated_at)
+                        VALUES (%s, 'portfolio_roundup', %s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker, format) DO UPDATE SET
+                            episode_title  = EXCLUDED.episode_title,
+                            script_json    = EXCLUDED.script_json,
+                            alignment_json = EXCLUDED.alignment_json,
+                            episode_mode   = EXCLUDED.episode_mode,
+                            generated_at   = NOW()
+                    """, (
+                        synthetic,
+                        result["script"].get("episode_title") or "Portfolio Roundup",
+                        json.dumps(result["script"]),
+                        json.dumps({
+                            "tickers":  tickers,
+                            "macro_used":   (result.get("alignment") or {}).get("macro_used", False),
+                            "bolton_count": (result.get("alignment") or {}).get("bolton_count", 0),
+                        }),
+                        "portfolio_roundup",
+                    ))
+                    conn.commit()
+            except Exception as e:
+                print(f"⚠️  [portfolio_roundup] persist failed for {synthetic}: {e!s:.200}", flush=True)
+
+        _set(stage="done", status="done", label="✓ Portfolio Roundup ready",
+             result={
+                "ok":         True,
+                "ticker":     synthetic,
+                "script":     result["script"],
+                "validation": result["validation"],
+                "alignment":  result.get("alignment"),
+                "transcript": podcast_engine.script_to_transcript(result["script"]),
+                "macro":      result.get("macro"),
+                "bolt_ons":   result.get("bolt_ons"),
+             })
+    except Exception as e:
+        print(f"❌ [portfolio_roundup {tickers}] failed: {e!s:.500}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/podcast/portfolio-roundup/script")
+async def podcast_generate_portfolio_roundup(req: Request, background_tasks: BackgroundTasks):
+    """Portfolio Roundup — PM-style review of a 5-20 ticker book.
+
+    Body:
+      { "tickers":   ["NVDA","INTC", ...],            // REQUIRED, 5-20 names
+        "positions": [{"ticker":"X","weight_pct":12, // OPTIONAL — adds sizing
+                       "sector":"Tech","beta":1.4}]  //            to snapshot
+      }
+
+    Poll status under "PORTFOLIO_<tickers>" job key:
+      GET /api/podcast/{key}/script-status
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    tickers = [t.upper().strip() for t in (body or {}).get("tickers", []) if t and t.strip()]
+    if len(tickers) < 5:
+        return JSONResponse({"ok": False, "error": "Need at least 5 tickers for a Portfolio Roundup"},
+                            status_code=400)
+    if len(tickers) > 20:
+        tickers = tickers[:20]
+    positions = (body or {}).get("positions") or [{"ticker": t} for t in tickers]
+    job_key = "PORTFOLIO_" + ",".join(tickers)
+    existing = _podcast_script_jobs.get(job_key)
+    if existing and existing.get("status") == "running":
+        return {"ok": True, "ticker": job_key, "started": False, "already_running": True}
+    background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions)
+    return {"ok": True, "ticker": job_key, "tickers": tickers, "started": True}
+
+
 @app.get("/api/podcast/{ticker}/script-status")
 def podcast_script_status(ticker: str):
     """Return the current state of a script-generation job for `ticker`.

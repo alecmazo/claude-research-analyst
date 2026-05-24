@@ -207,6 +207,16 @@ EPISODE_FORMATS = {
         "approx_minutes":   "7-9",
         "title_pattern":    "Roundup: {TICKERS}",
     },
+    "portfolio_roundup": {
+        "label":   "Portfolio Roundup",
+        "icon":    "🧰",
+        "tagline": "PM-style review of your whole book — risks, blind spots, bolt-ons, the one move this week",
+        "multi_ticker":     True,
+        "word_budget_low":  2200,
+        "word_budget_high": 2800,
+        "approx_minutes":   "13-16",
+        "title_pattern":    "Portfolio Roundup · {TICKERS}",
+    },
 }
 
 # Per-format required-sections lists. Validator and renderers consult these.
@@ -263,6 +273,18 @@ FORMAT_SECTIONS = {
         "cold_open",
         # "ticker_1_intro", "ticker_1_take", "ticker_1_rebuttal", ... (dynamic)
         "wrap",
+    ],
+    "portfolio_roundup": [
+        "cold_open",
+        "portfolio_snapshot",
+        "macro_setup",
+        "position_walk",
+        "concentration_risks",
+        "wipeout_scenarios",
+        "correlation_blind_spots",
+        "bolt_ons",
+        "cuts",
+        "pm_verdict",
     ],
 }
 
@@ -453,6 +475,74 @@ Use real catalyst dates from the source reports where possible. If a date isn't 
 
 Total ~600–900 words. ~5 min episode. DO NOT pad — short is the whole point."""
         winner_field = '  "winner": "rock" | "claudia",\n'
+
+    elif format == "portfolio_roundup":
+        structure = """STRUCTURE — Portfolio Roundup. PM-style review of the WHOLE book.
+This is NOT a sequence of mini-debates per ticker. This is a senior investment
+committee meeting where Opus runs the show as a hands-on PM at DGA Capital.
+
+OPUS PERSONA SHIFT — read carefully:
+  For this format ONLY, Opus is NOT a neutral moderator. He's a SENIOR PM at
+  DGA Capital who owns the P&L on this book. Directional, opinionated, owns
+  the decisions. Use phrases like:
+    "We're not comfortable with the X exposure."
+    "I've been telling the team to trim Y."
+    "The committee voted to add Z last Thursday."
+    "What's our plan if rates rip 50bps from here?"
+  He still calls a verdict at the end — but it's a PM call, not a debate winner.
+
+ROCK + CLAUDIA in this format:
+  • Rock = the analyst pushing for MORE risk / bolder positioning. He sees
+    upside others miss. Will push back on Opus when Opus wants to trim.
+  • Claudia = the analyst flagging risks / arguing for trims. She sees
+    cracks the bulls miss. Will push back when Opus wants to add.
+  Both stay in character — Rock British/punchy, Claudia measured/skeptic.
+
+  1. cold_open            — Opus only, ~35–55 words. ONE-LINE hook the book.
+        e.g. "We're 73% long tech, sitting on $4M in unrealized gain, and
+              I'm starting to lose sleep. Let's go through it."
+        Or: "Tonight: the book, top to bottom. What's working, what's not,
+             what I'd add this week."
+  2. portfolio_snapshot   — Opus only, ~160–200 words. What's in the book in
+        plain English: sector mix, top 3 positions by weight, % cash,
+        concentration profile. Use the position data provided. NO TICKER LIST
+        DUMP — synthesize: "Top three names — NVDA, MSFT, AAPL — are 38% of
+        the book. Tech is 73%. Cash is 8%."
+  3. macro_setup          — Opus only, ~180–230 words. The world THIS WEEK
+        as it relates to THIS book. Use the macro context block provided —
+        cite specific headlines + dates. NOT generic — "rates" is bad,
+        "the 10yr at 4.62% after Thursday's CPI print" is good.
+  4. position_walk        — 6–9 turns mixed. Rock + Claudia each call out
+        2-3 positions they LIKE and 2-3 they HATE — punchy, single sentence
+        each, cite numbers from the source reports if helpful.
+        NOT all 15 positions — JUST the punchy ones. Skip the boring middle.
+  5. concentration_risks  — 4–5 turns mixed. Identify where the book is
+        over-exposed (sector, factor, single name, theme). Specific numbers
+        from the snapshot. Both argue intensity — Rock often defends ("the
+        AI capex cycle has 2 more years"), Claudia warns ("you're 60% in
+        one trade dressed up as 8 different names").
+  6. wipeout_scenarios    — 4–5 turns mixed. Both name 2-3 SPECIFIC scenarios
+        that would draw this book down 40%+ and assign probabilities.
+        Brutally honest. "A China-Taiwan escalation puts 35% of your book
+        at immediate risk." "A regional banking crisis hits BAC + C
+        simultaneously." Not abstract — specific.
+  7. correlation_blind_spots — 3–4 turns mixed. Where the book LOOKS
+        diversified but isn't. e.g. "Your 6 tech names are all the same
+        AI capex trade." "You think you have defensives but staples are
+        getting margin-compressed too." Calls out the illusion of breadth.
+  8. bolt_ons             — 4–6 turns mixed. Walks through the 2-3 SPECIFIC
+        BOLT-ON CANDIDATES provided in the user prompt. For each: which
+        analyst sponsors it, what role it plays (hedge / complement /
+        rotation), where to size it. DO NOT INVENT bolt-on tickers — only
+        present the ones provided.
+  9. cuts                 — 3–4 turns mixed. Name 1-2 positions that should
+        be trimmed/exited. Why. Be specific. Both analysts can disagree on
+        a name. Opus has the final word.
+ 10. pm_verdict           — Opus only, 1–2 turns, ~170–220 words. The PM
+        call. Are we positioned to capitalize on volatility AND protect
+        downside? What's the ONE specific move this week? Sizing + entry
+        + time horizon. End with a specific date for the next review."""
+        winner_field = '  "winner": "rock" | "claudia",  // who landed more concrete trade ideas\n'
 
     elif format == "roundup":
         structure = """STRUCTURE — Roundup. Multi-ticker show covering 3-4 names in one episode.
@@ -659,12 +749,16 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
     is_multi_ticker = bool(fmt_meta.get("multi_ticker"))
 
     if is_multi_ticker:
-        # Roundup: require cold_open + wrap; per-ticker sections are dynamic
-        # (e.g. nvda_intro/nvda_take/nvda_rebuttal) and validated separately
-        # by the caller against the actual ticker list.
-        for required in ("cold_open", "wrap"):
-            if required not in section_ids:
-                errors.append(f"missing required section: {required}")
+        # roundup            → cold_open + per-ticker dynamics + wrap
+        # portfolio_roundup  → full fixed section list (no per-ticker dynamics)
+        if fmt_name == "portfolio_roundup":
+            for required in required_secs:
+                if required not in section_ids:
+                    errors.append(f"missing required section: {required}")
+        else:
+            for required in ("cold_open", "wrap"):
+                if required not in section_ids:
+                    errors.append(f"missing required section: {required}")
     else:
         for required in required_secs:
             if required not in section_ids:
@@ -1615,6 +1709,278 @@ Now write the episode. Remember:
         "validation": validation,
         "raw_response": raw,
         "alignment":  script["_alignment"],
+    }
+
+
+def fetch_macro_context(*, on_progress=None) -> str:
+    """Today's macro headlines that matter for a US equity portfolio.
+
+    Uses Grok with live_search=True for genuinely-fresh data (the whole point
+    of the Portfolio Roundup is "how are we positioned for the world right
+    now" — stale macro defeats the format).
+
+    Returns: a markdown block of 6-10 bullet points with date-stamped headlines.
+    On failure: returns a short '[macro unavailable: …]' string — caller treats
+    that as "no macro" and the script still generates (degraded but workable).
+    """
+    import claude_analyst as _ca
+    if on_progress:
+        try: on_progress("macro_pull", "Grok pulling today's macro headlines…")
+        except Exception: pass
+    prompt = f"""Pull the most relevant macro headlines from the LAST 48 HOURS \
+that affect a US equity portfolio. Use your web search tool.
+
+Cover these buckets only when there's actual news in each (don't pad):
+  • Fed / rates moves (FOMC statements, dot plot, Fed speakers)
+  • Major economic releases (jobs, CPI, PCE, GDP, ISM, PMI)
+  • Geopolitical events affecting markets (war, sanctions, trade, tariffs)
+  • Major FX moves (DXY, USD/JPY, EUR/USD, CNY)
+  • Commodity moves > 2% (oil, gold, copper, nat gas)
+  • Sector-specific news (semis, banks, energy, healthcare regulation)
+  • Big earnings results from BELLWETHER names that move sentiment
+
+OUTPUT FORMAT: 6-10 bullets, one sentence each.
+Each bullet MUST include: the actual headline + the date (use real dates,
+today is {_today_str()}) + a number or specific entity name.
+Bad: "Rates moved on Fed news"
+Good: "10-year yield rose to 4.62% Thursday after hot CPI print (+0.3% MoM)"
+
+NO preamble, NO closing summary. Just the bullets, one per line, each
+starting with "• "."""
+    try:
+        raw = _ca.call_grok(
+            system_prompt="You are a market macro researcher with web access. "
+                          "Pull the freshest macro headlines that affect US equity portfolios.",
+            user_content=prompt,
+            live_search=True,
+        )
+    except Exception as e:
+        return f"[macro unavailable: {e!s:.120}]"
+    return (raw or "").strip()
+
+
+def screen_bolton_candidates(
+    current_positions: list[dict],
+    *,
+    on_progress=None,
+    universe_hint: str = "S&P 500 + the user's watchlist",
+) -> list[dict]:
+    """Sonnet 4.6 picks 3-5 BOLT-ON tickers for a Portfolio Roundup.
+
+    current_positions: list of {ticker, sector?, weight_pct?, market_cap?, ...}
+    universe_hint:     plain-English describes the candidate universe
+
+    Returns: [{ticker, role: 'hedge'|'complement'|'rotation', reason: str,
+               size_pct: float, risk_note: str}, ...]
+    Empty list if Sonnet rejects or errors.
+
+    Constrained universe (not free-form) — Sonnet only picks from common,
+    well-known US-listed names so we don't get hallucinated tickers.
+    """
+    import claude_analyst as _ca
+    import json as _json
+    if on_progress:
+        try: on_progress("bolton_screen", "Sonnet 4.6 screening bolt-on candidates…")
+        except Exception: pass
+    if not current_positions:
+        return []
+
+    sys_prompt = (
+        "You are a senior portfolio manager at a US equity hedge fund. "
+        "You're reviewing a colleague's book and suggesting 3-5 BOLT-ON "
+        "positions that would IMPROVE the portfolio. Pick from "
+        f"{universe_hint}. Stay in well-known US-listed tickers only — "
+        "no obscure picks, no foreign listings, no crypto, no SPACs.\n\n"
+        "For EACH bolt-on, identify ONE clear role:\n"
+        "  • 'hedge'      — explicitly offsets a major risk in the current book\n"
+        "  • 'complement' — adds missing exposure / theme not currently held\n"
+        "  • 'rotation'   — replaces a current position the PM should trim\n\n"
+        "Return STRICT JSON. No prose, no code fences. Schema:\n"
+        '{ "bolt_ons": [{"ticker":"X", "role":"hedge|complement|rotation", '
+        '"reason":"≤25 words why it fits", "size_pct":1.0-5.0, '
+        '"risk_note":"≤15 words the main risk in this name"}] }'
+    )
+    positions_summary = _json.dumps(current_positions, indent=2, default=str)
+    user = (
+        f"Today: {_today_str()}\n"
+        f"Current positions (with sizing where available):\n\n{positions_summary}\n\n"
+        "Pick 3-5 bolt-on suggestions. Be SPECIFIC about role and sizing. "
+        "No 'maybe consider' — make the call."
+    )
+
+    try:
+        raw = _ca.call_claude(
+            system_prompt=sys_prompt,
+            user_content=user,
+            model=_ca.CLAUDE_SCREEN_MODEL,
+        )
+    except Exception as e:
+        print(f"⚠️  [bolton_screen] Sonnet call failed: {e!s:.200}", flush=True)
+        return []
+
+    cleaned = _strip_code_fence(raw)
+    try:
+        parsed = _json.loads(cleaned)
+    except _json.JSONDecodeError:
+        print(f"⚠️  [bolton_screen] invalid JSON: {cleaned[:200]}", flush=True)
+        return []
+    return parsed.get("bolt_ons") or []
+
+
+def generate_portfolio_roundup_script(
+    tickers: list[str],
+    reports_by_ticker: dict[str, dict[str, str]],
+    *,
+    positions: list[dict] | None = None,
+    model: str | None = None,
+    on_progress=None,
+) -> dict[str, Any]:
+    """Portfolio Roundup — PM-style review of a 10-20 ticker book.
+
+    Args:
+        tickers: ordered list of 10-20 ticker symbols (no enforced max here;
+                 callers should sanity-cap)
+        reports_by_ticker: {ticker: {"grok": "...", "claude": "..."}}.
+                          Tickers without reports are OK — the script just
+                          can't cite them as deeply.
+        positions: optional [{ticker, weight_pct?, market_cap?, sector?,
+                              beta?, last_price?}] — feeds the snapshot
+                  section with real sizing.
+        model / on_progress: standard
+
+    Returns: same shape as generate_script. Synthetic ticker is
+    "PORTFOLIO_<n>tickers_<timestamp>" so DB key is unique per run
+    (you generate a new one every refresh, vs single-ticker formats
+    which keep one row per ticker).
+    """
+    import claude_analyst as _ca
+    import time as _t
+
+    tickers = [t.upper().strip() for t in (tickers or []) if t and t.strip()]
+    if len(tickers) < 5:
+        raise ValueError("Portfolio Roundup needs at least 5 tickers")
+
+    # 1. Macro context (Grok live search) — best-effort
+    macro = fetch_macro_context(on_progress=on_progress)
+
+    # 2. Bolt-on screen via Sonnet 4.6 (constrained to current_positions awareness)
+    positions = positions or [{"ticker": t} for t in tickers]
+    # Augment positions with sector from existing reports if missing
+    bolt_ons = screen_bolton_candidates(positions, on_progress=on_progress)
+
+    # 3. Build the dialogue prompt
+    if on_progress:
+        try: on_progress("script_gen",
+                         f"Writing portfolio script ({len(tickers)} positions)…")
+        except Exception: pass
+
+    # Compact reports — at 15 tickers × 2 reports we'd blow the context if we
+    # passed full reports. Truncate hard.
+    MAX_PER_REPORT = 5500
+    reports_block_parts = []
+    for tk in tickers:
+        rep = reports_by_ticker.get(tk, {})
+        grok_md   = (rep.get("grok") or "").strip()
+        claude_md = (rep.get("claude") or "").strip()
+        if not (grok_md or claude_md):
+            continue
+        reports_block_parts.append(
+            f"\n══ {tk} ══\n"
+            f"ROCK:\n{grok_md[:MAX_PER_REPORT]}\n"
+            f"CLAUDIA:\n{claude_md[:MAX_PER_REPORT]}\n"
+        )
+    reports_block = "\n".join(reports_block_parts) if reports_block_parts else \
+        "(No saved reports for any of these tickers — write based on the macro context + position sizing.)"
+
+    pos_block = json.dumps(positions, indent=2, default=str)
+    bolton_block = json.dumps(bolt_ons, indent=2, default=str) if bolt_ons else "(none)"
+
+    fmt_meta = EPISODE_FORMATS["portfolio_roundup"]
+    system = _system_prompt(format="portfolio_roundup")
+    user = f"""Generate the DGA HiTech Podcast PORTFOLIO ROUNDUP for this book.
+
+══════════════════════════════════════════════════════════════════════
+CURRENT POSITIONS ({len(tickers)} names):
+══════════════════════════════════════════════════════════════════════
+{pos_block}
+
+══════════════════════════════════════════════════════════════════════
+MACRO CONTEXT (today's headlines, via live web search):
+══════════════════════════════════════════════════════════════════════
+{macro}
+
+══════════════════════════════════════════════════════════════════════
+BOLT-ON CANDIDATES (pre-screened by Sonnet 4.6, only present these):
+══════════════════════════════════════════════════════════════════════
+{bolton_block}
+
+══════════════════════════════════════════════════════════════════════
+SOURCE REPORTS (per-ticker Grok + Claudia analyses):
+══════════════════════════════════════════════════════════════════════
+{reports_block}
+
+══════════════════════════════════════════════════════════════════════
+Now write the episode. Reminders:
+  • Opus speaks as a SENIOR PM at DGA Capital — directional, owns the P&L.
+    NOT a moderator.
+  • {fmt_meta['word_budget_low']:,}–{fmt_meta['word_budget_high']:,} total words ({fmt_meta['approx_minutes']} min).
+  • Bolt-on suggestions MUST be from the candidates provided above. DO NOT
+    invent any other tickers.
+  • Cite specific headlines from the macro block + specific numbers from
+    the reports where relevant. Be concrete.
+  • End the pm_verdict with a specific date for the next portfolio review
+    (e.g., "next committee — Thursday").
+"""
+
+    _tc = _t.time()
+    print(f"🎙️ [portfolio_roundup] calling Opus  user={len(user):,}ch  reports={len(reports_block_parts)}  bolt_ons={len(bolt_ons)}", flush=True)
+    raw = _ca.call_claude(
+        system_prompt=system, user_content=user,
+        model=model or _ca.CLAUDE_MODEL,
+    )
+    print(f"🎙️ [portfolio_roundup] Opus returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
+
+    cleaned = _strip_code_fence(raw)
+    try:
+        script = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        head = cleaned[:300].replace("\n", "\\n")
+        print(f"❌ [portfolio_roundup] JSON parse failed at pos {e.pos}: {head}", flush=True)
+        return {
+            "ticker": "PORTFOLIO_INVALID",
+            "script": None,
+            "validation": {"ok": False, "errors": [f"LLM returned invalid JSON: {e!s:.200}"],
+                           "warnings": [], "stats": {}},
+            "raw_response": raw,
+        }
+
+    # Synthetic key — unique per run (you'd want fresh ones for re-runs of
+    # the same book on different days, so timestamp it).
+    synthetic = f"PORTFOLIO_{len(tickers)}TICKERS_{int(_t.time())}"
+    script["ticker"] = synthetic
+    script["format"] = "portfolio_roundup"
+    script["tickers"] = tickers
+    if not script.get("episode_title"):
+        script["episode_title"] = fmt_meta["title_pattern"].replace("{TICKERS}", f"{len(tickers)} positions · {_today_str()}")
+    script["_alignment"] = {
+        "episode_mode": "portfolio_roundup",
+        "bull_speaker": "rock",
+        "bear_speaker": "claudia",
+        "tickers":      tickers,
+        "da_brief_used": False,
+        "macro_used":    not macro.startswith("[macro unavailable"),
+        "bolton_count":  len(bolt_ons),
+    }
+
+    validation = validate_script(script)
+    return {
+        "ticker":       synthetic,
+        "script":       script,
+        "validation":   validation,
+        "raw_response": raw,
+        "alignment":    script["_alignment"],
+        "macro":        macro,
+        "bolt_ons":     bolt_ons,
     }
 
 
