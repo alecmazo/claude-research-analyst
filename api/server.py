@@ -15820,15 +15820,47 @@ def _ensure_podcast_table() -> None:
             """)
             conn.commit()
             # ui133: alignment + DA brief columns (idempotent)
+            # ui150: format column + composite (ticker, format) PK so each
+            #        format gets its own row (Debate + Pre-Mortem + Memo etc
+            #        for the same ticker coexist without overwriting).
             for stmt in [
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS alignment_json JSONB",
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS da_brief TEXT",
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS episode_mode TEXT",
+                "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'debate'",
             ]:
                 try:
                     cur.execute(stmt); conn.commit()
                 except Exception as _e:
                     print(f"⚠️  [podcast] schema ALTER skipped: {_e!s:.120}", flush=True)
+            # Backfill format from script_json before flipping the PK
+            try:
+                cur.execute(
+                    "UPDATE analyst_podcasts SET format = COALESCE(script_json->>'format', 'debate') "
+                    "WHERE format IS NULL OR format = 'debate'"
+                )
+                conn.commit()
+            except Exception as _e:
+                print(f"⚠️  [podcast] format backfill skipped: {_e!s:.120}", flush=True)
+            # Replace single-column PK with composite (ticker, format)
+            try:
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'analyst_podcasts_pkey'
+                              AND conrelid = 'analyst_podcasts'::regclass
+                              AND (SELECT array_length(conkey,1)) = 1
+                        ) THEN
+                            ALTER TABLE analyst_podcasts DROP CONSTRAINT analyst_podcasts_pkey;
+                            ALTER TABLE analyst_podcasts ADD PRIMARY KEY (ticker, format);
+                        END IF;
+                    END$$;
+                """)
+                conn.commit()
+            except Exception as _e:
+                print(f"⚠️  [podcast] PK migration skipped: {_e!s:.120}", flush=True)
     except Exception as e:
         print(f"❌ [podcast] table ensure failed: {e!s:.200}", flush=True)
 
@@ -15868,15 +15900,23 @@ def _podcast_progress(ticker: str):
     return _record
 
 
-def _run_podcast_generation(ticker: str, tts_model: str) -> None:
+def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate") -> None:
     """Background worker: pull script (or generate one), synthesize audio,
-    upload to Dropbox, update DB."""
+    upload to Dropbox, update DB.
+
+    format scopes everything — separate MP3 + DB row per (ticker, format),
+    so generating Pre-Mortem audio for INTC doesn't overwrite the Debate
+    audio for INTC.
+    """
     import podcast_engine as pe
     tk = ticker.upper()
-    _podcast_jobs[tk] = {
+    # Job key includes format so concurrent jobs for different formats of
+    # the same ticker don't collide in the progress dict.
+    job_key = f"{tk}::{format}"
+    _podcast_jobs[job_key] = {
         "stage": "queued", "current": 0, "total": 0,
         "label": "Loading reports…", "status": "running",
-        "started_at": time.time(),
+        "started_at": time.time(), "format": format,
     }
     try:
         # 1. Load both reports
@@ -15893,12 +15933,12 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                 f"{tk} needs BOTH Grok + Claude reports — generate them first."
             )
 
-        # 2. Re-use existing script if one is cached, else generate fresh
+        # 2. Re-use existing script for THIS format if cached, else generate fresh
         cached_script = None
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""SELECT script_json FROM analyst_podcasts
-                               WHERE ticker = %s""", (tk,))
+                               WHERE ticker = %s AND format = %s""", (tk, format))
                 pr = cur.fetchone()
                 if pr and pr.get("script_json"):
                     cached_script = pr["script_json"]
@@ -15907,12 +15947,12 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
 
         if cached_script:
             script = cached_script
-            _podcast_jobs[tk] = {**_podcast_jobs[tk],
-                "label": "Re-using cached script (regenerating audio only)…"}
+            _podcast_jobs[job_key] = {**_podcast_jobs[job_key],
+                "label": f"Re-using cached {format} script (regenerating audio only)…"}
         else:
-            _podcast_jobs[tk] = {**_podcast_jobs[tk],
-                "label": "Writing script with Claude Opus (~40s)…"}
-            result = pe.generate_script(tk, grok_md, claude_md)
+            _podcast_jobs[job_key] = {**_podcast_jobs[job_key],
+                "label": f"Writing {format} script with Claude Opus (~40s)…"}
+            result = pe.generate_script(tk, grok_md, claude_md, format=format)
             if not result.get("script"):
                 raise RuntimeError("Script generation failed: " +
                     ", ".join(result.get("validation", {}).get("errors", []) or ["unknown"]))
@@ -15927,17 +15967,19 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
             )
             vcfg = _kv_get("podcast.voice_config") or {}
             pe.apply_voice_overrides(voices=vcfg.get("voices"))
-            print(f"🎙️ [podcast/audio {tk}] speed={pe.get_speed_config()} voices={pe.get_voice_config()['voices']}", flush=True)
+            print(f"🎙️ [podcast/audio {job_key}] speed={pe.get_speed_config()} voices={pe.get_voice_config()['voices']}", flush=True)
         except Exception as _e:
-            print(f"⚠️  [podcast/audio {tk}] config override load failed: {_e!s:.120}", flush=True)
+            print(f"⚠️  [podcast/audio {job_key}] config override load failed: {_e!s:.120}", flush=True)
         out_dir = analyst.STOCKS_FOLDER / "podcasts"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{tk}_podcast.mp3"
+        # Format-specific filename so Pre-Mortem doesn't clobber Debate on disk
+        mp3_name = f"{tk}_{format}_podcast.mp3" if format != "debate" else f"{tk}_podcast.mp3"
+        out_path = out_dir / mp3_name
         syn = pe.synthesize_episode(
             script,
             out_path=out_path,
             tts_model=tts_model,
-            on_progress=_podcast_progress(tk),
+            on_progress=_podcast_progress(job_key),
         )
 
         # 4. Upload to Dropbox under /podcast/episodes/
@@ -15948,7 +15990,7 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                 import dropbox as _dbx
                 base = analyst._dropbox_folder()
                 sub = f"{base}/podcast/episodes" if base else "/podcast/episodes"
-                dropbox_path = f"{sub}/{tk}_podcast.mp3"
+                dropbox_path = f"{sub}/{mp3_name}"
                 dbx.files_upload(
                     out_path.read_bytes(),
                     dropbox_path,
@@ -15966,11 +16008,11 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
             with _fund_conn() as conn, conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO analyst_podcasts
-                        (ticker, episode_title, script_json, audio_local_path,
+                        (ticker, format, episode_title, script_json, audio_local_path,
                          audio_dropbox_path, duration_sec, tts_model, voice_map,
                          generated_at, cost_usd)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
-                    ON CONFLICT (ticker) DO UPDATE SET
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                    ON CONFLICT (ticker, format) DO UPDATE SET
                         episode_title      = EXCLUDED.episode_title,
                         script_json        = EXCLUDED.script_json,
                         audio_local_path   = EXCLUDED.audio_local_path,
@@ -15982,6 +16024,7 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                         cost_usd           = EXCLUDED.cost_usd
                 """, (
                     tk,
+                    format,
                     script.get("episode_title") or f"{tk}: Bull vs Bear",
                     json.dumps(script),
                     str(out_path),
@@ -15993,21 +16036,21 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
                 ))
                 conn.commit()
         except Exception as e:
-            print(f"❌ [podcast] DB persist failed for {tk}: {e!s:.200}", flush=True)
+            print(f"❌ [podcast] DB persist failed for {job_key}: {e!s:.200}", flush=True)
 
-        _podcast_jobs[tk] = {
-            **_podcast_jobs[tk],
+        _podcast_jobs[job_key] = {
+            **_podcast_jobs[job_key],
             "stage": "done", "status": "done",
             "label": f"✓ Done — {syn['duration_sec']:.0f}s episode",
             "duration_sec": syn.get("duration_sec"),
-            "audio_url": f"/api/podcast/{tk}/audio.mp3",
+            "audio_url": f"/api/podcast/{tk}/audio.mp3?format={format}",
             "dropbox_path": dropbox_path,
             "cost_usd": cost.get("estimated_usd"),
         }
     except Exception as e:
-        print(f"❌ [podcast] generation failed for {tk}: {e!s:.500}", flush=True)
-        _podcast_jobs[tk] = {
-            **(_podcast_jobs.get(tk) or {}),
+        print(f"❌ [podcast] generation failed for {job_key}: {e!s:.500}", flush=True)
+        _podcast_jobs[job_key] = {
+            **(_podcast_jobs.get(job_key) or {}),
             "stage": "error", "status": "error",
             "label": f"❌ {e!s:.200}", "error": str(e),
         }
@@ -16015,59 +16058,68 @@ def _run_podcast_generation(ticker: str, tts_model: str) -> None:
 
 @app.post("/api/podcast/{ticker}/generate")
 def podcast_generate(ticker: str, background_tasks: BackgroundTasks,
-                     tts_model: str = "tts-1-hd"):
+                     tts_model: str = "tts-1-hd", format: str = "debate"):
     """Kick off podcast audio generation in the background.
 
-    Poll progress via GET /api/podcast/{ticker}/status.
-    When status.stage='done', play GET /api/podcast/{ticker}/audio.mp3.
+    format scopes the entire job — separate MP3 + DB row per (ticker, format)
+    so Pre-Mortem audio doesn't overwrite Debate audio for the same ticker.
+
+    Poll progress via GET /api/podcast/{ticker}/status?format=X.
+    When status.stage='done', play GET /api/podcast/{ticker}/audio.mp3?format=X.
     """
     tk = ticker.upper().strip()
     if not os.environ.get("OPENAI_API_KEY"):
         return JSONResponse({"ok": False, "error": "OPENAI_API_KEY not set on server"},
                             status_code=400)
-    existing = _podcast_jobs.get(tk)
+    job_key = f"{tk}::{format}"
+    existing = _podcast_jobs.get(job_key)
     if existing and existing.get("status") == "running":
-        return {"ok": True, "ticker": tk, "already_running": True}
-    background_tasks.add_task(_run_podcast_generation, tk, tts_model)
-    return {"ok": True, "ticker": tk, "tts_model": tts_model}
+        return {"ok": True, "ticker": tk, "format": format, "already_running": True}
+    background_tasks.add_task(_run_podcast_generation, tk, tts_model, format)
+    return {"ok": True, "ticker": tk, "format": format, "tts_model": tts_model}
 
 
 @app.get("/api/podcast/{ticker}/status")
-def podcast_status(ticker: str):
+def podcast_status(ticker: str, format: str = "debate"):
     tk = ticker.upper().strip()
-    job = _podcast_jobs.get(tk) or {"stage": "idle", "status": "idle"}
-    return {"ok": True, "ticker": tk, **job}
+    job_key = f"{tk}::{format}"
+    job = _podcast_jobs.get(job_key) or {"stage": "idle", "status": "idle"}
+    return {"ok": True, "ticker": tk, "format": format, **job}
 
 
 @app.get("/api/podcast/{ticker}/audio.mp3")
-def podcast_audio(ticker: str):
-    """Stream the most recent MP3 for this ticker (DB row → local file)."""
+def podcast_audio(ticker: str, format: str = "debate"):
+    """Stream the MP3 for (ticker, format). DB row → local file → Dropbox rehydrate."""
     from fastapi.responses import FileResponse
     tk = ticker.upper().strip()
-    # 1. Try DB (canonical source — survives Railway restarts via Dropbox fallback)
     local_path: str | None = None
     dropbox_path: str | None = None
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("""SELECT audio_local_path, audio_dropbox_path
-                               FROM analyst_podcasts WHERE ticker = %s""", (tk,))
+                # Try exact format first; if missing, fall back to whatever
+                # row exists for this ticker (handles legacy single-format rows).
+                cur.execute("""SELECT audio_local_path, audio_dropbox_path, format
+                               FROM analyst_podcasts
+                               WHERE ticker = %s
+                               ORDER BY (format = %s) DESC, generated_at DESC
+                               LIMIT 1""", (tk, format))
                 row = cur.fetchone()
                 if row:
                     local_path   = row.get("audio_local_path")
                     dropbox_path = row.get("audio_dropbox_path")
         except Exception:
             pass
-    # 2. Local file (fast path)
     if local_path:
         p = Path(local_path)
         if p.exists():
             return FileResponse(p, media_type="audio/mpeg", filename=p.name)
-    # 3. Fallback to expected location
-    fallback = analyst.STOCKS_FOLDER / "podcasts" / f"{tk}_podcast.mp3"
+    # Fallback to expected per-format location
+    mp3_name = f"{tk}_{format}_podcast.mp3" if format != "debate" else f"{tk}_podcast.mp3"
+    fallback = analyst.STOCKS_FOLDER / "podcasts" / mp3_name
     if fallback.exists():
         return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
-    # 4. Dropbox fallback (rehydrate then serve)
+    # Dropbox rehydrate
     if dropbox_path:
         try:
             dbx = analyst._dropbox_client()
@@ -16077,8 +16129,8 @@ def podcast_audio(ticker: str):
                 fallback.write_bytes(res.content)
                 return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
         except Exception as e:
-            print(f"⚠️  [podcast] dropbox rehydrate failed for {tk}: {e!s:.200}", flush=True)
-    return JSONResponse({"ok": False, "error": f"No podcast audio found for {tk}"},
+            print(f"⚠️  [podcast] dropbox rehydrate failed for {tk}/{format}: {e!s:.200}", flush=True)
+    return JSONResponse({"ok": False, "error": f"No {format} audio found for {tk}"},
                         status_code=404)
 
 
@@ -16237,20 +16289,22 @@ def podcast_list():
     try:
         _ensure_podcast_table()
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""SELECT ticker, episode_title, duration_sec, generated_at,
+            cur.execute("""SELECT ticker, format, episode_title, duration_sec, generated_at,
                                   tts_model, cost_usd, audio_dropbox_path
                            FROM analyst_podcasts
+                           WHERE audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL
                            ORDER BY generated_at DESC""")
             rows = cur.fetchall()
         return {"ok": True, "episodes": [
             {
-                "ticker": r["ticker"],
-                "title":  r["episode_title"],
+                "ticker":       r["ticker"],
+                "format":       r.get("format") or "debate",
+                "title":        r["episode_title"],
                 "duration_sec": r["duration_sec"],
                 "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
                 "tts_model":    r["tts_model"],
                 "cost_usd":     r["cost_usd"],
-                "audio_url":    f"/api/podcast/{r['ticker']}/audio.mp3",
+                "audio_url":    f"/api/podcast/{r['ticker']}/audio.mp3?format={r.get('format') or 'debate'}",
                 "dropbox_path": r["audio_dropbox_path"],
             } for r in rows
         ]}
@@ -16319,10 +16373,10 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
                 with _fund_conn() as conn, conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO analyst_podcasts
-                            (ticker, episode_title, script_json,
+                            (ticker, format, episode_title, script_json,
                              alignment_json, da_brief, episode_mode, generated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                        ON CONFLICT (ticker) DO UPDATE SET
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker, format) DO UPDATE SET
                             episode_title  = EXCLUDED.episode_title,
                             script_json    = EXCLUDED.script_json,
                             alignment_json = EXCLUDED.alignment_json,
@@ -16331,6 +16385,7 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
                             generated_at   = NOW()
                     """, (
                         tk,
+                        format,
                         (result["script"].get("episode_title") or f"{tk}: Bull vs Bear"),
                         json.dumps(result["script"]),
                         json.dumps({
@@ -16426,9 +16481,9 @@ def _run_roundup_generation(tickers: list[str]) -> None:
                 with _fund_conn() as conn, conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO analyst_podcasts
-                            (ticker, episode_title, script_json, episode_mode, generated_at)
-                        VALUES (%s, %s, %s, %s, NOW())
-                        ON CONFLICT (ticker) DO UPDATE SET
+                            (ticker, format, episode_title, script_json, episode_mode, generated_at)
+                        VALUES (%s, 'roundup', %s, %s, %s, NOW())
+                        ON CONFLICT (ticker, format) DO UPDATE SET
                             episode_title = EXCLUDED.episode_title,
                             script_json   = EXCLUDED.script_json,
                             episode_mode  = EXCLUDED.episode_mode,
@@ -16509,7 +16564,7 @@ def podcast_list_scripts():
             cur.execute("""
                 SELECT ticker, episode_title, generated_at, episode_mode,
                        (script_json->>'winner') AS winner,
-                       (script_json->>'format') AS format,
+                       COALESCE(format, script_json->>'format', 'debate') AS format,
                        (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio
                 FROM analyst_podcasts
                 WHERE script_json IS NOT NULL
@@ -16565,18 +16620,20 @@ async def podcast_update_script(ticker: str, req: Request):
 
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
+    edit_format = (script.get("format") or "debate").lower()
     try:
         _ensure_podcast_table()
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO analyst_podcasts (ticker, episode_title, script_json, generated_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (ticker) DO UPDATE SET
+                INSERT INTO analyst_podcasts (ticker, format, episode_title, script_json, generated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (ticker, format) DO UPDATE SET
                     episode_title = EXCLUDED.episode_title,
                     script_json   = EXCLUDED.script_json,
                     generated_at  = NOW()
             """, (
                 tk,
+                edit_format,
                 (script.get("episode_title") or f"{tk}: Bull vs Bear"),
                 json.dumps(script),
             ))
@@ -16595,28 +16652,31 @@ async def podcast_update_script(ticker: str, req: Request):
 
 
 @app.get("/api/podcast/{ticker}/script")
-def podcast_get_script(ticker: str):
-    """Fetch a previously-generated podcast script (no regeneration, no spend)."""
+def podcast_get_script(ticker: str, format: str = "debate"):
+    """Fetch a previously-generated podcast script for (ticker, format)."""
     import podcast_engine
     tk = ticker.upper().strip()
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""SELECT script_json, episode_title, generated_at,
+            cur.execute("""SELECT script_json, episode_title, generated_at, format,
                                   alignment_json, da_brief, episode_mode
-                           FROM analyst_podcasts WHERE ticker = %s""", (tk,))
+                           FROM analyst_podcasts
+                           WHERE ticker = %s
+                           ORDER BY (format = %s) DESC, generated_at DESC
+                           LIMIT 1""", (tk, format))
             row = cur.fetchone()
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
     if not row or not row.get("script_json"):
-        return JSONResponse({"ok": False, "error": f"No saved script for {tk}"}, status_code=404)
+        return JSONResponse({"ok": False, "error": f"No {format} script for {tk}"}, status_code=404)
     script = row["script_json"]
-    # Re-validate so stats display the same way as a fresh generation
     validation = podcast_engine.validate_script(script) if isinstance(script, dict) else {}
     return {
         "ok":           True,
         "ticker":       tk,
+        "format":       row.get("format") or format,
         "script":       script,
         "validation":   validation,
         "transcript":   podcast_engine.script_to_transcript(script) if isinstance(script, dict) else None,
