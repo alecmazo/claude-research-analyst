@@ -1,3 +1,7 @@
+// Build tag — bump on every JS change so we can verify the OTA landed.
+// Shown in the screen header so the device tells us which bundle is loaded.
+const PODCAST_BUILD = 'pc-v3-tap-debug-20260523';
+
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
  *
@@ -92,8 +96,11 @@ export default function PodcastScreen() {
   }, [loadEpisodes]);
 
   const handleSelect = useCallback(async (ep) => {
-    haptics.light();
-    setLastErr(null);
+    // FIRST LINE: force player card visible + show tap feedback so we know
+    // the touch registered, even if everything downstream fails.
+    setSelectedTicker(ep.ticker);
+    setLastErr(`TAP ${ep.ticker} · ${PODCAST_BUILD}`);
+    try { haptics.light(); } catch {}
     // Tap the SAME row → toggle play/pause
     if (selectedTicker === ep.ticker) {
       try {
@@ -103,7 +110,7 @@ export default function PodcastScreen() {
       return;
     }
     // New episode: build URL, probe reachability, then replace + play
-    setSelectedTicker(ep.ticker);
+    // (setSelectedTicker already called at function top)
     const url = await api.getPodcastAudioUrl(ep.ticker);
     setAudioUrl(url);
     console.log('[podcast] loading', ep.ticker, '→', url);
@@ -191,7 +198,7 @@ export default function PodcastScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.brand}>🎙️  DGA HiTech</Text>
-        <Text style={styles.brandSub}>Rock vs Claudia · Alec calls it</Text>
+        <Text style={styles.brandSub}>Rock vs Claudia · Alec calls it · {PODCAST_BUILD}</Text>
       </View>
 
       {/* Active episode player (sticky at top once a ticker is selected) */}
