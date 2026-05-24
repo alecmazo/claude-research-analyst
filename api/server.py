@@ -15771,6 +15771,11 @@ except Exception:
 _podcast_jobs: dict[str, dict] = {}
 _podcast_jobs_lock = threading.Lock()
 
+# Separate dict for script-generation jobs so they don't collide with audio
+# generation (which uses _podcast_jobs). Schema is the same:
+#   {stage, current, total, label, status, started_at, [result], [error]}
+_podcast_script_jobs: dict[str, dict] = {}
+
 
 def _podcast_progress(ticker: str):
     """Return a closure that records progress for one ticker job."""
@@ -16179,20 +16184,29 @@ def podcast_list():
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
-@app.post("/api/podcast/{ticker}/script")
-def podcast_generate_script(ticker: str):
-    """Generate a podcast script for one ticker from its saved Grok + Claude reports.
-
-    Returns the structured dialogue JSON + validation. No audio yet (v0).
-    Caller must have BOTH a Grok report and a Claude report in analyst_reports.
-    """
+def _run_script_generation(ticker: str) -> None:
+    """Background worker for /api/podcast/{ticker}/script.
+    Updates _podcast_script_jobs as it progresses so the UI can poll."""
     import podcast_engine
     tk = ticker.upper().strip()
-    # Pull both report texts from DB
-    grok_md = ""
-    claude_md = ""
-    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
-        try:
+
+    def _set(**kw):
+        _podcast_script_jobs[tk] = {**(_podcast_script_jobs.get(tk) or {}), **kw,
+                                    "updated_at": time.time()}
+    def _on_progress(stage, *args):
+        # generate_script's on_progress signature: (stage, label_str)
+        # — but DA brief uses (stage, label) too. Normalize to a single label.
+        label = args[0] if args else stage
+        _set(stage=stage, label=str(label))
+
+    _set(stage="queued", current=0, total=0, label="Queued…",
+         status="running", started_at=time.time())
+
+    try:
+        # 1. Pull both reports
+        _set(stage="load", label="Loading Grok + Claude reports…")
+        grok_md, claude_md = "", ""
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
                                WHERE ticker = %s""", (tk,))
@@ -16200,80 +16214,100 @@ def podcast_generate_script(ticker: str):
                 if row:
                     grok_md   = row.get("report_md") or ""
                     claude_md = row.get("report_md_claude") or ""
-        except Exception as e:
-            return JSONResponse(
-                {"ok": False, "error": f"DB read failed: {e!s:.200}"},
-                status_code=500,
-            )
-    if not grok_md.strip():
-        return JSONResponse(
-            {"ok": False, "error": f"No Grok report found for {tk}. Run analysis first."},
-            status_code=400,
-        )
-    if not claude_md.strip():
-        return JSONResponse(
-            {"ok": False, "error": f"No Claude report found for {tk}. Run Claude analysis first."},
-            status_code=400,
-        )
-    try:
-        result = podcast_engine.generate_script(tk, grok_md, claude_md)
-    except Exception as e:
-        print(f"❌ [podcast] generate_script({tk}) crashed: {e!s:.500}", flush=True)
-        return JSONResponse(
-            {"ok": False, "error": f"Script generation failed: {e!s:.300}"},
-            status_code=500,
+        if not grok_md.strip():
+            raise RuntimeError(f"No Grok report found for {tk}")
+        if not claude_md.strip():
+            raise RuntimeError(f"No Claude report found for {tk}")
+
+        # 2. Generate (passes _on_progress to engine — it'll fire at classify /
+        #    da_research / da_synth / script_gen stages)
+        result = podcast_engine.generate_script(
+            tk, grok_md, claude_md, on_progress=_on_progress,
         )
 
-    # Persist to /stocks for inspection (cheap, lets us diff regenerations)
-    try:
-        out_path = analyst.STOCKS_FOLDER / f"{tk}_podcast_script.json"
-        out_path.write_text(json.dumps(result["script"] or {"raw": result.get("raw_response")}, indent=2))
-    except Exception:
-        pass
+        if not result.get("script"):
+            errs = (result.get("validation") or {}).get("errors", []) or ["unknown"]
+            raise RuntimeError("Script generation returned nothing: " + "; ".join(errs))
 
-    # Persist script + alignment + DA brief to DB so the dropdown lists it
-    # and the audio pipeline reuses everything (no double-spend).
-    alignment = result.get("alignment") or {}
-    if result.get("script") and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        # 3. Persist artifacts
+        _set(stage="persist", label="Saving script…")
         try:
-            _ensure_podcast_table()
-            with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO analyst_podcasts
-                        (ticker, episode_title, script_json,
-                         alignment_json, da_brief, episode_mode, generated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (ticker) DO UPDATE SET
-                        episode_title  = EXCLUDED.episode_title,
-                        script_json    = EXCLUDED.script_json,
-                        alignment_json = EXCLUDED.alignment_json,
-                        da_brief       = EXCLUDED.da_brief,
-                        episode_mode   = EXCLUDED.episode_mode,
-                        generated_at   = NOW()
-                """, (
-                    tk,
-                    (result["script"].get("episode_title") or f"{tk}: Bull vs Bear"),
-                    json.dumps(result["script"]),
-                    json.dumps({
-                        "roles":         alignment.get("roles"),
-                        "rock_stance":   alignment.get("rock_stance"),
-                        "claude_stance": alignment.get("claude_stance"),
-                    }),
-                    alignment.get("da_brief") or None,
-                    (alignment.get("roles") or {}).get("episode_mode"),
-                ))
-                conn.commit()
-        except Exception as e:
-            print(f"⚠️  [podcast] script DB persist failed for {tk}: {e!s:.200}", flush=True)
+            (analyst.STOCKS_FOLDER / f"{tk}_podcast_script.json").write_text(
+                json.dumps(result["script"], indent=2))
+        except Exception:
+            pass
 
-    return {
-        "ok":          bool(result.get("script")),
-        "ticker":      tk,
-        "script":      result.get("script"),
-        "validation":  result.get("validation"),
-        "alignment":   alignment,
-        "transcript":  podcast_engine.script_to_transcript(result["script"]) if result.get("script") else None,
-    }
+        alignment = result.get("alignment") or {}
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                _ensure_podcast_table()
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO analyst_podcasts
+                            (ticker, episode_title, script_json,
+                             alignment_json, da_brief, episode_mode, generated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            episode_title  = EXCLUDED.episode_title,
+                            script_json    = EXCLUDED.script_json,
+                            alignment_json = EXCLUDED.alignment_json,
+                            da_brief       = EXCLUDED.da_brief,
+                            episode_mode   = EXCLUDED.episode_mode,
+                            generated_at   = NOW()
+                    """, (
+                        tk,
+                        (result["script"].get("episode_title") or f"{tk}: Bull vs Bear"),
+                        json.dumps(result["script"]),
+                        json.dumps({
+                            "roles":         alignment.get("roles"),
+                            "rock_stance":   alignment.get("rock_stance"),
+                            "claude_stance": alignment.get("claude_stance"),
+                        }),
+                        alignment.get("da_brief") or None,
+                        (alignment.get("roles") or {}).get("episode_mode"),
+                    ))
+                    conn.commit()
+            except Exception as e:
+                print(f"⚠️  [podcast] script DB persist failed for {tk}: {e!s:.200}", flush=True)
+
+        # 4. Final payload — the status endpoint returns this whole object
+        _set(stage="done", status="done", label="✓ Script ready",
+             result={
+                "ok":          True,
+                "ticker":      tk,
+                "script":      result.get("script"),
+                "validation":  result.get("validation"),
+                "alignment":   alignment,
+                "transcript":  podcast_engine.script_to_transcript(result["script"]),
+             })
+    except Exception as e:
+        print(f"❌ [podcast/script {tk}] generation failed: {e!s:.500}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/podcast/{ticker}/script")
+def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks):
+    """Kick off podcast script generation in the background.
+
+    Returns immediately with {ok, started}. Poll GET .../script-status
+    for live stage updates; the final {script, validation, alignment,
+    transcript} payload arrives in the status response when status='done'.
+    """
+    tk = ticker.upper().strip()
+    existing = _podcast_script_jobs.get(tk)
+    if existing and existing.get("status") == "running":
+        return {"ok": True, "ticker": tk, "started": False, "already_running": True}
+    background_tasks.add_task(_run_script_generation, tk)
+    return {"ok": True, "ticker": tk, "started": True}
+
+
+@app.get("/api/podcast/{ticker}/script-status")
+def podcast_script_status(ticker: str):
+    """Return the current state of a script-generation job for `ticker`.
+    Includes the full result payload once stage == 'done'."""
+    tk = ticker.upper().strip()
+    job = _podcast_script_jobs.get(tk) or {"stage": "idle", "status": "idle"}
+    return {"ok": True, "ticker": tk, **job}
 
 
 @app.get("/api/podcast/scripts")
