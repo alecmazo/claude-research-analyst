@@ -759,6 +759,10 @@
     vertical-align: middle; border-radius: 3px;
   }
   .rep-compare-btn:hover { opacity: 1; background: #f0f9ff; }
+  /* 🎙️ Podcast button — same chrome as compare, slightly higher resting
+     opacity so users notice it exists. Gold-tint hover instead of blue. */
+  .rep-podcast-btn { opacity: 0.7; }
+  .rep-podcast-btn:hover { background: #fef9e7; }
 
   /* Side-by-side comparison modal */
   .cmp-modal-backdrop {
@@ -3334,11 +3338,28 @@
   $wlInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') addWatchlist(); });
 
   // ── Saved Reports ───────────────────────────────────────────────
+  // Set of tickers that have a generated podcast audio episode — used to
+  // decide whether to render the 🎙️ button next to 🔬 in each row.
+  // Refreshed alongside the reports list.
+  window._podcastEpisodeTickers = new Set();
+
   async function loadReports() {
     try {
-      const r = await window.dgaFetch('/api/reports');
-      if (!r.ok) throw new Error('reports ' + r.status);
-      const list = await r.json();
+      // Fire both in parallel: reports list + podcast episode list. We only
+      // wait on reports for render; the podcast set arrives as a side-effect
+      // and is consulted by renderReports() each time it runs.
+      const [rRep, rPod] = await Promise.all([
+        window.dgaFetch('/api/reports'),
+        window.dgaFetch('/api/podcast/list').catch(function() { return null; }),
+      ]);
+      if (rPod && rPod.ok) {
+        try {
+          const pd = await rPod.json();
+          window._podcastEpisodeTickers = new Set((pd.episodes || []).map(function(e) { return e.ticker; }));
+        } catch {}
+      }
+      if (!rRep.ok) throw new Error('reports ' + rRep.status);
+      const list = await rRep.json();
       renderReports(Array.isArray(list) ? list : []);
     } catch (e) {
       console.warn('[reports]', e);
@@ -3447,6 +3468,13 @@
             '<button class="rep-compare-btn" data-compare-ticker="' + rep.ticker + '"'
               + ' title="Compare Grok report with Claude (≈2-3 min)"'
               + ' onclick="event.stopPropagation();">🔬</button>' +
+            // 🎙️ Podcast — only when an episode exists for this ticker.
+            // Click opens the LLM Lab tab + auto-plays this episode.
+            ((window._podcastEpisodeTickers && window._podcastEpisodeTickers.has(rep.ticker))
+              ? '<button class="rep-compare-btn rep-podcast-btn" data-podcast-ticker="' + rep.ticker + '"'
+                + ' title="Open this stock\'s podcast episode"'
+                + ' onclick="event.stopPropagation();">🎙️</button>'
+              : '') +
             '<button class="rep-compare-btn" data-refresh-ticker="' + rep.ticker + '"'
               + ' title="Wipe cached SEC + market data for this ticker and re-run a fresh Grok analysis. '
               + 'Use when the report has empty financial tables (cached extract was bad)."'
@@ -3535,6 +3563,39 @@
           e.stopPropagation();
           const tk = btn.getAttribute('data-compare-ticker');
           openCompareModal(tk);
+        });
+      });
+
+      // 🎙️ Podcast buttons — switch to LLM Lab tab, sync the audio ticker
+      // picker, surface the player for this ticker's existing episode.
+      tbody.querySelectorAll('[data-podcast-ticker]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tk = btn.getAttribute('data-podcast-ticker');
+          // Switch to the LLM Lab tab (which contains the podcast card)
+          const labTab = document.querySelector('.topbar-link[data-tab="lab"]');
+          if (labTab) labTab.click();
+          // After the tab DOM is visible, sync pickers + open the player.
+          // Small timeout lets _initLabTab finish populating dropdowns.
+          setTimeout(function() {
+            const sel = document.getElementById('podcast-audio-saved');
+            if (sel) {
+              if (!Array.from(sel.options).some(function(o){ return o.value === tk; })) {
+                const opt = document.createElement('option');
+                opt.value = tk; opt.textContent = tk;
+                sel.appendChild(opt);
+              }
+              sel.value = tk;
+            }
+            const ep = (window._podcastEpisodes || []).find(function(e){ return e.ticker === tk; });
+            if (typeof _showPodcastPlayer === 'function') {
+              _showPodcastPlayer(tk, ep || { title: tk });
+            }
+            const player = document.getElementById('podcast-audio-player');
+            if (player && player.scrollIntoView) {
+              player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 250);
         });
       });
 
