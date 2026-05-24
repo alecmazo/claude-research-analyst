@@ -48,33 +48,31 @@ export default function PodcastScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
-  const [pendingPlay, setPendingPlay] = useState(false);
+  const [lastErr,  setLastErr]  = useState(null);
 
-  // expo-audio: useAudioPlayer takes a source object or null (no playback)
-  const player = useAudioPlayer(audioUrl ? { uri: audioUrl } : null);
+  // Create player ONCE with null source — we'll feed it new URLs via
+  // player.replace(). This is more reliable than re-running useAudioPlayer
+  // with a changing source (the hook's source-change behavior is opaque
+  // and was the leading suspect for "tap but nothing happens").
+  const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
 
   // ── Enable iOS silent-mode playback (otherwise nothing plays when the
-  //    ringer switch is off). Must be called BEFORE play().
+  //    ringer switch is off).
   useEffect(() => {
     setAudioModeAsync({
       playsInSilentMode: true,
       allowsRecording: false,
       shouldPlayInBackground: true,
       interruptionMode: 'mixWithOthers',
-    }).catch((e) => console.warn('[podcast] setAudioModeAsync failed:', e?.message));
+    })
+      .then(() => console.log('[podcast] audio mode set'))
+      .catch((e) => {
+        const msg = e?.message || String(e);
+        console.warn('[podcast] setAudioModeAsync failed:', msg);
+        setLastErr(`audioMode: ${msg}`);
+      });
   }, []);
-
-  // ── Once the new audio finishes loading, fire play() if requested.
-  //    Calling play() before isLoaded silently no-ops on expo-audio,
-  //    which is why our earlier setTimeout-based approach felt broken.
-  useEffect(() => {
-    if (!pendingPlay) return;
-    if (status?.isLoaded) {
-      try { player.play(); } catch (e) { console.warn('[podcast] play failed:', e?.message); }
-      setPendingPlay(false);
-    }
-  }, [pendingPlay, status?.isLoaded, player]);
 
   const loadEpisodes = useCallback(async () => {
     try {
@@ -95,19 +93,48 @@ export default function PodcastScreen() {
 
   const handleSelect = useCallback(async (ep) => {
     haptics.light();
+    setLastErr(null);
+    // Tap the SAME row → toggle play/pause
     if (selectedTicker === ep.ticker) {
-      // Tapping the active episode toggles play/pause
       try {
         if (status?.playing) player.pause();
-        else player.play();
-      } catch (e) { console.warn('[podcast] toggle failed:', e?.message); }
+        else                 player.play();
+      } catch (e) { setLastErr(`toggle: ${e?.message || e}`); }
       return;
     }
+    // New episode: build URL, probe reachability, then replace + play
     setSelectedTicker(ep.ticker);
     const url = await api.getPodcastAudioUrl(ep.ticker);
-    console.log('[podcast] loading', ep.ticker, '→', url);
     setAudioUrl(url);
-    setPendingPlay(true);   // useEffect above will play once status.isLoaded
+    console.log('[podcast] loading', ep.ticker, '→', url);
+
+    // Probe with HEAD so we can show user a precise error if it 404s/401s
+    try {
+      const r = await fetch(url, { method: 'HEAD' });
+      console.log('[podcast] HEAD', r.status, 'ct=', r.headers?.get?.('content-type'));
+      if (!r.ok) {
+        setLastErr(`HTTP ${r.status} fetching audio`);
+        return;
+      }
+    } catch (e) {
+      setLastErr(`net: ${e?.message || e}`);
+      return;
+    }
+
+    // Hand the new URL to the existing player + play
+    try {
+      player.replace({ uri: url });
+    } catch (e) {
+      setLastErr(`replace: ${e?.message || e}`);
+      return;
+    }
+    // play() is safe to call right after replace() in expo-audio v1 —
+    // the player buffers + starts when ready
+    try {
+      player.play();
+    } catch (e) {
+      setLastErr(`play: ${e?.message || e}`);
+    }
   }, [selectedTicker, player, status]);
 
   const handleSeek = useCallback((deltaSec) => {
@@ -173,6 +200,14 @@ export default function PodcastScreen() {
           <Text style={styles.playerTicker}>{selectedTicker}</Text>
           <Text style={styles.playerTitle} numberOfLines={1}>
             {(episodes.find(e => e.ticker === selectedTicker)?.title) || `${selectedTicker}: Bull vs Bear`}
+          </Text>
+          {/* Diagnostic strip — temporary until playback is reliable */}
+          <Text style={styles.diag} numberOfLines={2}>
+            {lastErr
+              ? `⚠ ${lastErr}`
+              : status?.isLoaded
+                ? `▸ loaded · ${status.playing ? 'PLAYING' : 'paused'} · ${Math.round(status.duration || 0)}s`
+                : `⏳ loading audio…  url: ${(audioUrl || '').replace(/^https?:\/\//, '')}`}
           </Text>
           <View style={styles.scrubRow}>
             <Text style={styles.scrubTime}>{fmtDuration(status?.currentTime || 0)}</Text>
@@ -275,6 +310,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 2,
     opacity: 0.85,
+  },
+  diag: {
+    color: '#84CCE3', fontSize: 10, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 6, opacity: 0.85,
   },
   scrubRow: {
     flexDirection: 'row', alignItems: 'center',
