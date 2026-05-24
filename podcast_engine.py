@@ -46,6 +46,18 @@ MAX_CURSES_PER_EPISODE = 10  # ui132: bumped from 5 — user wanted more punch
 # Intensity → playback speed (used by v1 TTS layer)
 INTENSITY_SPEED = {"calm": 0.95, "normal": 1.0, "heated": 1.10}
 
+# Per-speaker baseline speed offset (multiplied with INTENSITY_SPEED).
+# Lets us brighten/calm individual voices without changing intensity logic.
+#   • Alec (onyx) skews somber at 1.0× — +6% makes him noticeably more
+#     upbeat without rushing the moderator role.
+SPEAKER_SPEED_OFFSET = {
+    "alec":    1.06,   # bump for energy (onyx can sound flat at 1.0)
+    "rock":    1.00,
+    "claudia": 1.00,
+}
+# OpenAI TTS hard limits — clamp so we never send an out-of-range speed.
+SPEED_MIN, SPEED_MAX = 0.85, 1.20
+
 VALID_SPEAKERS = {"alec", "rock", "claudia"}
 VALID_INTENSITY = set(INTENSITY_SPEED)
 
@@ -955,9 +967,12 @@ def _ensure_stings() -> tuple[Path, Path]:
 def _tts_turn(client, speaker: str, text: str, intensity: str,
               model: str = TTS_MODEL_DEFAULT) -> bytes:
     """Synthesize one turn via OpenAI TTS. Returns raw MP3 bytes."""
-    voice = VOICE_MAP.get(speaker.lower(), "alloy")
-    speed = INTENSITY_SPEED.get(intensity.lower(), 1.0)
-    # OpenAI speed range is 0.25–4.0; we stay in 0.95–1.10 per our spec.
+    sp_l = speaker.lower()
+    voice = VOICE_MAP.get(sp_l, "alloy")
+    # Final speed = intensity speed × per-speaker baseline, clamped to API range
+    intensity_mult = INTENSITY_SPEED.get(intensity.lower(), 1.0)
+    speaker_mult   = SPEAKER_SPEED_OFFSET.get(sp_l, 1.0)
+    speed = max(SPEED_MIN, min(SPEED_MAX, intensity_mult * speaker_mult))
     resp = client.audio.speech.create(
         model=model,
         voice=voice,
