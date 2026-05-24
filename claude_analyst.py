@@ -5965,8 +5965,19 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         "which can wait. You're cost-conscious — every Opus report costs ~$2 and "
         "an analyst-day of review time. Don't recommend tickers where the recent "
         "data doesn't suggest anything actionable.\n\n"
+        "Each candidate has a 'bucket' tag — use it to balance your picks:\n"
+        "  • active = moved ≥2.5% TODAY → react/refresh, high actionability\n"
+        "  • stale  = no big move + last report >14d old → REFRESH candidate\n"
+        "  • fresh  = no big move + recent report → low priority unless data"
+            " is genuinely new\n\n"
+        "AIM FOR A MIX: ideally your top picks include BOTH 'active' (react)\n"
+        "and 'stale' (refresh) tickers. Don't return only active or only stale."
+        " A pure-active list misses the slow-burning thesis names; a pure-stale"
+        " list ignores what's actually moving. Tag each pick's bucket in the"
+        " 'bucket' field of your output so the UI can render it.\n\n"
         "Return STRICT JSON. No prose, no code fences. Schema:\n"
-        '{ "picks":   [{"ticker":"X", "score":0-100, "reason":"≤20 words", "priority":"high|med|low"}],\n'
+        '{ "picks":   [{"ticker":"X", "score":0-100, "reason":"≤20 words",'
+        ' "priority":"high|med|low", "bucket":"active|stale|fresh"}],\n'
         '  "skipped": [{"ticker":"X", "reason":"≤15 words why no full report needed"}] }'
     )
     user = (

@@ -5724,75 +5724,128 @@ _SECTOR_ETF_MAP = {
 
 @app.post("/api/v2/research/prioritize")
 def research_prioritize(request: Request, top_n: int = 5):
-    """Cheap Sonnet-4.6 pre-screen — rank the user's universe by which
-    tickers deserve a full Opus report this week.
+    """Cheap Sonnet 4.6 pre-screen (Option C — hybrid universe).
 
-    Pulls the same universe as /idea-feed (watchlist ∪ positions ∪ saved
-    reports), enriches each candidate with light market data + recency of
-    last report, and asks Sonnet to rank top_n picks with one-line reasoning.
+    Universe = (today's movers from idea-feed) ∪ (ALL saved-report tickers).
+    Each candidate is tagged with a bucket signal that the screener uses
+    to balance its picks:
+      • bucket='active' → moved ≥2.5% today (action-biased)
+      • bucket='stale'  → no big move + last_report_at > 14 days
+                          (refresh candidate, not action)
+      • bucket='fresh'  → no big move + last_report_at ≤ 14 days
+                          (deprioritized — recently analyzed, quiet today)
 
-    Cost: ~$0.02 per call. Saves $0.10-0.30 per ticker the screener
-    rejects (an Opus full report not run).
+    Sonnet returns picks ideally mixing buckets so the UI gets a balanced
+    "what to refresh / what to react to" list.
+
+    Cost: ~$0.02 per call.
     """
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
 
-    # 1) Reuse the same universe builder as idea-feed for consistency
+    # 1) Movers from idea-feed (the "active" bucket source)
     try:
-        feed = research_idea_feed(request, threshold=2.5, limit=40, force=False)
+        feed = research_idea_feed(request, threshold=2.5, limit=80, force=False)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"universe build failed: {e!s:.200}"},
                             status_code=500)
     movers = (feed or {}).get("movers") or []
-    if not movers:
-        return {"ok": True, "picks": [], "skipped": [],
-                "note": "Universe is quiet — no movers in the |Δ| ≥ 2.5% band today."}
+    movers_by_tk = {m.get("ticker"): m for m in movers if m.get("ticker")}
 
-    # 2) Pull existing-report freshness so the screener can deprioritize
-    #    tickers we already analyzed in the last 7 days
-    recent_reports: dict[str, str] = {}
+    # 2) ALL saved reports (the "stale"/"fresh" bucket source)
+    all_reports: list[dict] = []
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("""SELECT ticker, generated_at FROM analyst_reports
+                cur.execute("""SELECT ticker, generated_at, last_attempt_at,
+                                      report_date, rating, price_target, upside_pct
+                               FROM analyst_reports
                                WHERE archived IS NOT TRUE
-                                 AND generated_at > NOW() - INTERVAL '14 days'""")
-                for r in cur.fetchall():
-                    recent_reports[r["ticker"]] = r["generated_at"].isoformat() if r["generated_at"] else None
+                               ORDER BY generated_at DESC""")
+                all_reports = cur.fetchall() or []
         except Exception as _e:
-            print(f"⚠️ [prioritize] recent_reports query failed: {_e!s:.120}", flush=True)
+            print(f"⚠️ [prioritize] reports query failed: {_e!s:.120}", flush=True)
+    reports_by_tk = {r["ticker"]: r for r in all_reports}
 
-    # 3) Build a slim candidate payload — keep it short for cheap input tokens
+    # 3) Build the merged candidate list (deduped by ticker)
+    candidate_tickers: set[str] = set(movers_by_tk.keys()) | set(reports_by_tk.keys())
+    from datetime import datetime as _dt, timezone as _tz
+    now_utc = _dt.now(_tz.utc)
+
     candidates = []
-    for m in movers[:40]:
-        tk = m.get("ticker") or ""
-        if not tk: continue
+    for tk in candidate_tickers:
+        m   = movers_by_tk.get(tk) or {}
+        rep = reports_by_tk.get(tk) or {}
+
+        # Compute report age in days (None if no report)
+        gen_at = rep.get("generated_at")
+        age_days = None
+        if gen_at:
+            try:
+                if hasattr(gen_at, "tzinfo") and gen_at.tzinfo is None:
+                    gen_at = gen_at.replace(tzinfo=_tz.utc)
+                age_days = max(0, int((now_utc - gen_at).total_seconds() // 86400))
+            except Exception:
+                age_days = None
+
+        pct = m.get("pct_change") if m else None
+        is_mover = pct is not None and abs(pct) >= 2.5
+
+        # Bucket classification
+        if is_mover:
+            bucket = "active"
+        elif age_days is not None and age_days > 14:
+            bucket = "stale"
+        else:
+            bucket = "fresh"
+
         candidates.append({
             "ticker":               tk,
+            "bucket":               bucket,    # ← key signal for the screener
             "name":                 m.get("name"),
             "sector":               m.get("sector"),
-            "pct_change_today":     m.get("pct_change"),
+            "pct_change_today":     pct,
             "sector_etf_change":    m.get("sector_etf_change"),
             "reason_class":         m.get("reason_class"),
             "headline_count":       len(m.get("news") or []),
             "top_headline":         ((m.get("news") or [{}])[0] or {}).get("title"),
-            "last_report_at":       recent_reports.get(tk),
+            "last_report_at":       gen_at.isoformat() if gen_at else None,
+            "report_age_days":      age_days,
+            "rating":               rep.get("rating"),
+            "upside_pct":           float(rep["upside_pct"]) if rep.get("upside_pct") is not None else None,
         })
 
     if not candidates:
-        return {"ok": True, "picks": [], "skipped": [], "note": "No candidates after enrichment."}
+        return {"ok": True, "picks": [], "skipped": [],
+                "note": "Nothing in universe — no movers and no saved reports."}
 
-    print(f"🎯 [prioritize {lp_id}] screening {len(candidates)} tickers via Sonnet 4.6", flush=True)
+    # Cap considered set to keep input cheap (Sonnet is reasonable at $0.02 per call;
+    # going past 100 tickers makes the input prompt bloat without much picking benefit)
+    candidates.sort(key=lambda c: (
+        0 if c["bucket"] == "active" else
+        1 if c["bucket"] == "stale" else
+        2,
+        -abs(c["pct_change_today"] or 0),
+        -(c["report_age_days"] or 0),
+    ))
+    candidates = candidates[:100]
+    bucket_counts = {b: sum(1 for c in candidates if c["bucket"] == b)
+                     for b in ("active", "stale", "fresh")}
+
+    print(f"🎯 [prioritize {lp_id}] {len(candidates)} candidates "
+          f"(active={bucket_counts['active']} stale={bucket_counts['stale']} fresh={bucket_counts['fresh']}) → Sonnet 4.6", flush=True)
+
     result = analyst.screen_universe(candidates, top_n=top_n)
     if not result.get("ok"):
         return JSONResponse({"ok": False, "error": result.get("error", "screen failed")},
                             status_code=500)
     return {
-        "ok":      True,
-        "model":   result.get("model"),
-        "picks":   result["picks"],
-        "skipped": result["skipped"],
-        "considered": len(candidates),
+        "ok":            True,
+        "model":         result.get("model"),
+        "picks":         result["picks"],
+        "skipped":       result["skipped"],
+        "considered":    len(candidates),
+        "bucket_counts": bucket_counts,
     }
 
 
@@ -8073,9 +8126,114 @@ def start_ticker_scan(body: _TickerScanReq, background_tasks: BackgroundTasks):
     return _sjobs[job_id]
 
 
+@app.post("/api/scan/ticker/{ticker}")
+def start_single_ticker_scan(ticker: str, background_tasks: BackgroundTasks):
+    """Live-search scan for ONE ticker. ~$0.04-0.06.
+
+    Drop-in for the per-row 📡 button in Market Pulse. Streams the result
+    into the shared kv_store 'scan.pulse' the same way bulk scans do, so
+    Market Pulse re-renders with the new row when it lands.
+    """
+    tk = ticker.upper().strip()
+    if not tk or not _filter_scan_tickers([tk]):
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker!r}")
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _sjobs_lock:
+        _sjobs[job_id] = {
+            "job_id": job_id, "status": "queued", "created_at": now,
+            "tickers": [tk], "tickers_done": [], "results": {},
+            "scanned_at": None, "error": None, "cancel_requested": False,
+        }
+    background_tasks.add_task(_run_scan, job_id, [tk])
+    return _sjobs[job_id]
+
+
+@app.get("/api/scan/preview")
+def scan_preview(threshold: float = 2.5, source: str = "reports"):
+    """Preview what a bulk scan would do BEFORE the user clicks Scan.
+
+    source: 'reports' = saved-report tickers (current Scan All button source)
+            'market'  = Market Scan list
+
+    Returns:
+      { ok, source, threshold,
+        total_universe: int,
+        movers: [{ticker, pct_change, price}],   // only mover tickers
+        movers_count: int,
+        est_cost_low_usd: float,   // mover-only cost
+        est_cost_high_usd: float,
+        all_cost_low_usd: float,   // "scan everything" cost
+        all_cost_high_usd: float }
+    """
+    # Per-call Grok pricing — sticky empirical bounds (incl. live search add-on)
+    PER_TICKER_LOW, PER_TICKER_HIGH = 0.04, 0.06
+
+    # Source the universe
+    universe: list[str] = []
+    if source == "reports":
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""SELECT ticker FROM analyst_reports
+                                   WHERE archived IS NOT TRUE
+                                   ORDER BY generated_at DESC""")
+                    universe = [r[0] for r in cur.fetchall() if r and r[0]]
+            except Exception as _e:
+                print(f"[scan/preview] DB query failed: {_e}")
+    elif source == "market":
+        universe = _get_market_scan_tickers()
+    universe = _filter_scan_tickers(universe)
+
+    if not universe:
+        return {"ok": True, "source": source, "threshold": threshold,
+                "total_universe": 0, "movers": [], "movers_count": 0,
+                "est_cost_low_usd": 0, "est_cost_high_usd": 0,
+                "all_cost_low_usd": 0, "all_cost_high_usd": 0}
+
+    # Pull quotes for each ticker (fast — yfinance batch under the hood)
+    movers: list[dict] = []
+    for tk in universe:
+        try:
+            snap = analyst.fetch_market_snapshot(tk)
+            price, prev = snap.get("price"), snap.get("previous_close")
+            if price is None or not prev or prev == 0:
+                continue
+            pct = (price - prev) / prev * 100
+            if abs(pct) >= threshold:
+                movers.append({
+                    "ticker":     tk,
+                    "pct_change": round(pct, 2),
+                    "price":      round(float(price), 2),
+                })
+        except Exception:
+            pass
+
+    movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
+    n_movers, n_all = len(movers), len(universe)
+    return {
+        "ok": True,
+        "source":         source,
+        "threshold":      threshold,
+        "total_universe": n_all,
+        "movers":         movers,
+        "movers_count":   n_movers,
+        "est_cost_low_usd":  round(n_movers * PER_TICKER_LOW,  2),
+        "est_cost_high_usd": round(n_movers * PER_TICKER_HIGH, 2),
+        "all_cost_low_usd":  round(n_all    * PER_TICKER_LOW,  2),
+        "all_cost_high_usd": round(n_all    * PER_TICKER_HIGH, 2),
+    }
+
+
 @app.post("/api/scan/reports")
-def start_reports_scan(background_tasks: BackgroundTasks):
-    """Kick off a live-search scan for all tickers in the analyst_reports table."""
+def start_reports_scan(background_tasks: BackgroundTasks, threshold: float = 0.0):
+    """Kick off a live-search scan for tickers in the analyst_reports table.
+
+    threshold > 0  → scan ONLY tickers whose today's |pct_change| ≥ threshold
+                     (cheap mover-only mode — recommended default 2.5)
+    threshold == 0 → scan ALL saved-report tickers (legacy "scan everything",
+                     billed accordingly — confirm the cost with the user first)
+    """
     # Collect tickers from DB first, filesystem fallback
     tickers = []
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -8092,6 +8250,28 @@ def start_reports_scan(background_tasks: BackgroundTasks):
     tickers = _filter_scan_tickers(tickers)
     if not tickers:
         raise HTTPException(status_code=422, detail="No saved reports to scan")
+
+    # Mover-only filter — saves ~90% of cost on quiet days
+    if threshold and threshold > 0:
+        all_tickers = list(tickers)
+        kept = []
+        for tk in all_tickers:
+            try:
+                snap = analyst.fetch_market_snapshot(tk)
+                price, prev = snap.get("price"), snap.get("previous_close")
+                if price is not None and prev and prev != 0:
+                    pct = abs((price - prev) / prev * 100)
+                    if pct >= threshold:
+                        kept.append(tk)
+            except Exception:
+                pass   # don't fail the whole scan because one quote failed
+        print(f"[scan/reports] threshold={threshold}% filter: {len(kept)}/{len(all_tickers)} tickers qualify", flush=True)
+        tickers = kept
+        if not tickers:
+            raise HTTPException(
+                status_code=422,
+                detail=f"No saved-report tickers moved ≥{threshold}% today — nothing to scan.",
+            )
 
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
