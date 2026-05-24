@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v6-bg-audio-build19-20260523';
+const PODCAST_BUILD = 'pc-v7-safe-toggle-20260523';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -37,6 +37,37 @@ function fmtAgo(iso) {
   return `${Math.round(mins / 1440)}d ago`;
 }
 
+// ── Bulletproof play/pause toggle ────────────────────────────────────────────
+// Calling player.pause()/play() on a player that's still buffering, or whose
+// source hasn't fully loaded, has been observed to crash the app on iOS in
+// expo-audio v1. This helper:
+//   • verifies player + status objects are well-formed before touching them
+//   • guards each method call individually so one failing call can't trip up
+//     the next one
+//   • surfaces any failure to the on-screen diag strip so we can debug
+//     without needing Metro logs
+function safeToggle(player, status, setLastErr) {
+  if (!player || typeof player !== 'object') {
+    try { setLastErr('toggle: no player'); } catch {}
+    return;
+  }
+  // Avoid touching the player at all if its source isn't loaded yet —
+  // pausing a non-loaded player has been the suspected crash trigger.
+  if (!status || status.isLoaded !== true) {
+    try { setLastErr('toggle: still loading…'); } catch {}
+    return;
+  }
+  try {
+    if (status.playing === true) {
+      if (typeof player.pause === 'function') player.pause();
+    } else {
+      if (typeof player.play === 'function')  player.play();
+    }
+  } catch (e) {
+    try { setLastErr(`toggle: ${e?.message || e}`); } catch {}
+  }
+}
+
 function fmtDuration(sec) {
   if (!sec) return '—';
   const m = Math.floor(sec / 60);
@@ -64,14 +95,14 @@ export default function PodcastScreen() {
   // ── Enable iOS silent-mode playback (otherwise nothing plays when the
   //    ringer switch is off).
   useEffect(() => {
-    // Build 19+ ships UIBackgroundModes:["audio"] in Info.plist, so
-    // we can request background playback again. (Pre-19 binaries crash
-    // when audio starts with this flag set — this OTA only goes out
-    // AFTER build 19 is confirmed installed.)
+    // Background playback request is GATED on build 19+ — pre-19
+    // binaries (incl. user's currently-installed build 17) crash
+    // when audio starts with shouldPlayInBackground:true because
+    // they lack UIBackgroundModes:['audio'] in Info.plist. The flag
+    // gets re-added in the post-build-19-install OTA.
     setAudioModeAsync({
       playsInSilentMode: true,
       allowsRecording: false,
-      shouldPlayInBackground: true,
     })
       .then(() => console.log('[podcast] audio mode set'))
       .catch((e) => {
@@ -104,12 +135,9 @@ export default function PodcastScreen() {
     setSelectedTicker(ep.ticker);
     setLastErr(`TAP ${ep.ticker} · ${PODCAST_BUILD}`);
     try { haptics.light(); } catch {}
-    // Tap the SAME row → toggle play/pause
+    // Tap the SAME row → toggle play/pause (delegate to the bulletproof helper)
     if (selectedTicker === ep.ticker) {
-      try {
-        if (status?.playing) player.pause();
-        else                 player.play();
-      } catch (e) { setLastErr(`toggle: ${e?.message || e}`); }
+      safeToggle(player, status, setLastErr);
       return;
     }
     // New episode: build URL → replace → play. NO HEAD probe (FileResponse
@@ -139,12 +167,8 @@ export default function PodcastScreen() {
   }, [player, status]);
 
   const handleTogglePlay = useCallback(() => {
-    if (!player) return;
-    haptics.light();
-    try {
-      if (status?.playing) player.pause();
-      else                 player.play();
-    } catch (e) { console.warn('[podcast] toggle failed:', e?.message); }
+    try { haptics.light(); } catch {}
+    safeToggle(player, status, setLastErr);
   }, [player, status]);
 
   const renderEpisode = ({ item }) => {

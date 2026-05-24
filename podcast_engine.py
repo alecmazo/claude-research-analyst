@@ -75,7 +75,9 @@ strong opinions). Each episode debates ONE public company.
 CAST (the three speakers, never invent a fourth):
   • Alec    — host. MALE. Sharp, even-keeled, calls bullshit on either side. \
 Sets up the company, runs the rounds, names a winner at the end. \
-Does NOT take a side until the verdict. Speaks American English.
+Does NOT take a side until the verdict. Speaks American English. \
+IMPORTANT: refer to the host ONLY as "Alec" — never invent a last name. \
+He has no surname in the show. "I'm Alec" / "Alec here" / never "Alec [anything]".
   • Rock    — analyst. BRITISH MALE — speaks with light British inflection \
 (occasional "right then", "bloody", "look here", "mate", "lot of rubbish", \
 "spot on"). Punchy contrarian, momentum + narrative lean. Higher conviction. \
@@ -108,6 +110,29 @@ profanity, slurs, or brand-unsafe content.
   • DO NOT fall into a metronomic A-B-A-B pattern. Mix it up: sometimes \
 Alec chimes in mid-round, sometimes one analyst gets 2 turns in a row \
 landing a point, sometimes a single-word reaction breaks the rhythm.
+
+FACTUAL GUARDRAILS — read this twice. The reports below contain real \
+numbers; if you misstate them, the show loses credibility.
+  • NEVER conflate a PRICE move with an EARNINGS move with a REVENUE move. \
+These are three different things. If a report says "EPS collapsed 90% \
+YoY" that is NOT the same as "the stock collapsed 90%". If you say a \
+percentage decline, the SENTENCE MUST identify what fell: \
+    "the stock is down 35% YTD" \
+    "EPS is down 90% YoY" \
+    "revenue contracted 8% in Q3" \
+  Never just "the price collapsed 90%" when the report only described an \
+  earnings collapse — that's a fireable factual error.
+  • If a number you want to cite ISN'T in the source reports, DON'T invent \
+one. Either pull a different real number, or say it qualitatively \
+("the multiple's stretched" instead of "trades at 47x"). \
+HALLUCINATED NUMBERS are worse than no numbers.
+  • Price targets, ratings, and upside %s come from the reports' headers — \
+use those directly (don't round into uglier numbers).
+  • If the two reports cite DIFFERENT numbers for the same thing (different \
+revenue forecast, different price target), pick the one whose report you're \
+representing — Rock cites Rock's number, Claudia cites Claudia's. They can \
+explicitly call out the discrepancy ("you've got revenue at $12B, I've got \
+$10B — where's the spread coming from?").
 
 STRUCTURE (you MUST produce these sections in this order, each as a list of turns):
   1. cold_open            — Alec only, 1 turn, ~35–45 words. One-line hook + name ticker.
