@@ -16008,6 +16008,9 @@ def _ensure_podcast_table() -> None:
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS da_brief TEXT",
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS episode_mode TEXT",
                 "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'debate'",
+                # ui156: real script-gen cost (sum of all LLM calls) — separate
+                # from cost_usd which has historically held audio-only cost
+                "ALTER TABLE analyst_podcasts ADD COLUMN IF NOT EXISTS script_cost_usd REAL",
             ]:
                 try:
                     cur.execute(stmt); conn.commit()
@@ -16568,15 +16571,17 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
                     cur.execute("""
                         INSERT INTO analyst_podcasts
                             (ticker, format, episode_title, script_json,
-                             alignment_json, da_brief, episode_mode, generated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                             alignment_json, da_brief, episode_mode,
+                             script_cost_usd, generated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT (ticker, format) DO UPDATE SET
-                            episode_title  = EXCLUDED.episode_title,
-                            script_json    = EXCLUDED.script_json,
-                            alignment_json = EXCLUDED.alignment_json,
-                            da_brief       = EXCLUDED.da_brief,
-                            episode_mode   = EXCLUDED.episode_mode,
-                            generated_at   = NOW()
+                            episode_title   = EXCLUDED.episode_title,
+                            script_json     = EXCLUDED.script_json,
+                            alignment_json  = EXCLUDED.alignment_json,
+                            da_brief        = EXCLUDED.da_brief,
+                            episode_mode    = EXCLUDED.episode_mode,
+                            script_cost_usd = EXCLUDED.script_cost_usd,
+                            generated_at    = NOW()
                     """, (
                         tk,
                         format,
@@ -16589,6 +16594,7 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
                         }),
                         alignment.get("da_brief") or None,
                         (alignment.get("roles") or {}).get("episode_mode"),
+                        result.get("cost_usd"),
                     ))
                     conn.commit()
             except Exception as e:
@@ -16682,18 +16688,21 @@ def _run_roundup_generation(tickers: list[str]) -> None:
                 with _fund_conn() as conn, conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO analyst_podcasts
-                            (ticker, format, episode_title, script_json, episode_mode, generated_at)
-                        VALUES (%s, 'roundup', %s, %s, %s, NOW())
+                            (ticker, format, episode_title, script_json, episode_mode,
+                             script_cost_usd, generated_at)
+                        VALUES (%s, 'roundup', %s, %s, %s, %s, NOW())
                         ON CONFLICT (ticker, format) DO UPDATE SET
-                            episode_title = EXCLUDED.episode_title,
-                            script_json   = EXCLUDED.script_json,
-                            episode_mode  = EXCLUDED.episode_mode,
-                            generated_at  = NOW()
+                            episode_title   = EXCLUDED.episode_title,
+                            script_json     = EXCLUDED.script_json,
+                            episode_mode    = EXCLUDED.episode_mode,
+                            script_cost_usd = EXCLUDED.script_cost_usd,
+                            generated_at    = NOW()
                     """, (
                         synthetic,
                         result["script"].get("episode_title") or "Roundup",
                         json.dumps(result["script"]),
                         "roundup",
+                        result.get("cost_usd"),
                     ))
                     conn.commit()
             except Exception as e:
@@ -16798,14 +16807,16 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
                     cur.execute("""
                         INSERT INTO analyst_podcasts
                             (ticker, format, episode_title, script_json,
-                             alignment_json, episode_mode, generated_at)
-                        VALUES (%s, 'portfolio_roundup', %s, %s, %s, %s, NOW())
+                             alignment_json, episode_mode,
+                             script_cost_usd, generated_at)
+                        VALUES (%s, 'portfolio_roundup', %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT (ticker, format) DO UPDATE SET
-                            episode_title  = EXCLUDED.episode_title,
-                            script_json    = EXCLUDED.script_json,
-                            alignment_json = EXCLUDED.alignment_json,
-                            episode_mode   = EXCLUDED.episode_mode,
-                            generated_at   = NOW()
+                            episode_title   = EXCLUDED.episode_title,
+                            script_json     = EXCLUDED.script_json,
+                            alignment_json  = EXCLUDED.alignment_json,
+                            episode_mode    = EXCLUDED.episode_mode,
+                            script_cost_usd = EXCLUDED.script_cost_usd,
+                            generated_at    = NOW()
                     """, (
                         synthetic,
                         result["script"].get("episode_title") or "Portfolio Roundup",
@@ -16816,6 +16827,7 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
                             "bolton_count": (result.get("alignment") or {}).get("bolton_count", 0),
                         }),
                         "portfolio_roundup",
+                        result.get("cost_usd"),
                     ))
                     conn.commit()
             except Exception as e:
@@ -16914,7 +16926,9 @@ def podcast_list_scripts():
                 SELECT ticker, episode_title, generated_at, episode_mode,
                        (script_json->>'winner') AS winner,
                        COALESCE(format, script_json->>'format', 'debate') AS format,
-                       (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio
+                       (audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL) AS has_audio,
+                       script_cost_usd,
+                       cost_usd AS audio_cost_usd
                 FROM analyst_podcasts
                 WHERE script_json IS NOT NULL
                 ORDER BY generated_at DESC
@@ -16922,13 +16936,15 @@ def podcast_list_scripts():
             rows = cur.fetchall()
         return {"ok": True, "scripts": [
             {
-                "ticker":       r["ticker"],
-                "title":        r["episode_title"] or f"{r['ticker']}: Bull vs Bear",
-                "winner":       r["winner"],
-                "mode":         r["episode_mode"],
-                "format":       r["format"] or "debate",
-                "has_audio":    bool(r["has_audio"]),
-                "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
+                "ticker":         r["ticker"],
+                "title":          r["episode_title"] or f"{r['ticker']}: Bull vs Bear",
+                "winner":         r["winner"],
+                "mode":           r["episode_mode"],
+                "format":         r["format"] or "debate",
+                "has_audio":      bool(r["has_audio"]),
+                "script_cost_usd": r["script_cost_usd"],
+                "audio_cost_usd": r["audio_cost_usd"],
+                "generated_at":   r["generated_at"].isoformat() if r["generated_at"] else None,
             } for r in rows
         ]}
     except Exception as e:
@@ -17010,7 +17026,9 @@ def podcast_get_script(ticker: str, format: str = "debate"):
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""SELECT script_json, episode_title, generated_at, format,
-                                  alignment_json, da_brief, episode_mode
+                                  alignment_json, da_brief, episode_mode,
+                                  script_cost_usd, cost_usd AS audio_cost_usd,
+                                  duration_sec
                            FROM analyst_podcasts
                            WHERE ticker = %s
                            ORDER BY (format = %s) DESC, generated_at DESC
@@ -17023,16 +17041,19 @@ def podcast_get_script(ticker: str, format: str = "debate"):
     script = row["script_json"]
     validation = podcast_engine.validate_script(script) if isinstance(script, dict) else {}
     return {
-        "ok":           True,
-        "ticker":       tk,
-        "format":       row.get("format") or format,
-        "script":       script,
-        "validation":   validation,
-        "transcript":   podcast_engine.script_to_transcript(script) if isinstance(script, dict) else None,
-        "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
-        "alignment":    row.get("alignment_json"),
-        "da_brief":     row.get("da_brief"),
-        "mode":         row.get("episode_mode"),
+        "ok":              True,
+        "ticker":          tk,
+        "format":          row.get("format") or format,
+        "script":          script,
+        "validation":      validation,
+        "transcript":      podcast_engine.script_to_transcript(script) if isinstance(script, dict) else None,
+        "generated_at":    row["generated_at"].isoformat() if row["generated_at"] else None,
+        "alignment":       row.get("alignment_json"),
+        "da_brief":        row.get("da_brief"),
+        "mode":            row.get("episode_mode"),
+        "script_cost_usd": row.get("script_cost_usd"),
+        "audio_cost_usd":  row.get("audio_cost_usd"),
+        "duration_sec":    row.get("duration_sec"),
     }
 
 

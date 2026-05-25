@@ -5834,11 +5834,34 @@ def _extract_responses_text(resp) -> str:
     return "\n".join(chunks)
 
 
+# Per-Mtoken prices for Grok via xAI (USD).
+# live_search adds a per-call surcharge on top (Grok bills per search invocation).
+GROK_PRICING_PER_MTOK = {
+    # model_id        : (input $/Mtok, output $/Mtok)
+    "grok-4-reasoning": (5.0, 15.0),
+    "grok-4.20-reasoning": (5.0, 15.0),
+    "grok-beta":        (5.0, 15.0),
+}
+# Approximate per-search-call cost (the model may invoke 1-3 searches per request)
+GROK_LIVE_SEARCH_PER_CALL = 0.025
+
+
+def estimate_grok_cost(model: str, input_tokens: int, output_tokens: int,
+                       live_search_count: int = 0) -> float:
+    """Estimate USD cost for a Grok call. live_search_count adds the search
+    surcharge (xAI bills per search invocation on top of the LLM tokens)."""
+    inp_rate, out_rate = GROK_PRICING_PER_MTOK.get(model, (5.0, 15.0))
+    token_cost = (input_tokens * inp_rate + output_tokens * out_rate) / 1_000_000.0
+    search_cost = live_search_count * GROK_LIVE_SEARCH_PER_CALL
+    return token_cost + search_cost
+
+
 def call_grok(system_prompt: str, user_content: str,
               model: str = GROK_MODEL,
               *,
               live_search: bool = False,
-              search_from_date: str | None = None) -> str:
+              search_from_date: str | None = None,
+              usage_capture=None) -> str:
     """Call xAI Grok.
 
     When ``live_search=True`` we use xAI's Responses API with the server-side
@@ -5857,10 +5880,28 @@ def call_grok(system_prompt: str, user_content: str,
     """
     client = _client()
 
+    def _capture(resp, *, search_count: int = 0):
+        """Best-effort: pull usage from any response shape + invoke usage_capture."""
+        if usage_capture is None:
+            return
+        try:
+            u = getattr(resp, "usage", None) or {}
+            inp = int(getattr(u, "prompt_tokens", None)
+                      or getattr(u, "input_tokens", None) or 0)
+            out = int(getattr(u, "completion_tokens", None)
+                      or getattr(u, "output_tokens", None) or 0)
+            cost = estimate_grok_cost(model, inp, out, live_search_count=search_count)
+            usage_capture({
+                "model":              model,
+                "input_tokens":       inp,
+                "output_tokens":      out,
+                "live_search_calls":  search_count,
+                "cost_usd":           cost,
+            })
+        except Exception as _e:
+            print(f"⚠️  [call_grok] usage capture failed: {_e!s:.120}", flush=True)
+
     if live_search:
-        # xAI Responses API with built-in web + X search tools.
-        # The model decides when to call the tools; the server runs them
-        # and folds the results back in before returning the final message.
         try:
             resp = client.responses.create(
                 model=model,
@@ -5875,10 +5916,12 @@ def call_grok(system_prompt: str, user_content: str,
             )
             text = _extract_responses_text(resp)
             if text:
+                # Assume 1 search invocation on average (xAI doesn't expose
+                # exact counts in the response; could be 1-3). Conservative.
+                _capture(resp, search_count=1)
                 return text
-            # Empty text is treated as a soft failure — fall through.
             print("   ⚠️  Grok live-search returned empty text; retrying without search.")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"   ⚠️  Grok live-search call failed ({exc}); retrying without search.")
 
     # Fallback / default path.
@@ -5889,6 +5932,7 @@ def call_grok(system_prompt: str, user_content: str,
             {"role": "user", "content": user_content},
         ],
     )
+    _capture(resp, search_count=0)
     return resp.choices[0].message.content or ""
 
 
@@ -6024,6 +6068,23 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
     }
 
 
+# Per-Mtoken prices (USD) for the Anthropic models we use. Update when
+# Anthropic ships new pricing or model identifiers. Falls back to Sonnet
+# pricing if a model isn't listed (conservative — Sonnet is cheap).
+CLAUDE_PRICING_PER_MTOK = {
+    # model_id                         : (input $/Mtok, output $/Mtok)
+    "claude-opus-4-1-20250805":           (15.0, 75.0),
+    "claude-sonnet-4-5-20250929":          (3.0, 15.0),
+    "claude-sonnet-4-6-20260214":          (3.0, 15.0),   # speculative; same pricing if it ships
+}
+
+
+def estimate_claude_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost for a Claude API call given exact token counts."""
+    inp_rate, out_rate = CLAUDE_PRICING_PER_MTOK.get(model, (3.0, 15.0))
+    return (input_tokens * inp_rate + output_tokens * out_rate) / 1_000_000.0
+
+
 def call_claude(system_prompt: str, user_content: str,
                 model: str = CLAUDE_MODEL,
                 *,
@@ -6031,6 +6092,7 @@ def call_claude(system_prompt: str, user_content: str,
                 search_from_date: str | None = None, # accepted for parity; ignored
                 on_delta=None,                       # optional callable(str) invoked for each streamed chunk
                 max_tokens: int = 16000,             # cap on output tokens; raise for long-form formats
+                usage_capture=None,                  # optional callable({model, input_tokens, output_tokens, cost_usd})
                 ) -> str:
     """Call Anthropic Claude. Same signature as :func:`call_grok` so the
     analyze_ticker pipeline can swap providers via a single parameter.
@@ -6072,6 +6134,23 @@ def call_claude(system_prompt: str, user_content: str,
                     on_delta(delta)
                 except Exception:  # noqa: BLE001
                     pass  # listener bugs must never break the LLM call
+
+        # ── Capture exact usage from the final message for cost accounting ──
+        if usage_capture is not None:
+            try:
+                final = stream.get_final_message()
+                u = final.usage
+                cost = estimate_claude_cost(model, u.input_tokens, u.output_tokens)
+                usage_capture({
+                    "model": model,
+                    "input_tokens":  int(u.input_tokens),
+                    "output_tokens": int(u.output_tokens),
+                    "cost_usd":      cost,
+                })
+            except Exception as _e:
+                # Never let usage tracking break the actual call
+                print(f"⚠️  [call_claude] usage capture failed: {_e!s:.120}", flush=True)
+
     return "".join(chunks)
 
 

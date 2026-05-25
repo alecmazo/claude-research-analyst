@@ -5120,9 +5120,16 @@
             out.insertBefore(bb, out.firstChild.nextSibling);
           }
           const s = (d.validation && d.validation.stats) || {};
+          const fmtCost = function(v) {
+            if (v == null || isNaN(Number(v))) return '';
+            return ' · 💸 $' + Number(v).toFixed(2);
+          };
+          const scriptCost = fmtCost(d.script_cost_usd);
+          const audioCost  = d.audio_cost_usd != null ? ' · 🎧 $' + Number(d.audio_cost_usd).toFixed(2) : '';
           stats.textContent = '📂 saved · ' + (s.word_count||0) + ' words · ' +
             (s.approx_minutes||0) + ' min · ' + (s.turn_count||0) + ' turns · ' +
-            (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase();
+            (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() +
+            scriptCost + audioCost;
           // If audio already exists for this (ticker, format), surface the player
           try {
             const sr = await window.dgaFetch('/api/podcast/list');
@@ -5563,9 +5570,12 @@
     }
     const s = (d.validation && d.validation.stats) || {};
     if (statsEl) {
+      // Real cost from the API response (cost_usd is now populated by the
+      // generator's accumulated Claude+Grok usage tracking)
+      const costStr = (d.cost_usd != null) ? ' · 💸 $' + Number(d.cost_usd).toFixed(2) : '';
       statsEl.textContent = '📊 ' + (s.word_count||0) + ' words · ' +
         (s.approx_minutes||0) + ' min · ' + (s.turn_count||0) + ' turns · ' +
-        (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase();
+        (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() + costStr;
     }
     _populatePodcastSavedScripts();
   }
@@ -5621,9 +5631,15 @@
                           ((s.mode && modeIcons[s.mode]) ? (' ' + modeIcons[s.mode]) : '');
           const winner = s.winner ? (' · 🏆 ' + s.winner.toUpperCase()) : '';
           const audio  = s.has_audio ? ' · 🎧' : '';
+          // Show real costs when known. Script cost only shows for scripts
+          // generated AFTER ui156 (older rows have NULL script_cost_usd).
+          const sCost  = (s.script_cost_usd != null && s.script_cost_usd > 0)
+            ? ' · 💸 $' + Number(s.script_cost_usd).toFixed(2) : '';
+          const aCost  = (s.audio_cost_usd != null && s.audio_cost_usd > 0)
+            ? ' / 🎧 $' + Number(s.audio_cost_usd).toFixed(2) : '';
           const fmtKey = s.format || 'debate';
           return '<option value="' + s.ticker + '::' + fmtKey + '">' + displayTk + fmtIcon +
-                 winner + audio + ' · ' + fmtAgo(s.generated_at) + '</option>';
+                 winner + audio + sCost + aCost + ' · ' + fmtAgo(s.generated_at) + '</option>';
         }).join('');
     } catch (e) {
       sel.innerHTML = '<option value="">— failed to load saved scripts —</option>';

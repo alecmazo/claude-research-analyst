@@ -1007,7 +1007,7 @@ def assign_roles(rock_stance: dict, claude_stance: dict) -> dict[str, Any]:
 
 def generate_devils_advocate_brief(
     ticker: str, grok_md: str, claude_md: str,
-    *, on_progress=None,
+    *, on_progress=None, usage_capture=None,
 ) -> str:
     """Two-pass DA brief: Grok researches via live search, Claude synthesizes.
 
@@ -1049,6 +1049,7 @@ Today's date is {_today_str()}."""
                           "Find the strongest counter-evidence to the bullish consensus.",
             user_content=research_prompt,
             live_search=True,
+            usage_capture=usage_capture,
         )
     except Exception as e:
         return f"[DA brief unavailable — Grok research failed: {e!s:.120}]"
@@ -1093,6 +1094,7 @@ No preamble, no header, no closing summary. Five to eight bullets only.
         brief = _ca.call_claude(
             system_prompt="You synthesize bear-case research into punchy podcast-ready bullets.",
             user_content=synth_prompt,
+            usage_capture=usage_capture,
         )
         return (brief or "").strip()
     except Exception as e:
@@ -1170,16 +1172,21 @@ def generate_script(
 
     # ── 2. DA brief (best-effort — never blocks script gen) ─────────
     da_brief = ""
+    # Cost accumulator — every call_claude / call_grok inside this generator
+    # appends a usage dict, summed at the end into script.cost_usd.
+    cost_events: list[dict] = []
+    def _track_cost(u): cost_events.append(u)
+
     if roles.get("needs_da_brief"):
         _tb = _t.time()
         try:
             print(f"🎙️ [podcast/script {ticker}] DA brief: Grok research…", flush=True)
             da_brief = generate_devils_advocate_brief(
-                ticker, grok_md, claude_md, on_progress=on_progress,
+                ticker, grok_md, claude_md,
+                on_progress=on_progress, usage_capture=_track_cost,
             )
             print(f"🎙️ [podcast/script {ticker}] DA brief done ({_t.time()-_tb:.1f}s, {len(da_brief)} chars)", flush=True)
         except Exception as e:
-            # DA brief failure must NEVER kill the episode. Drop it + carry on.
             print(f"⚠️  [podcast/script {ticker}] DA brief failed, continuing without it: {e!s:.300}", flush=True)
             da_brief = ""
 
@@ -1210,6 +1217,7 @@ def generate_script(
             system_prompt=system,
             user_content=user,
             model=model or _ca.CLAUDE_MODEL,
+            usage_capture=_track_cost,
         )
     except Exception as e:
         print(f"❌ [podcast/script {ticker}] Claude call failed: {e!s:.500}", flush=True)
@@ -1281,6 +1289,15 @@ def generate_script(
         "claude_upside_pct": claude_stance["upside_pct"],
         "da_brief_used":    bool(da_brief and not da_brief.startswith("[DA brief unavailable")),
     }
+    # Stamp REAL accumulated cost (sum of every Claude/Grok call in this run)
+    total_cost = sum(e.get("cost_usd", 0.0) for e in cost_events)
+    script["_cost"] = {
+        "total_usd":        round(total_cost, 4),
+        "by_call":          cost_events,
+        "total_input_tok":  sum(e.get("input_tokens", 0) for e in cost_events),
+        "total_output_tok": sum(e.get("output_tokens", 0) for e in cost_events),
+    }
+    print(f"💸 [podcast/script {ticker}] total cost: ${total_cost:.4f} across {len(cost_events)} LLM calls", flush=True)
 
     validation = validate_script(script)
     return {
@@ -1288,6 +1305,8 @@ def generate_script(
         "script":       script,
         "validation":   validation,
         "raw_response": raw,
+        "cost_usd":     round(total_cost, 4),
+        "cost_breakdown": cost_events,
         "alignment": {
             "rock_stance":   rock_stance,
             "claude_stance": claude_stance,
@@ -1694,11 +1713,15 @@ Now write the episode. Remember:
     you found more convincing
 """
 
+    cost_events: list[dict] = []
+    def _track_cost(u): cost_events.append(u)
+
     print(f"🎙️ [podcast/roundup {tickers}] calling Claude Opus  user={len(user):,}ch", flush=True)
     _tc = _t.time()
     raw = _ca.call_claude(
         system_prompt=system, user_content=user,
         model=model or _ca.CLAUDE_MODEL,
+        usage_capture=_track_cost,
     )
     print(f"🎙️ [podcast/roundup {tickers}] Claude returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
 
@@ -1729,6 +1752,14 @@ Now write the episode. Remember:
         "tickers":      tickers,
         "da_brief_used": False,
     }
+    total_cost = sum(e.get("cost_usd", 0.0) for e in cost_events)
+    script["_cost"] = {
+        "total_usd":        round(total_cost, 4),
+        "by_call":          cost_events,
+        "total_input_tok":  sum(e.get("input_tokens", 0) for e in cost_events),
+        "total_output_tok": sum(e.get("output_tokens", 0) for e in cost_events),
+    }
+    print(f"💸 [podcast/roundup {tickers}] total cost: ${total_cost:.4f}", flush=True)
 
     validation = validate_script(script)
     return {
@@ -1736,11 +1767,13 @@ Now write the episode. Remember:
         "script":     script,
         "validation": validation,
         "raw_response": raw,
+        "cost_usd":   round(total_cost, 4),
+        "cost_breakdown": cost_events,
         "alignment":  script["_alignment"],
     }
 
 
-def fetch_macro_context(*, on_progress=None) -> str:
+def fetch_macro_context(*, on_progress=None, usage_capture=None) -> str:
     """Today's macro headlines that matter for a US equity portfolio.
 
     Uses Grok with live_search=True for genuinely-fresh data (the whole point
@@ -1781,6 +1814,7 @@ starting with "• "."""
                           "Pull the freshest macro headlines that affect US equity portfolios.",
             user_content=prompt,
             live_search=True,
+            usage_capture=usage_capture,
         )
     except Exception as e:
         return f"[macro unavailable: {e!s:.120}]"
@@ -1791,6 +1825,7 @@ def screen_bolton_candidates(
     current_positions: list[dict],
     *,
     on_progress=None,
+    usage_capture=None,
     universe_hint: str = "S&P 500 + the user's watchlist",
 ) -> list[dict]:
     """Sonnet 4.6 picks 3-5 BOLT-ON tickers for a Portfolio Roundup.
@@ -1841,6 +1876,7 @@ def screen_bolton_candidates(
             system_prompt=sys_prompt,
             user_content=user,
             model=_ca.CLAUDE_SCREEN_MODEL,
+            usage_capture=usage_capture,
         )
     except Exception as e:
         print(f"⚠️  [bolton_screen] Sonnet call failed: {e!s:.200}", flush=True)
@@ -1889,12 +1925,15 @@ def generate_portfolio_roundup_script(
         raise ValueError("Portfolio Roundup needs at least 5 tickers")
 
     # 1. Macro context (Grok live search) — best-effort
-    macro = fetch_macro_context(on_progress=on_progress)
+    cost_events: list[dict] = []
+    def _track_cost(u): cost_events.append(u)
+
+    macro = fetch_macro_context(on_progress=on_progress, usage_capture=_track_cost)
 
     # 2. Bolt-on screen via Sonnet 4.6 (constrained to current_positions awareness)
     positions = positions or [{"ticker": t} for t in tickers]
     # Augment positions with sector from existing reports if missing
-    bolt_ons = screen_bolton_candidates(positions, on_progress=on_progress)
+    bolt_ons = screen_bolton_candidates(positions, on_progress=on_progress, usage_capture=_track_cost)
 
     # 3. Build the dialogue prompt
     if on_progress:
@@ -1990,6 +2029,7 @@ Now write the episode. Reminders:
         # need ~6-7k output tokens. Cap at 24k to stay safely under Opus 4.1's
         # output limit while leaving headroom.
         max_tokens=24000,
+        usage_capture=_track_cost,
     )
     print(f"🎙️ [portfolio_roundup] Opus returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
 
@@ -2024,6 +2064,14 @@ Now write the episode. Reminders:
         "macro_used":    not macro.startswith("[macro unavailable"),
         "bolton_count":  len(bolt_ons),
     }
+    total_cost = sum(e.get("cost_usd", 0.0) for e in cost_events)
+    script["_cost"] = {
+        "total_usd":        round(total_cost, 4),
+        "by_call":          cost_events,
+        "total_input_tok":  sum(e.get("input_tokens", 0) for e in cost_events),
+        "total_output_tok": sum(e.get("output_tokens", 0) for e in cost_events),
+    }
+    print(f"💸 [portfolio_roundup] total cost: ${total_cost:.4f} across {len(cost_events)} LLM calls", flush=True)
 
     validation = validate_script(script)
     return {
@@ -2031,6 +2079,8 @@ Now write the episode. Reminders:
         "script":       script,
         "validation":   validation,
         "raw_response": raw,
+        "cost_usd":     round(total_cost, 4),
+        "cost_breakdown": cost_events,
         "alignment":    script["_alignment"],
         "macro":        macro,
         "bolt_ons":     bolt_ons,
