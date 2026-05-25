@@ -5418,7 +5418,7 @@
     };
     (async function() {
       try {
-        const r0 = await window.dgaFetch('/api/podcast/roundup/script', {
+        const r0 = await window.dgaFetch('/api/podcast-roundup/script', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tickers: tickers }),
         });
@@ -5495,7 +5495,7 @@
     };
     (async function() {
       try {
-        const r0 = await window.dgaFetch('/api/podcast/portfolio-roundup/script', {
+        const r0 = await window.dgaFetch('/api/podcast-portfolio-roundup/script', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tickers: tickers }),
         });

@@ -1093,7 +1093,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
 
     return out, economics, fund_established_year
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request, Path
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16596,18 +16596,8 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
 
 
 @app.post("/api/podcast/{ticker}/script")
-def podcast_generate_script(
-    # Negative lookahead — reject reserved path segments so FastAPI falls
-    # through to the dedicated endpoints (POST /api/podcast/roundup/script
-    # and POST /api/podcast/portfolio-roundup/script). Without this, a
-    # request for /api/podcast/portfolio-roundup/script gets matched by
-    # THIS handler with ticker='portfolio-roundup' → tries to look up
-    # Grok reports for "PORTFOLIO-ROUNDUP" → fails silently. The bug
-    # the user actually hit.
-    ticker: str = Path(..., pattern=r"^(?!roundup$)(?!portfolio-roundup$).+$"),
-    background_tasks: BackgroundTasks = None,
-    format: str = "debate",
-):
+def podcast_generate_script(ticker: str, background_tasks: BackgroundTasks,
+                            format: str = "debate"):
     """Kick off podcast script generation in the background.
 
     format: 'debate' (default) | 'pre_mortem' | 'memo' | 'catalysts' | 'quick_hit'
@@ -16709,7 +16699,10 @@ def _run_roundup_generation(tickers: list[str]) -> None:
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
 
 
-@app.post("/api/podcast/roundup/script")
+# NOTE: Renamed from /api/podcast/roundup/script to a non-colliding URL.
+# FastAPI's /api/podcast/{ticker}/script catchall was matching 'roundup'
+# as a literal ticker string, breaking the multi-ticker flow.
+@app.post("/api/podcast-roundup/script")
 async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTasks):
     """Kick off a multi-ticker Roundup script.
 
@@ -16830,7 +16823,10 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
 
 
-@app.post("/api/podcast/portfolio-roundup/script")
+# NOTE: Renamed from /api/podcast/portfolio-roundup/script to a non-colliding
+# URL — the /api/podcast/{ticker}/script catchall was eating 'portfolio-roundup'
+# as a literal ticker string. See sibling comment on /api/podcast-roundup/script.
+@app.post("/api/podcast-portfolio-roundup/script")
 async def podcast_generate_portfolio_roundup(req: Request, background_tasks: BackgroundTasks):
     """Portfolio Roundup — PM-style review of a 5-20 ticker book.
 
