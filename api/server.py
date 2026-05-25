@@ -16099,21 +16099,11 @@ def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate")
         "started_at": time.time(), "format": format,
     }
     try:
-        # 1. Load both reports
-        grok_md, claude_md = "", ""
-        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
-                           WHERE ticker = %s""", (tk,))
-            row = cur.fetchone()
-            if row:
-                grok_md   = row.get("report_md") or ""
-                claude_md = row.get("report_md_claude") or ""
-        if not (grok_md.strip() and claude_md.strip()):
-            raise RuntimeError(
-                f"{tk} needs BOTH Grok + Claude reports — generate them first."
-            )
-
-        # 2. Re-use existing script for THIS format if cached, else generate fresh
+        # 1. Look for a cached script for THIS (ticker, format). Check FIRST,
+        #    before report loading — because for multi-ticker formats (roundup,
+        #    portfolio_roundup) the "ticker" is a synthetic key like
+        #    PORTFOLIO_18TICKERS_1779728533 and there are no underlying reports
+        #    in analyst_reports by that name. The cached script is all we need.
         cached_script = None
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -16125,11 +16115,35 @@ def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate")
         except Exception:
             pass
 
+        # Multi-ticker formats can ONLY use cached scripts — they're generated
+        # via dedicated workers (run_roundup_generation / run_portfolio_roundup_
+        # generation) that need ticker lists. We can't regenerate them here.
+        is_multi = format in ("roundup", "portfolio_roundup")
+        if is_multi and not cached_script:
+            raise RuntimeError(
+                f"No cached {format} script for {tk}. Generate the script first via "
+                f"the appropriate Generate button (not this audio button)."
+            )
+
         if cached_script:
             script = cached_script
             _podcast_jobs[job_key] = {**_podcast_jobs[job_key],
                 "label": f"Re-using cached {format} script (regenerating audio only)…"}
         else:
+            # Single-ticker formats with no cached script → need to write one
+            # from the underlying reports.
+            grok_md, claude_md = "", ""
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT report_md, report_md_claude FROM analyst_reports
+                               WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+                if row:
+                    grok_md   = row.get("report_md") or ""
+                    claude_md = row.get("report_md_claude") or ""
+            if not (grok_md.strip() and claude_md.strip()):
+                raise RuntimeError(
+                    f"{tk} needs BOTH Grok + Claude reports — generate them first."
+                )
             _podcast_jobs[job_key] = {**_podcast_jobs[job_key],
                 "label": f"Writing {format} script with Claude Opus (~40s)…"}
             result = pe.generate_script(tk, grok_md, claude_md, format=format)
