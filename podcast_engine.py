@@ -1896,6 +1896,7 @@ def generate_portfolio_roundup_script(
     reports_by_ticker: dict[str, dict[str, str]],
     *,
     positions: list[dict] | None = None,
+    title_hint: str | None = None,
     model: str | None = None,
     on_progress=None,
 ) -> dict[str, Any]:
@@ -1962,6 +1963,56 @@ def generate_portfolio_roundup_script(
     pos_block = json.dumps(positions, indent=2, default=str)
     bolton_block = json.dumps(bolt_ons, indent=2, default=str) if bolt_ons else "(none)"
 
+    # Detect whether the caller supplied REAL weights (from an uploaded portfolio
+    # file) vs synthetic placeholders. When real weights are present we hard-
+    # require the script to cite them verbatim and forbid invented concentrations.
+    real_weights = [p for p in positions
+                    if isinstance(p, dict) and float(p.get("weight_pct") or 0) > 0]
+    has_real_weights = len(real_weights) >= max(3, int(len(positions) * 0.6))
+    if has_real_weights:
+        sorted_w = sorted(real_weights, key=lambda p: float(p.get("weight_pct") or 0), reverse=True)
+        top3 = sorted_w[:3]
+        top3_str = ", ".join(f"{p['ticker']} ({float(p['weight_pct']):.1f}%)" for p in top3)
+        total_w = sum(float(p.get("weight_pct") or 0) for p in real_weights)
+        weights_rules = f"""
+══════════════════════════════════════════════════════════════════════
+🔒 REAL PORTFOLIO WEIGHTS — STRICT CITATION RULES (uploaded by the user):
+══════════════════════════════════════════════════════════════════════
+The `weight_pct` field on each position above is REAL — the user uploaded their
+actual book. You MUST:
+
+  1. CITE the exact weight_pct (rounded to 1 decimal) when discussing any
+     position by size. e.g. "NVDA at 12.4% of the book", NOT "our big NVDA
+     position" and NEVER "we're 20% NVDA" if the file says 12.4%.
+  2. NEVER invent, round aggressively, or estimate weights. If you say a
+     number, it must match the file.
+  3. The portfolio_snapshot section MUST open with the REAL top-3 by weight:
+       Top 3 by weight: {top3_str}
+       Total book weight covered by file: {total_w:.1f}%
+  4. The concentration_risks section MUST reference REAL weights when calling
+     out over-exposure ("you're 38% in 3 names" only if math agrees).
+  5. cuts + bolt_ons MUST suggest sizing in REAL percentage-point deltas
+     ("trim NVDA from 12.4% → 9%", not vague "trim a bit").
+  6. Rock and Claudia MUST disagree CONCRETELY on specific positions tied to
+     real weights — not vague "I'd be more cautious." Examples:
+       Rock:    "Keep NVDA at 12.4% — actually I'd push to 15%."
+       Claudia: "12.4% is already a fat tail. Trim to 8% this week."
+     Every analyst turn in position_walk should name a specific weight + a
+     specific trim/hold/add number. Real intellectual debate, not pleasantries.
+"""
+    else:
+        weights_rules = """
+══════════════════════════════════════════════════════════════════════
+⚠️ NO REAL WEIGHTS PROVIDED — SIZING MUST STAY QUALITATIVE:
+══════════════════════════════════════════════════════════════════════
+The caller did NOT upload real portfolio weights. You MUST:
+  • NEVER state a specific weight_pct ("we're 12% NVDA" is FORBIDDEN).
+  • Use qualitative sizing only: "a meaningful position", "a small starter",
+    "concentrated", "trimmed to a half-size". Never numeric.
+  • In concentration_risks, talk about NAME / SECTOR overlap qualitatively,
+    not "X% in Y" — you don't know the X.
+"""
+
     fmt_meta = EPISODE_FORMATS["portfolio_roundup"]
     budget = _portfolio_roundup_budget(len(tickers))
     system = _system_prompt(format="portfolio_roundup")
@@ -1987,6 +2038,7 @@ which is not enough for a real PM-style review.
 CURRENT POSITIONS ({len(tickers)} names):
 ══════════════════════════════════════════════════════════════════════
 {pos_block}
+{weights_rules}
 
 ══════════════════════════════════════════════════════════════════════
 MACRO CONTEXT (today's headlines, via live web search):
@@ -2053,7 +2105,10 @@ Now write the episode. Reminders:
     script["ticker"] = synthetic
     script["format"] = "portfolio_roundup"
     script["tickers"] = tickers
-    if not script.get("episode_title"):
+    # Title hint from caller (e.g. uploaded sleeve name) wins over LLM's title
+    if title_hint:
+        script["episode_title"] = f"{title_hint} · {len(tickers)} positions · {_today_str()}"
+    elif not script.get("episode_title"):
         script["episode_title"] = fmt_meta["title_pattern"].replace("{TICKERS}", f"{len(tickers)} positions · {_today_str()}")
     script["_alignment"] = {
         "episode_mode": "portfolio_roundup",

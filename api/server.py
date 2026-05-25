@@ -16760,7 +16760,8 @@ async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTas
 
 
 # ─── Portfolio Roundup (PM-style review of the whole book) ──────────────
-def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] | None) -> None:
+def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] | None,
+                                       title_hint: str | None = None) -> None:
     """Background worker for /api/podcast/portfolio-roundup/script.
     Heaviest format: Grok macro pull + Sonnet bolt-on screen + Opus script.
     Expect 2-4 min total wall time."""
@@ -16792,7 +16793,8 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
                     }
 
         result = podcast_engine.generate_portfolio_roundup_script(
-            tickers, reports, positions=positions, on_progress=_on_progress,
+            tickers, reports, positions=positions, title_hint=title_hint,
+            on_progress=_on_progress,
         )
         if not result.get("script"):
             errs = (result.get("validation") or {}).get("errors", []) or ["unknown"]
@@ -16852,6 +16854,83 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
 # NOTE: Renamed from /api/podcast/portfolio-roundup/script to a non-colliding
 # URL — the /api/podcast/{ticker}/script catchall was eating 'portfolio-roundup'
 # as a literal ticker string. See sibling comment on /api/podcast-roundup/script.
+@app.post("/api/podcast-portfolio-roundup/upload")
+async def podcast_portfolio_roundup_upload(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    sleeve_name: str = Form(""),
+):
+    """Upload a portfolio file → parse → kick off a Portfolio Roundup with
+    REAL positions + weights (no more invented concentration claims).
+
+    Same parser as the Fund tab's portfolio upload — accepts CSV / XLSX from
+    Fidelity / Schwab / generic 2-3 column files. The parsed records are
+    forwarded to the Portfolio Roundup generator as `positions`, which the
+    engine prompt is now required to cite verbatim instead of guessing.
+    """
+    # Persist upload to a temp file (parser reads from disk)
+    suffix = Path(file.filename or "portfolio.xlsx").suffix.lower() or ".xlsx"
+    if suffix not in (".csv", ".tsv", ".xlsx", ".xls", ".xlsm"):
+        raise HTTPException(status_code=422, detail="File must be .csv / .tsv / .xlsx")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        content = await file.read()
+        tmp.write(content); tmp.close()
+        try:
+            records = analyst.load_portfolio_file(tmp.name)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not parse portfolio: {exc}")
+    finally:
+        try: os.unlink(tmp.name)
+        except OSError: pass
+
+    if not records:
+        raise HTTPException(status_code=422, detail="Portfolio file has no rows")
+
+    # Normalize → positions list expected by the engine
+    positions = []
+    tickers = []
+    total_weight = sum(float(r.get("weight") or 0) for r in records)
+    # Weights may be 0-1 (decimal) or 0-100 (percent) — normalize to percent
+    is_decimal = total_weight > 0 and total_weight < 1.5
+    for r in records:
+        tk = (r.get("ticker") or "").upper().strip()
+        if not tk: continue
+        w = float(r.get("weight") or 0)
+        if is_decimal: w *= 100
+        positions.append({"ticker": tk, "weight_pct": round(w, 2)})
+        tickers.append(tk)
+
+    # Sanity bounds the engine enforces
+    if len(tickers) < 5:
+        raise HTTPException(status_code=422,
+            detail=f"Need at least 5 positions; uploaded file had {len(tickers)}")
+    if len(tickers) > 25:
+        # Engine caps at 20 internally but accept a small overflow gracefully
+        positions = positions[:25]
+        tickers   = tickers[:25]
+
+    # Optional sleeve name → used in the title so the user can distinguish
+    # multiple uploaded books in the saved-episodes list
+    title_hint = (sleeve_name or "").strip()[:80]
+
+    job_key = "PORTFOLIO_" + ",".join(tickers)
+    existing = _podcast_script_jobs.get(job_key)
+    if existing and existing.get("status") == "running":
+        return {"ok": True, "ticker": job_key, "started": False, "already_running": True}
+    _podcast_script_jobs[job_key] = {
+        "stage": "queued", "current": 0, "total": 0,
+        "label": f"Queued · {len(tickers)} positions uploaded",
+        "status": "running", "started_at": time.time(),
+        "updated_at": time.time(),
+    }
+    print(f"🎙️ [portfolio-roundup-upload] WROTE job_key={job_key!r}  uploaded {len(tickers)} positions  total_weight={total_weight}", flush=True)
+    background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions, title_hint)
+    return {"ok": True, "ticker": job_key, "tickers": tickers,
+            "positions": positions, "started": True,
+            "title_hint": title_hint}
+
+
 @app.post("/api/podcast-portfolio-roundup/script")
 async def podcast_generate_portfolio_roundup(req: Request, background_tasks: BackgroundTasks):
     """Portfolio Roundup — PM-style review of a 5-20 ticker book.

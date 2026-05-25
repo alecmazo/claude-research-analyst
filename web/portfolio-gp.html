@@ -5254,10 +5254,20 @@
           (isSel ? '✓ ' : '') + tk + '</button>';
       };
       const loadFromPositionsBtn = isPortfolio
-        ? '<button id="ps-rd-load-positions" type="button" ' +
-            'style="margin-bottom:8px;background:#fff;border:1px dashed #0A1628;color:#0A1628;' +
+        ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center;">' +
+          '<button id="ps-rd-load-positions" type="button" ' +
+            'style="background:#fff;border:1px dashed #0A1628;color:#0A1628;' +
             'padding:5px 12px;border-radius:14px;font-size:11px;font-weight:700;cursor:pointer;">' +
-            '↓ Load from my live positions</button>'
+            '↓ Load from my live positions</button>' +
+          '<input id="ps-rd-upload-sleeve" type="text" placeholder="Sleeve name (optional)" ' +
+            'style="border:1px solid #cbd5e1;border-radius:6px;padding:5px 9px;font-size:11px;width:180px;">' +
+          '<input id="ps-rd-upload-file" type="file" accept=".csv,.tsv,.xlsx,.xls,.xlsm" style="display:none;">' +
+          '<button id="ps-rd-upload-btn" type="button" ' +
+            'style="background:#92400e;border:1px solid #78350f;color:#fff;' +
+            'padding:5px 12px;border-radius:14px;font-size:11px;font-weight:700;cursor:pointer;">' +
+            '📂 Upload portfolio (real weights)</button>' +
+          '<span style="font-size:10.5px;color:#64748b;">Uses ACTUAL weights — no invented concentrations.</span>' +
+          '</div>'
         : '';
       chipsEl.innerHTML = loadFromPositionsBtn +
         '<div style="display:flex;flex-wrap:wrap;gap:6px;">' +
@@ -5284,6 +5294,42 @@
           _populatePodcastRoundupTickers(format);
         });
       });
+      // Wire upload button (portfolio_roundup only) — POSTs the file to a
+      // dedicated endpoint that parses real weights and kicks off generation
+      // bypassing the chip picker entirely.
+      const upBtn  = document.getElementById('ps-rd-upload-btn');
+      const upFile = document.getElementById('ps-rd-upload-file');
+      const upName = document.getElementById('ps-rd-upload-sleeve');
+      if (upBtn && upFile) {
+        upBtn.addEventListener('click', function(){ upFile.click(); });
+        upFile.addEventListener('change', async function() {
+          const f = upFile.files && upFile.files[0];
+          if (!f) return;
+          const sleeve = (upName && upName.value || '').trim();
+          const scriptBtn   = document.getElementById('podcast-script-btn');
+          const scriptOut   = document.getElementById('podcast-script-render');
+          const scriptStats = document.getElementById('podcast-script-stats');
+          upBtn.disabled = true; upBtn.textContent = '⏳ Uploading…';
+          try {
+            const fd = new FormData();
+            fd.append('file', f);
+            fd.append('sleeve_name', sleeve);
+            const r = await window.dgaFetch('/api/podcast-portfolio-roundup/upload', {
+              method:'POST', body: fd,
+            });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.detail || d.error || 'Upload failed');
+            // Server already queued the job — drop into the polling UI using
+            // the returned ticker list (which is what builds the job_key).
+            _attachPortfolioRoundupPoll(d.tickers || [], scriptBtn, scriptOut, scriptStats);
+          } catch (e) {
+            alert('Upload failed: ' + e.message);
+          } finally {
+            upBtn.disabled = false; upBtn.textContent = '📂 Upload portfolio (real weights)';
+            upFile.value = '';
+          }
+        });
+      }
       // Wire "Load from positions" (portfolio_roundup only) — pulls live tax_lots
       const loadBtn = document.getElementById('ps-rd-load-positions');
       if (loadBtn) {
@@ -5549,6 +5595,68 @@
         } catch (e) { /* transient */ }
       }, 1800);
     })();
+  }
+
+  // Attach the polling UI to an ALREADY-QUEUED Portfolio Roundup job
+  // (e.g. after a portfolio-file upload). Skips the kickoff POST.
+  function _attachPortfolioRoundupPoll(tickers, btn, out, statsEl) {
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Working…'; }
+    if (statsEl) statsEl.textContent = '';
+    out.style.display = 'block';
+    out.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;margin-bottom:10px;">' +
+        '<div style="flex:1;">' +
+          '<div id="ps-progress-label" style="font-size:13px;font-weight:700;margin-bottom:8px;">📂 Uploaded portfolio (' + tickers.length + ' positions) — Starting…</div>' +
+          '<div style="height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;">' +
+            '<div id="ps-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#84CCE3);transition:width .4s ease;"></div>' +
+          '</div>' +
+          '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed · expect 3-4 min</div>' +
+        '</div>' +
+      '</div>';
+    const labelEl = document.getElementById('ps-progress-label');
+    const barEl   = document.getElementById('ps-progress-bar');
+    const elapEl  = document.getElementById('ps-progress-elapsed');
+    const t0 = Date.now();
+    const tickerKey = 'PORTFOLIO_' + tickers.map(function(t){return t.toUpperCase();}).join(',');
+    const elapsedTimer = setInterval(function() {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (elapEl) elapEl.textContent = sec + 's elapsed';
+    }, 1000);
+    let pollTimer = null;
+    const finish = function() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      clearInterval(elapsedTimer);
+      if (btn) { btn.disabled = false; btn.textContent = '🎬 Generate script'; }
+    };
+    let idleSince = null;
+    pollTimer = setInterval(async function() {
+      const elapsed = (Date.now() - t0) / 1000;
+      if (elapsed > 720) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Portfolio Roundup timed out after 12 min. Try again.</div>';
+        finish(); return;
+      }
+      try {
+        const r = await window.dgaFetch('/api/podcast/' + encodeURIComponent(tickerKey) + '/script-status');
+        const d = await r.json();
+        if (d.stage === 'idle') {
+          idleSince = idleSince || Date.now();
+          if ((Date.now() - idleSince) > 30000) {
+            out.innerHTML = '<div style="color:#d97706;font-size:12px;">⚠ Upload job not found on server (Railway restart?). Try again.</div>';
+            finish(); return;
+          }
+        } else { idleSince = null; }
+        const pct = PODCAST_SCRIPT_STAGE_PCT[d.stage] != null ? PODCAST_SCRIPT_STAGE_PCT[d.stage] : 50;
+        if (labelEl) labelEl.textContent = d.label || d.stage || 'Working…';
+        if (barEl)   barEl.style.width = pct + '%';
+        if (d.status === 'done' && d.result) {
+          finish();
+          _onPodcastScriptDone(d.result, out, statsEl);
+        } else if (d.status === 'error') {
+          out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + (d.label || d.error || 'failed') + '</div>';
+          finish();
+        }
+      } catch (e) { /* transient */ }
+    }, 1800);
   }
 
   function _onPodcastScriptDone(d, out, statsEl) {
