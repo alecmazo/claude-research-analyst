@@ -2294,7 +2294,12 @@
         </details>
 
         <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
-          <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;margin-bottom:8px;">—</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;flex:1;">—</div>
+            <button id="podcast-audio-delete-btn"
+              title="Delete this audio episode (MP3 + Dropbox copy). Script is kept — you can re-generate audio anytime."
+              style="background:transparent;color:#fca5a5;border:1px solid #fca5a5;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🗑️ Audio</button>
+          </div>
           <audio id="podcast-audio-el" controls preload="metadata" style="width:100%;"></audio>
           <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
             <span style="font-size:10.5px;color:#84CCE3;letter-spacing:1px;font-weight:700;">SPEED</span>
@@ -5623,10 +5628,20 @@
       const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰', portfolio_roundup:'🧰' };
       sel.innerHTML = '<option value="">📂 Open a saved script… (' + scripts.length + ')</option>' +
         scripts.map(function(s) {
-          // Roundup tickers are stored as "ROUNDUP_NVDA,INTC,MSFT" — show prettier
-          const displayTk = s.ticker.startsWith('ROUNDUP_')
-            ? '📰 ' + s.ticker.replace('ROUNDUP_', '').split(',').join('·')
-            : s.ticker;
+          // Synthetic tickers (PORTFOLIO_/ROUNDUP_) get clean labels.
+          // Prefer the user-set/engine-friendly episode_title when available;
+          // fall back to the synthetic key transformation.
+          const isUgly = /^PORTFOLIO_\d+TICKERS_\d+$/i.test(s.ticker);
+          let displayTk;
+          if (s.ticker.startsWith('ROUNDUP_')) {
+            displayTk = '📰 ' + s.ticker.replace('ROUNDUP_', '').split(',').join('·');
+          } else if (isUgly) {
+            // Prefer the renamed title if user has set one; else fall back
+            displayTk = (s.title && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(s.title))
+              ? s.title : 'Portfolio Roundup';
+          } else {
+            displayTk = s.ticker;
+          }
           const fmtIcon = (s.format && fmtIcons[s.format]) ? (' ' + fmtIcons[s.format]) :
                           ((s.mode && modeIcons[s.mode]) ? (' ' + modeIcons[s.mode]) : '');
           const winner = s.winner ? (' · 🏆 ' + s.winner.toUpperCase()) : '';
@@ -5930,8 +5945,18 @@
           const ic  = fmtIcons[fmt] || '';
           const dur = e.duration_sec ? (' · ' + Math.round(e.duration_sec) + 's') : '';
           const cost = (e.cost_usd != null) ? (' · $' + Number(e.cost_usd).toFixed(2)) : '';
-          // Value encodes both ticker AND format so opener can disambiguate
-          return '<option value="' + e.ticker + '::' + fmt + '">' + e.ticker + ' ' + ic +
+          // Clean label: prefer episode title for synthetic tickers (PORTFOLIO_/ROUNDUP_)
+          const isUgly = /^PORTFOLIO_\d+TICKERS_\d+$/i.test(e.ticker);
+          let displayTk;
+          if (e.ticker.startsWith('ROUNDUP_')) {
+            displayTk = '📰 ' + e.ticker.replace('ROUNDUP_', '').split(',').join('·');
+          } else if (isUgly) {
+            displayTk = (e.title && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(e.title))
+              ? e.title : 'Portfolio Roundup';
+          } else {
+            displayTk = e.ticker;
+          }
+          return '<option value="' + e.ticker + '::' + fmt + '">' + displayTk + ' ' + ic +
                  dur + cost + ' · ' + fmtAgo(e.generated_at) + '</option>';
         }).join('');
     } catch (e) {
@@ -6018,12 +6043,20 @@
     if (!wrap || !el) return;
     wrap.style.display = 'block';
     const fmt = (status && status.format) || 'debate';
-    // Use the actual stored episode title — falls back only if we don't have one
-    const epTitle = (status && status.title) ||
-                    (window._podcastEpisodes || []).find(function(e){
-                      return e.ticker === ticker && (e.format||'debate') === fmt;
-                    })?.title ||
-                    (ticker + ': ' + fmt);
+    let epTitle = (status && status.title) ||
+                  (window._podcastEpisodes || []).find(function(e){
+                    return e.ticker === ticker && (e.format||'debate') === fmt;
+                  })?.title;
+    // Friendly fallback when the title is missing OR is the raw synthetic key
+    if (!epTitle || /^PORTFOLIO_\d+TICKERS_\d+$/i.test(epTitle)) {
+      if (ticker.startsWith('PORTFOLIO_')) {
+        epTitle = 'Portfolio Roundup';
+      } else if (ticker.startsWith('ROUNDUP_')) {
+        epTitle = 'Roundup · ' + ticker.replace('ROUNDUP_', '').split(',').join(' · ');
+      } else {
+        epTitle = ticker + ': ' + fmt;
+      }
+    }
     if (title) title.textContent = '🎙️ ' + epTitle;
     // Format-aware URL + cache-bust on regeneration
     el.src = '/api/podcast/' + ticker + '/audio.mp3?format=' + encodeURIComponent(fmt) + '&t=' + Date.now();
@@ -6045,6 +6078,43 @@
       meta.textContent = parts.length ? parts.join(' · ') : 'Ready';
     }
     _wirePodcastSpeedButtons();
+    // Wire 🗑️ Audio delete — wipes ONLY the MP3 (script kept so user can
+    // re-generate audio without re-paying Claude). Refreshes saved-audio
+    // dropdown and hides the player on success.
+    const delBtn = document.getElementById('podcast-audio-delete-btn');
+    if (delBtn && !delBtn.dataset.wired) {
+      delBtn.dataset.wired = '1';
+      delBtn.addEventListener('click', async function() {
+        const curTk  = ticker;
+        const curFmt = fmt;
+        if (!confirm(
+          'Delete the audio MP3 for ' + curTk + ' (' + curFmt + ')?\n\n' +
+          '• Removes the file from disk + Dropbox.\n' +
+          '• Keeps the script — you can re-generate audio without re-spending Claude.\n\n' +
+          'Cannot be undone.'
+        )) return;
+        const orig = delBtn.textContent;
+        delBtn.disabled = true; delBtn.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(curTk) +
+            '?format=' + encodeURIComponent(curFmt) + '&what=audio',
+            { method: 'DELETE' }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          try { el.pause(); } catch {}
+          el.src = '';
+          wrap.style.display = 'none';
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+        } finally {
+          delBtn.disabled = false; delBtn.textContent = orig;
+        }
+      });
+    }
   }
 
   function _setPodcastSpeedActive(rate) {
@@ -6084,10 +6154,30 @@
     const intensityIcon = { calm: '🔉', normal: '', heated: '🔥' };
     const esc = function(s) { return (s||'').replace(/[&<>]/g, function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c];}); };
     const parts = [];
+    // Clean up synthetic tickers in the displayed title — strip the
+    // "PORTFOLIO_18TICKERS_1779732287" ugliness in favor of whatever the
+    // user has set (or the engine's friendly default).
+    const _titleDisplay = (function() {
+      const t = (script.episode_title || '').trim();
+      if (t && !/^PORTFOLIO_\d+TICKERS_\d+$/i.test(t)) return t;
+      // Fallback for missing or ugly titles
+      if ((script.ticker || '').startsWith('PORTFOLIO_')) {
+        const n = (script.tickers || []).length;
+        return n ? n + ' Tickers · Portfolio Roundup' : 'Portfolio Roundup';
+      }
+      if ((script.ticker || '').startsWith('ROUNDUP_')) {
+        return 'Roundup · ' + script.ticker.replace('ROUNDUP_', '').split(',').join(' · ');
+      }
+      return script.ticker || 'Episode';
+    })();
     parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">' +
-      '<div style="font-size:18px;font-weight:800;color:#0A1628;flex:1;min-width:200px;">' + esc(script.episode_title || script.ticker) + '</div>' +
-      '<button data-tk="' + esc(script.ticker || '') + '" class="podcast-edit-script" style="background:transparent;color:#0A1628;border:1px solid #0A1628;padding:8px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">✏️ Edit script</button>' +
-      '<button data-tk="' + esc(script.ticker || '') + '" class="podcast-make-audio-inline" style="background:#0A1628;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;">🎧 Make audio for this script →</button>' +
+      '<div style="font-size:18px;font-weight:800;color:#0A1628;flex:1;min-width:200px;display:flex;align-items:center;gap:6px;">' +
+        '<span>' + esc(_titleDisplay) + '</span>' +
+        '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" data-cur="' + esc(_titleDisplay) + '" class="podcast-rename-script" title="Rename this episode" style="background:transparent;border:none;color:#94a3b8;font-size:13px;cursor:pointer;padding:2px 4px;line-height:1;">✏️</button>' +
+      '</div>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-edit-script" style="background:transparent;color:#0A1628;border:1px solid #0A1628;padding:8px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">✏️ Edit script</button>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-make-audio-inline" style="background:#0A1628;color:#fff;border:none;padding:8px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;">🎧 Make audio for this script →</button>' +
+      '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-delete-script" title="Delete this entire episode (script + audio if any)" style="background:transparent;color:#dc2626;border:1px solid #dc2626;padding:8px 10px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">🗑️</button>' +
     '</div>');
     // Mode badge + winner line
     const align = script._alignment || {};
@@ -6158,6 +6248,73 @@
     container.querySelectorAll('.podcast-edit-script').forEach(function(b) {
       b.addEventListener('click', function() {
         _renderPodcastScriptEditor(script, validation, container);
+      });
+    });
+    // Wire the ✏️ rename button — updates episode title (column + script_json)
+    container.querySelectorAll('.podcast-rename-script').forEach(function(b) {
+      b.addEventListener('click', async function() {
+        const tk  = b.dataset.tk;
+        const fmt = b.dataset.fmt || 'debate';
+        const cur = b.dataset.cur || '';
+        const next = prompt('Rename this episode:', cur);
+        if (next === null) return;            // cancel
+        const clean = (next || '').trim();
+        if (!clean) { alert('Title cannot be empty.'); return; }
+        if (clean === cur)  return;            // no change
+        const orig = b.textContent;
+        b.disabled = true; b.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(tk) + '/title?format=' + encodeURIComponent(fmt),
+            { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: clean }) }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          // Patch the in-memory script + re-render the header label without
+          // a full reload. Walk up to find the <span> sibling.
+          const headerSpan = b.previousElementSibling;
+          if (headerSpan) headerSpan.textContent = clean;
+          b.dataset.cur = clean;
+          script.episode_title = clean;
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+        } catch (e) {
+          alert('Rename failed: ' + e.message);
+        } finally {
+          b.disabled = false; b.textContent = orig;
+        }
+      });
+    });
+    // Wire the 🗑️ delete button — deletes ENTIRE episode (script + audio)
+    container.querySelectorAll('.podcast-delete-script').forEach(function(b) {
+      b.addEventListener('click', async function() {
+        const tk = b.dataset.tk;
+        const fmt = b.dataset.fmt || 'debate';
+        if (!tk) return;
+        if (!confirm(
+          'Delete this entire episode?\n\n' +
+          '• Ticker:  ' + tk + '\n' +
+          '• Format:  ' + fmt + '\n' +
+          '• Removes: script, audio MP3 on disk + Dropbox, DB row.\n\n' +
+          'Cannot be undone.'
+        )) return;
+        b.disabled = true; b.textContent = '⏳';
+        try {
+          const r = await window.dgaFetch(
+            '/api/podcast/' + encodeURIComponent(tk) +
+            '?format=' + encodeURIComponent(fmt) + '&what=all',
+            { method: 'DELETE' }
+          );
+          const d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          container.innerHTML = '<div style="color:#16a34a;font-size:12px;padding:14px;">✓ Deleted ' + tk + ' (' + fmt + ').</div>';
+          if (typeof _populatePodcastSavedScripts === 'function') _populatePodcastSavedScripts();
+          if (typeof _populatePodcastSavedAudio === 'function')   _populatePodcastSavedAudio();
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+          b.disabled = false; b.textContent = '🗑️';
+        }
       });
     });
   }

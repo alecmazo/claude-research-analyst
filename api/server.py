@@ -16951,6 +16951,158 @@ def podcast_list_scripts():
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
+@app.patch("/api/podcast/{ticker}/title")
+async def podcast_rename(ticker: str, req: Request, format: str = "debate"):
+    """Rename a saved episode's title.
+
+    Body: {"title": "New Title String"}
+
+    Updates BOTH the analyst_podcasts.episode_title column AND the
+    script_json -> 'episode_title' field, so the dropdown and the
+    in-script rendering stay in sync.
+    """
+    tk = ticker.upper().strip()
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    new_title = (body or {}).get("title", "")
+    new_title = (new_title or "").strip()[:140]   # sane cap
+    if not new_title:
+        return JSONResponse({"ok": False, "error": "Title cannot be empty"}, status_code=400)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return JSONResponse({"ok": False, "error": "DB unavailable"}, status_code=503)
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Update the column AND the embedded title inside the script_json
+            cur.execute("""
+                UPDATE analyst_podcasts
+                   SET episode_title = %s,
+                       script_json   = COALESCE(script_json, '{}'::jsonb)
+                                          || jsonb_build_object('episode_title', %s::text)
+                 WHERE ticker = %s AND format = %s
+                 RETURNING ticker, format, episode_title
+            """, (new_title, new_title, tk, format))
+            row = cur.fetchone()
+            conn.commit()
+        if not row:
+            return JSONResponse({"ok": False, "error": f"No episode found for {tk} ({format})"},
+                                status_code=404)
+        print(f"✏️ [podcast/rename] {tk}/{format} → {new_title!r}", flush=True)
+        return {"ok": True, "ticker": row["ticker"], "format": row["format"],
+                "episode_title": row["episode_title"]}
+    except Exception as e:
+        print(f"❌ [podcast/rename {tk}/{format}] failed: {e!s:.300}", flush=True)
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.delete("/api/podcast/{ticker}")
+def podcast_delete(ticker: str, format: str = "debate", what: str = "all"):
+    """Delete a podcast row (or part of it) keyed by (ticker, format).
+
+    what:
+      • 'all'    — remove the whole DB row + MP3 on disk + MP3 in Dropbox (default)
+      • 'script' — clear script_json/alignment/da_brief/script_cost only; keep audio
+      • 'audio'  — clear audio_local_path/audio_dropbox_path/duration_sec/cost
+                   + delete MP3 on disk + Dropbox; keep script_json
+
+    Idempotent: missing files / rows are silently OK.
+    """
+    tk = ticker.upper().strip()
+    if what not in ("all", "script", "audio"):
+        return JSONResponse({"ok": False, "error": f"invalid what={what!r} (use all|script|audio)"},
+                            status_code=400)
+
+    # Fetch the row first so we know which files to wipe
+    row = None
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT audio_local_path, audio_dropbox_path
+                               FROM analyst_podcasts
+                               WHERE ticker = %s AND format = %s
+                               LIMIT 1""", (tk, format))
+                row = cur.fetchone()
+        except Exception as e:
+            print(f"⚠️  [podcast/delete {tk}/{format}] row lookup failed: {e!s:.200}", flush=True)
+
+    # Delete MP3 from local disk (if applicable)
+    deleted_local = False
+    if (what in ("all", "audio")) and row and row.get("audio_local_path"):
+        try:
+            p = Path(row["audio_local_path"])
+            if p.exists():
+                p.unlink()
+                deleted_local = True
+                print(f"🗑️ [podcast/delete] removed local MP3 {p.name}", flush=True)
+        except Exception as e:
+            print(f"⚠️  [podcast/delete] local MP3 unlink failed: {e!s:.120}", flush=True)
+    # Best-effort fallback for the default path pattern
+    if (what in ("all", "audio")) and not deleted_local:
+        try:
+            mp3_name = f"{tk}_{format}_podcast.mp3" if format != "debate" else f"{tk}_podcast.mp3"
+            fb = analyst.STOCKS_FOLDER / "podcasts" / mp3_name
+            if fb.exists():
+                fb.unlink()
+                print(f"🗑️ [podcast/delete] removed local fallback MP3 {fb.name}", flush=True)
+        except Exception:
+            pass
+
+    # Delete from Dropbox (if applicable)
+    if (what in ("all", "audio")) and row and row.get("audio_dropbox_path"):
+        try:
+            dbx = analyst._dropbox_client()
+            if dbx is not None:
+                dbx.files_delete_v2(row["audio_dropbox_path"])
+                print(f"🗑️ [podcast/delete] removed Dropbox MP3 {row['audio_dropbox_path']}", flush=True)
+        except Exception as e:
+            print(f"⚠️  [podcast/delete] Dropbox delete failed: {e!s:.200}", flush=True)
+
+    # DB mutation
+    db_action = "noop"
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                if what == "all":
+                    cur.execute("DELETE FROM analyst_podcasts WHERE ticker = %s AND format = %s",
+                                (tk, format))
+                    db_action = "row_deleted"
+                elif what == "script":
+                    cur.execute("""UPDATE analyst_podcasts SET
+                                       script_json = NULL,
+                                       alignment_json = NULL,
+                                       da_brief = NULL,
+                                       script_cost_usd = NULL,
+                                       generated_at = NOW()
+                                   WHERE ticker = %s AND format = %s""", (tk, format))
+                    db_action = "script_cleared"
+                else:   # audio
+                    cur.execute("""UPDATE analyst_podcasts SET
+                                       audio_local_path = NULL,
+                                       audio_dropbox_path = NULL,
+                                       duration_sec = NULL,
+                                       cost_usd = NULL,
+                                       tts_model = NULL,
+                                       voice_map = NULL
+                                   WHERE ticker = %s AND format = %s""", (tk, format))
+                    db_action = "audio_cleared"
+                conn.commit()
+        except Exception as e:
+            print(f"❌ [podcast/delete {tk}/{format}/{what}] DB op failed: {e!s:.200}", flush=True)
+            return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+    # Also drop any in-memory job state so a fresh generate works cleanly
+    try:
+        _podcast_script_jobs.pop(tk, None)
+        _podcast_script_jobs.pop(f"PORTFOLIO_{tk}", None)
+        _podcast_jobs.pop(f"{tk}::{format}", None)
+    except Exception:
+        pass
+
+    print(f"🗑️ [podcast/delete] {tk}/{format} what={what} → {db_action}", flush=True)
+    return {"ok": True, "ticker": tk, "format": format, "what": what, "db_action": db_action}
+
+
 @app.put("/api/podcast/{ticker}/script")
 async def podcast_update_script(ticker: str, req: Request):
     """Save a user-edited podcast script. Replaces the cached script_json
