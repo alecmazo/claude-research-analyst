@@ -212,12 +212,34 @@ EPISODE_FORMATS = {
         "icon":    "🧰",
         "tagline": "PM-style review of your whole book — risks, blind spots, bolt-ons, the one move this week",
         "multi_ticker":     True,
-        "word_budget_low":  2200,
-        "word_budget_high": 2800,
-        "approx_minutes":   "13-16",
+        # Budget below is a FALLBACK only. The generator computes a dynamic
+        # budget based on ticker count via _portfolio_roundup_budget() and
+        # injects that into the user prompt at generation time.
+        "word_budget_low":  1500,
+        "word_budget_high": 3500,
+        "approx_minutes":   "10-22 (scales with ticker count)",
         "title_pattern":    "Portfolio Roundup · {TICKERS}",
     },
 }
+
+
+def _portfolio_roundup_budget(n_tickers: int) -> dict:
+    """Dynamic word + minute budget for Portfolio Roundup.
+
+    Formula: base (1500w) + per-ticker (95w). 95w ≈ 35 sec of dialogue —
+    enough for one analyst to land a real point on each name, with bigger
+    positions naturally pulling more.
+
+      5 tickers  → ~1,975w  ≈ 12 min
+     10 tickers  → ~2,450w  ≈ 15 min
+     15 tickers  → ~2,925w  ≈ 18 min
+     20 tickers  → ~3,400w  ≈ 20 min
+    """
+    base, per = 1500, 95
+    target = base + n_tickers * per
+    lo, hi = int(target * 0.92), int(target * 1.12)
+    minutes = round(target / 165, 0)   # ~165 wpm conversational TTS
+    return {"low": lo, "high": hi, "target": target, "minutes": minutes}
 
 # Per-format required-sections lists. Validator and renderers consult these.
 FORMAT_SECTIONS = {
@@ -512,10 +534,16 @@ ROCK + CLAUDIA in this format:
         as it relates to THIS book. Use the macro context block provided —
         cite specific headlines + dates. NOT generic — "rates" is bad,
         "the 10yr at 4.62% after Thursday's CPI print" is good.
-  4. position_walk        — 6–9 turns mixed. Rock + Claudia each call out
-        2-3 positions they LIKE and 2-3 they HATE — punchy, single sentence
-        each, cite numbers from the source reports if helpful.
-        NOT all 15 positions — JUST the punchy ones. Skip the boring middle.
+  4. position_walk        — MUST cover EVERY ticker in the portfolio. This
+        is the longest section by far. Average 80-100 words per ticker (a
+        few sentences). Bigger positions get longer treatment (4-6 sentences),
+        smaller positions get shorter (1-2 sentences) — but NO ticker is
+        skipped entirely. Don't dump them ticker-by-ticker like a roll call;
+        group naturally by sector / theme / risk-bucket and have Rock and
+        Claudia trade takes within each group. Cite specific numbers from the
+        source reports (price target, multiples, recent move) where present.
+        For a 15-ticker portfolio expect ~18-22 turns in this section alone.
+        For a 5-ticker portfolio expect ~8-10 turns.
   5. concentration_risks  — 4–5 turns mixed. Identify where the book is
         over-exposed (sector, factor, single name, theme). Specific numbers
         from the snapshot. Both argue intensity — Rock often defends ("the
@@ -1896,8 +1924,25 @@ def generate_portfolio_roundup_script(
     bolton_block = json.dumps(bolt_ons, indent=2, default=str) if bolt_ons else "(none)"
 
     fmt_meta = EPISODE_FORMATS["portfolio_roundup"]
+    budget = _portfolio_roundup_budget(len(tickers))
     system = _system_prompt(format="portfolio_roundup")
     user = f"""Generate the DGA HiTech Podcast PORTFOLIO ROUNDUP for this book.
+
+══════════════════════════════════════════════════════════════════════
+WORD BUDGET (DYNAMIC — scales with ticker count, overrides any system-prompt budget):
+══════════════════════════════════════════════════════════════════════
+TARGET: ~{budget['target']:,} words  (acceptable range: {budget['low']:,}–{budget['high']:,})
+EXPECTED RUNTIME: ~{int(budget['minutes'])} min at conversational pacing.
+
+This is the MOST IMPORTANT NUMBER in this prompt. The position_walk
+section ALONE should be ~{int(len(tickers) * 90):,} words because you have
+{len(tickers)} tickers and each one gets ~80-100 words of treatment (some
+big positions longer, some small positions shorter, but NONE skipped).
+The other sections together add another ~{budget['target'] - int(len(tickers) * 90):,} words.
+
+If you produce a {int(budget['target'] * 0.5):,}-word episode for {len(tickers)} tickers
+it will not be acceptable — that's ~{int(budget['target'] * 0.5 / len(tickers)):,} words/ticker
+which is not enough for a real PM-style review.
 
 ══════════════════════════════════════════════════════════════════════
 CURRENT POSITIONS ({len(tickers)} names):
@@ -1923,7 +1968,11 @@ SOURCE REPORTS (per-ticker Grok + Claudia analyses):
 Now write the episode. Reminders:
   • Opus speaks as a SENIOR PM at DGA Capital — directional, owns the P&L.
     NOT a moderator.
-  • {fmt_meta['word_budget_low']:,}–{fmt_meta['word_budget_high']:,} total words ({fmt_meta['approx_minutes']} min).
+  • Use the DYNAMIC word budget above ({budget['target']:,} words target,
+    ~{int(budget['minutes'])} min). The default in the system prompt is a
+    fallback for missing data — override it with the dynamic budget here.
+  • position_walk MUST cover EVERY one of the {len(tickers)} tickers
+    (some briefly, some in depth — none skipped entirely).
   • Bolt-on suggestions MUST be from the candidates provided above. DO NOT
     invent any other tickers.
   • Cite specific headlines from the macro block + specific numbers from
@@ -1933,10 +1982,14 @@ Now write the episode. Reminders:
 """
 
     _tc = _t.time()
-    print(f"🎙️ [portfolio_roundup] calling Opus  user={len(user):,}ch  reports={len(reports_block_parts)}  bolt_ons={len(bolt_ons)}", flush=True)
+    print(f"🎙️ [portfolio_roundup] calling Opus  user={len(user):,}ch  reports={len(reports_block_parts)}  bolt_ons={len(bolt_ons)}  budget={budget['target']}w/{int(budget['minutes'])}min", flush=True)
     raw = _ca.call_claude(
         system_prompt=system, user_content=user,
         model=model or _ca.CLAUDE_MODEL,
+        # Lift max output tokens for this long-form format. 20-min episodes
+        # need ~6-7k output tokens. Cap at 24k to stay safely under Opus 4.1's
+        # output limit while leaving headroom.
+        max_tokens=24000,
     )
     print(f"🎙️ [portfolio_roundup] Opus returned {len(raw):,}ch ({_t.time()-_tc:.1f}s)", flush=True)
 

@@ -6030,6 +6030,7 @@ def call_claude(system_prompt: str, user_content: str,
                 live_search: bool = False,           # accepted for signature parity with call_grok; ignored
                 search_from_date: str | None = None, # accepted for parity; ignored
                 on_delta=None,                       # optional callable(str) invoked for each streamed chunk
+                max_tokens: int = 16000,             # cap on output tokens; raise for long-form formats
                 ) -> str:
     """Call Anthropic Claude. Same signature as :func:`call_grok` so the
     analyze_ticker pipeline can swap providers via a single parameter.
@@ -6057,7 +6058,7 @@ def call_claude(system_prompt: str, user_content: str,
     chunks: list[str] = []
     with client.messages.stream(
         model=model,
-        max_tokens=16000,   # generous — DGA reports run ~6-10k tokens
+        max_tokens=max_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
     ) as stream:
