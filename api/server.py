@@ -16714,9 +16714,10 @@ def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate")
         #    PORTFOLIO_18TICKERS_1779728533 and there are no underlying reports
         #    in analyst_reports by that name. The cached script is all we need.
         cached_script = None
+        cached_script_format = format
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("""SELECT script_json FROM analyst_podcasts
+                cur.execute("""SELECT script_json, format FROM analyst_podcasts
                                WHERE ticker = %s AND format = %s""", (tk, format))
                 pr = cur.fetchone()
                 if pr and pr.get("script_json"):
@@ -16724,14 +16725,37 @@ def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate")
         except Exception:
             pass
 
+        # Synthetic multi-ticker keys carry their own format implicitly
+        # (PORTFOLIO_* → portfolio_roundup, ROUNDUP_* → roundup). If the
+        # caller passed the wrong format (e.g. the script-format dropdown
+        # was on "debate"), the cached_script lookup above missed. Recover
+        # by ignoring the requested format and picking up whatever format
+        # ACTUALLY exists for this ticker.
+        is_synthetic = tk.startswith("PORTFOLIO_") or tk.startswith("ROUNDUP_")
+        if is_synthetic and not cached_script:
+            try:
+                with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                    cur.execute("""SELECT script_json, format FROM analyst_podcasts
+                                    WHERE ticker = %s
+                                    ORDER BY generated_at DESC LIMIT 1""", (tk,))
+                    pr = cur.fetchone()
+                    if pr and pr.get("script_json"):
+                        cached_script        = pr["script_json"]
+                        cached_script_format = pr.get("format") or format
+                        if cached_script_format != format:
+                            print(f"🛠 [podcast/audio {job_key}] format {format!r} mismatched "
+                                  f"cached row; using {cached_script_format!r} from DB", flush=True)
+                            format = cached_script_format   # use the real format downstream
+            except Exception: pass
+
         # Multi-ticker formats can ONLY use cached scripts — they're generated
         # via dedicated workers (run_roundup_generation / run_portfolio_roundup_
         # generation) that need ticker lists. We can't regenerate them here.
-        is_multi = format in ("roundup", "portfolio_roundup")
+        is_multi = format in ("roundup", "portfolio_roundup") or is_synthetic
         if is_multi and not cached_script:
             raise RuntimeError(
-                f"No cached {format} script for {tk}. Generate the script first via "
-                f"the appropriate Generate button (not this audio button)."
+                f"No cached script found for {tk} (any format). Generate the script "
+                f"first via the appropriate Generate button (not this audio button)."
             )
 
         if cached_script:

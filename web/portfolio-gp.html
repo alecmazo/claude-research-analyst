@@ -6189,8 +6189,14 @@
       const tk = document.getElementById('podcast-audio-ticker').value;
       const model = document.getElementById('podcast-audio-model').value || 'tts-1-hd';
       // Audio inherits format from whichever script is currently rendered.
-      // The format dropdown on the SCRIPT row is the source of truth.
-      const fmt = (document.getElementById('podcast-script-format') || {}).value || 'debate';
+      // The format dropdown on the SCRIPT row is the source of truth — EXCEPT
+      // for synthetic multi-ticker keys (PORTFOLIO_*, ROUNDUP_*) which carry
+      // their format implicitly. Otherwise picking a Portfolio Roundup audio
+      // while the script dropdown still says "Debate" sends the wrong format
+      // and the server's cached-script lookup misses.
+      let fmt = (document.getElementById('podcast-script-format') || {}).value || 'debate';
+      if (tk && tk.startsWith('PORTFOLIO_')) fmt = 'portfolio_roundup';
+      else if (tk && tk.startsWith('ROUNDUP_'))  fmt = 'roundup';
       if (!tk) { alert('Pick a ticker first.'); return; }
       btn.disabled = true;
       btn.textContent = '⏳ Generating…';
