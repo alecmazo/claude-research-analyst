@@ -15987,6 +15987,439 @@ PODCAST_AUDITION_VOICES = [
 ]
 
 
+# ── DGA Memos (PDF-export of podcast scripts) ─────────────────────────
+def _ensure_dga_memos_table() -> None:
+    """Create dga_memos table — DGA Capital memos generated from podcast
+    scripts. Idempotent."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS dga_memos (
+                    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    source_job_key  TEXT NOT NULL,
+                    source_format   TEXT,
+                    episode_title   TEXT,
+                    assigned_fund_id UUID,
+                    gp_memo         TEXT,
+                    script_json     JSONB,
+                    pdf_bytes       BYTEA,
+                    generated_by    TEXT,
+                    generated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_sent_to    TEXT,
+                    last_sent_at    TIMESTAMPTZ,
+                    archived        BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_fund_idx ON dga_memos(assigned_fund_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_gen_idx  ON dga_memos(generated_at DESC)")
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ _ensure_dga_memos_table failed: {e!s:.200}", flush=True)
+
+
+def _render_dga_memo_html(script: dict, gp_memo: str, fund_name: str | None,
+                           generated_at_iso: str) -> str:
+    """Render a podcast script as a DGA Capital memo (HTML, print-friendly).
+    Sections become narrative chapters; turns become attributed paragraphs.
+    """
+    import html as _html
+    episode_title = script.get("episode_title") or script.get("ticker") or "DGA Memo"
+    tickers = script.get("tickers") or [script.get("ticker")]
+    tickers_str = ", ".join(t for t in (tickers or []) if t)[:300]
+    fmt = (script.get("format") or "memo").replace("_", " ").title()
+    date_str = (generated_at_iso or "")[:10]
+
+    # Map speaker → display name + color
+    SPEAKER_META = {
+        "opus":    ("Marc (PM)",    "#0A1628"),
+        "rock":    ("Rock",         "#1565c0"),
+        "claudia": ("Claudia",      "#7c3aed"),
+    }
+    def _sp(name):
+        return SPEAKER_META.get((name or "").lower(), (name.title() if name else "Narrator", "#475569"))
+
+    sections_html = []
+    for sec in (script.get("sections") or []):
+        sid = (sec.get("id") or "").replace("_", " ").strip()
+        # Skip technical IDs in title casing
+        title = sid.title() if sid else "Section"
+        turn_html = []
+        for t in (sec.get("turns") or []):
+            text = _html.escape(t.get("text") or "")
+            sp_name, sp_color = _sp(t.get("speaker"))
+            turn_html.append(
+                f'<p style="margin:8px 0;line-height:1.55;font-size:11pt;">'
+                f'<strong style="color:{sp_color};">{_html.escape(sp_name)}:</strong> '
+                f'<span style="color:#1e293b;">{text}</span></p>'
+            )
+        if turn_html:
+            sections_html.append(
+                f'<h2 style="font-size:13pt;color:#0A1628;border-bottom:1.5px solid #5BB8D4;'
+                f'padding-bottom:4px;margin-top:24px;margin-bottom:10px;letter-spacing:0.3px;">'
+                f'{_html.escape(title)}</h2>'
+                + "".join(turn_html)
+            )
+
+    memo_block = ""
+    if (gp_memo or "").strip():
+        memo_block = (
+            '<div style="background:#fff8e1;border:1px solid #fde68a;border-left:4px solid #f59e0b;'
+            'border-radius:6px;padding:12px 16px;margin:18px 0;">'
+            '<div style="font-size:9.5pt;font-weight:800;letter-spacing:1px;color:#92400e;'
+            'text-transform:uppercase;margin-bottom:6px;">GP Note</div>'
+            f'<div style="font-size:11pt;color:#0A1628;line-height:1.55;white-space:pre-wrap;">'
+            f'{_html.escape(gp_memo.strip())}</div></div>'
+        )
+
+    fund_line = f'<div style="font-size:10pt;color:#475569;margin-top:2px;">For: <strong>{_html.escape(fund_name)}</strong></div>' if fund_name else ""
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{_html.escape(episode_title)}</title>
+<style>
+  @page {{ size: Letter; margin: 0.85in; @bottom-center {{ content: "DGA Capital · Confidential · Page " counter(page) " of " counter(pages); font-size: 8pt; color: #94a3b8; }} }}
+  body {{ font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1e293b; }}
+  h1 {{ font-size: 20pt; color: #0A1628; margin: 0; letter-spacing: -0.4px; }}
+</style></head>
+<body>
+  <div style="border-bottom:3px solid #0A1628;padding-bottom:10px;margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+      <div>
+        <div style="font-size:9pt;font-weight:800;letter-spacing:2px;color:#5BB8D4;text-transform:uppercase;">DGA Capital · Investment Memo</div>
+        <h1>{_html.escape(episode_title)}</h1>
+        {fund_line}
+      </div>
+      <div style="text-align:right;font-size:9.5pt;color:#64748b;line-height:1.5;">
+        <div>{date_str}</div>
+        <div style="margin-top:2px;">Format: {_html.escape(fmt)}</div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:9pt;color:#64748b;">Coverage: {_html.escape(tickers_str)}</div>
+  </div>
+  {memo_block}
+  {''.join(sections_html) or '<p style="color:#94a3b8;font-style:italic;">No sections in source script.</p>'}
+  <div style="margin-top:36px;padding-top:14px;border-top:1px solid #cbd5e1;font-size:8pt;color:#94a3b8;line-height:1.5;">
+    <strong style="color:#475569;">Disclaimer:</strong> This memo is for informational purposes only and reflects views as of {date_str}. It is not investment advice nor an offer to buy or sell any security. Generated from DGA Capital's internal research pipeline. Distribution is restricted to authorized recipients.
+  </div>
+</body></html>"""
+
+
+def _load_script_by_job_key(job_key: str) -> dict | None:
+    """Look up a script (and its format/title) in analyst_podcasts by ticker key."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return None
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT ticker, format, episode_title, script_json
+                             FROM analyst_podcasts
+                            WHERE ticker = %s
+                         ORDER BY generated_at DESC LIMIT 1""", (job_key,))
+            row = cur.fetchone()
+            if not row: return None
+            rj = row["script_json"]
+            script = json.loads(rj) if isinstance(rj, str) else (rj or {})
+            return {
+                "ticker": row["ticker"],
+                "format": row.get("format"),
+                "episode_title": row.get("episode_title") or script.get("episode_title"),
+                "script": script,
+            }
+    except Exception as e:
+        print(f"⚠️ _load_script_by_job_key({job_key!r}) failed: {e!s:.150}", flush=True)
+        return None
+
+
+def _fund_name_lookup(fund_id: str | None) -> str | None:
+    if not fund_id or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return None
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT legal_name FROM funds WHERE id = %s", (fund_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+@app.post("/api/memos/from-podcast/{job_key}")
+async def create_memo_from_podcast(job_key: str, request: Request):
+    """Generate a DGA Capital memo PDF from a saved podcast script.
+
+    Body: { assigned_fund_id?: uuid, gp_memo?: str }
+    Returns: { ok, memo_id, episode_title, pdf_url }
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_dga_memos_table()
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    assigned_fund_id = (body or {}).get("assigned_fund_id") or None
+    gp_memo = ((body or {}).get("gp_memo") or "").strip()
+
+    src = _load_script_by_job_key(job_key)
+    if not src or not src.get("script"):
+        raise HTTPException(404, f"No podcast script found for {job_key}")
+
+    fund_name = _fund_name_lookup(assigned_fund_id)
+    from datetime import datetime as _dt, timezone as _tz
+    gen_iso = _dt.now(_tz.utc).isoformat()
+    html_body = _render_dga_memo_html(src["script"], gp_memo, fund_name, gen_iso)
+
+    try:
+        pdf_bytes = _render_report_pdf(html_body)
+    except Exception as e:
+        raise HTTPException(500, f"PDF render failed: {e!s:.200}")
+
+    memo_id = None
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO dga_memos
+                   (source_job_key, source_format, episode_title,
+                    assigned_fund_id, gp_memo, script_json,
+                    pdf_bytes, generated_by, generated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                RETURNING id::text
+            """, (
+                job_key, src.get("format"),
+                src.get("episode_title") or "DGA Memo",
+                assigned_fund_id, gp_memo or None,
+                json.dumps(src["script"]),
+                psycopg2.Binary(pdf_bytes),
+                claims.get("email") or claims.get("lp_id") or "gp",
+            ))
+            memo_id = cur.fetchone()[0]
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(500, f"DB insert failed: {e!s:.200}")
+
+    return {
+        "ok": True, "memo_id": memo_id,
+        "episode_title": src.get("episode_title"),
+        "assigned_fund_id": assigned_fund_id,
+        "fund_name": fund_name,
+        "pdf_url": f"/api/memos/{memo_id}/pdf",
+        "size_bytes": len(pdf_bytes),
+    }
+
+
+@app.get("/api/memos")
+def list_memos(request: Request, fund_id: str | None = None,
+                include_archived: bool = False):
+    """List all DGA memos, newest first. Optionally filter by assigned fund."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_dga_memos_table()
+    rows = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            where = []
+            params: list = []
+            if not include_archived:
+                where.append("m.archived IS NOT TRUE")
+            if fund_id:
+                where.append("m.assigned_fund_id = %s")
+                params.append(fund_id)
+            where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(f"""
+                SELECT m.id::text                AS id,
+                       m.source_job_key          AS source_job_key,
+                       m.source_format           AS source_format,
+                       m.episode_title           AS episode_title,
+                       m.assigned_fund_id::text  AS assigned_fund_id,
+                       f.legal_name              AS fund_name,
+                       m.gp_memo                 AS gp_memo,
+                       m.generated_by            AS generated_by,
+                       m.generated_at            AS generated_at,
+                       m.last_sent_to            AS last_sent_to,
+                       m.last_sent_at            AS last_sent_at,
+                       octet_length(m.pdf_bytes) AS size_bytes
+                  FROM dga_memos m
+             LEFT JOIN funds f ON f.id = m.assigned_fund_id
+                {where_sql}
+                 ORDER BY m.generated_at DESC
+                 LIMIT 200
+            """, tuple(params))
+            for r in cur.fetchall():
+                rows.append({
+                    **{k: v for k, v in r.items() if k not in ("generated_at", "last_sent_at")},
+                    "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+                    "last_sent_at": r["last_sent_at"].isoformat() if r.get("last_sent_at") else None,
+                })
+    except Exception as e:
+        raise HTTPException(500, f"List memos failed: {e!s:.200}")
+    return {"ok": True, "memos": rows}
+
+
+@app.get("/api/memos/{memo_id}/pdf")
+def download_memo_pdf(memo_id: str, request: Request):
+    """Stream the persisted PDF for a memo."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT pdf_bytes, episode_title
+                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Memo not found")
+            pdf_bytes = bytes(row[0]) if row[0] else b""
+            title = (row[1] or "dga_memo").replace("/", "_")[:80]
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(500, f"Fetch failed: {e!s:.200}")
+    from fastapi.responses import Response as _Response
+    return _Response(content=pdf_bytes, media_type="application/pdf",
+                     headers={"Content-Disposition": f'inline; filename="{title}.pdf"'})
+
+
+@app.post("/api/memos/{memo_id}/email")
+async def email_memo(memo_id: str, request: Request):
+    """Send a memo PDF via email.
+    Body: { mode: 'ad_hoc'|'lp_list', to_addr?, subject?, body_html? }
+    mode='lp_list' sends one email per active LP in the assigned fund.
+    """
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    mode      = (body or {}).get("mode") or "ad_hoc"
+    to_addr   = ((body or {}).get("to_addr") or "").strip()
+    subject_in = ((body or {}).get("subject") or "").strip()
+    body_html  = ((body or {}).get("body_html") or "").strip()
+
+    # Load memo
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id::text, episode_title, gp_memo,
+                                  pdf_bytes, assigned_fund_id::text AS fund_id
+                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+            memo = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(500, f"Fetch failed: {e!s:.200}")
+    if not memo:
+        raise HTTPException(404, "Memo not found")
+    pdf_bytes = bytes(memo["pdf_bytes"]) if memo.get("pdf_bytes") else b""
+    if not pdf_bytes:
+        raise HTTPException(500, "Memo has no stored PDF")
+
+    subject = subject_in or f"DGA Capital · {memo['episode_title']}"
+    filename = (memo["episode_title"] or "dga_memo").replace("/", "_")[:80] + ".pdf"
+    default_html = body_html or f"""
+<html><body style="font-family:-apple-system,sans-serif;color:#1e293b;">
+  <p>Please find attached our latest DGA Capital memo: <strong>{memo['episode_title']}</strong>.</p>
+  {('<p style="background:#fff8e1;padding:10px 14px;border-left:3px solid #f59e0b;border-radius:4px;">'
+    + (memo['gp_memo'] or '').replace(chr(10), '<br>') + '</p>') if memo.get('gp_memo') else ''}
+  <p>Best,<br>DGA Capital</p>
+</body></html>"""
+
+    # Resolve recipients
+    recipients: list[str] = []
+    if mode == "lp_list":
+        if not memo.get("fund_id"):
+            raise HTTPException(422, "Memo is not assigned to a fund — cannot use lp_list mode")
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT email FROM lps
+                                WHERE fund_id = %s::uuid AND status = 'active'
+                                  AND email IS NOT NULL AND email <> ''""", (memo["fund_id"],))
+                recipients = [r["email"] for r in cur.fetchall() if r.get("email")]
+        except Exception as e:
+            raise HTTPException(500, f"LP lookup failed: {e!s:.200}")
+        if not recipients:
+            raise HTTPException(422, "No active LPs with email found for this fund")
+    else:
+        if not to_addr or "@" not in to_addr:
+            raise HTTPException(422, "Provide a valid recipient email address")
+        recipients = [to_addr]
+
+    # Send
+    results = []
+    for addr in recipients:
+        r = _send_email_with_pdf_attachment(addr, subject, default_html,
+                                             pdf_bytes, filename)
+        results.append({"to": addr, **r})
+
+    sent_ok = [r for r in results if r.get("ok")]
+    if sent_ok:
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""UPDATE dga_memos
+                                  SET last_sent_to = %s, last_sent_at = now()
+                                WHERE id = %s::uuid""",
+                            (", ".join(r["to"] for r in sent_ok)[:500], memo_id))
+                conn.commit()
+        except Exception: pass
+
+    return {"ok": bool(sent_ok), "sent": len(sent_ok), "attempted": len(results),
+            "results": results}
+
+
+@app.patch("/api/memos/{memo_id}")
+async def update_memo(memo_id: str, request: Request):
+    """Update assigned_fund_id and/or gp_memo. Regenerates the PDF so the new
+    fund name + memo text appear inside the document."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    new_fund = (body or {}).get("assigned_fund_id")  # may be None or "" to clear
+    new_memo = (body or {}).get("gp_memo")
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT script_json, episode_title, assigned_fund_id::text AS fund_id, gp_memo
+                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Memo not found")
+        # Compute new values (None = leave alone)
+        final_fund = row["fund_id"] if new_fund is None else (new_fund or None)
+        final_memo = row["gp_memo"] if new_memo is None else (new_memo or None)
+        script = json.loads(row["script_json"]) if isinstance(row["script_json"], str) else row["script_json"]
+        fund_name = _fund_name_lookup(final_fund)
+        from datetime import datetime as _dt, timezone as _tz
+        html_body = _render_dga_memo_html(script, final_memo or "", fund_name,
+                                            _dt.now(_tz.utc).isoformat())
+        pdf_bytes = _render_report_pdf(html_body)
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""UPDATE dga_memos
+                              SET assigned_fund_id = %s, gp_memo = %s, pdf_bytes = %s
+                            WHERE id = %s::uuid""",
+                        (final_fund, final_memo, psycopg2.Binary(pdf_bytes), memo_id))
+            conn.commit()
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(500, f"Update failed: {e!s:.200}")
+    return {"ok": True, "memo_id": memo_id, "fund_name": fund_name}
+
+
+@app.delete("/api/memos/{memo_id}")
+def delete_memo(memo_id: str, request: Request):
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM dga_memos WHERE id = %s::uuid", (memo_id,))
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(500, f"Delete failed: {e!s:.200}")
+    return {"ok": True}
+
+
 # ── Podcast DB schema ──────────────────────────────────────────────────
 def _ensure_podcast_table() -> None:
     """Create analyst_podcasts if missing. Idempotent, per-ALTER commits."""

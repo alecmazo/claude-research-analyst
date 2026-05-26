@@ -1697,6 +1697,7 @@
     <span class="topbar-link" data-tab="positions">📊 Positions</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="reports">📋 Reports</span>
+    <span class="topbar-link" data-tab="memos">📄 Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
     <span class="status-dot" title="API online"></span>
   </nav>
@@ -2788,6 +2789,102 @@
 </div><!-- #tab-reports -->
 
 
+<!-- ══ MEMOS TAB ═══════════════════════════════════════════════ -->
+<div id="tab-memos" class="tab-panel">
+  <div class="wide-shell">
+    <div class="tab-toolbar" style="display:flex;align-items:center;gap:10px;">
+      <h2>📄 DGA Capital Memos <span style="font-size:11px;font-weight:500;color:var(--mid);">— PDFs generated from podcast scripts</span></h2>
+      <span style="flex:1;"></span>
+      <select id="memos-fund-filter"
+              style="height:32px;border:1px solid var(--panel-edge);border-radius:6px;
+                     padding:0 10px;font-size:12px;color:#1e293b;background:#fff;">
+        <option value="">All funds</option>
+      </select>
+      <button class="tab-btn" id="memos-refresh-btn" type="button">↻ Refresh</button>
+    </div>
+    <section class="panel" style="margin-top:14px;">
+      <div id="memos-list" style="padding:0;">
+        <div style="padding:24px;text-align:center;font-size:12px;color:var(--dim);">Loading…</div>
+      </div>
+    </section>
+  </div>
+</div><!-- #tab-memos -->
+
+
+<!-- ══ DGA MEMO MODAL (export from podcast) ════════════════════ -->
+<div id="memo-export-modal" style="display:none;position:fixed;inset:0;background:rgba(10,22,40,0.65);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;max-width:560px;width:92%;padding:24px;box-shadow:0 18px 48px rgba(0,0,0,0.3);">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <span style="font-size:18px;">📄</span>
+      <h3 style="margin:0;font-size:15px;color:#0A1628;">Export as DGA Capital Memo</h3>
+      <span style="flex:1;"></span>
+      <button id="memo-export-close" type="button" style="background:none;border:0;font-size:18px;color:#94a3b8;cursor:pointer;">✕</button>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:14px;" id="memo-export-source">Source: —</div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Assign to fund / account</label>
+      <select id="memo-export-fund" style="width:100%;height:34px;border:1px solid #cbd5e1;border-radius:6px;padding:0 10px;font-size:12.5px;color:#1e293b;background:#fff;">
+        <option value="">— unassigned —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">GP note (optional, appears at top of PDF)</label>
+      <textarea id="memo-export-memo" rows="4"
+        placeholder="Short context for the recipient: why this memo, what to focus on, any caveats."
+        style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:9px 11px;font-size:12px;font-family:inherit;line-height:1.55;color:#1e293b;background:#fff;resize:vertical;"></textarea>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="memo-export-cancel" type="button" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>
+      <button id="memo-export-save" type="button" style="background:#0A1628;border:1px solid #0A1628;color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">💾 Save to Memos</button>
+      <button id="memo-export-save-email" type="button" style="background:#5BB8D4;border:1px solid #4A9BB8;color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">📨 Save & Email…</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══ MEMO EMAIL MODAL ════════════════════════════════════════ -->
+<div id="memo-email-modal" style="display:none;position:fixed;inset:0;background:rgba(10,22,40,0.65);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;max-width:520px;width:92%;padding:24px;box-shadow:0 18px 48px rgba(0,0,0,0.3);">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <span style="font-size:18px;">📨</span>
+      <h3 style="margin:0;font-size:15px;color:#0A1628;">Email DGA Memo</h3>
+      <span style="flex:1;"></span>
+      <button id="memo-email-close" type="button" style="background:none;border:0;font-size:18px;color:#94a3b8;cursor:pointer;">✕</button>
+    </div>
+    <div id="memo-email-title" style="font-size:12px;color:#475569;margin-bottom:14px;font-weight:700;">—</div>
+
+    <div style="display:flex;gap:10px;margin-bottom:14px;padding:4px;background:#f1f5f9;border-radius:6px;">
+      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;color:#475569;" id="memo-email-mode-ad-hoc-lbl">
+        <input type="radio" name="memo-email-mode" value="ad_hoc" checked> Single recipient
+      </label>
+      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;color:#475569;" id="memo-email-mode-lp-list-lbl">
+        <input type="radio" name="memo-email-mode" value="lp_list"> All LPs in assigned fund
+      </label>
+    </div>
+
+    <div id="memo-email-ad-hoc-row" style="margin-bottom:14px;">
+      <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Recipient email</label>
+      <input id="memo-email-to" type="email" placeholder="name@example.com"
+        style="width:100%;height:34px;border:1px solid #cbd5e1;border-radius:6px;padding:0 11px;font-size:12.5px;color:#1e293b;background:#fff;">
+    </div>
+    <div id="memo-email-lp-row" style="display:none;margin-bottom:14px;font-size:12px;color:#475569;background:#fff8e1;border:1px solid #fde68a;padding:10px 12px;border-radius:6px;">
+      Sending to all active LPs in <strong id="memo-email-fund-name">—</strong>.
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Subject</label>
+      <input id="memo-email-subject" type="text"
+        style="width:100%;height:34px;border:1px solid #cbd5e1;border-radius:6px;padding:0 11px;font-size:12.5px;color:#1e293b;background:#fff;">
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="memo-email-cancel" type="button" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>
+      <button id="memo-email-send" type="button" style="background:#5BB8D4;border:1px solid #4A9BB8;color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">📨 Send</button>
+    </div>
+  </div>
+</div>
+
+
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
@@ -3236,6 +3333,7 @@
     fund:      () => loadFundTab(),
     settings:  () => loadSettingsTab(),
     reports:   () => loadReportsTab(),
+    memos:     () => loadMemosTab(),
   };
 
   function showTab(name) {
@@ -5694,6 +5792,21 @@
         (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() + costStr;
     }
     _populatePodcastSavedScripts();
+
+    // 📄 Add an "Export as DGA Memo" button so the GP can turn this script
+    // into a saved PDF + email it from the Memos tab.
+    try {
+      const jobKey = d.script.ticker || d.ticker;
+      const epTitle = d.script.episode_title || jobKey;
+      if (jobKey) {
+        const memoBtn = document.createElement('button');
+        memoBtn.type = 'button';
+        memoBtn.textContent = '📄 Export as DGA Memo';
+        memoBtn.style.cssText = 'margin:12px 0 4px 0;background:#0A1628;border:1px solid #0A1628;color:#fff;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;';
+        memoBtn.onclick = () => window._openMemoExportModal(jobKey, epTitle);
+        out.insertBefore(memoBtn, out.firstChild);
+      }
+    } catch (e) { console.warn('[memo btn]', e); }
   }
 
   async function _populatePodcastScriptPicker() {
@@ -12854,6 +12967,211 @@
       }
     });
   })();
+
+  // ══════════════════════════════════════════════════════════════
+  // 📄 DGA MEMOS — list + export-from-podcast + email modals
+  // ══════════════════════════════════════════════════════════════
+  window._memoFunds = [];          // cached fund list for modal dropdowns
+  window._currentExportJobKey = null;
+  window._currentEmailMemo = null;
+
+  async function _loadFundsForMemoModal() {
+    if (window._memoFunds.length) return window._memoFunds;
+    try {
+      const r = await window.dgaFetch('/api/fund/list');
+      const j = await r.json();
+      const list = Array.isArray(j) ? j : (j.funds || []);
+      window._memoFunds = list.filter(f => f && f.id);
+    } catch (e) {
+      console.warn('[memos] fund load failed', e);
+    }
+    return window._memoFunds;
+  }
+  function _populateFundSelect(selectEl, includeAll) {
+    const opts = [includeAll
+      ? '<option value="">All funds</option>'
+      : '<option value="">— unassigned —</option>'];
+    (window._memoFunds || []).forEach(f => {
+      const nm = f.legal_name || f.name || f.id;
+      opts.push(`<option value="${f.id}">${nm}</option>`);
+    });
+    selectEl.innerHTML = opts.join('');
+  }
+
+  // ── Load + render Memos tab ────────────────────────────────────
+  async function loadMemosTab() {
+    await _loadFundsForMemoModal();
+    const filterSel = document.getElementById('memos-fund-filter');
+    if (filterSel) {
+      _populateFundSelect(filterSel, true);
+      filterSel.onchange = () => _renderMemosList();
+    }
+    const refresh = document.getElementById('memos-refresh-btn');
+    if (refresh) refresh.onclick = () => _renderMemosList();
+    _renderMemosList();
+  }
+  async function _renderMemosList() {
+    const list = document.getElementById('memos-list');
+    if (!list) return;
+    list.innerHTML = '<div style="padding:24px;text-align:center;font-size:12px;color:var(--dim);">Loading…</div>';
+    const fundId = (document.getElementById('memos-fund-filter') || {}).value || '';
+    try {
+      const url = '/api/memos' + (fundId ? '?fund_id=' + encodeURIComponent(fundId) : '');
+      const r = await window.dgaFetch(url);
+      const j = await r.json();
+      const memos = j.memos || [];
+      if (!memos.length) {
+        list.innerHTML = '<div style="padding:32px;text-align:center;font-size:12px;color:var(--dim);">No memos yet. Generate a podcast in the LLM Lab and click <strong>📄 Export as DGA Memo</strong>.</div>';
+        return;
+      }
+      const rows = memos.map(m => {
+        const memoSnip = (m.gp_memo || '').slice(0, 90);
+        const sentBadge = m.last_sent_at
+          ? `<span style="font-size:9.5px;color:#22c55e;font-weight:700;">📨 sent ${(m.last_sent_at||'').slice(0,10)}</span>`
+          : `<span style="font-size:9.5px;color:#94a3b8;">not sent</span>`;
+        return `
+          <div style="display:grid;grid-template-columns:1fr auto;gap:14px;padding:14px 18px;border-bottom:1px solid var(--panel-edge);">
+            <div>
+              <div style="font-weight:800;font-size:13px;color:#0A1628;">${(m.episode_title||'Memo').replace(/[<>&]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])}</div>
+              <div style="font-size:10.5px;color:#64748b;margin-top:3px;">
+                ${(m.generated_at||'').slice(0,10)} · ${m.source_format||'memo'}
+                ${m.fund_name ? ' · <strong style="color:#0A1628;">'+m.fund_name+'</strong>' : '<span style="color:#94a3b8;"> · unassigned</span>'}
+                · ${sentBadge}
+              </div>
+              ${memoSnip ? `<div style="font-size:10.5px;color:#92400e;font-style:italic;margin-top:5px;background:#fff8e1;padding:6px 10px;border-left:2px solid #f59e0b;border-radius:3px;">${memoSnip.replace(/[<>&]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])}${m.gp_memo.length>90?'…':''}</div>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <a href="/api/memos/${m.id}/pdf" target="_blank" rel="noopener"
+                 style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;text-decoration:none;">📄 View PDF</a>
+              <button data-memo-email="${m.id}" data-fund="${m.assigned_fund_id||''}" data-title="${(m.episode_title||'').replace(/"/g,'&quot;')}"
+                 style="background:#5BB8D4;border:1px solid #4A9BB8;color:#fff;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">📨 Email</button>
+              <button data-memo-delete="${m.id}"
+                 style="background:#fff;border:1px solid #fca5a5;color:#b91c1c;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">🗑</button>
+            </div>
+          </div>`;
+      }).join('');
+      list.innerHTML = rows;
+      list.querySelectorAll('[data-memo-email]').forEach(b => b.onclick = () =>
+        _openMemoEmailModal(b.dataset.memoEmail, b.dataset.fund, b.dataset.title));
+      list.querySelectorAll('[data-memo-delete]').forEach(b => b.onclick = async () => {
+        if (!confirm('Delete this memo permanently?')) return;
+        const r = await window.dgaFetch('/api/memos/' + b.dataset.memoDelete, { method:'DELETE' });
+        if (r.ok) _renderMemosList(); else alert('Delete failed');
+      });
+    } catch (e) {
+      list.innerHTML = '<div style="padding:24px;color:#dc2626;font-size:12px;">Failed: ' + e.message + '</div>';
+    }
+  }
+
+  // ── EXPORT-from-podcast modal wiring ───────────────────────────
+  window._openMemoExportModal = async function(jobKey, episodeTitle) {
+    window._currentExportJobKey = jobKey;
+    await _loadFundsForMemoModal();
+    _populateFundSelect(document.getElementById('memo-export-fund'), false);
+    document.getElementById('memo-export-memo').value = '';
+    document.getElementById('memo-export-source').textContent = 'Source: ' + (episodeTitle || jobKey);
+    document.getElementById('memo-export-modal').style.display = 'flex';
+  };
+  function _closeMemoExportModal() {
+    document.getElementById('memo-export-modal').style.display = 'none';
+    window._currentExportJobKey = null;
+  }
+  document.getElementById('memo-export-close')?.addEventListener('click', _closeMemoExportModal);
+  document.getElementById('memo-export-cancel')?.addEventListener('click', _closeMemoExportModal);
+  async function _doMemoExport(thenEmail) {
+    const jobKey = window._currentExportJobKey;
+    if (!jobKey) return;
+    const fundId = document.getElementById('memo-export-fund').value || null;
+    const memo   = document.getElementById('memo-export-memo').value || '';
+    const saveBtn  = document.getElementById('memo-export-save');
+    const emailBtn = document.getElementById('memo-export-save-email');
+    saveBtn.disabled = emailBtn.disabled = true;
+    saveBtn.textContent = '⏳ Rendering PDF…';
+    try {
+      const r = await window.dgaFetch('/api/memos/from-podcast/' + encodeURIComponent(jobKey), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ assigned_fund_id: fundId, gp_memo: memo }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.detail || j.error || 'Export failed');
+      _closeMemoExportModal();
+      if (thenEmail) {
+        _openMemoEmailModal(j.memo_id, fundId, j.episode_title);
+      } else {
+        alert('✓ Memo saved. Find it under the 📄 Memos tab.');
+      }
+    } catch (e) {
+      alert('Export failed: ' + e.message);
+    } finally {
+      saveBtn.disabled = emailBtn.disabled = false;
+      saveBtn.textContent = '💾 Save to Memos';
+    }
+  }
+  document.getElementById('memo-export-save')?.addEventListener('click', () => _doMemoExport(false));
+  document.getElementById('memo-export-save-email')?.addEventListener('click', () => _doMemoExport(true));
+
+  // ── EMAIL modal wiring ─────────────────────────────────────────
+  function _openMemoEmailModal(memoId, fundId, title) {
+    window._currentEmailMemo = { id: memoId, fund_id: fundId, title: title };
+    document.getElementById('memo-email-title').textContent = title || 'Memo';
+    document.getElementById('memo-email-subject').value = 'DGA Capital · ' + (title || 'Memo');
+    document.getElementById('memo-email-to').value = '';
+    document.querySelector('input[name="memo-email-mode"][value="ad_hoc"]').checked = true;
+    document.getElementById('memo-email-ad-hoc-row').style.display = '';
+    document.getElementById('memo-email-lp-row').style.display = 'none';
+    // Populate fund name display + lock out LP mode if no fund assigned
+    const fundObj = (window._memoFunds || []).find(f => f.id === fundId);
+    document.getElementById('memo-email-fund-name').textContent =
+      fundObj ? (fundObj.legal_name || fundObj.name || fundId) : '(no fund assigned)';
+    const lpLbl = document.getElementById('memo-email-mode-lp-list-lbl');
+    const lpRadio = lpLbl.querySelector('input');
+    if (!fundId) {
+      lpRadio.disabled = true; lpLbl.style.opacity = '0.4';
+      lpLbl.title = 'Assign this memo to a fund first to use this mode.';
+    } else {
+      lpRadio.disabled = false; lpLbl.style.opacity = '1';
+      lpLbl.title = '';
+    }
+    document.getElementById('memo-email-modal').style.display = 'flex';
+  }
+  function _closeMemoEmailModal() {
+    document.getElementById('memo-email-modal').style.display = 'none';
+    window._currentEmailMemo = null;
+  }
+  document.getElementById('memo-email-close')?.addEventListener('click', _closeMemoEmailModal);
+  document.getElementById('memo-email-cancel')?.addEventListener('click', _closeMemoEmailModal);
+  document.querySelectorAll('input[name="memo-email-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      const isLp = r.checked && r.value === 'lp_list';
+      document.getElementById('memo-email-ad-hoc-row').style.display = isLp ? 'none' : '';
+      document.getElementById('memo-email-lp-row').style.display = isLp ? '' : 'none';
+    });
+  });
+  document.getElementById('memo-email-send')?.addEventListener('click', async () => {
+    const m = window._currentEmailMemo;
+    if (!m) return;
+    const mode    = document.querySelector('input[name="memo-email-mode"]:checked').value;
+    const toAddr  = document.getElementById('memo-email-to').value.trim();
+    const subject = document.getElementById('memo-email-subject').value.trim();
+    if (mode === 'ad_hoc' && !toAddr) { alert('Enter a recipient email.'); return; }
+    const sendBtn = document.getElementById('memo-email-send');
+    sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending…';
+    try {
+      const r = await window.dgaFetch('/api/memos/' + m.id + '/email', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode, to_addr: toAddr, subject }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error((j.results||[]).map(x=>x.error).filter(Boolean).join('; ') || j.detail || 'Send failed');
+      alert(`✓ Sent to ${j.sent}/${j.attempted} recipient${j.attempted===1?'':'s'}.`);
+      _closeMemoEmailModal();
+      _renderMemosList();
+    } catch (e) {
+      alert('Email failed: ' + e.message);
+    } finally {
+      sendBtn.disabled = false; sendBtn.textContent = '📨 Send';
+    }
+  });
 
   // ── Init ─────────────────────────────────────────────────────
   loadIndices();
