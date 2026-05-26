@@ -16307,7 +16307,8 @@ def _fund_name_lookup(fund_id: str | None) -> str | None:
         return None
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT legal_name FROM funds WHERE id = %s", (fund_id,))
+            cur.execute("SELECT COALESCE(short_name, name) FROM funds WHERE id::text = %s",
+                        (str(fund_id),))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception:
@@ -16441,7 +16442,7 @@ def list_memos(request: Request, fund_id: str | None = None,
                        m.source_format           AS source_format,
                        m.episode_title           AS episode_title,
                        m.assigned_fund_id        AS assigned_fund_id,
-                       f.legal_name              AS fund_name,
+                       COALESCE(f.short_name, f.name) AS fund_name,
                        m.gp_memo                 AS gp_memo,
                        m.generated_by            AS generated_by,
                        m.generated_at            AS generated_at,
