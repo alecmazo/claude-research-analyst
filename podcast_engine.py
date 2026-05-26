@@ -873,16 +873,49 @@ where present. This is what makes the stress test feel real and not
 performative.
 ══════════════════════════════════════════════════════════════════════"""
 
-    return f"""Generate the DGA HiTech Podcast episode for ticker {ticker}.
-{format_intro}
-══════════════════════════════════════════════════════════════════════
+    # Non-debate formats (memo, pre_mortem, catalysts, quick_hit) have their
+    # OWN structure that doesn't revolve around bull-vs-bear seats. Injecting
+    # debate framing on top of those structures confuses the LLM and it
+    # falls back to producing a debate. Gate this block on format=='debate'.
+    if format == "debate":
+        role_block = f"""══════════════════════════════════════════════════════════════════════
 ROLE ASSIGNMENT (data-driven, do not override):
 ══════════════════════════════════════════════════════════════════════
 {framing}
 
   • BULL SEAT  → {bull.upper()}   (his actual report direction: {rock_stance.get('direction') if bull=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bull=='rock' else claude_stance.get('upside_pct')}%)
   • BEAR SEAT  → {bear.upper()}   (his actual report direction: {rock_stance.get('direction') if bear=='rock' else claude_stance.get('direction')}, upside: {rock_stance.get('upside_pct') if bear=='rock' else claude_stance.get('upside_pct')}%)
+"""
+    else:
+        # Format-aware speaker note — keep the cast intro WITHOUT bull/bear seats.
+        # The format's structure block (from _format_addendum) tells each speaker
+        # what to do in each section directly.
+        role_block = f"""══════════════════════════════════════════════════════════════════════
+SPEAKER NOTES (this is a {fmt['label']}, NOT a debate):
+══════════════════════════════════════════════════════════════════════
+Follow the section-by-section structure exactly as laid out below — DO NOT
+default to a Bull-vs-Bear debate format. The structure assigns specific
+speakers to specific sections (e.g. "Opus only" or "Rock only" or "mixed").
 
+  • Opus    — leads narrative sections (cold_open, executive_summary,
+              business_overview, recommendation, etc.)
+  • Rock    — argues the bullish view in sections marked for him
+              (e.g. bull_thesis); his real report direction was
+              "{rock_stance.get('direction', 'neutral')}" with
+              {rock_stance.get('upside_pct', 0)}% upside.
+  • Claudia — argues the bearish/skeptical view in sections marked for her
+              (e.g. bear_thesis); her real report direction was
+              "{claude_stance.get('direction', 'neutral')}" with
+              {claude_stance.get('upside_pct', 0)}% upside.
+
+The structure section below is AUTHORITATIVE for ordering, turn
+assignments, and word budgets. Treat the sections as if you're following
+an investment committee agenda, not a debate transcript.
+"""
+
+    return f"""Generate the DGA HiTech Podcast episode for ticker {ticker}.
+{format_intro}
+{role_block}
 Both speakers stay in personality (Rock punchy/British-contrarian, Claudia
 measured/skeptic-tilted). But the directional stance each ARGUES is
 assigned above. If the assignment goes against an analyst's own report
