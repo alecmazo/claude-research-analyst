@@ -1092,14 +1092,20 @@ def validate_script(script: dict[str, Any]) -> dict[str, Any]:
     elif total_words > wb_hi * 1.15:
         warnings.append(f"word count {total_words} above {wb_lo:,}–{wb_hi:,} target — episode may overshoot")
 
-    # Verdict must contain winner name
-    verdict_text = ""
-    for sec in sections:
-        if sec.get("id") == "verdict":
-            verdict_text = " ".join(t.get("text", "") for t in (sec.get("turns") or []))
-            break
-    if winner and winner not in verdict_text.lower():
-        warnings.append(f"verdict text does not mention the declared winner ({winner!r})")
+    # Verdict-must-contain-winner check is debate-specific. Non-debate
+    # formats (memo, catalysts, pre_mortem, quick_hit) end with a
+    # recommendation / ranking / failure-path, not a Rock-vs-Claudia
+    # judgment — so the "winner" field is a vestigial JSON artifact and
+    # shouldn't trigger validation warnings about it.
+    fmt = (script.get("format") or "debate").lower()
+    if fmt == "debate":
+        verdict_text = ""
+        for sec in sections:
+            if sec.get("id") == "verdict":
+                verdict_text = " ".join(t.get("text", "") for t in (sec.get("turns") or []))
+                break
+        if winner and winner not in verdict_text.lower():
+            warnings.append(f"verdict text does not mention the declared winner ({winner!r})")
 
     return {
         "ok": not errors,
