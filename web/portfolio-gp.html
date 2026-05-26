@@ -2300,6 +2300,9 @@
         <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
             <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;flex:1;">—</div>
+            <button id="podcast-audio-export-memo-btn"
+              title="Render this episode's script as a DGA Capital branded PDF memo (saved to the 📄 Memos tab)."
+              style="background:#5BB8D4;color:#0A1628;border:1px solid #5BB8D4;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">📄 Export Memo</button>
             <button id="podcast-audio-delete-btn"
               title="Delete this audio episode (MP3 + Dropbox copy). Script is kept — you can re-generate audio anytime."
               style="background:transparent;color:#fca5a5;border:1px solid #fca5a5;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🗑️ Audio</button>
@@ -6269,6 +6272,18 @@
       }
     }
     if (title) title.textContent = '🎙️ ' + epTitle;
+    // Wire the "Export Memo" button to the SAME ticker the player is showing.
+    // Re-bound on every player swap so it always points at the right script.
+    const memoBtn = document.getElementById('podcast-audio-export-memo-btn');
+    if (memoBtn) {
+      memoBtn.onclick = function() {
+        if (typeof window._openMemoExportModal === 'function') {
+          window._openMemoExportModal(ticker, epTitle);
+        } else {
+          alert('Memo export not loaded yet — try refreshing.');
+        }
+      };
+    }
     // Format-aware URL + cache-bust on regeneration
     el.src = '/api/podcast/' + ticker + '/audio.mp3?format=' + encodeURIComponent(fmt) + '&t=' + Date.now();
     el.load();
