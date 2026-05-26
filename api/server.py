@@ -16019,10 +16019,157 @@ def _ensure_dga_memos_table() -> None:
         print(f"⚠️ _ensure_dga_memos_table failed: {e!s:.200}", flush=True)
 
 
+def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
+                          generated_at_iso: str) -> bytes:
+    """Render a podcast script as a DGA Capital memo PDF (reportlab platypus).
+    Sections become narrative chapters; turns become attributed paragraphs.
+    No external dependencies beyond reportlab (already installed)."""
+    import io as _io
+    import html as _html
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak,
+    )
+    from reportlab.lib.enums import TA_LEFT
+
+    NAVY = colors.HexColor("#0A1628")
+    BLUE = colors.HexColor("#5BB8D4")
+    AMBER_BG = colors.HexColor("#fff8e1")
+    AMBER_BORDER = colors.HexColor("#f59e0b")
+    GREY = colors.HexColor("#64748b")
+    DARK = colors.HexColor("#1e293b")
+
+    episode_title = script.get("episode_title") or script.get("ticker") or "DGA Memo"
+    tickers = script.get("tickers") or [script.get("ticker")]
+    tickers_str = ", ".join(t for t in (tickers or []) if t)[:300]
+    fmt = (script.get("format") or "memo").replace("_", " ").title()
+    date_str = (generated_at_iso or "")[:10]
+
+    # Speaker display name + hex color string (used inline in Paragraph
+    # markup so we keep the raw "#RRGGBB" form rather than HexColor objects)
+    SPEAKER_META = {
+        "opus":    ("Marc (PM)",  "#0A1628"),
+        "rock":    ("Rock",       "#1565c0"),
+        "claudia": ("Claudia",    "#7c3aed"),
+    }
+    def _sp(name):
+        return SPEAKER_META.get((name or "").lower(),
+                                 ((name or "Narrator").title(), "#475569"))
+
+    # Footer with page numbers
+    def _footer(canv, doc):
+        canv.saveState()
+        canv.setFont("Helvetica", 7.5)
+        canv.setFillColor(GREY)
+        canv.drawCentredString(letter[0]/2, 0.45*inch,
+            f"DGA Capital · Confidential · Page {canv.getPageNumber()}")
+        canv.restoreState()
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        leftMargin=0.85*inch, rightMargin=0.85*inch,
+        topMargin=0.8*inch, bottomMargin=0.7*inch,
+        title=episode_title, author="DGA Capital",
+    )
+
+    # ── Styles ────────────────────────────────────────────────────────────
+    h_eyebrow = ParagraphStyle("eyebrow", fontName="Helvetica-Bold",
+        fontSize=8, textColor=BLUE, spaceAfter=2, leading=10)
+    h_title = ParagraphStyle("title", fontName="Helvetica-Bold",
+        fontSize=19, textColor=NAVY, spaceAfter=4, leading=22)
+    h_fund = ParagraphStyle("fund", fontName="Helvetica",
+        fontSize=10, textColor=DARK, spaceAfter=2, leading=13)
+    h_meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=9,
+        textColor=GREY, leading=12)
+    h_section = ParagraphStyle("section", fontName="Helvetica-Bold",
+        fontSize=12.5, textColor=NAVY, spaceBefore=14, spaceAfter=6, leading=15,
+        borderColor=BLUE, borderWidth=0,
+        borderPadding=(0, 0, 3, 0))
+    p_turn = ParagraphStyle("turn", fontName="Helvetica", fontSize=10.5,
+        textColor=DARK, leading=14.5, spaceAfter=4, alignment=TA_LEFT)
+    p_memo = ParagraphStyle("memo", fontName="Helvetica", fontSize=10.5,
+        textColor=NAVY, leading=14.5, alignment=TA_LEFT)
+    p_disc = ParagraphStyle("disclaimer", fontName="Helvetica", fontSize=7.5,
+        textColor=GREY, leading=10.5, spaceBefore=10)
+
+    flow = []
+    # ── Header block ─────────────────────────────────────────────────────
+    flow.append(Paragraph("DGA CAPITAL · INVESTMENT MEMO", h_eyebrow))
+    flow.append(Paragraph(_html.escape(episode_title), h_title))
+    if fund_name:
+        flow.append(Paragraph(f"For: <b>{_html.escape(fund_name)}</b>", h_fund))
+    flow.append(Paragraph(
+        f"{date_str} &nbsp;·&nbsp; Format: {_html.escape(fmt)}"
+        + (f" &nbsp;·&nbsp; Coverage: {_html.escape(tickers_str)}" if tickers_str else ""),
+        h_meta))
+    flow.append(Spacer(1, 6))
+    flow.append(HRFlowable(width="100%", thickness=2, color=NAVY,
+                            spaceBefore=2, spaceAfter=10))
+
+    # ── GP Note callout ──────────────────────────────────────────────────
+    if (gp_memo or "").strip():
+        memo_para = Paragraph(
+            f"<b><font color='#92400e' size='8'>GP NOTE</font></b><br/><br/>"
+            + _html.escape(gp_memo.strip()).replace("\n", "<br/>"),
+            p_memo,
+        )
+        tbl = Table([[memo_para]], colWidths=[doc.width])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), AMBER_BG),
+            ("LEFTPADDING", (0,0), (-1,-1), 12),
+            ("RIGHTPADDING", (0,0), (-1,-1), 12),
+            ("TOPPADDING", (0,0), (-1,-1), 10),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+            ("LINEBEFORE", (0,0), (-1,-1), 3, AMBER_BORDER),
+            ("BOX", (0,0), (-1,-1), 0.5, AMBER_BORDER),
+        ]))
+        flow.append(tbl)
+        flow.append(Spacer(1, 12))
+
+    # ── Sections ─────────────────────────────────────────────────────────
+    for sec in (script.get("sections") or []):
+        sid = (sec.get("id") or "").replace("_", " ").strip()
+        title = sid.title() if sid else "Section"
+        turns = sec.get("turns") or []
+        if not turns:
+            continue
+        flow.append(Paragraph(_html.escape(title), h_section))
+        flow.append(HRFlowable(width="40%", thickness=1.2, color=BLUE,
+                                spaceBefore=0, spaceAfter=6, hAlign="LEFT"))
+        for t in turns:
+            text = _html.escape(t.get("text") or "")
+            sp_name, sp_color_hex = _sp(t.get("speaker"))
+            flow.append(Paragraph(
+                f'<b><font color="{sp_color_hex}">{_html.escape(sp_name)}:</font></b> {text}',
+                p_turn,
+            ))
+
+    # ── Disclaimer ───────────────────────────────────────────────────────
+    flow.append(Spacer(1, 16))
+    flow.append(HRFlowable(width="100%", thickness=0.4,
+                            color=colors.HexColor("#cbd5e1"),
+                            spaceBefore=4, spaceAfter=4))
+    flow.append(Paragraph(
+        f"<b>Disclaimer:</b> This memo is for informational purposes only and "
+        f"reflects views as of {date_str}. It is not investment advice nor an "
+        f"offer to buy or sell any security. Generated from DGA Capital's "
+        f"internal research pipeline. Distribution restricted to authorized recipients.",
+        p_disc))
+
+    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    return buf.getvalue()
+
+
 def _render_dga_memo_html(script: dict, gp_memo: str, fund_name: str | None,
                            generated_at_iso: str) -> str:
     """Render a podcast script as a DGA Capital memo (HTML, print-friendly).
     Sections become narrative chapters; turns become attributed paragraphs.
+    Kept around in case we wire WeasyPrint later — current PDF path uses
+    _render_dga_memo_pdf (reportlab) which has no extra system deps.
     """
     import html as _html
     episode_title = script.get("episode_title") or script.get("ticker") or "DGA Memo"
@@ -16168,10 +16315,8 @@ async def create_memo_from_podcast(job_key: str, request: Request):
     fund_name = _fund_name_lookup(assigned_fund_id)
     from datetime import datetime as _dt, timezone as _tz
     gen_iso = _dt.now(_tz.utc).isoformat()
-    html_body = _render_dga_memo_html(src["script"], gp_memo, fund_name, gen_iso)
-
     try:
-        pdf_bytes = _render_report_pdf(html_body)
+        pdf_bytes = _render_dga_memo_pdf(src["script"], gp_memo, fund_name, gen_iso)
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
 
@@ -16391,9 +16536,8 @@ async def update_memo(memo_id: str, request: Request):
         script = json.loads(row["script_json"]) if isinstance(row["script_json"], str) else row["script_json"]
         fund_name = _fund_name_lookup(final_fund)
         from datetime import datetime as _dt, timezone as _tz
-        html_body = _render_dga_memo_html(script, final_memo or "", fund_name,
-                                            _dt.now(_tz.utc).isoformat())
-        pdf_bytes = _render_report_pdf(html_body)
+        pdf_bytes = _render_dga_memo_pdf(script, final_memo or "", fund_name,
+                                          _dt.now(_tz.utc).isoformat())
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""UPDATE dga_memos
                               SET assigned_fund_id = %s, gp_memo = %s, pdf_bytes = %s
