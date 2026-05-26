@@ -2176,22 +2176,28 @@ def generate_portfolio_roundup_script(
     # If we matched a fund's reconciliation, build a callout block citing
     # the authoritative portfolio YTD instead of buy-and-hold approximation.
     if matched_fund and matched_fund.get("portfolio_ytd_pct") is not None:
+        # Methodology variants (may be None — only shown if present)
+        twr_line = (f"   │  Time-Weighted (TWR):     {matched_fund['ytd_modified_dietz_pct']:+6.2f}%                       │\n"
+                    if matched_fund.get("ytd_modified_dietz_pct") is not None else "")
+        mwr_line = (f"   │  Money-Weighted (MWR):    {matched_fund['ytd_money_weighted_pct']:+6.2f}%                       │\n"
+                    if matched_fund.get("ytd_money_weighted_pct") is not None else "")
         matched_block = (
             f"\n🟢 AUTHORITATIVE PORTFOLIO YTD — THIS IS THE NUMBER TO QUOTE:\n"
             f"\n"
             f"   ┌──────────────────────────────────────────────────────┐\n"
-            f"   │  Portfolio YTD: {matched_fund['portfolio_ytd_pct']:+6.2f}%   "
-            f"(Modified Dietz)        │\n"
+            f"   │  📊 YTD Return:           {matched_fund['portfolio_ytd_pct']:+6.2f}%   ← QUOTE THIS    │\n"
+            + twr_line + mwr_line +
             f"   │  Fund/Sleeve:   {(matched_fund.get('fund_name') or '(account)')[:35]:<35}      │\n"
             f"   │  Reconciled:    {(matched_fund.get('updated_at') or 'recently')[:10]:<10}                           │\n"
             f"   └──────────────────────────────────────────────────────┘\n"
             f"\n"
             f"   🚨 CRITICAL: Whenever the script talks about the portfolio's\n"
-            f"   year-to-date return, the ONLY acceptable number is\n"
+            f"   year-to-date return, the ONLY acceptable headline number is\n"
             f"   {matched_fund['portfolio_ytd_pct']:+.2f}%. This is the real\n"
-            f"   Modified Dietz return from the user's reconciled brokerage\n"
-            f"   data — transaction-aware, accounts for deposits / withdrawals /\n"
-            f"   partial sales / timing of buys.\n"
+            f"   YTD return from the user's reconciled brokerage data — same\n"
+            f"   number the managed-accounts UI displays as the headline.\n"
+            f"   (TWR and MWR variants are listed above for context — only\n"
+            f"   mention them if you're explicitly distinguishing methodology.)\n"
             f"\n"
             f"   ❌ DO NOT cite any other portfolio return number. Specifically:\n"
             f"      • DO NOT sum per-ticker YTD × weight to get a different total.\n"

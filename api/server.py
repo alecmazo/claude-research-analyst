@@ -17659,11 +17659,26 @@ async def podcast_portfolio_roundup_upload(
                     matched_fund["positions_matched"] = sum(
                         1 for p in positions if p.get("ytd_source") == "managed_account_reconciliation"
                     )
-                    matched_fund["portfolio_ytd_pct"]  = (
-                        float(rj.get("modified_dietz_pct")
-                              or rj.get("ytd_pct")
-                              or matched_fund["ytd_pct"] or 0)
-                        or None
+                    # Prefer the cache's `ytd_pct` column FIRST — that's the
+                    # number the managed-accounts UI displays as the headline
+                    # "YTD RETURN" on the account overview card. Fall back to
+                    # result_json fields only if the column is empty.
+                    # Order matches what's used elsewhere (e.g. server.py:2510,
+                    # 3439, 10345 — cache column → result_json fallback).
+                    matched_fund["portfolio_ytd_pct"] = (
+                        matched_fund["ytd_pct"]
+                        or (float(rj.get("ytd_pct")) if rj.get("ytd_pct") is not None else None)
+                        or (float(rj.get("modified_dietz_pct")) if rj.get("modified_dietz_pct") is not None else None)
+                    )
+                    # Also expose the alternates so the prompt can surface
+                    # them if useful (TWR vs Personal vs Headline).
+                    matched_fund["ytd_modified_dietz_pct"] = (
+                        float(rj.get("modified_dietz_pct"))
+                        if rj.get("modified_dietz_pct") is not None else None
+                    )
+                    matched_fund["ytd_money_weighted_pct"] = (
+                        float(rj.get("money_weighted_pct") or rj.get("mwrr_pct"))
+                        if (rj.get("money_weighted_pct") or rj.get("mwrr_pct")) is not None else None
                     )
                 except Exception as _e:
                     print(f"⚠️ [portfolio-roundup-upload] attribution parse failed: {_e!s:.150}", flush=True)
