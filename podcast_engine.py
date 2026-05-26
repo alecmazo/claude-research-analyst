@@ -2177,14 +2177,33 @@ def generate_portfolio_roundup_script(
     # the authoritative portfolio YTD instead of buy-and-hold approximation.
     if matched_fund and matched_fund.get("portfolio_ytd_pct") is not None:
         matched_block = (
-            f"\n🟢 AUTHORITATIVE YTD SOURCE (use these numbers):\n"
-            f"   Fund/Sleeve:   {matched_fund.get('fund_name','(managed account)')}\n"
-            f"   Portfolio YTD: {matched_fund['portfolio_ytd_pct']:+.2f}%  "
-            f"(Modified Dietz, transaction-aware)\n"
-            f"   Reconciled:    {matched_fund.get('updated_at','recently')}\n"
-            f"   Per-ticker YTD on each position is `ytd_pct` from this same\n"
-            f"   reconciliation — quote them verbatim. NEVER recompute, NEVER\n"
-            f"   approximate, NEVER cite a different time window.\n"
+            f"\n🟢 AUTHORITATIVE PORTFOLIO YTD — THIS IS THE NUMBER TO QUOTE:\n"
+            f"\n"
+            f"   ┌──────────────────────────────────────────────────────┐\n"
+            f"   │  Portfolio YTD: {matched_fund['portfolio_ytd_pct']:+6.2f}%   "
+            f"(Modified Dietz)        │\n"
+            f"   │  Fund/Sleeve:   {(matched_fund.get('fund_name') or '(account)')[:35]:<35}      │\n"
+            f"   │  Reconciled:    {(matched_fund.get('updated_at') or 'recently')[:10]:<10}                           │\n"
+            f"   └──────────────────────────────────────────────────────┘\n"
+            f"\n"
+            f"   🚨 CRITICAL: Whenever the script talks about the portfolio's\n"
+            f"   year-to-date return, the ONLY acceptable number is\n"
+            f"   {matched_fund['portfolio_ytd_pct']:+.2f}%. This is the real\n"
+            f"   Modified Dietz return from the user's reconciled brokerage\n"
+            f"   data — transaction-aware, accounts for deposits / withdrawals /\n"
+            f"   partial sales / timing of buys.\n"
+            f"\n"
+            f"   ❌ DO NOT cite any other portfolio return number. Specifically:\n"
+            f"      • DO NOT sum per-ticker YTD × weight to get a different total.\n"
+            f"      • DO NOT average per-ticker returns.\n"
+            f"      • DO NOT estimate from sector buckets.\n"
+            f"      • A simple Σ(weight × ticker_return) overstates real returns\n"
+            f"        because it ignores when you bought, cash drag, and trims —\n"
+            f"        which is why we use Modified Dietz instead.\n"
+            f"\n"
+            f"   ✓ Per-ticker `ytd_pct` on each position above is ALSO from\n"
+            f"     this same reconciliation — quote those verbatim when\n"
+            f"     discussing a single name's performance.\n"
         )
     else:
         matched_block = (
@@ -2278,7 +2297,9 @@ above. You MUST cite these numbers, not invent your own.
 
 {sector_block}
 
-Portfolio-level YTD contribution (sum of all sectors): {portfolio_ytd_contrib:+.2f}%-pts
+{"" if (matched_fund and matched_fund.get("portfolio_ytd_pct") is not None) else
+ f"Portfolio-level YTD (BUY-AND-HOLD APPROXIMATION, no transactions accounted for): "
+ f"{portfolio_ytd_contrib:+.2f}%-pts"}
 YTD period: {ytd_period}
 {matched_block}
 
