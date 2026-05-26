@@ -269,10 +269,16 @@ def _is_cash_like(ticker: str) -> bool:
     return False
 
 
-def _enrich_positions_with_sectors_and_ytd(positions: list[dict]) -> None:
+def _enrich_positions_with_sectors_and_ytd(positions: list[dict],
+                                             skip_ytd: bool = False) -> None:
     """Mutates `positions` in place — fills `sector` (real, from yfinance/SEC)
     and `ytd_pct` (real, from yfinance Jan-1 → today). Cash-like tickers are
     forced to sector='Cash' with ytd_pct=0 since MM funds are stable NAV.
+
+    When `skip_ytd=True`, the caller has already populated authoritative YTD
+    numbers (e.g. from the managed-account reconciliation cache). We still
+    resolve sectors but skip the yfinance buy-and-hold recompute that would
+    overwrite better data.
 
     Why this exists: the LLM was inventing concentrations like "Financials 24%"
     by eyeballing tickers. Pre-resolve sectors here so the prompt can hand it
@@ -299,7 +305,7 @@ def _enrich_positions_with_sectors_and_ytd(positions: list[dict]) -> None:
         equity_tks.append(tk)
 
     # ── Pass 2: YTD prices — bulk yfinance fetch (one HTTP roundtrip) ────────
-    if not equity_tks:
+    if not equity_tks or skip_ytd:
         return
     try:
         import yfinance as _yf
@@ -2055,6 +2061,7 @@ def generate_portfolio_roundup_script(
     *,
     positions: list[dict] | None = None,
     title_hint: str | None = None,
+    matched_fund: dict | None = None,
     model: str | None = None,
     on_progress=None,
 ) -> dict[str, Any]:
@@ -2095,11 +2102,19 @@ def generate_portfolio_roundup_script(
     # 2a. ENRICH positions — pull real sectors via yfinance/SEC (don't let the
     #     LLM guess) + flag cash/MM funds explicitly + compute REAL YTD return
     #     per ticker so the PM can cite actual numbers instead of inventing them.
+    # If matched_fund is set, the caller already grafted authoritative YTD from
+    # the managed-account reconciliation (Modified Dietz, transaction-aware) —
+    # in that case skip the yfinance buy-and-hold approximation.
+    have_authoritative_ytd = bool(
+        matched_fund and any(p.get("ytd_source") == "managed_account_reconciliation"
+                             for p in positions)
+    )
     if on_progress:
         try: on_progress("enrich_positions",
-                         f"Enriching {len(positions)} positions (sectors + YTD)…")
+                         f"Enriching {len(positions)} positions "
+                         f"(sectors{'' if have_authoritative_ytd else ' + YTD'})…")
         except Exception: pass
-    _enrich_positions_with_sectors_and_ytd(positions)
+    _enrich_positions_with_sectors_and_ytd(positions, skip_ytd=have_authoritative_ytd)
 
     # 2b. Compute SECTOR BREAKDOWN — the LLM was miscounting (Financials at
     #     24%, etc.) because it was eyeballing tickers. Give it pre-computed
@@ -2157,6 +2172,25 @@ def generate_portfolio_roundup_script(
     cash_info = sector_breakdown.get("Cash") or {}
     cash_pct = cash_info.get("weight_pct", 0.0)
     cash_tickers = ", ".join(cash_info.get("tickers", [])) or "(none)"
+
+    # If we matched a fund's reconciliation, build a callout block citing
+    # the authoritative portfolio YTD instead of buy-and-hold approximation.
+    if matched_fund and matched_fund.get("portfolio_ytd_pct") is not None:
+        matched_block = (
+            f"\n🟢 AUTHORITATIVE YTD SOURCE (use these numbers):\n"
+            f"   Fund/Sleeve:   {matched_fund.get('fund_name','(managed account)')}\n"
+            f"   Portfolio YTD: {matched_fund['portfolio_ytd_pct']:+.2f}%  "
+            f"(Modified Dietz, transaction-aware)\n"
+            f"   Reconciled:    {matched_fund.get('updated_at','recently')}\n"
+            f"   Per-ticker YTD on each position is `ytd_pct` from this same\n"
+            f"   reconciliation — quote them verbatim. NEVER recompute, NEVER\n"
+            f"   approximate, NEVER cite a different time window.\n"
+        )
+    else:
+        matched_block = (
+            "\n⚠️ NO RECONCILIATION MATCH — per-ticker YTD below is yfinance\n"
+            "   buy-and-hold (no transactions accounted for). Treat as approximate.\n"
+        )
 
     # Detect whether the caller supplied REAL weights (from an uploaded portfolio
     # file) vs synthetic placeholders. When real weights are present we hard-
@@ -2246,6 +2280,7 @@ above. You MUST cite these numbers, not invent your own.
 
 Portfolio-level YTD contribution (sum of all sectors): {portfolio_ytd_contrib:+.2f}%-pts
 YTD period: {ytd_period}
+{matched_block}
 
 🚨 CASH SLICE: {cash_pct:.2f}%  ({cash_tickers})
    Cash is its OWN sector. NEVER fold it into Financials. NEVER skip it.

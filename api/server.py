@@ -16771,7 +16771,8 @@ async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTas
 
 # ─── Portfolio Roundup (PM-style review of the whole book) ──────────────
 def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] | None,
-                                       title_hint: str | None = None) -> None:
+                                       title_hint: str | None = None,
+                                       matched_fund: dict | None = None) -> None:
     """Background worker for /api/podcast/portfolio-roundup/script.
     Heaviest format: Grok macro pull + Sonnet bolt-on screen + Opus script.
     Expect 2-4 min total wall time."""
@@ -16804,7 +16805,7 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
 
         result = podcast_engine.generate_portfolio_roundup_script(
             tickers, reports, positions=positions, title_hint=title_hint,
-            on_progress=_on_progress,
+            matched_fund=matched_fund, on_progress=_on_progress,
         )
         if not result.get("script"):
             errs = (result.get("validation") or {}).get("errors", []) or ["unknown"]
@@ -16919,6 +16920,96 @@ async def podcast_portfolio_roundup_upload(
         positions = positions[:35]
         tickers   = tickers[:35]
 
+    # ── Pull YTD + attribution from managed_account_ytd_cache ───────────────
+    # The user reconciled this same portfolio file in the Managed Accounts
+    # tab (proper Modified Dietz + transaction-aware attribution). Match the
+    # uploaded ticker set to the best-fitting fund by Jaccard overlap and
+    # graft the per-ticker YTD numbers onto positions so the engine cites
+    # the REAL figures instead of buy-and-hold approximations.
+    matched_fund = None
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            uploaded_set = set(tickers)
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                # Get all managed-account funds with cached YTD + their live holdings
+                cur.execute("""
+                    SELECT c.fund_id::text       AS fund_id,
+                           c.nav                 AS nav,
+                           c.ytd_pct             AS ytd_pct,
+                           c.result_json         AS result_json,
+                           c.updated_at          AS updated_at,
+                           f.legal_name          AS fund_name,
+                           array_agg(DISTINCT s.symbol)
+                               FILTER (WHERE s.symbol IS NOT NULL) AS symbols
+                      FROM managed_account_ytd_cache c
+                      JOIN funds f      ON f.id = c.fund_id
+                      LEFT JOIN tax_lots tl   ON tl.fund_id = c.fund_id
+                                              AND tl.closed_at IS NULL
+                                              AND tl.quantity > 0
+                      LEFT JOIN securities s  ON s.id = tl.security_id
+                     WHERE f.status != 'closed'
+                     GROUP BY c.fund_id, c.nav, c.ytd_pct, c.result_json,
+                              c.updated_at, f.legal_name
+                """)
+                rows = cur.fetchall() or []
+
+            best, best_score = None, 0.0
+            for row in rows:
+                fund_syms = set(s.upper() for s in (row.get("symbols") or []) if s)
+                if not fund_syms: continue
+                inter = uploaded_set & fund_syms
+                union = uploaded_set | fund_syms
+                jacc  = len(inter) / max(1, len(union))
+                if jacc > best_score and len(inter) >= max(3, int(len(uploaded_set) * 0.5)):
+                    best, best_score = row, jacc
+            if best:
+                matched_fund = {
+                    "fund_id":     best["fund_id"],
+                    "fund_name":   best.get("fund_name"),
+                    "ytd_pct":     float(best["ytd_pct"]) if best.get("ytd_pct") is not None else None,
+                    "nav":         float(best["nav"]) if best.get("nav") is not None else None,
+                    "updated_at":  best["updated_at"].isoformat()[:10] if best.get("updated_at") else None,
+                    "match_score": round(best_score, 3),
+                }
+                # Parse attribution and graft onto positions
+                try:
+                    rj = best.get("result_json")
+                    rj = json.loads(rj) if isinstance(rj, str) else (rj or {})
+                    attr_by_tk = {}
+                    for a in (rj.get("attribution") or []):
+                        tk = (a.get("ticker") or "").upper().strip()
+                        if tk: attr_by_tk[tk] = a
+                    for p in positions:
+                        a = attr_by_tk.get(p["ticker"])
+                        if not a: continue
+                        # Per-ticker YTD return + dollar contribution from the
+                        # reconciliation (Modified Dietz, transaction-aware).
+                        if a.get("ticker_return_pct") is not None:
+                            p["ytd_pct"]            = float(a["ticker_return_pct"])
+                        if a.get("contribution_pct") is not None:
+                            p["ytd_contribution_pct"] = float(a["contribution_pct"])
+                        if a.get("dollar_gain") is not None:
+                            p["ytd_dollar_gain"]    = float(a["dollar_gain"])
+                        p["ytd_source"] = "managed_account_reconciliation"
+                    matched_fund["positions_matched"] = sum(
+                        1 for p in positions if p.get("ytd_source") == "managed_account_reconciliation"
+                    )
+                    matched_fund["portfolio_ytd_pct"]  = (
+                        float(rj.get("modified_dietz_pct")
+                              or rj.get("ytd_pct")
+                              or matched_fund["ytd_pct"] or 0)
+                        or None
+                    )
+                except Exception as _e:
+                    print(f"⚠️ [portfolio-roundup-upload] attribution parse failed: {_e!s:.150}", flush=True)
+                print(f"🔗 [portfolio-roundup-upload] matched fund={matched_fund['fund_name']} "
+                      f"(score={best_score:.2f}, attr_grafted={matched_fund.get('positions_matched', 0)})", flush=True)
+            else:
+                print(f"🔗 [portfolio-roundup-upload] no matching fund found "
+                      f"(uploaded {len(uploaded_set)} tickers, no fund met 50% overlap threshold)", flush=True)
+        except Exception as _e:
+            print(f"⚠️ [portfolio-roundup-upload] fund-match lookup failed: {_e!s:.150}", flush=True)
+
     # Optional sleeve name → used in the title so the user can distinguish
     # multiple uploaded books in the saved-episodes list
     title_hint = (sleeve_name or "").strip()[:80]
@@ -16934,9 +17025,9 @@ async def podcast_portfolio_roundup_upload(
         "updated_at": time.time(),
     }
     print(f"🎙️ [portfolio-roundup-upload] WROTE job_key={job_key!r}  uploaded {len(tickers)} positions  total_weight={total_weight}", flush=True)
-    background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions, title_hint)
+    background_tasks.add_task(_run_portfolio_roundup_generation, tickers, positions, title_hint, matched_fund)
     return {"ok": True, "ticker": job_key, "tickers": tickers,
-            "positions": positions, "started": True,
+            "positions": positions, "matched_fund": matched_fund, "started": True,
             "title_hint": title_hint}
 
 
