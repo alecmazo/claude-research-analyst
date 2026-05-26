@@ -5910,6 +5910,16 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12
     except Exception as _e:
         print(f"[idea-feed] reports fetch failed: {_e}")
 
+    # 1b2. Daily Brief tickers (from the morning Grok scan) — surfaces names
+    # you don't track yet but the brief flagged as worth a look. Tagged with
+    # source 'daily_brief' so Prioritize can recognize them as discovery.
+    try:
+        brief_payload = _kv_get("daily_brief.latest") or {}
+        for tk in (brief_payload.get("tickers") or [])[:20]:
+            _add(tk, "daily_brief")
+    except Exception as _e:
+        print(f"[idea-feed] daily-brief fetch failed: {_e}")
+
     # 1c. Open positions (managed accounts + LP funds — both live in tax_lots)
     try:
         if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
