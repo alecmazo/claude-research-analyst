@@ -5273,6 +5273,10 @@
               bear_speaker: d.alignment.roles.bear_speaker,
             };
           }
+          // Stamp generation date so the header's 📅 pill renders correctly
+          if (d.generated_at && !d.script.generated_at) {
+            d.script.generated_at = d.generated_at;
+          }
           _renderPodcastScript(d.script, d.validation, out);
           if (d.da_brief) {
             const bb = document.createElement('div');
@@ -5858,6 +5862,11 @@
         bear_speaker: d.alignment.roles.bear_speaker,
       };
     }
+    // Fresh-generation: stamp current time as production date if backend
+    // hasn't supplied one (so the header date pill shows "today" right away).
+    if (!d.script.generated_at) {
+      d.script.generated_at = d.generated_at || new Date().toISOString();
+    }
     _renderPodcastScript(d.script, d.validation, out);
     if (d.alignment && d.alignment.da_brief) {
       const briefBlock = document.createElement('div');
@@ -5920,6 +5929,23 @@
         if (mins < 1440) return Math.round(mins/60) + 'h ago';
         return Math.round(mins/1440) + 'd ago';
       };
+      // Absolute date in "May 25" or "May 25 '26" form so the user can see
+      // when an episode was actually produced. Year shown only when not current.
+      const fmtDateShort = function(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const mo = d.toLocaleString('en-US', { month: 'short' });
+        const day = d.getDate();
+        const yr = d.getFullYear();
+        const curYr = new Date().getFullYear();
+        return yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`;
+      };
+      const fmtWhen = function(iso) {
+        const abs = fmtDateShort(iso);
+        const ago = fmtAgo(iso);
+        return abs && ago ? `${abs} · ${ago}` : (abs || ago);
+      };
       const modeIcons = { debate:'⚔️', stress_test:'🔬', devils_advocate:'😈', spread:'📏', mixed:'❓' };
       // Format icons take priority over mode icons when the script has a format
       const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰', portfolio_roundup:'🧰' };
@@ -5951,7 +5977,7 @@
             ? ' / 🎧 $' + Number(s.audio_cost_usd).toFixed(2) : '';
           const fmtKey = s.format || 'debate';
           return '<option value="' + s.ticker + '::' + fmtKey + '">' + displayTk + fmtIcon +
-                 winner + audio + sCost + aCost + ' · ' + fmtAgo(s.generated_at) + '</option>';
+                 winner + audio + sCost + aCost + ' · ' + fmtWhen(s.generated_at) + '</option>';
         }).join('');
     } catch (e) {
       sel.innerHTML = '<option value="">— failed to load saved scripts —</option>';
@@ -6235,6 +6261,20 @@
         if (mins < 1440) return Math.round(mins/60) + 'h ago';
         return Math.round(mins/1440) + 'd ago';
       };
+      const fmtDateShort = function(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const mo = d.toLocaleString('en-US', { month: 'short' });
+        const day = d.getDate();
+        const yr = d.getFullYear();
+        const curYr = new Date().getFullYear();
+        return yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`;
+      };
+      const fmtWhen = function(iso) {
+        const abs = fmtDateShort(iso); const ago = fmtAgo(iso);
+        return abs && ago ? `${abs} · ${ago}` : (abs || ago);
+      };
       const fmtIcons = { debate:'⚔️', pre_mortem:'🪦', memo:'📋', catalysts:'📅', quick_hit:'⚡', roundup:'📰', portfolio_roundup:'🧰' };
       sel.innerHTML = '<option value="">🎧 Open a saved episode… (' + eps.length + ')</option>' +
         eps.map(function(e) {
@@ -6254,7 +6294,7 @@
             displayTk = e.ticker;
           }
           return '<option value="' + e.ticker + '::' + fmt + '">' + displayTk + ' ' + ic +
-                 dur + cost + ' · ' + fmtAgo(e.generated_at) + '</option>';
+                 dur + cost + ' · ' + fmtWhen(e.generated_at) + '</option>';
         }).join('');
     } catch (e) {
       sel.innerHTML = '<option value="">— failed to load episodes —</option>';
@@ -6360,7 +6400,28 @@
         epTitle = ticker + ': ' + fmt;
       }
     }
-    if (title) title.textContent = '🎙️ ' + epTitle;
+    if (title) {
+      // Build a date suffix from the episode's generated_at (status has it on
+      // fresh runs; the cached episode list has it on saved replays).
+      const ep = (window._podcastEpisodes || []).find(function(e){
+        return e.ticker === ticker && (e.format||'debate') === fmt;
+      }) || {};
+      const genIso = (status && status.generated_at) || ep.generated_at;
+      let when = '';
+      if (genIso) {
+        try {
+          const dd = new Date(genIso);
+          if (!isNaN(dd.getTime())) {
+            const mo = dd.toLocaleString('en-US', { month: 'short' });
+            const day = dd.getDate(); const yr = dd.getFullYear();
+            const curYr = new Date().getFullYear();
+            when = (yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`);
+          }
+        } catch (_) {}
+      }
+      title.innerHTML = '🎙️ ' + epTitle.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])
+        + (when ? '  <span style="font-size:10.5px;font-weight:600;color:#84CCE3;background:rgba(255,255,255,0.10);padding:2px 8px;border-radius:10px;letter-spacing:0.3px;margin-left:6px;vertical-align:middle;">📅 ' + when + '</span>' : '');
+    }
     // Wire the "Export Memo" button to the SAME ticker the player is showing.
     // Re-bound on every player swap so it always points at the right script.
     const memoBtn = document.getElementById('podcast-audio-export-memo-btn');
@@ -6485,9 +6546,26 @@
       }
       return script.ticker || 'Episode';
     })();
+    // Production date — show absolute date next to the title so user knows when made.
+    // Falls back gracefully when the script has no generated_at (fresh runs from the
+    // generator don't carry it yet; saved-script loads do).
+    const _genIso = script.generated_at || script._generated_at || '';
+    let _whenLabel = '';
+    if (_genIso) {
+      try {
+        const dd = new Date(_genIso);
+        if (!isNaN(dd.getTime())) {
+          const mo = dd.toLocaleString('en-US', { month: 'short' });
+          const day = dd.getDate(); const yr = dd.getFullYear();
+          const curYr = new Date().getFullYear();
+          _whenLabel = (yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`);
+        }
+      } catch (_) {}
+    }
     parts.push('<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">' +
       '<div style="font-size:18px;font-weight:800;color:#0A1628;flex:1;min-width:200px;display:flex;align-items:center;gap:6px;">' +
         '<span>' + esc(_titleDisplay) + '</span>' +
+        (_whenLabel ? '<span style="font-size:11px;font-weight:600;color:#64748b;background:#f1f5f9;padding:2px 8px;border-radius:10px;letter-spacing:0.3px;" title="Date produced">📅 ' + _whenLabel + '</span>' : '') +
         '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" data-cur="' + esc(_titleDisplay) + '" class="podcast-rename-script" title="Rename this episode" style="background:transparent;border:none;color:#94a3b8;font-size:13px;cursor:pointer;padding:2px 4px;line-height:1;">✏️</button>' +
       '</div>' +
       '<button data-tk="' + esc(script.ticker || '') + '" data-fmt="' + esc(script.format || 'debate') + '" class="podcast-edit-script" style="background:transparent;color:#0A1628;border:1px solid #0A1628;padding:8px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">✏️ Edit script</button>' +

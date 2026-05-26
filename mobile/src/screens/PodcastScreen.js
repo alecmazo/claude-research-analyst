@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v13-clean-titles-20260525';
+const PODCAST_BUILD = 'pc-v14-prod-date-20260525';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -36,6 +36,24 @@ function fmtAgo(iso) {
   if (mins < 60) return `${mins}m ago`;
   if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
   return `${Math.round(mins / 1440)}d ago`;
+}
+
+// Absolute production date — shows "May 25" or "May 25 '24" so the user
+// can see exactly when an episode was made, not just relative time.
+function fmtDateShort(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const mo = d.toLocaleString('en-US', { month: 'short' });
+  const day = d.getDate();
+  const yr = d.getFullYear();
+  const curYr = new Date().getFullYear();
+  return yr === curYr ? `${mo} ${day}` : `${mo} ${day} '${String(yr).slice(-2)}`;
+}
+function fmtWhen(iso) {
+  const abs = fmtDateShort(iso);
+  const ago = fmtAgo(iso);
+  return abs && ago ? `${abs} · ${ago}` : (abs || ago);
 }
 
 // ── Bulletproof play/pause toggle ────────────────────────────────────────────
@@ -333,7 +351,7 @@ export default function PodcastScreen() {
             {cleanTitle(item.title, item.ticker, item.format)}
           </Text>
           <Text style={styles.epSub}>
-            {fmtAgo(item.generated_at)}
+            {fmtWhen(item.generated_at)}
             {item.cost_usd != null ? `  ·  $${Number(item.cost_usd).toFixed(2)}` : ''}
           </Text>
         </View>
@@ -357,6 +375,11 @@ export default function PodcastScreen() {
             <Text style={{ fontSize: 12, opacity: 0.7 }}>
               {FORMAT_ICON[selectedEp()?.format || 'debate'] || ''}
             </Text>
+            {selectedEp()?.generated_at ? (
+              <Text style={{ fontSize: 11, opacity: 0.65, fontWeight: '600' }}>
+                {'   '}📅 {fmtDateShort(selectedEp()?.generated_at)}
+              </Text>
+            ) : null}
           </Text>
           <Text style={styles.playerTitle} numberOfLines={1}>
             {cleanTitle(selectedEp()?.title, selectedEp()?.ticker, selectedEp()?.format)}
