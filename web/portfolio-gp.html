@@ -5792,21 +5792,8 @@
         (s.curse_count||0) + ' curses · winner: ' + (s.winner||'?').toUpperCase() + costStr;
     }
     _populatePodcastSavedScripts();
-
-    // 📄 Add an "Export as DGA Memo" button so the GP can turn this script
-    // into a saved PDF + email it from the Memos tab.
-    try {
-      const jobKey = d.script.ticker || d.ticker;
-      const epTitle = d.script.episode_title || jobKey;
-      if (jobKey) {
-        const memoBtn = document.createElement('button');
-        memoBtn.type = 'button';
-        memoBtn.textContent = '📄 Export as DGA Memo';
-        memoBtn.style.cssText = 'margin:12px 0 4px 0;background:#0A1628;border:1px solid #0A1628;color:#fff;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;';
-        memoBtn.onclick = () => window._openMemoExportModal(jobKey, epTitle);
-        out.insertBefore(memoBtn, out.firstChild);
-      }
-    } catch (e) { console.warn('[memo btn]', e); }
+    // Memo-export button is injected by _renderPodcastScript itself (so
+    // it appears on saved-script loads too, not only on fresh generation).
   }
 
   async function _populatePodcastScriptPicker() {
@@ -6541,6 +6528,28 @@
         }
       });
     });
+
+    // 📄 "Export as DGA Memo" — turns this script into a branded PDF
+    // memo (saved under the 📄 Memos tab). Lives at the top of every
+    // rendered script so it's reachable from both fresh-generated AND
+    // saved-script views.
+    try {
+      const jobKey  = script.ticker || (validation && validation.ticker);
+      const epTitle = script.episode_title || jobKey || '';
+      if (jobKey && typeof window._openMemoExportModal === 'function') {
+        // Avoid duplicating the button if re-rendered into the same container
+        const existing = container.querySelector('.podcast-export-memo-btn');
+        if (existing) existing.remove();
+        const memoBtn = document.createElement('button');
+        memoBtn.type = 'button';
+        memoBtn.className = 'podcast-export-memo-btn';
+        memoBtn.textContent = '📄 Export as DGA Memo';
+        memoBtn.title = 'Render this script as a DGA Capital branded PDF — save to the Memos tab and email it from there.';
+        memoBtn.style.cssText = 'margin:6px 0 12px 0;background:#0A1628;border:1px solid #0A1628;color:#fff;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.2px;';
+        memoBtn.onclick = () => window._openMemoExportModal(jobKey, epTitle);
+        container.insertBefore(memoBtn, container.firstChild);
+      }
+    } catch (e) { console.warn('[memo btn]', e); }
   }
 
   // ── Editable view: same script structure, every turn becomes
