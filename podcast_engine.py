@@ -234,12 +234,170 @@ def _portfolio_roundup_budget(n_tickers: int) -> dict:
      10 tickers  → ~2,450w  ≈ 15 min
      15 tickers  → ~2,925w  ≈ 18 min
      20 tickers  → ~3,400w  ≈ 20 min
+     25 tickers  → ~3,875w  ≈ 23 min
+     30 tickers  → ~4,350w  ≈ 26 min
+     35 tickers  → ~4,825w  ≈ 29 min
     """
     base, per = 1500, 95
     target = base + n_tickers * per
     lo, hi = int(target * 0.92), int(target * 1.12)
     minutes = round(target / 165, 0)   # ~165 wpm conversational TTS
     return {"low": lo, "high": hi, "target": target, "minutes": minutes}
+
+
+# Money-market / cash-sweep tickers that should be bucketed as "Cash"
+# regardless of what yfinance returns for their sector. Extend as needed.
+_CASH_TICKERS = {
+    # Fidelity money markets
+    "SPAXX", "FDRXX", "FZFXX", "SPRXX", "FDLXX", "FDIC", "FZDXX", "FTEXX",
+    # Vanguard
+    "VMFXX", "VMRXX", "VUSXX", "VYFXX",
+    # Schwab
+    "SWVXX", "SNVXX", "SNAXX", "SCOXX",
+    # Treasury / cash-equivalent ETFs commonly used as parking
+    "SGOV", "BIL", "USFR", "TFLO", "VGSH", "SHV",
+    # Generic cash markers brokerages sometimes emit
+    "CASH", "MONEY_MARKET", "MM", "USD",
+}
+
+def _is_cash_like(ticker: str) -> bool:
+    t = (ticker or "").upper().strip()
+    if t in _CASH_TICKERS: return True
+    # XX-suffixed Fidelity-style MM funds (4-5 char + XX), e.g. FXXX/SPAXX form
+    if len(t) in (4, 5, 6) and t.endswith("XX") and t.isalpha():
+        return True
+    return False
+
+
+def _enrich_positions_with_sectors_and_ytd(positions: list[dict]) -> None:
+    """Mutates `positions` in place — fills `sector` (real, from yfinance/SEC)
+    and `ytd_pct` (real, from yfinance Jan-1 → today). Cash-like tickers are
+    forced to sector='Cash' with ytd_pct=0 since MM funds are stable NAV.
+
+    Why this exists: the LLM was inventing concentrations like "Financials 24%"
+    by eyeballing tickers. Pre-resolve sectors here so the prompt can hand it
+    a deterministic breakdown.
+    """
+    import claude_analyst as _ca
+    from datetime import datetime as _dt, timedelta as _td
+
+    # ── Pass 1: sectors (with cash override) ─────────────────────────────────
+    equity_tks = []
+    for p in positions:
+        tk = (p.get("ticker") or "").upper().strip()
+        if not tk: continue
+        if _is_cash_like(tk):
+            p["sector"] = "Cash"
+            p["ytd_pct"] = 0.0
+            continue
+        # Always re-resolve sector (the LLM was hallucinating these)
+        try:
+            sec, _ind = _ca.fetch_sector_and_industry(tk)
+            p["sector"] = sec or p.get("sector") or "Unknown"
+        except Exception:
+            p["sector"] = p.get("sector") or "Unknown"
+        equity_tks.append(tk)
+
+    # ── Pass 2: YTD prices — bulk yfinance fetch (one HTTP roundtrip) ────────
+    if not equity_tks:
+        return
+    try:
+        import yfinance as _yf
+        from datetime import timezone as _tz
+        now = _dt.now(_tz.utc)
+        # Jan-1 window: same pattern compute_position_attribution uses —
+        # download a 2-week window around Jan 1 and take the last close
+        # (i.e. the first trading day of the year).
+        year = now.year
+        jan_start = f"{year}-01-01"
+        jan_end   = (_dt(year, 1, 1) + _td(days=14)).strftime("%Y-%m-%d")
+        hist = _yf.download(
+            equity_tks, start=jan_start, end=jan_end,
+            auto_adjust=False, progress=False,
+        )
+        close_jan = hist.get("Close") if isinstance(hist, dict) else (
+            hist["Close"] if "Close" in hist.columns.get_level_values(0) else hist
+        )
+        # Current price — pull recent close in a small window
+        now_start = (now - _td(days=7)).strftime("%Y-%m-%d")
+        now_end   = (now + _td(days=1)).strftime("%Y-%m-%d")
+        hist_now = _yf.download(
+            equity_tks, start=now_start, end=now_end,
+            auto_adjust=False, progress=False,
+        )
+        close_now = hist_now.get("Close") if isinstance(hist_now, dict) else (
+            hist_now["Close"] if "Close" in hist_now.columns.get_level_values(0) else hist_now
+        )
+        for p in positions:
+            tk = (p.get("ticker") or "").upper().strip()
+            if not tk or p.get("sector") == "Cash":
+                continue
+            try:
+                if hasattr(close_jan, "columns"):
+                    s_jan = close_jan[tk].dropna()
+                    s_now = close_now[tk].dropna()
+                else:
+                    s_jan = close_jan.dropna()
+                    s_now = close_now.dropna()
+                if s_jan.empty or s_now.empty:
+                    continue
+                px_jan = float(s_jan.iloc[0])
+                px_now = float(s_now.iloc[-1])
+                if px_jan > 0:
+                    p["ytd_pct"] = round((px_now / px_jan - 1.0) * 100.0, 2)
+                    p["price_jan1"]    = round(px_jan, 4)
+                    p["price_current"] = round(px_now, 4)
+            except Exception:
+                continue
+    except Exception as _e:
+        print(f"⚠️ [portfolio_roundup] YTD bulk fetch failed: {_e!s:.120}", flush=True)
+
+
+def _build_sector_breakdown(positions: list[dict]) -> dict:
+    """Group positions by sector and total weight, returning a dict the
+    prompt can quote verbatim. Also computes weighted YTD contribution
+    per sector so the script can talk about REAL sector-level performance.
+
+    Returns:
+      {
+        "Technology": {
+            "weight_pct": 42.3,
+            "tickers": ["NVDA (12.4%)", "MSFT (8.1%)", ...],
+            "ytd_contribution_pct": 5.2,   # weight-weighted YTD for the sector
+            "avg_ytd_pct": 14.7,
+        },
+        ...
+      }
+    Sorted by weight_pct descending.
+    """
+    by_sector: dict[str, dict] = {}
+    for p in positions:
+        sec = (p.get("sector") or "Unknown").strip() or "Unknown"
+        w   = float(p.get("weight_pct") or 0)
+        ytd = p.get("ytd_pct")
+        bucket = by_sector.setdefault(sec, {
+            "weight_pct": 0.0, "tickers": [], "_ytd_sum": 0.0, "_ytd_n": 0,
+            "_contrib_sum": 0.0,
+        })
+        bucket["weight_pct"] += w
+        tk = (p.get("ticker") or "").upper()
+        bucket["tickers"].append(f"{tk} ({w:.1f}%)" if w > 0 else tk)
+        if ytd is not None:
+            bucket["_ytd_sum"] += float(ytd)
+            bucket["_ytd_n"]   += 1
+            bucket["_contrib_sum"] += (w / 100.0) * float(ytd)   # %-pt contribution to portfolio YTD
+
+    # Finalize
+    out = {}
+    for sec, b in by_sector.items():
+        out[sec] = {
+            "weight_pct":            round(b["weight_pct"], 2),
+            "tickers":               b["tickers"],
+            "avg_ytd_pct":           round(b["_ytd_sum"] / b["_ytd_n"], 2) if b["_ytd_n"] else None,
+            "ytd_contribution_pct":  round(b["_contrib_sum"], 3),
+        }
+    # Sort by weight descending
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["weight_pct"]))
 
 # Per-format required-sections lists. Validator and renderers consult these.
 FORMAT_SECTIONS = {
@@ -1900,10 +2058,10 @@ def generate_portfolio_roundup_script(
     model: str | None = None,
     on_progress=None,
 ) -> dict[str, Any]:
-    """Portfolio Roundup — PM-style review of a 10-20 ticker book.
+    """Portfolio Roundup — PM-style review of a 5-35 ticker book.
 
     Args:
-        tickers: ordered list of 10-20 ticker symbols (no enforced max here;
+        tickers: ordered list of 5-35 ticker symbols (no enforced max here;
                  callers should sanity-cap)
         reports_by_ticker: {ticker: {"grok": "...", "claude": "..."}}.
                           Tickers without reports are OK — the script just
@@ -1933,7 +2091,22 @@ def generate_portfolio_roundup_script(
 
     # 2. Bolt-on screen via Sonnet 4.6 (constrained to current_positions awareness)
     positions = positions or [{"ticker": t} for t in tickers]
-    # Augment positions with sector from existing reports if missing
+
+    # 2a. ENRICH positions — pull real sectors via yfinance/SEC (don't let the
+    #     LLM guess) + flag cash/MM funds explicitly + compute REAL YTD return
+    #     per ticker so the PM can cite actual numbers instead of inventing them.
+    if on_progress:
+        try: on_progress("enrich_positions",
+                         f"Enriching {len(positions)} positions (sectors + YTD)…")
+        except Exception: pass
+    _enrich_positions_with_sectors_and_ytd(positions)
+
+    # 2b. Compute SECTOR BREAKDOWN — the LLM was miscounting (Financials at
+    #     24%, etc.) because it was eyeballing tickers. Give it pre-computed
+    #     buckets with the tickers listed under each one so it MUST quote
+    #     the right numbers.
+    sector_breakdown = _build_sector_breakdown(positions)
+
     bolt_ons = screen_bolton_candidates(positions, on_progress=on_progress, usage_capture=_track_cost)
 
     # 3. Build the dialogue prompt
@@ -1962,6 +2135,28 @@ def generate_portfolio_roundup_script(
 
     pos_block = json.dumps(positions, indent=2, default=str)
     bolton_block = json.dumps(bolt_ons, indent=2, default=str) if bolt_ons else "(none)"
+
+    # ── DETERMINISTIC SECTOR / CASH / YTD BLOCK ──────────────────────────────
+    # Pre-computed so the LLM does NOT have to count and cannot miscount.
+    from datetime import datetime as _dt2
+    today_str = _dt2.now().strftime("%B %d, %Y")
+    ytd_period = f"Jan 1 {_dt2.now().year} → {today_str}"
+    sector_lines = []
+    portfolio_ytd_contrib = 0.0
+    for sec, info in sector_breakdown.items():
+        ytd_str = (f"avg YTD {info['avg_ytd_pct']:+.2f}% · "
+                   f"contributes {info['ytd_contribution_pct']:+.2f}%-pts to portfolio YTD"
+                   if info["avg_ytd_pct"] is not None else "(no YTD data)")
+        sector_lines.append(
+            f"  • {sec:<22} {info['weight_pct']:6.2f}%   {ytd_str}\n"
+            f"      tickers: {', '.join(info['tickers'])}"
+        )
+        portfolio_ytd_contrib += info["ytd_contribution_pct"] or 0
+    sector_block = "\n".join(sector_lines) if sector_lines else "(no sector data)"
+    # Cash slice — pulled out separately so it's impossible to miss
+    cash_info = sector_breakdown.get("Cash") or {}
+    cash_pct = cash_info.get("weight_pct", 0.0)
+    cash_tickers = ", ".join(cash_info.get("tickers", [])) or "(none)"
 
     # Detect whether the caller supplied REAL weights (from an uploaded portfolio
     # file) vs synthetic placeholders. When real weights are present we hard-
@@ -2039,6 +2234,43 @@ CURRENT POSITIONS ({len(tickers)} names):
 ══════════════════════════════════════════════════════════════════════
 {pos_block}
 {weights_rules}
+
+══════════════════════════════════════════════════════════════════════
+🔒 DETERMINISTIC SECTOR BREAKDOWN — DO NOT RECOMPUTE, QUOTE VERBATIM:
+══════════════════════════════════════════════════════════════════════
+The sectors below were resolved from yfinance + SEC (NOT guessed). The
+weight percentages are SUMS of the real per-ticker weights you were given
+above. You MUST cite these numbers, not invent your own.
+
+{sector_block}
+
+Portfolio-level YTD contribution (sum of all sectors): {portfolio_ytd_contrib:+.2f}%-pts
+YTD period: {ytd_period}
+
+🚨 CASH SLICE: {cash_pct:.2f}%  ({cash_tickers})
+   Cash is its OWN sector. NEVER fold it into Financials. NEVER skip it.
+   The portfolio_snapshot section MUST explicitly state the cash percentage.
+
+⚠️ HARD RULES — sector talk:
+  • Whenever you say a sector concentration ("Financials at X%"), the X
+    MUST match the table above. If the table says Financials = 6.4%, you
+    cannot say 24% — that's wrong.
+  • Whenever you cite a sector by percent, IMMEDIATELY list the tickers
+    that make up that bucket from the table above, e.g.:
+       "Financials are 6.4% of the book — that's JPM (4.1%) and BAC (2.3%)."
+    This is non-negotiable. Every sector percent must be followed by the
+    ticker breakdown the way the table presents it.
+  • Cash/MM funds (SPAXX, FDRXX, SGOV, BIL, etc.) are CASH, not Financials.
+
+⚠️ HARD RULES — performance talk:
+  • When you discuss performance, use YTD ({ytd_period}) — NEVER make up
+    an "8-month" or "6-month" frame. We are in {_dt2.now().strftime("%B %Y")},
+    so YTD = roughly {_dt2.now().timetuple().tm_yday // 30} months of data.
+  • Per-ticker YTD lives on each position above as `ytd_pct`. Quote those
+    numbers, don't invent them. If a position has no ytd_pct in the JSON,
+    say "YTD data unavailable" rather than guessing.
+  • Sector-level YTD contribution and avg YTD are in the table above —
+    cite those, don't compute your own.
 
 ══════════════════════════════════════════════════════════════════════
 MACRO CONTEXT (today's headlines, via live web search):

@@ -16915,10 +16915,9 @@ async def podcast_portfolio_roundup_upload(
     if len(tickers) < 5:
         raise HTTPException(status_code=422,
             detail=f"Need at least 5 positions; uploaded file had {len(tickers)}")
-    if len(tickers) > 25:
-        # Engine caps at 20 internally but accept a small overflow gracefully
-        positions = positions[:25]
-        tickers   = tickers[:25]
+    if len(tickers) > 35:
+        positions = positions[:35]
+        tickers   = tickers[:35]
 
     # Optional sleeve name → used in the title so the user can distinguish
     # multiple uploaded books in the saved-episodes list
@@ -16962,8 +16961,8 @@ async def podcast_generate_portfolio_roundup(req: Request, background_tasks: Bac
     if len(tickers) < 5:
         return JSONResponse({"ok": False, "error": "Need at least 5 tickers for a Portfolio Roundup"},
                             status_code=400)
-    if len(tickers) > 20:
-        tickers = tickers[:20]
+    if len(tickers) > 35:
+        tickers = tickers[:35]
     positions = (body or {}).get("positions") or [{"ticker": t} for t in tickers]
     job_key = "PORTFOLIO_" + ",".join(tickers)
     existing = _podcast_script_jobs.get(job_key)
