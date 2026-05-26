@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v12-format-aware-20260523';
+const PODCAST_BUILD = 'pc-v13-clean-titles-20260525';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -107,6 +107,52 @@ function fmtDuration(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.round(sec % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
+}
+
+// Synthetic ticker keys for multi-ticker formats (Roundup, Portfolio Roundup)
+// look like "PORTFOLIO_27TICKERS_1779758656" or "ROUNDUP_NVDA,INTC,AMD".
+// Shorten them for display — keep the raw key for routing / API calls.
+function shortTicker(raw) {
+  if (!raw) return '';
+  const s = String(raw);
+  // PORTFOLIO_<n>TICKERS_<ts> → "Portfolio · 27 names"
+  let m = s.match(/^PORTFOLIO_(\d+)TICKERS?_\d+$/i);
+  if (m) return `Portfolio · ${m[1]} names`;
+  // PORTFOLIO_<TICKER,TICKER,...> (legacy)
+  m = s.match(/^PORTFOLIO_(.+)$/i);
+  if (m) {
+    const names = m[1].split(',').filter(Boolean);
+    return names.length <= 3
+      ? `Portfolio · ${names.join(', ')}`
+      : `Portfolio · ${names.length} names`;
+  }
+  // ROUNDUP_<TICKER,TICKER,...>
+  m = s.match(/^ROUNDUP_(.+)$/i);
+  if (m) {
+    const names = m[1].split(',').filter(Boolean);
+    return names.length <= 4
+      ? `Roundup · ${names.join(', ')}`
+      : `Roundup · ${names.length} names`;
+  }
+  return s;   // plain single ticker — already short
+}
+
+// Clean an episode title that may also contain the synthetic key.
+function cleanTitle(title, ticker, format) {
+  if (!title) return shortTicker(ticker) + (format ? ` · ${format.replace(/_/g, ' ')}` : '');
+  // Drop "TICKER:format" prefix shapes
+  let t = String(title).trim();
+  if (t.includes(':')) {
+    const [head, tail] = t.split(':', 2);
+    if (head && head.trim().toUpperCase() === String(ticker).toUpperCase()) {
+      t = tail.trim();
+    }
+  }
+  // If the title IS the raw key, shorten it.
+  if (/^PORTFOLIO_\d+TICKERS?_\d+/i.test(t) || /^PORTFOLIO_[A-Z0-9,.\-]+$/i.test(t)) {
+    return shortTicker(t);
+  }
+  return t;
 }
 
 export default function PodcastScreen() {
@@ -278,13 +324,13 @@ export default function PodcastScreen() {
         </View>
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <Text style={styles.epTicker}>
-            {item.ticker} {ic}
+            {shortTicker(item.ticker)} {ic}
             {item.duration_sec ? (
               <Text style={styles.epMeta}>  ·  {fmtDuration(item.duration_sec)}</Text>
             ) : null}
           </Text>
           <Text style={styles.epTitle} numberOfLines={1}>
-            {item.title || `${item.ticker}: Bull vs Bear`}
+            {cleanTitle(item.title, item.ticker, item.format)}
           </Text>
           <Text style={styles.epSub}>
             {fmtAgo(item.generated_at)}
@@ -306,14 +352,14 @@ export default function PodcastScreen() {
       {selectedKey ? (
         <Card style={styles.playerCard}>
           <Text style={styles.playerTicker}>
-            {selectedEp()?.ticker || selectedKey.split('::')[0]}
+            {shortTicker(selectedEp()?.ticker || selectedKey.split('::')[0])}
             {'  '}
             <Text style={{ fontSize: 12, opacity: 0.7 }}>
               {FORMAT_ICON[selectedEp()?.format || 'debate'] || ''}
             </Text>
           </Text>
           <Text style={styles.playerTitle} numberOfLines={1}>
-            {selectedEp()?.title || `${selectedEp()?.ticker || ''}: ${selectedEp()?.format || 'Bull vs Bear'}`}
+            {cleanTitle(selectedEp()?.title, selectedEp()?.ticker, selectedEp()?.format)}
           </Text>
           {/* Diagnostic strip — temporary until playback is reliable */}
           <Text style={styles.diag} numberOfLines={2}>
