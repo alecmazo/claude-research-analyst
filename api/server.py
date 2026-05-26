@@ -15995,13 +15995,18 @@ def _ensure_dga_memos_table() -> None:
         return
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
+            # Try to enable pgcrypto for gen_random_uuid (no-op if not available);
+            # safe to ignore failures because we now generate UUIDs in Python.
+            try:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+            except Exception: pass
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS dga_memos (
-                    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    id              TEXT PRIMARY KEY,
                     source_job_key  TEXT NOT NULL,
                     source_format   TEXT,
                     episode_title   TEXT,
-                    assigned_fund_id UUID,
+                    assigned_fund_id TEXT,
                     gp_memo         TEXT,
                     script_json     JSONB,
                     pdf_bytes       BYTEA,
@@ -16014,6 +16019,17 @@ def _ensure_dga_memos_table() -> None:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_fund_idx ON dga_memos(assigned_fund_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_gen_idx  ON dga_memos(generated_at DESC)")
+            # Migration: earlier deploys may have created id / assigned_fund_id
+            # as UUID. We now generate IDs in Python so the column must be
+            # TEXT-compatible. Each ALTER is wrapped because they're no-ops
+            # when the column is already TEXT.
+            for alter in (
+                "ALTER TABLE dga_memos ALTER COLUMN id TYPE TEXT USING id::text",
+                "ALTER TABLE dga_memos ALTER COLUMN id DROP DEFAULT",
+                "ALTER TABLE dga_memos ALTER COLUMN assigned_fund_id TYPE TEXT USING assigned_fund_id::text",
+            ):
+                try: cur.execute(alter); conn.commit()
+                except Exception: conn.rollback()
             conn.commit()
     except Exception as e:
         print(f"⚠️ _ensure_dga_memos_table failed: {e!s:.200}", flush=True)
@@ -16320,27 +16336,29 @@ async def create_memo_from_podcast(job_key: str, request: Request):
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
 
-    memo_id = None
+    import uuid as _uuid
+    memo_id = str(_uuid.uuid4())
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO dga_memos
-                   (source_job_key, source_format, episode_title,
+                   (id, source_job_key, source_format, episode_title,
                     assigned_fund_id, gp_memo, script_json,
                     pdf_bytes, generated_by, generated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
-                RETURNING id::text
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
             """, (
-                job_key, src.get("format"),
+                memo_id, job_key, src.get("format"),
                 src.get("episode_title") or "DGA Memo",
                 assigned_fund_id, gp_memo or None,
                 json.dumps(src["script"]),
                 psycopg2.Binary(pdf_bytes),
                 claims.get("email") or claims.get("lp_id") or "gp",
             ))
-            memo_id = cur.fetchone()[0]
             conn.commit()
+        print(f"📄 [memo] saved id={memo_id} job_key={job_key!r} "
+              f"fund={assigned_fund_id} bytes={len(pdf_bytes)}", flush=True)
     except Exception as e:
+        print(f"❌ [memo] INSERT failed for {job_key!r}: {e!s:.300}", flush=True)
         raise HTTPException(500, f"DB insert failed: {e!s:.200}")
 
     return {
@@ -16372,12 +16390,13 @@ def list_memos(request: Request, fund_id: str | None = None,
                 where.append("m.assigned_fund_id = %s")
                 params.append(fund_id)
             where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+            # funds.id is UUID, m.assigned_fund_id is TEXT — cast on join side
             cur.execute(f"""
-                SELECT m.id::text                AS id,
+                SELECT m.id                       AS id,
                        m.source_job_key          AS source_job_key,
                        m.source_format           AS source_format,
                        m.episode_title           AS episode_title,
-                       m.assigned_fund_id::text  AS assigned_fund_id,
+                       m.assigned_fund_id        AS assigned_fund_id,
                        f.legal_name              AS fund_name,
                        m.gp_memo                 AS gp_memo,
                        m.generated_by            AS generated_by,
@@ -16386,7 +16405,7 @@ def list_memos(request: Request, fund_id: str | None = None,
                        m.last_sent_at            AS last_sent_at,
                        octet_length(m.pdf_bytes) AS size_bytes
                   FROM dga_memos m
-             LEFT JOIN funds f ON f.id = m.assigned_fund_id
+             LEFT JOIN funds f ON f.id::text = m.assigned_fund_id
                 {where_sql}
                  ORDER BY m.generated_at DESC
                  LIMIT 200
@@ -16411,7 +16430,7 @@ def download_memo_pdf(memo_id: str, request: Request):
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""SELECT pdf_bytes, episode_title
-                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+                             FROM dga_memos WHERE id = %s""", (memo_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "Memo not found")
@@ -16448,7 +16467,7 @@ async def email_memo(memo_id: str, request: Request):
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""SELECT id::text, episode_title, gp_memo,
                                   pdf_bytes, assigned_fund_id::text AS fund_id
-                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+                             FROM dga_memos WHERE id = %s""", (memo_id,))
             memo = cur.fetchone()
     except Exception as e:
         raise HTTPException(500, f"Fetch failed: {e!s:.200}")
@@ -16476,7 +16495,7 @@ async def email_memo(memo_id: str, request: Request):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("""SELECT email FROM lps
-                                WHERE fund_id = %s::uuid AND status = 'active'
+                                WHERE fund_id::text = %s AND status = 'active'
                                   AND email IS NOT NULL AND email <> ''""", (memo["fund_id"],))
                 recipients = [r["email"] for r in cur.fetchall() if r.get("email")]
         except Exception as e:
@@ -16501,7 +16520,7 @@ async def email_memo(memo_id: str, request: Request):
             with _fund_conn() as conn, conn.cursor() as cur:
                 cur.execute("""UPDATE dga_memos
                                   SET last_sent_to = %s, last_sent_at = now()
-                                WHERE id = %s::uuid""",
+                                WHERE id = %s""",
                             (", ".join(r["to"] for r in sent_ok)[:500], memo_id))
                 conn.commit()
         except Exception: pass
@@ -16526,7 +16545,7 @@ async def update_memo(memo_id: str, request: Request):
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("""SELECT script_json, episode_title, assigned_fund_id::text AS fund_id, gp_memo
-                             FROM dga_memos WHERE id = %s::uuid""", (memo_id,))
+                             FROM dga_memos WHERE id = %s""", (memo_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "Memo not found")
@@ -16541,7 +16560,7 @@ async def update_memo(memo_id: str, request: Request):
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""UPDATE dga_memos
                               SET assigned_fund_id = %s, gp_memo = %s, pdf_bytes = %s
-                            WHERE id = %s::uuid""",
+                            WHERE id = %s""",
                         (final_fund, final_memo, psycopg2.Binary(pdf_bytes), memo_id))
             conn.commit()
     except HTTPException: raise
@@ -16557,7 +16576,7 @@ def delete_memo(memo_id: str, request: Request):
         raise HTTPException(403, "GP only")
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM dga_memos WHERE id = %s::uuid", (memo_id,))
+            cur.execute("DELETE FROM dga_memos WHERE id = %s", (memo_id,))
             conn.commit()
     except Exception as e:
         raise HTTPException(500, f"Delete failed: {e!s:.200}")
