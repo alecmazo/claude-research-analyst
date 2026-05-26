@@ -13048,10 +13048,26 @@
     try {
       const url = '/api/memos' + (fundId ? '?fund_id=' + encodeURIComponent(fundId) : '');
       const r = await window.dgaFetch(url);
-      const j = await r.json();
-      const memos = j.memos || [];
+      const status = r.status;
+      let j = null;
+      try { j = await r.json(); } catch(_) { j = null; }
+      // Surface HTTP errors loudly instead of silently rendering "empty"
+      if (!r.ok) {
+        const detail = (j && (j.detail || j.error)) || ('HTTP ' + status);
+        list.innerHTML = '<div style="padding:24px;color:#dc2626;font-size:12px;">'
+          + 'Failed to load memos: <strong>' + detail + '</strong>'
+          + '<div style="margin-top:8px;font-size:10.5px;color:#64748b;">Status ' + status
+          + ' · check Railway logs for [memo] errors</div></div>';
+        return;
+      }
+      const memos = (j && j.memos) || [];
+      console.log('[memos] GET /api/memos →', { status, ok: r.ok, count: memos.length, raw: j });
       if (!memos.length) {
-        list.innerHTML = '<div style="padding:32px;text-align:center;font-size:12px;color:var(--dim);">No memos yet. Generate a podcast in the LLM Lab and click <strong>📄 Export as DGA Memo</strong>.</div>';
+        list.innerHTML = '<div style="padding:32px;text-align:center;font-size:12px;color:var(--dim);">'
+          + 'No memos yet. Generate a podcast in the LLM Lab and click <strong>📄 Export as DGA Memo</strong>.'
+          + '<div style="margin-top:10px;font-size:10.5px;color:#94a3b8;">'
+          + 'If you just saved one and it should be here, open DevTools → Console — '
+          + 'the API response is logged for diagnosis.</div></div>';
         return;
       }
       const rows = memos.map(m => {
@@ -13122,8 +13138,12 @@
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ assigned_fund_id: fundId, gp_memo: memo }),
       });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.detail || j.error || 'Export failed');
+      let j = null; try { j = await r.json(); } catch(_) { j = null; }
+      console.log('[memos] POST from-podcast →', { status: r.status, ok: r.ok, body: j });
+      if (!r.ok || !j || !j.ok) {
+        const msg = (j && (j.detail || j.error)) || ('HTTP ' + r.status);
+        throw new Error(msg);
+      }
       _closeMemoExportModal();
       if (thenEmail) {
         _openMemoEmailModal(j.memo_id, fundId, j.episode_title);

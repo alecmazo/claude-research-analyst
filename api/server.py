@@ -15993,13 +15993,12 @@ def _ensure_dga_memos_table() -> None:
     scripts. Idempotent."""
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
+    # Step 1: CREATE TABLE + INDEXES (one transaction, must succeed together)
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
-            # Try to enable pgcrypto for gen_random_uuid (no-op if not available);
-            # safe to ignore failures because we now generate UUIDs in Python.
             try:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-            except Exception: pass
+            except Exception: conn.rollback()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS dga_memos (
                     id              TEXT PRIMARY KEY,
@@ -16019,20 +16018,30 @@ def _ensure_dga_memos_table() -> None:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_fund_idx ON dga_memos(assigned_fund_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS dga_memos_gen_idx  ON dga_memos(generated_at DESC)")
-            # Migration: earlier deploys may have created id / assigned_fund_id
-            # as UUID. We now generate IDs in Python so the column must be
-            # TEXT-compatible. Each ALTER is wrapped because they're no-ops
-            # when the column is already TEXT.
-            for alter in (
-                "ALTER TABLE dga_memos ALTER COLUMN id TYPE TEXT USING id::text",
-                "ALTER TABLE dga_memos ALTER COLUMN id DROP DEFAULT",
-                "ALTER TABLE dga_memos ALTER COLUMN assigned_fund_id TYPE TEXT USING assigned_fund_id::text",
-            ):
-                try: cur.execute(alter); conn.commit()
-                except Exception: conn.rollback()
             conn.commit()
     except Exception as e:
-        print(f"⚠️ _ensure_dga_memos_table failed: {e!s:.200}", flush=True)
+        print(f"❌ _ensure_dga_memos_table CREATE failed: {e!s:.300}", flush=True)
+        return  # Without the table, the ALTERs below would also fail
+
+    # Step 2: Idempotent migration for any pre-existing UUID-typed columns.
+    # Each ALTER runs in its OWN connection so a failure (e.g. column already
+    # TEXT) doesn't poison subsequent ones.
+    for alter in (
+        "ALTER TABLE dga_memos ALTER COLUMN id TYPE TEXT USING id::text",
+        "ALTER TABLE dga_memos ALTER COLUMN id DROP DEFAULT",
+        "ALTER TABLE dga_memos ALTER COLUMN assigned_fund_id TYPE TEXT USING assigned_fund_id::text",
+        "ALTER TABLE dga_memos ALTER COLUMN assigned_fund_id DROP DEFAULT",
+    ):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute(alter)
+                conn.commit()
+        except Exception as e:
+            # Most failures are "cannot cast" or "column is not of type X" —
+            # both no-op cases. Log once for visibility.
+            es = str(e)[:120]
+            if "already" not in es and "does not exist" not in es:
+                print(f"⚠️ dga_memos ALTER skipped: {alter[-60:]!r} → {es}", flush=True)
 
 
 def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
@@ -16369,6 +16378,41 @@ async def create_memo_from_podcast(job_key: str, request: Request):
         "pdf_url": f"/api/memos/{memo_id}/pdf",
         "size_bytes": len(pdf_bytes),
     }
+
+
+@app.get("/api/memos/_diag")
+def memos_diag(request: Request):
+    """Diagnostic — confirm the dga_memos table exists, show column types,
+    row count, and the most recent row's id/title. Helps debug 'memos not
+    showing up' without needing Railway log access."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_dga_memos_table()
+    out: dict = {"ok": True, "claims_role": claims.get("role")}
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        out["ok"] = False; out["error"] = "no DATABASE_URL / psycopg2"; return out
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT column_name, data_type
+                             FROM information_schema.columns
+                            WHERE table_name = 'dga_memos'
+                            ORDER BY ordinal_position""")
+            out["columns"] = [dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT COUNT(*) AS n FROM dga_memos")
+            out["row_count"] = cur.fetchone()["n"]
+            cur.execute("""SELECT id, episode_title, assigned_fund_id,
+                                  generated_at, octet_length(pdf_bytes) AS bytes
+                             FROM dga_memos
+                            ORDER BY generated_at DESC LIMIT 5""")
+            rows = []
+            for r in cur.fetchall():
+                rows.append({**dict(r),
+                             "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None})
+            out["recent"] = rows
+    except Exception as e:
+        out["ok"] = False; out["error"] = str(e)[:300]
+    return out
 
 
 @app.get("/api/memos")
