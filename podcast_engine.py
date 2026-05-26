@@ -1346,6 +1346,7 @@ def generate_script(
     model: str | None = None,
     on_progress=None,
     format: str = "debate",
+    should_cancel=None,   # optional callable() → bool, polled mid-stream
 ) -> dict[str, Any]:
     """Generate one podcast episode script from both research reports.
 
@@ -1424,9 +1425,18 @@ def generate_script(
     claude_trim = claude_md[:MAX_INPUT_CHARS]
 
     if on_progress:
-        try: on_progress("script_gen",
-                         f"Writing script (mode: {roles['episode_mode']}, "
-                         f"bull={roles['bull_speaker']}, bear={roles['bear_speaker']})…")
+        # Format-aware status label. Bull/bear seats are only meaningful for
+        # debate format — surfacing them on memo/catalysts/pre_mortem/quick_hit
+        # confuses users (looks like a debate even when they picked memo).
+        fmt_label = EPISODE_FORMATS.get(format, {}).get("label", format)
+        fmt_icon  = EPISODE_FORMATS.get(format, {}).get("icon",  "🎬")
+        if format == "debate":
+            label = (f"{fmt_icon} Writing {fmt_label} script "
+                     f"(mode: {roles['episode_mode']}, "
+                     f"bull={roles['bull_speaker']}, bear={roles['bear_speaker']})…")
+        else:
+            label = f"{fmt_icon} Writing {fmt_label} script…"
+        try: on_progress("script_gen", label)
         except Exception: pass
 
     system = _system_prompt(format=format)
@@ -1446,7 +1456,11 @@ def generate_script(
             user_content=user,
             model=model or _ca.CLAUDE_MODEL,
             usage_capture=_track_cost,
+            should_cancel=should_cancel,
         )
+    except _ca.ClaudeCancelled:
+        print(f"🛑 [podcast/script {ticker}] cancelled mid-stream by user", flush=True)
+        raise
     except Exception as e:
         print(f"❌ [podcast/script {ticker}] Claude call failed: {e!s:.500}", flush=True)
         raise

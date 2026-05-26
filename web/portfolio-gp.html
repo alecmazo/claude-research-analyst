@@ -5528,11 +5528,16 @@
           '</div>' +
           '<div id="ps-progress-elapsed" style="font-size:10.5px;color:#84CCE3;margin-top:6px;font-family:\'SF Mono\',monospace;">0s elapsed</div>' +
         '</div>' +
+        '<button id="ps-cancel-btn" type="button" title="Cancel this generation" ' +
+        'style="background:rgba(239,68,68,0.15);border:1px solid #fca5a5;color:#fca5a5;' +
+        'padding:6px 12px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;' +
+        'white-space:nowrap;">🛑 Cancel</button>' +
       '</div>';
 
     const labelEl = document.getElementById('ps-progress-label');
     const barEl   = document.getElementById('ps-progress-bar');
     const elapEl  = document.getElementById('ps-progress-elapsed');
+    const cancelBtn = document.getElementById('ps-cancel-btn');
     const t0 = Date.now();
     const tick = function() {
       const sec = Math.round((Date.now() - t0) / 1000);
@@ -5547,6 +5552,25 @@
       btn.disabled = false;
       btn.textContent = '🎬 Generate script';
     };
+
+    // Cancel wiring — POST to the cancel endpoint then keep polling until the
+    // worker confirms (the poll picks up status='cancelled' and renders below).
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', async function() {
+        if (cancelBtn.disabled) return;
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '⏳ Cancelling…';
+        try {
+          await window.dgaFetch('/api/podcast/' + encodeURIComponent(ticker) +
+                                 '/script/cancel', { method: 'POST' });
+          if (labelEl) labelEl.textContent = '🛑 Cancelling — waiting for worker to stop…';
+        } catch (e) {
+          alert('Cancel request failed: ' + e.message);
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = '🛑 Cancel';
+        }
+      });
+    }
 
     (async function() {
       try {
@@ -5590,6 +5614,10 @@
           if (d.status === 'done' && d.result) {
             finish();
             _onPodcastScriptDone(d.result, out, statsEl);
+          } else if (d.status === 'cancelled') {
+            out.innerHTML = '<div style="color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:10px 14px;border-radius:6px;font-size:12px;">' +
+              '🛑 Cancelled. Generation stopped — you weren\'t charged for the full Opus call.</div>';
+            finish();
           } else if (d.status === 'error') {
             out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' +
               (d.label || d.error || 'Generation failed') + '</div>';

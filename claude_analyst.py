@@ -6085,6 +6085,11 @@ def estimate_claude_cost(model: str, input_tokens: int, output_tokens: int) -> f
     return (input_tokens * inp_rate + output_tokens * out_rate) / 1_000_000.0
 
 
+class ClaudeCancelled(Exception):
+    """Raised by call_claude when should_cancel() returns True mid-stream."""
+    pass
+
+
 def call_claude(system_prompt: str, user_content: str,
                 model: str = CLAUDE_MODEL,
                 *,
@@ -6093,6 +6098,7 @@ def call_claude(system_prompt: str, user_content: str,
                 on_delta=None,                       # optional callable(str) invoked for each streamed chunk
                 max_tokens: int = 16000,             # cap on output tokens; raise for long-form formats
                 usage_capture=None,                  # optional callable({model, input_tokens, output_tokens, cost_usd})
+                should_cancel=None,                  # optional callable() → bool; polled mid-stream to abort
                 ) -> str:
     """Call Anthropic Claude. Same signature as :func:`call_grok` so the
     analyze_ticker pipeline can swap providers via a single parameter.
@@ -6135,6 +6141,7 @@ def call_claude(system_prompt: str, user_content: str,
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
                 # text_stream yields raw text deltas as they arrive
+                _cancel_count = 0
                 for delta in stream.text_stream:
                     if not delta:
                         continue
@@ -6144,6 +6151,22 @@ def call_claude(system_prompt: str, user_content: str,
                             on_delta(delta)
                         except Exception:  # noqa: BLE001
                             pass  # listener bugs must never break the LLM call
+                    # Cooperative cancellation — polled every chunk so the
+                    # abort latency is bounded by chunk frequency (~50ms).
+                    # Skip a couple iterations to keep overhead negligible.
+                    _cancel_count += 1
+                    if should_cancel is not None and _cancel_count % 5 == 0:
+                        try:
+                            if should_cancel():
+                                # Close the HTTP stream so we stop paying for
+                                # tokens we'll discard, then bubble up.
+                                try: stream.close()
+                                except Exception: pass
+                                raise ClaudeCancelled("cancelled mid-stream")
+                        except ClaudeCancelled:
+                            raise
+                        except Exception:
+                            pass  # bad cancel callback shouldn't kill the call
 
                 # ── Capture exact usage from the final message ──
                 if usage_capture is not None:
@@ -6160,6 +6183,9 @@ def call_claude(system_prompt: str, user_content: str,
                     except Exception as _e:
                         print(f"⚠️  [call_claude] usage capture failed: {_e!s:.120}", flush=True)
             break   # success — exit retry loop
+        except ClaudeCancelled:
+            # Caller asked us to stop — do not retry, bubble up immediately.
+            raise
         except Exception as e:
             # Identify retryable conditions: 529 overloaded, 503, 502, 504,
             # and "Overloaded" / "overloaded_error" message variants. The

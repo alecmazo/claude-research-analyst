@@ -17275,14 +17275,27 @@ def podcast_list():
 
 def _run_script_generation(ticker: str, format: str = "debate") -> None:
     """Background worker for /api/podcast/{ticker}/script.
-    Updates _podcast_script_jobs as it progresses so the UI can poll."""
+    Updates _podcast_script_jobs as it progresses so the UI can poll.
+
+    Cancellation: the cancel endpoint flips `_podcast_script_jobs[tk]
+    ['cancel_requested'] = True`. The worker polls this flag (a) between
+    stages via _on_progress, and (b) every ~5 streaming chunks via the
+    should_cancel callback passed into call_claude. The latter actually
+    closes the HTTP stream so we don't pay for tokens we'll discard."""
     import podcast_engine
     tk = ticker.upper().strip()
 
     def _set(**kw):
         _podcast_script_jobs[tk] = {**(_podcast_script_jobs.get(tk) or {}), **kw,
                                     "updated_at": time.time()}
+    def _should_cancel() -> bool:
+        return bool(_podcast_script_jobs.get(tk, {}).get("cancel_requested"))
     def _on_progress(stage, *args):
+        # Check cancel before updating progress — stage transitions are the
+        # cheapest abort points (before the big Claude call begins).
+        if _should_cancel():
+            from claude_analyst import ClaudeCancelled as _CC
+            raise _CC(f"cancelled at stage={stage}")
         # generate_script's on_progress signature: (stage, label_str)
         # — but DA brief uses (stage, label) too. Normalize to a single label.
         label = args[0] if args else stage
@@ -17312,7 +17325,7 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
         #    da_research / da_synth / script_gen stages)
         result = podcast_engine.generate_script(
             tk, grok_md, claude_md, on_progress=_on_progress,
-            format=format,
+            format=format, should_cancel=_should_cancel,
         )
 
         if not result.get("script"):
@@ -17375,8 +17388,36 @@ def _run_script_generation(ticker: str, format: str = "debate") -> None:
                 "transcript":  podcast_engine.script_to_transcript(result["script"]),
              })
     except Exception as e:
-        print(f"❌ [podcast/script {tk}] generation failed: {e!s:.500}", flush=True)
-        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+        from claude_analyst import ClaudeCancelled as _CC
+        if isinstance(e, _CC):
+            print(f"🛑 [podcast/script {tk}] cancelled by user", flush=True)
+            _set(stage="cancelled", status="cancelled",
+                 label="🛑 Cancelled", error="cancelled",
+                 cancel_requested=False)   # clear so a re-run isn't auto-cancelled
+        else:
+            print(f"❌ [podcast/script {tk}] generation failed: {e!s:.500}", flush=True)
+            _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/podcast/{ticker}/script/cancel")
+def podcast_cancel_script(ticker: str):
+    """Request cancellation of an in-flight script-gen job. The worker polls
+    the cancel flag between stages and inside the Claude streaming loop,
+    closes the HTTP stream early to stop accruing token cost, and marks
+    the job 'cancelled'. Safe to call when no job exists (no-op)."""
+    tk = ticker.upper().strip()
+    job = _podcast_script_jobs.get(tk)
+    if not job:
+        return {"ok": True, "ticker": tk, "noop": True, "reason": "no job"}
+    if job.get("status") not in ("running",):
+        return {"ok": True, "ticker": tk, "noop": True,
+                "reason": f"job status={job.get('status')}"}
+    _podcast_script_jobs[tk] = {**job,
+                                 "cancel_requested": True,
+                                 "label": "🛑 Cancelling…",
+                                 "updated_at": time.time()}
+    print(f"🛑 [podcast/script {tk}] cancel requested", flush=True)
+    return {"ok": True, "ticker": tk, "cancel_requested": True}
 
 
 @app.post("/api/podcast/{ticker}/script")
