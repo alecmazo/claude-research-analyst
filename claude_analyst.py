@@ -6115,42 +6115,72 @@ def call_claude(system_prompt: str, user_content: str,
     # Lazy import so the module loads even when anthropic isn't installed
     # (e.g. during unit tests of the parser/renderer).
     from anthropic import Anthropic   # type: ignore
+    import time as _t_call
 
     client = Anthropic(api_key=get_claude_api_key())
+    # Retry on overloaded_error (529) and other transient API errors.
+    # Anthropic explicitly recommends retry-with-backoff for 529s. Long-form
+    # formats like Portfolio Roundup take 60-90s of Opus compute and are the
+    # most likely to hit "Overloaded" — without retry the job fails outright.
+    MAX_RETRIES = 4
+    BACKOFFS    = [4, 10, 22, 45]   # seconds
     chunks: list[str] = []
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_content}],
-    ) as stream:
-        # text_stream yields raw text deltas as they arrive
-        for delta in stream.text_stream:
-            if not delta:
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            chunks = []   # reset on retry
+            with client.messages.stream(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}],
+            ) as stream:
+                # text_stream yields raw text deltas as they arrive
+                for delta in stream.text_stream:
+                    if not delta:
+                        continue
+                    chunks.append(delta)
+                    if on_delta is not None:
+                        try:
+                            on_delta(delta)
+                        except Exception:  # noqa: BLE001
+                            pass  # listener bugs must never break the LLM call
+
+                # ── Capture exact usage from the final message ──
+                if usage_capture is not None:
+                    try:
+                        final = stream.get_final_message()
+                        u = final.usage
+                        cost = estimate_claude_cost(model, u.input_tokens, u.output_tokens)
+                        usage_capture({
+                            "model": model,
+                            "input_tokens":  int(u.input_tokens),
+                            "output_tokens": int(u.output_tokens),
+                            "cost_usd":      cost,
+                        })
+                    except Exception as _e:
+                        print(f"⚠️  [call_claude] usage capture failed: {_e!s:.120}", flush=True)
+            break   # success — exit retry loop
+        except Exception as e:
+            # Identify retryable conditions: 529 overloaded, 503, 502, 504,
+            # and "Overloaded" / "overloaded_error" message variants. The
+            # Anthropic SDK raises different subclasses across versions, so
+            # we sniff by message+status rather than catching a specific type.
+            msg = str(e)
+            status = getattr(e, "status_code", None) or getattr(e, "status", None)
+            is_overloaded = (
+                status in (502, 503, 504, 529)
+                or "overload" in msg.lower()
+                or "rate_limit" in msg.lower()
+                or "529" in msg
+            )
+            if is_overloaded and attempt < MAX_RETRIES:
+                wait = BACKOFFS[attempt]
+                print(f"⏳ [call_claude] overloaded (attempt {attempt+1}/{MAX_RETRIES+1}); "
+                      f"retrying in {wait}s … {msg[:120]}", flush=True)
+                _t_call.sleep(wait)
                 continue
-            chunks.append(delta)
-            if on_delta is not None:
-                try:
-                    on_delta(delta)
-                except Exception:  # noqa: BLE001
-                    pass  # listener bugs must never break the LLM call
-
-        # ── Capture exact usage from the final message for cost accounting ──
-        if usage_capture is not None:
-            try:
-                final = stream.get_final_message()
-                u = final.usage
-                cost = estimate_claude_cost(model, u.input_tokens, u.output_tokens)
-                usage_capture({
-                    "model": model,
-                    "input_tokens":  int(u.input_tokens),
-                    "output_tokens": int(u.output_tokens),
-                    "cost_usd":      cost,
-                })
-            except Exception as _e:
-                # Never let usage tracking break the actual call
-                print(f"⚠️  [call_claude] usage capture failed: {_e!s:.120}", flush=True)
-
+            # Out of retries, or non-retryable error — re-raise
+            raise
     return "".join(chunks)
 
 

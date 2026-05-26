@@ -287,14 +287,21 @@ def _enrich_positions_with_sectors_and_ytd(positions: list[dict],
     import claude_analyst as _ca
     from datetime import datetime as _dt, timedelta as _td
 
-    # ── Pass 1: sectors (with cash override) ─────────────────────────────────
+    # ── Pass 1: sectors + company name (with cash override) ─────────────────
+    # Company name is added so the PM can say "NVIDIA" instead of just "NVDA"
+    # — pulled from yfinance.info shortName/longName, falls back to ticker.
     equity_tks = []
+    try:
+        import yfinance as _yf_name
+    except Exception:
+        _yf_name = None
     for p in positions:
         tk = (p.get("ticker") or "").upper().strip()
         if not tk: continue
         if _is_cash_like(tk):
             p["sector"] = "Cash"
             p["ytd_pct"] = 0.0
+            p["company_name"] = p.get("company_name") or "Cash / Money Market"
             continue
         # Always re-resolve sector (the LLM was hallucinating these)
         try:
@@ -302,6 +309,25 @@ def _enrich_positions_with_sectors_and_ytd(positions: list[dict],
             p["sector"] = sec or p.get("sector") or "Unknown"
         except Exception:
             p["sector"] = p.get("sector") or "Unknown"
+        # Company name — only fetch if not already supplied by the caller
+        if not p.get("company_name") and _yf_name is not None:
+            try:
+                info = _yf_name.Ticker(tk).info or {}
+                nm = (info.get("shortName") or info.get("longName") or "").strip()
+                if nm:
+                    # Strip common boilerplate suffixes for natural speech
+                    for suffix in (", Inc.", " Inc.", ", Inc", " Inc", " Corporation",
+                                    " Corp.", " Corp", " Holdings", " Holdings, Inc.",
+                                    " Co.", " Company", " Plc", " plc", " S.A.",
+                                    " Limited", " Ltd.", " Ltd"):
+                        if nm.endswith(suffix):
+                            nm = nm[:-len(suffix)].rstrip(",").strip()
+                            break
+                    p["company_name"] = nm
+            except Exception:
+                pass
+        if not p.get("company_name"):
+            p["company_name"] = tk   # fallback — never blank
         equity_tks.append(tk)
 
     # ── Pass 2: YTD prices — bulk yfinance fetch (one HTTP roundtrip) ────────
@@ -387,7 +413,12 @@ def _build_sector_breakdown(positions: list[dict]) -> dict:
         })
         bucket["weight_pct"] += w
         tk = (p.get("ticker") or "").upper()
-        bucket["tickers"].append(f"{tk} ({w:.1f}%)" if w > 0 else tk)
+        nm = (p.get("company_name") or "").strip()
+        # Format as "NVIDIA (NVDA, 12.4%)" so the LLM has both forms available
+        label = (f"{nm} ({tk}, {w:.1f}%)" if (nm and nm != tk and w > 0)
+                  else (f"{nm} ({tk})" if (nm and nm != tk)
+                  else (f"{tk} ({w:.1f}%)" if w > 0 else tk)))
+        bucket["tickers"].append(label)
         if ytd is not None:
             bucket["_ytd_sum"] += float(ytd)
             bucket["_ytd_n"]   += 1
@@ -2312,6 +2343,20 @@ YTD period: {ytd_period}
 🚨 CASH SLICE: {cash_pct:.2f}%  ({cash_tickers})
    Cash is its OWN sector. NEVER fold it into Financials. NEVER skip it.
    The portfolio_snapshot section MUST explicitly state the cash percentage.
+
+⚠️ HARD RULES — naming companies (READ THIS):
+  • When introducing a position for the FIRST time in any section, use the
+    COMPANY NAME (from the `company_name` field on each position), not the
+    raw ticker. Example: "Let's talk NVIDIA — we're 12.4% there" — NOT
+    "Let's talk NVDA". A podcast is a SPOKEN medium; tickers sound robotic.
+  • After the first mention in a section, the ticker symbol is acceptable
+    shorthand. So: "NVIDIA at 12.4%... NVDA's been compounding 38% YTD..."
+  • For well-known multi-word brands, you may use the natural short form
+    when it reads better: "Apple" (not "Apple Inc."), "Microsoft", "Tesla",
+    "JPMorgan", "Bank of America". The company_name field has had
+    boilerplate stripped — use it as-is unless it's still awkward.
+  • Cash / money-market positions: say "cash" or "the cash sleeve" — never
+    "SPAXX" or "FDRXX" out loud.
 
 ⚠️ HARD RULES — sector talk:
   • Whenever you say a sector concentration ("Financials at X%"), the X
