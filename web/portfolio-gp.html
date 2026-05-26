@@ -705,6 +705,16 @@
   .rep-table tbody tr { cursor: pointer; transition: background .12s; }
   .rep-table tbody tr:hover td { background: rgba(91,184,212,0.06); }
   .rep-tk { font-weight: 800; color: #0f172a; letter-spacing: 1px; font-size: 14px; }
+  /* Ticker hover → GuruFocus summary (only the ticker chip, not the rest of the row) */
+  .rep-tk[data-rep-gf] {
+    cursor: pointer;
+    border-bottom: 1px dashed transparent;
+    transition: color .12s, border-color .12s;
+  }
+  .rep-tk[data-rep-gf]:hover {
+    color: var(--blue);
+    border-bottom-color: var(--blue);
+  }
   .rep-pill {
     display: inline-block;
     font-size: 8px; font-weight: 800;
@@ -1691,13 +1701,13 @@
 
   <nav class="topbar-right">
     <span class="topbar-link active" data-tab="research">Research</span>
-    <span class="topbar-link" data-tab="builder">🧮 Builder</span>
-    <span class="topbar-link" data-tab="lab">🔬 LLM Lab</span>
+    <span class="topbar-link" data-tab="builder">Builder</span>
+    <span class="topbar-link" data-tab="lab">LLM Lab</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
-    <span class="topbar-link" data-tab="positions">📊 Positions</span>
+    <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
-    <span class="topbar-link" data-tab="reports">📋 Reports</span>
-    <span class="topbar-link" data-tab="memos">📄 Memos</span>
+    <span class="topbar-link" data-tab="reports">Reports</span>
+    <span class="topbar-link" data-tab="memos">Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
     <span class="status-dot" title="API online"></span>
   </nav>
@@ -3637,7 +3647,7 @@
           '<td>' +
             '<span style="display:inline-flex;align-items:center;gap:5px;">' +
               statusIcon +
-              '<span class="rep-tk">' + rep.ticker + '</span>' +
+              '<span class="rep-tk" data-rep-gf="' + rep.ticker + '" title="Open ' + rep.ticker + ' on GuruFocus">' + rep.ticker + '</span>' +
               '<button data-rep-delete="' + rep.ticker + '" title="Remove report" ' +
                 'style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:12px;line-height:1;color:var(--dim);opacity:0.6;" ' +
                 'onclick="event.stopPropagation();">×</button>' +
@@ -3742,7 +3752,17 @@
           if (e.target.closest('[data-compare-ticker]')) return;
           if (e.target.closest('[data-rep-open]')) return;
           if (e.target.closest('[data-rep-retry]')) return;
+          if (e.target.closest('[data-rep-gf]')) return;   // ticker → GuruFocus
           openReport(tr.getAttribute('data-ticker'));
+        });
+      });
+
+      // Ticker chip → GuruFocus summary (only when clicking the ticker text;
+      // row-click still opens the report)
+      tbody.querySelectorAll('[data-rep-gf]').forEach(span => {
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openGuruFocus(span.getAttribute('data-rep-gf'));
         });
       });
 
