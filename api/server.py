@@ -16179,10 +16179,16 @@ def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
                             color=colors.HexColor("#cbd5e1"),
                             spaceBefore=4, spaceAfter=4))
     flow.append(Paragraph(
-        f"<b>Disclaimer:</b> This memo is for informational purposes only and "
-        f"reflects views as of {date_str}. It is not investment advice nor an "
-        f"offer to buy or sell any security. Generated from DGA Capital's "
-        f"internal research pipeline. Distribution restricted to authorized recipients.",
+        f"<b>Disclaimer:</b> This memo is for informational and educational "
+        f"purposes only and reflects views as of {date_str}. It is not "
+        f"investment advice, an offer to sell, or a solicitation to buy "
+        f"any security. DGA Capital is an exempt reporting adviser in "
+        f"California. Holdings, opinions, and price targets discussed may "
+        f"change without notice. Past performance is not indicative of "
+        f"future results. The information herein is believed to be reliable "
+        f"but is not guaranteed. Recipients should consult their own "
+        f"financial, legal, and tax advisors before making any investment "
+        f"decisions. Distribution restricted to authorized recipients only.",
         p_disc))
 
     doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
@@ -16847,10 +16853,22 @@ def _run_podcast_generation(ticker: str, tts_model: str, format: str = "debate")
         # Format-specific filename so Pre-Mortem doesn't clobber Debate on disk
         mp3_name = f"{tk}_{format}_podcast.mp3" if format != "debate" else f"{tk}_podcast.mp3"
         out_path = out_dir / mp3_name
+        # Compliance disclaimer (intro + outro audio) — looked up from
+        # kv_store so legal/counsel can edit text via the API without a
+        # deploy. Defaults inside the engine are conservative and ON.
+        dcfg = _kv_get("podcast.disclaimer_config") or {}
+        disc_intro = dcfg.get("intro_text", pe.DEFAULT_DISCLAIMER_INTRO) \
+                        if dcfg.get("intro_enabled", True) else None
+        disc_outro = dcfg.get("outro_text", pe.DEFAULT_DISCLAIMER_OUTRO) \
+                        if dcfg.get("outro_enabled", True) else None
+        disc_voice = dcfg.get("voice", pe.DEFAULT_DISCLAIMER_VOICE)
         syn = pe.synthesize_episode(
             script,
             out_path=out_path,
             tts_model=tts_model,
+            disclaimer_intro=disc_intro,
+            disclaimer_outro=disc_outro,
+            disclaimer_voice=disc_voice,
             on_progress=_podcast_progress(job_key),
         )
 
@@ -17151,6 +17169,77 @@ def podcast_reset_voice_config():
     pe._RUNTIME_VOICE_MAP = dict(pe.VOICE_MAP)
     _kv_put("podcast.voice_config", {"voices": dict(pe.VOICE_MAP)})
     return {"ok": True, **pe.get_voice_config()}
+
+
+@app.get("/api/podcast/disclaimer-config")
+def podcast_get_disclaimer_config():
+    """Return the current compliance disclaimer config (intro + outro text,
+    voice, enabled flags). Defaults from the engine if no override set."""
+    import podcast_engine as pe
+    cfg = _kv_get("podcast.disclaimer_config") or {}
+    return {
+        "ok":             True,
+        "intro_enabled":  bool(cfg.get("intro_enabled", True)),
+        "outro_enabled":  bool(cfg.get("outro_enabled", True)),
+        "intro_text":     cfg.get("intro_text") or pe.DEFAULT_DISCLAIMER_INTRO,
+        "outro_text":     cfg.get("outro_text") or pe.DEFAULT_DISCLAIMER_OUTRO,
+        "voice":          cfg.get("voice")      or pe.DEFAULT_DISCLAIMER_VOICE,
+        "default_intro":  pe.DEFAULT_DISCLAIMER_INTRO,
+        "default_outro":  pe.DEFAULT_DISCLAIMER_OUTRO,
+        "default_voice":  pe.DEFAULT_DISCLAIMER_VOICE,
+    }
+
+
+@app.post("/api/podcast/disclaimer-config")
+async def podcast_set_disclaimer_config(request: Request):
+    """Update the compliance disclaimer used at every audio generation.
+
+    Body fields (all optional — omitted fields keep their current value):
+      intro_enabled (bool), outro_enabled (bool),
+      intro_text (str),    outro_text (str),
+      voice (str — must be a valid OpenAI TTS voice)
+
+    Applies to the NEXT audio generation. Doesn't retroactively re-render."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    import podcast_engine as pe
+    cur = _kv_get("podcast.disclaimer_config") or {}
+    merged = {
+        "intro_enabled": bool(body.get("intro_enabled", cur.get("intro_enabled", True))),
+        "outro_enabled": bool(body.get("outro_enabled", cur.get("outro_enabled", True))),
+        "intro_text":    (body.get("intro_text",  cur.get("intro_text"))  or pe.DEFAULT_DISCLAIMER_INTRO).strip(),
+        "outro_text":    (body.get("outro_text",  cur.get("outro_text"))  or pe.DEFAULT_DISCLAIMER_OUTRO).strip(),
+        "voice":         (body.get("voice",        cur.get("voice"))       or pe.DEFAULT_DISCLAIMER_VOICE).strip(),
+    }
+    # Length guardrails — anything longer than ~600 chars adds noticeable
+    # dead air to every episode; very short defeats the purpose
+    for k in ("intro_text", "outro_text"):
+        if len(merged[k]) > 800:
+            raise HTTPException(422, f"{k} too long ({len(merged[k])} ch — max 800)")
+    _kv_put("podcast.disclaimer_config", merged)
+    return {"ok": True, **merged, "saved_at": _now_pacific().isoformat()}
+
+
+@app.post("/api/podcast/disclaimer-config/reset")
+def podcast_reset_disclaimer_config(request: Request):
+    """Revert to engine defaults."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    import podcast_engine as pe
+    defaults = {
+        "intro_enabled": True, "outro_enabled": True,
+        "intro_text":    pe.DEFAULT_DISCLAIMER_INTRO,
+        "outro_text":    pe.DEFAULT_DISCLAIMER_OUTRO,
+        "voice":         pe.DEFAULT_DISCLAIMER_VOICE,
+    }
+    _kv_put("podcast.disclaimer_config", defaults)
+    return {"ok": True, **defaults}
 
 
 @app.get("/api/podcast/list")

@@ -2891,6 +2891,61 @@
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
+
+    <!-- ⚖️ Compliance disclaimer (audio intro/outro for every episode) -->
+    <section class="panel" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">⚖️ Podcast Compliance Disclaimer</span>
+        <span class="panel-badge" id="disc-status" style="background:#dcfce7;color:#166534;">ON</span>
+      </header>
+      <div style="padding:16px 18px;">
+        <div style="font-size:11px;color:#64748b;margin-bottom:14px;line-height:1.55;">
+          Audio disclaimer appended to every podcast episode (intro + outro). Applied at the
+          NEXT audio generation — doesn't retroactively re-render existing episodes.
+          <strong style="color:#92400e;">Review the wording with your securities counsel before public RSS launch.</strong>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0A1628;">
+            <input type="checkbox" id="disc-intro-enabled" checked>
+            <strong>Intro disclaimer</strong> (before first turn)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0A1628;">
+            <input type="checkbox" id="disc-outro-enabled" checked>
+            <strong>Outro disclaimer</strong> (after last turn)
+          </label>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Intro text</label>
+          <textarea id="disc-intro-text" rows="3" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px 11px;font-size:12px;font-family:inherit;line-height:1.5;color:#1e293b;background:#fff;resize:vertical;"></textarea>
+          <div style="text-align:right;font-size:9.5px;color:#94a3b8;margin-top:2px;"><span id="disc-intro-len">0</span> ch / 800 max</div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Outro text</label>
+          <textarea id="disc-outro-text" rows="3" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px 11px;font-size:12px;font-family:inherit;line-height:1.5;color:#1e293b;background:#fff;resize:vertical;"></textarea>
+          <div style="text-align:right;font-size:9.5px;color:#94a3b8;margin-top:2px;"><span id="disc-outro-len">0</span> ch / 800 max</div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">Disclaimer voice</label>
+          <select id="disc-voice" style="width:240px;height:32px;border:1px solid #cbd5e1;border-radius:6px;padding:0 9px;font-size:12px;color:#1e293b;background:#fff;">
+            <option value="alloy">alloy — neutral (recommended)</option>
+            <option value="echo">echo — calm male</option>
+            <option value="onyx">onyx — deep male</option>
+            <option value="nova">nova — bright female</option>
+            <option value="shimmer">shimmer — soft female</option>
+            <option value="ash">ash — rich, slightly raspy male</option>
+            <option value="sage">sage — measured female</option>
+            <option value="fable">fable — British storyteller</option>
+          </select>
+          <span style="font-size:10.5px;color:#64748b;margin-left:10px;">Use a voice DIFFERENT from your cast so listeners hear it as a notice.</span>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button id="disc-save-btn" type="button" class="tab-btn">💾 Save</button>
+          <button id="disc-reset-btn" type="button" class="tab-btn" style="background:#fff;border:1px solid #cbd5e1;color:#475569;">↺ Reset to defaults</button>
+          <span id="disc-msg" style="margin-left:auto;font-size:11px;color:#64748b;align-self:center;"></span>
+        </div>
+      </div>
+    </section>
+
     <div class="wide-grid-2">
 
       <!-- Change Own Password -->
@@ -10331,6 +10386,86 @@
     loadAutomationSettings();
     _wireEmailDiag();
     loadRenameDropdown();
+    loadDisclaimerConfig();
+  }
+
+  // ── ⚖️ Compliance disclaimer panel ─────────────────────────────
+  async function loadDisclaimerConfig() {
+    try {
+      const r = await window.dgaFetch('/api/podcast/disclaimer-config');
+      const c = await r.json();
+      const setVal = (id, v) => { const el=document.getElementById(id); if(el) el.value = v||''; };
+      const setChk = (id, v) => { const el=document.getElementById(id); if(el) el.checked = !!v; };
+      setChk('disc-intro-enabled', c.intro_enabled);
+      setChk('disc-outro-enabled', c.outro_enabled);
+      setVal('disc-intro-text',    c.intro_text);
+      setVal('disc-outro-text',    c.outro_text);
+      setVal('disc-voice',         c.voice);
+      _updateDiscCharCounts();
+      _updateDiscStatusBadge();
+    } catch (e) { console.warn('[disclaimer] load failed', e); }
+    // Wire once
+    if (!window._discWired) {
+      window._discWired = true;
+      ['disc-intro-text','disc-outro-text'].forEach(id =>
+        document.getElementById(id)?.addEventListener('input', _updateDiscCharCounts));
+      ['disc-intro-enabled','disc-outro-enabled'].forEach(id =>
+        document.getElementById(id)?.addEventListener('change', _updateDiscStatusBadge));
+      document.getElementById('disc-save-btn')?.addEventListener('click', async () => {
+        const body = {
+          intro_enabled: document.getElementById('disc-intro-enabled').checked,
+          outro_enabled: document.getElementById('disc-outro-enabled').checked,
+          intro_text:    document.getElementById('disc-intro-text').value,
+          outro_text:    document.getElementById('disc-outro-text').value,
+          voice:         document.getElementById('disc-voice').value,
+        };
+        const msg = document.getElementById('disc-msg');
+        if (msg) msg.textContent = '⏳ Saving…';
+        try {
+          const r = await window.dgaFetch('/api/podcast/disclaimer-config', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(body),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.detail || 'Save failed');
+          if (msg) msg.textContent = '✓ Saved — applies to next audio gen';
+          _updateDiscStatusBadge();
+        } catch (e) {
+          if (msg) msg.textContent = '❌ ' + e.message;
+        }
+      });
+      document.getElementById('disc-reset-btn')?.addEventListener('click', async () => {
+        if (!confirm('Revert disclaimer to engine defaults?')) return;
+        try {
+          await window.dgaFetch('/api/podcast/disclaimer-config/reset', { method:'POST' });
+          loadDisclaimerConfig();
+        } catch (e) { alert('Reset failed: ' + e.message); }
+      });
+    }
+  }
+  function _updateDiscCharCounts() {
+    const i = document.getElementById('disc-intro-text');
+    const o = document.getElementById('disc-outro-text');
+    const il = document.getElementById('disc-intro-len');
+    const ol = document.getElementById('disc-outro-len');
+    if (i && il) il.textContent = (i.value || '').length;
+    if (o && ol) ol.textContent = (o.value || '').length;
+  }
+  function _updateDiscStatusBadge() {
+    const intro = document.getElementById('disc-intro-enabled')?.checked;
+    const outro = document.getElementById('disc-outro-enabled')?.checked;
+    const badge = document.getElementById('disc-status');
+    if (!badge) return;
+    if (intro && outro) {
+      badge.textContent = 'ON · intro + outro';
+      badge.style.background = '#dcfce7'; badge.style.color = '#166534';
+    } else if (intro || outro) {
+      badge.textContent = 'PARTIAL · ' + (intro ? 'intro only' : 'outro only');
+      badge.style.background = '#fef3c7'; badge.style.color = '#92400e';
+    } else {
+      badge.textContent = 'OFF — RISKY';
+      badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c';
+    }
   }
 
   // ── Populate the rename fund/account dropdown ──────────────────

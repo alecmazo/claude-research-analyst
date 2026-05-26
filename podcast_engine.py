@@ -1688,11 +1688,37 @@ def _tts_turn(client, speaker: str, text: str, intensity: str,
     return bytes(resp)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Compliance disclaimer infrastructure (audio intro/outro)
+# ─────────────────────────────────────────────────────────────────────────────
+# Designed so a securities-counsel review can change the wording without
+# touching code: the disclaimer text is a kwarg, default below. ON by default
+# so we don't accidentally ship a public episode without one. Voice is a
+# neutral "compliance announcer" — distinct from the cast (Marc/Rock/Claudia)
+# so listeners can hear it's a legal notice, not part of the show.
+DEFAULT_DISCLAIMER_INTRO = (
+    "This podcast is for informational and educational purposes only. "
+    "It is not investment advice, an offer to sell, or a solicitation to buy "
+    "any security. DGA Capital is an exempt reporting adviser in California. "
+    "Holdings, opinions, and price targets discussed may change without notice. "
+    "Past performance is not indicative of future results."
+)
+DEFAULT_DISCLAIMER_OUTRO = (
+    "Reminder: this episode is for informational purposes only and is not "
+    "investment advice. Consult your own financial advisor before making any "
+    "investment decisions. Thanks for listening."
+)
+DEFAULT_DISCLAIMER_VOICE = "alloy"   # neutral, even-toned — not in the cast
+
+
 def synthesize_episode(
     script: dict[str, Any],
     *,
     out_path: Path,
     tts_model: str = TTS_MODEL_DEFAULT,
+    disclaimer_intro: str | None = DEFAULT_DISCLAIMER_INTRO,
+    disclaimer_outro: str | None = DEFAULT_DISCLAIMER_OUTRO,
+    disclaimer_voice: str = DEFAULT_DISCLAIMER_VOICE,
     on_progress=None,
 ) -> dict[str, Any]:
     """Synthesize a full episode from a validated script. Writes MP3 to `out_path`.
@@ -1798,8 +1824,46 @@ def synthesize_episode(
     intro = intro.apply_gain((body_dbfs - intro_dbfs) + MUSIC_GAIN_OFFSET_DB)
     outro = outro.apply_gain((body_dbfs - outro_dbfs) + MUSIC_GAIN_OFFSET_DB)
 
-    full = intro + AudioSegment.silent(duration=350) + body + \
-           AudioSegment.silent(duration=400) + outro
+    # Compliance disclaimer (intro + outro) — synth in the neutral
+    # disclaimer voice, normalize to body loudness, drop a touch below
+    # speech so they're audible but not jarring. ON by default — safer to
+    # over-disclose than ship an unintended ad.
+    def _synth_disclaimer(text: str):
+        if not (text or "").strip():
+            return None
+        try:
+            if on_progress:
+                try: on_progress("disclaimer", total, total,
+                                   f"Synthesizing compliance disclaimer ({len(text)} ch)…")
+                except Exception: pass
+            r = client.audio.speech.create(
+                model=tts_model, voice=disclaimer_voice,
+                input=text.strip(), speed=1.0,
+            )
+            mp3 = r.content if hasattr(r, "content") else r.read()
+            seg = AudioSegment.from_file(io.BytesIO(mp3), format="mp3")
+            # Match dialogue loudness then sit a hair below
+            dsf = seg.dBFS if seg.dBFS != float("-inf") else -16.0
+            seg = seg.apply_gain((body_dbfs - dsf) - 1.0)
+            return seg
+        except Exception as _e:
+            print(f"⚠️ disclaimer TTS failed: {_e!s:.150}", flush=True)
+            return None
+
+    disc_intro_seg = _synth_disclaimer(disclaimer_intro)
+    disc_outro_seg = _synth_disclaimer(disclaimer_outro)
+
+    # Layout:
+    #   [intro music] → 350ms gap → [disclaimer] → 500ms gap → [body]
+    #               → 400ms gap → [disclaimer outro] → 350ms gap → [outro music]
+    parts = [intro]
+    if disc_intro_seg is not None:
+        parts += [AudioSegment.silent(duration=350), disc_intro_seg]
+    parts += [AudioSegment.silent(duration=500), body]
+    if disc_outro_seg is not None:
+        parts += [AudioSegment.silent(duration=400), disc_outro_seg]
+    parts += [AudioSegment.silent(duration=350), outro]
+    full = sum(parts[1:], parts[0])
     # Final mastering normalize — gentle (headroom 1.0 dB) so the level-match
     # we just did isn't undone by an aggressive normalize on the full mix.
     full = full.normalize(headroom=1.0)
@@ -1822,6 +1886,13 @@ def synthesize_episode(
         "bytes":         out_path.stat().st_size,
         "voice_map":     dict(VOICE_MAP),
         "tts_model":     tts_model,
+        "disclaimer": {
+            "intro_used":   disc_intro_seg is not None,
+            "outro_used":   disc_outro_seg is not None,
+            "voice":        disclaimer_voice,
+            "intro_text":   disclaimer_intro or "",
+            "outro_text":   disclaimer_outro or "",
+        },
     }
 
 
