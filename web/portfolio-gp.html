@@ -13108,8 +13108,8 @@
               ${memoSnip ? `<div style="font-size:10.5px;color:#92400e;font-style:italic;margin-top:5px;background:#fff8e1;padding:6px 10px;border-left:2px solid #f59e0b;border-radius:3px;">${memoSnip.replace(/[<>&]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c])}${m.gp_memo.length>90?'…':''}</div>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
-              <a href="/api/memos/${m.id}/pdf" target="_blank" rel="noopener"
-                 style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;text-decoration:none;">📄 View PDF</a>
+              <button data-memo-view="${m.id}" data-title="${(m.episode_title||'').replace(/"/g,'&quot;')}"
+                 style="background:#fff;border:1px solid #cbd5e1;color:#0A1628;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">📄 View PDF</button>
               <button data-memo-email="${m.id}" data-fund="${m.assigned_fund_id||''}" data-title="${(m.episode_title||'').replace(/"/g,'&quot;')}"
                  style="background:#5BB8D4;border:1px solid #4A9BB8;color:#fff;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">📨 Email</button>
               <button data-memo-delete="${m.id}"
@@ -13118,6 +13118,29 @@
           </div>`;
       }).join('');
       list.innerHTML = rows;
+      list.querySelectorAll('[data-memo-view]').forEach(b => b.onclick = async () => {
+        // Fetch via dgaFetch so the v2 auth token is attached, then open
+        // the returned PDF as a blob URL in a new tab. A plain <a href>
+        // wouldn't carry the header and would 401.
+        const orig = b.textContent;
+        b.disabled = true; b.textContent = '⏳ Loading…';
+        try {
+          const r = await window.dgaFetch('/api/memos/' + b.dataset.memoView + '/pdf');
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            throw new Error(j.detail || j.error || ('HTTP ' + r.status));
+          }
+          const blob = await r.blob();
+          const url  = URL.createObjectURL(blob);
+          window.open(url, '_blank', 'noopener');
+          // Best-effort cleanup after the new tab has had a moment to load it
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (e) {
+          alert('Could not open PDF: ' + e.message);
+        } finally {
+          b.disabled = false; b.textContent = orig;
+        }
+      });
       list.querySelectorAll('[data-memo-email]').forEach(b => b.onclick = () =>
         _openMemoEmailModal(b.dataset.memoEmail, b.dataset.fund, b.dataset.title));
       list.querySelectorAll('[data-memo-delete]').forEach(b => b.onclick = async () => {
