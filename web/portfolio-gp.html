@@ -2214,6 +2214,326 @@
 
   /* Body background — light editorial canvas */
   body { background: var(--bg-canvas); }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     DEPLOY B — DELIGHT LAYER
+     Toasts · Skeletons · Empty states · Hero · Dark mode · Ticker tape
+  ═══════════════════════════════════════════════════════════════════ */
+
+  /* ── Toast system (replaces alert() for non-blocking confirmations) ── */
+  #toast-root {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    max-width: min(420px, calc(100vw - 48px));
+  }
+  .toast {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-left: 3px solid var(--brand-400);
+    border-radius: var(--r-lg);
+    padding: 12px 16px 12px 14px;
+    box-shadow: var(--shadow-lg);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    pointer-events: auto;
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    gap: 10px;
+    align-items: flex-start;
+    animation: toast-in 280ms var(--ease-out) both;
+    word-wrap: break-word;
+  }
+  .toast.toast-out { animation: toast-out 220ms var(--ease-in-out) forwards; }
+  .toast.toast-success { border-left-color: var(--success-500); }
+  .toast.toast-error   { border-left-color: var(--danger-500); }
+  .toast.toast-warn    { border-left-color: var(--warn-500); }
+  .toast.toast-info    { border-left-color: var(--info-500); }
+  .toast-icon { font-size: 16px; line-height: 20px; }
+  .toast-msg { font-size: var(--text-base); color: var(--text-primary); }
+  .toast-close {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-tertiary); font-size: 16px; line-height: 1;
+    padding: 0 0 0 6px; transition: color var(--t-fast);
+  }
+  .toast-close:hover { color: var(--text-primary); }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(12px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes toast-out {
+    to { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  }
+
+  /* ── Skeleton loaders ── */
+  .skel {
+    display: block;
+    background: linear-gradient(90deg,
+      var(--gray-100) 0%,
+      var(--gray-200) 50%,
+      var(--gray-100) 100%);
+    background-size: 200% 100%;
+    animation: skel-shimmer 1.4s ease-in-out infinite;
+    border-radius: var(--r-sm);
+    height: 12px;
+    margin: 6px 0;
+  }
+  .skel-line { height: 12px; }
+  .skel-line-lg { height: 16px; }
+  .skel-line-xl { height: 22px; }
+  .skel-w-25 { width: 25%; }
+  .skel-w-40 { width: 40%; }
+  .skel-w-60 { width: 60%; }
+  .skel-w-80 { width: 80%; }
+  .skel-w-full { width: 100%; }
+  .skel-card {
+    padding: var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xl);
+  }
+  @keyframes skel-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* ── Empty state ── */
+  .empty-state {
+    padding: var(--space-12) var(--space-6);
+    text-align: center;
+    color: var(--text-secondary);
+  }
+  .empty-state-icon {
+    font-size: 48px;
+    margin-bottom: var(--space-3);
+    opacity: 0.45;
+    line-height: 1;
+  }
+  .empty-state-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+  }
+  .empty-state-desc {
+    font-size: var(--text-base);
+    color: var(--text-secondary);
+    max-width: 360px;
+    margin: 0 auto var(--space-4);
+    line-height: var(--lh-relaxed);
+  }
+  .empty-state-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    background: var(--brand-400);
+    color: var(--text-on-brand);
+    border-radius: var(--r-md);
+    font-weight: 600;
+    font-size: var(--text-base);
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: background var(--t-fast);
+  }
+  .empty-state-cta:hover { background: var(--brand-500); }
+
+  /* ── Hero section (page intro) ── */
+  .hero {
+    padding: var(--space-6) var(--space-2) var(--space-5);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .hero-title {
+    font-family: var(--font-display);
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: var(--track-tight);
+    line-height: var(--lh-tight);
+    margin-bottom: var(--space-2);
+  }
+  .hero-sub {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+    line-height: var(--lh-relaxed);
+    max-width: 720px;
+  }
+  .hero-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  /* ── Card hover micro-interaction ── */
+  .panel:not([data-no-hover]),
+  .builder-card,
+  .pc-card {
+    transition: box-shadow var(--t-base) var(--ease-out),
+                transform var(--t-base) var(--ease-out);
+  }
+  .panel:hover:not([data-no-hover]),
+  .builder-card:hover,
+  .pc-card:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  /* ── Ticker tape animation (index ribbon scrolls slowly) ── */
+  .ribbon[data-ticker="1"] {
+    overflow: hidden;
+  }
+  .ribbon[data-ticker="1"] .ribbon-track {
+    display: flex;
+    animation: ticker-scroll 60s linear infinite;
+    width: max-content;
+  }
+  .ribbon[data-ticker="1"]:hover .ribbon-track {
+    animation-play-state: paused;
+  }
+  @keyframes ticker-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+
+  /* ── Dark mode toggle button ── */
+  #theme-toggle {
+    background: transparent;
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    width: 32px; height: 32px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: background var(--t-fast), color var(--t-fast),
+                border-color var(--t-fast);
+  }
+  #theme-toggle:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     DARK MODE — activated by [data-theme="dark"] on <html>
+     Persisted in localStorage. Toggle button in topbar.
+  ═══════════════════════════════════════════════════════════════════ */
+  html[data-theme="dark"] {
+    --text-primary:    #f0f4fa;
+    --text-secondary:  #b8c3d4;
+    --text-tertiary:   #8a97ad;
+    --text-quaternary: #5d6a80;
+
+    --bg-canvas:    #0b1220;
+    --bg-surface:   #131c2e;
+    --bg-elevated:  #18223a;
+    --bg-subtle:    #0f1729;
+
+    --border-subtle:  #1f2c47;
+    --border-default: #2a3a5a;
+    --border-strong:  #3d527a;
+    --border-brand:   var(--brand-400);
+
+    --gray-50:  #131c2e;
+    --gray-100: #18223a;
+    --gray-200: #1f2c47;
+    --gray-300: #2a3a5a;
+    --gray-400: #3d527a;
+    --gray-500: #6a7c9a;
+    --gray-600: #98a8c0;
+    --gray-700: #c8d2e1;
+    --gray-800: #e5eaf2;
+    --gray-900: #f5f7fa;
+
+    --success-50: #052e1f; --success-500: #34d399; --success-700: #6ee7b7;
+    --danger-50:  #2c0d11; --danger-500:  #f87171; --danger-700:  #fca5a5;
+    --warn-50:    #2a1d05; --warn-500:    #fbbf24; --warn-700:    #fcd34d;
+    --info-50:    #0a1b3c; --info-500:    #60a5fa; --info-700:    #93c5fd;
+
+    --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+  }
+  html[data-theme="dark"] body { background: var(--bg-canvas); }
+  html[data-theme="dark"] .topbar {
+    background: rgba(11, 18, 32, 0.85);
+    border-bottom-color: var(--border-subtle);
+  }
+  html[data-theme="dark"] .ribbon-wrap { background: var(--bg-surface); }
+  html[data-theme="dark"] .idx { border-right-color: var(--border-subtle); }
+  html[data-theme="dark"] .panel,
+  html[data-theme="dark"] .builder-card,
+  html[data-theme="dark"] .pc-card {
+    background: var(--bg-elevated);
+    border-color: var(--border-subtle);
+  }
+  html[data-theme="dark"] .panel-head,
+  html[data-theme="dark"] section.panel > details > summary.panel-head,
+  html[data-theme="dark"] .builder-card-head {
+    background: transparent;
+    border-bottom-color: var(--border-subtle);
+  }
+  html[data-theme="dark"] input,
+  html[data-theme="dark"] select,
+  html[data-theme="dark"] textarea {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  html[data-theme="dark"] .tab-btn {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  html[data-theme="dark"] .tab-btn:hover {
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+  html[data-theme="dark"] .topbar-link:hover { background: var(--bg-surface); color: var(--text-primary); }
+  html[data-theme="dark"] .topbar-link.active { background: rgba(91, 184, 212, 0.18); color: var(--brand-300); }
+  html[data-theme="dark"] .data-table th,
+  html[data-theme="dark"] .rep-table th,
+  html[data-theme="dark"] .builder-result-table th {
+    background: var(--bg-surface);
+    color: var(--text-tertiary);
+    border-bottom-color: var(--border-subtle);
+  }
+  html[data-theme="dark"] .data-table td,
+  html[data-theme="dark"] .rep-table td {
+    border-bottom-color: var(--border-subtle);
+    color: var(--text-primary);
+  }
+  html[data-theme="dark"] .toast { background: var(--bg-elevated); border-color: var(--border-default); }
+  html[data-theme="dark"] .skel {
+    background: linear-gradient(90deg,
+      var(--bg-surface) 0%, var(--gray-300) 50%, var(--bg-surface) 100%);
+    background-size: 200% 100%;
+  }
+  html[data-theme="dark"] .pc-card-head {
+    background: linear-gradient(180deg, rgba(91,184,212,0.10) 0%, rgba(91,184,212,0.04) 80%, transparent 100%);
+  }
+  html[data-theme="dark"] .search-input { background: var(--bg-surface); }
+  html[data-theme="dark"] .search-input:focus { background: var(--bg-elevated); }
+  html[data-theme="dark"] .search-kbd { background: var(--bg-surface); color: var(--text-tertiary); }
+  html[data-theme="dark"] #theme-toggle {
+    border-color: var(--border-default);
+    color: var(--text-secondary);
+  }
+  html[data-theme="dark"] #theme-toggle:hover {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
 </style>
 </head>
 <body>
@@ -2241,9 +2561,13 @@
     <span class="topbar-link" data-tab="reports">Reports</span>
     <span class="topbar-link" data-tab="memos">Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
+    <button id="theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle theme">🌙</button>
     <span class="status-dot" title="API online"></span>
   </nav>
 </header>
+
+<!-- Toast root — populated by window.toast() -->
+<div id="toast-root" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ── INDEX RIBBON ── populated by JS from /api/market/indices ── -->
 <div class="ribbon-wrap">
@@ -14537,6 +14861,172 @@
     window._dashInitPanel   = _initPanel;
     window._saveDashLayout  = _saveDashLayout;
   })();
+})();
+</script>
+
+<!-- ═════════════════════════════════════════════════════════════════════
+     DESIGN v2 — Deploy B: Delight layer JS helpers
+     • window.toast(msg, type) — non-blocking notifications
+     • alert() override — automatically routes legacy alert calls to toast
+     • dark mode init + toggle
+     • ticker tape kickoff (animates the index ribbon)
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+(function() {
+  // ── Toast system ───────────────────────────────────────────────────
+  const ICONS = { success:'✓', error:'⚠', warn:'!', info:'ⓘ', default:'' };
+  function _typeFromMsg(s) {
+    const t = String(s || '').toLowerCase();
+    if (t.includes('fail') || t.includes('error') || t.includes('❌') || t.startsWith('⚠')) return 'error';
+    if (t.includes('warn') || t.includes('⚠'))   return 'warn';
+    if (t.includes('saved') || t.includes('✓') || t.includes('success') || t.includes('done')) return 'success';
+    return 'info';
+  }
+  window.toast = function(message, opts) {
+    const root = document.getElementById('toast-root');
+    if (!root) { return; }
+    const type = (opts && opts.type) || _typeFromMsg(message);
+    const ttl  = (opts && opts.ttl)  || 4200;
+    const el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    const icon = ICONS[type] || ICONS.default;
+    el.innerHTML =
+      '<span class="toast-icon" aria-hidden="true">' + icon + '</span>' +
+      '<span class="toast-msg"></span>' +
+      '<button class="toast-close" aria-label="Dismiss">✕</button>';
+    el.querySelector('.toast-msg').textContent = String(message);
+    el.querySelector('.toast-close').addEventListener('click', () => _dismiss(el));
+    root.appendChild(el);
+    let timer = setTimeout(() => _dismiss(el), ttl);
+    el.addEventListener('mouseenter', () => clearTimeout(timer));
+    el.addEventListener('mouseleave', () => { timer = setTimeout(() => _dismiss(el), 2000); });
+  };
+  function _dismiss(el) {
+    el.classList.add('toast-out');
+    setTimeout(() => { try { el.remove(); } catch {} }, 260);
+  }
+
+  // ── alert() override: route 60+ legacy calls through toasts ────────
+  // Preserves original alert via window._nativeAlert for any caller that
+  // really needs blocking behavior. confirm() and prompt() stay native
+  // because they need return values.
+  if (!window._nativeAlert) {
+    window._nativeAlert = window.alert.bind(window);
+    window.alert = function(msg) {
+      try { window.toast(msg); } catch { window._nativeAlert(msg); }
+    };
+  }
+
+  // ── Dark mode ──────────────────────────────────────────────────────
+  const THEME_KEY = 'dga_theme';
+  function getTheme() {
+    try {
+      const v = localStorage.getItem(THEME_KEY);
+      if (v === 'dark' || v === 'light') return v;
+    } catch {}
+    // Default to OS preference
+    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      ? 'dark' : 'light';
+  }
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    const btn = document.getElementById('theme-toggle');
+    if (btn) {
+      btn.textContent = (t === 'dark') ? '☀️' : '🌙';
+      btn.title = 'Switch to ' + (t === 'dark' ? 'light' : 'dark') + ' mode';
+    }
+  }
+  // Apply ASAP — before any pixels paint — to avoid a light flash on dark
+  applyTheme(getTheme());
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const next = (getTheme() === 'dark') ? 'light' : 'dark';
+      try { localStorage.setItem(THEME_KEY, next); } catch {}
+      applyTheme(next);
+      try { window.toast(`Switched to ${next} mode`, { type: 'info', ttl: 1800 }); } catch {}
+    });
+    applyTheme(getTheme());   // re-apply once DOM has the button
+  });
+
+  // ── Ticker tape: enable infinite-scroll on the index ribbon once it
+  //    has been populated. The ribbon contents get duplicated so the
+  //    -50% translate animation creates a seamless loop. Pause on hover.
+  function activateTickerTape() {
+    const ribbon = document.getElementById('ribbon');
+    if (!ribbon || ribbon.dataset.ticker === '1') return;
+    const items = Array.from(ribbon.children);
+    if (items.length < 4) return;  // not enough to animate
+    const track = document.createElement('div');
+    track.className = 'ribbon-track';
+    items.forEach(it => track.appendChild(it));
+    // Duplicate the items for seamless loop
+    items.forEach(it => track.appendChild(it.cloneNode(true)));
+    ribbon.appendChild(track);
+    ribbon.dataset.ticker = '1';
+  }
+  // Try activating periodically until indices have rendered (poll for ~10s)
+  let _tickerTries = 0;
+  const _tickerInterval = setInterval(() => {
+    activateTickerTape();
+    _tickerTries++;
+    const ribbon = document.getElementById('ribbon');
+    if ((ribbon && ribbon.dataset.ticker === '1') || _tickerTries > 50) {
+      clearInterval(_tickerInterval);
+    }
+  }, 250);
+
+  // ── Helper: render a skeleton block (for callers that want skeletons) ──
+  window.dgaSkel = function(rows = 3) {
+    let out = '<div class="skel-card">';
+    for (let i = 0; i < rows; i++) {
+      const widths = ['skel-w-80', 'skel-w-60', 'skel-w-40'];
+      const sizes = i === 0 ? 'skel-line-lg' : 'skel-line';
+      out += `<div class="skel ${sizes} ${widths[i % widths.length]}"></div>`;
+    }
+    return out + '</div>';
+  };
+
+  // ── Hero helper — inject above tab toolbars if missing ─────────────
+  // Tab panels already have h2 in .tab-toolbar; we enrich them with a
+  // subtitle on first display. Configured here per tab.
+  const HERO_COPY = {
+    research:  { title: 'Research',           sub: 'Generate, review, and refresh ticker reports. Pull new ideas from your watchlist, positions, and the morning brief.' },
+    builder:   { title: 'Portfolio Builder',  sub: 'Compose a target sleeve from sector weights and conviction filters. Save scenarios to revisit.' },
+    lab:       { title: 'LLM Lab',            sub: 'A/B test Grok vs Claude on any saved report and generate podcast episodes from your research.' },
+    ideas:     { title: 'Ideas',              sub: 'Daily morning brief, scan results, and market intelligence — the discovery surface.' },
+    positions: { title: 'Positions',          sub: 'Live view of every fund and managed-account book. Aggregated and per-LP cuts.' },
+    fund:      { title: 'Funds & Accounts',   sub: 'Per-fund overview: NAV, performance, capital flows, and LP roster.' },
+    reports:   { title: 'Quarterly Reports',  sub: 'Compose, preview, and send investor letters per fund and per quarter.' },
+    memos:     { title: 'DGA Capital Memos',  sub: 'PDF memos generated from your podcast scripts — assign to an account, attach a GP note, email it out.' },
+    settings:  { title: 'Settings',           sub: 'Account, automation, distribution, and compliance configuration.' },
+  };
+  function _injectHero() {
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+      const id = (panel.id || '').replace(/^tab-/, '');
+      const copy = HERO_COPY[id];
+      if (!copy) return;
+      const toolbar = panel.querySelector('.tab-toolbar');
+      if (!toolbar) return;
+      if (panel.dataset.hero === '1') return;
+      const h2 = toolbar.querySelector('h2');
+      const sub = document.createElement('div');
+      sub.className = 'hero-sub';
+      sub.style.cssText = 'font-size:14.5px;color:var(--text-secondary);line-height:1.6;margin-top:4px;max-width:720px;';
+      sub.textContent = copy.sub;
+      // Insert subtitle right after the h2 (or after toolbar if no h2)
+      if (h2 && h2.nextSibling) toolbar.insertBefore(sub, h2.nextSibling);
+      else toolbar.appendChild(sub);
+      panel.dataset.hero = '1';
+    });
+  }
+  // Run after a tick so the static markup is parsed; then once more after
+  // tab routing JS finishes wiring tabs.
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(_injectHero, 0);
+    setTimeout(_injectHero, 500);
+  });
 })();
 </script>
 
