@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v14-prod-date-20260525';
+const PODCAST_BUILD = 'pc-v15-share-btn-20260525';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -18,7 +18,7 @@ const PODCAST_BUILD = 'pc-v14-prod-date-20260525';
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Platform,
+  ActivityIndicator, RefreshControl, Platform, Share, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -310,6 +310,39 @@ export default function PodcastScreen() {
     safeToggle(player, status, setLastErr);
   }, [player, status]);
 
+  // ── Share the currently-playing episode via the native share sheet.
+  // Sends a tasteful preview: episode title + production date + a direct
+  // link to the MP3. Native sheet covers iMessage / Mail / Slack / Notes /
+  // Copy / Telegram / WhatsApp — whichever apps the user has installed.
+  const handleShareEpisode = useCallback(async () => {
+    try { haptics.light(); } catch {}
+    const ep = selectedEp();
+    if (!ep) return;
+    try {
+      const url   = audioUrl ||
+                     (await api.getPodcastAudioUrl(ep.ticker, ep.format || 'debate'));
+      const title = cleanTitle(ep.title, ep.ticker, ep.format)
+                     || (shortTicker(ep.ticker) + ' · ' + (ep.format || 'episode'));
+      const dateStr = fmtDateShort(ep.generated_at);
+      const lines = [
+        `DGA HiTech Podcast: ${title}`,
+        dateStr ? `Produced ${dateStr}` : '',
+        '',
+        url,
+        '',
+        'For informational purposes only. Not investment advice.',
+      ].filter(Boolean);
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { url, message: lines.join('\n'), title }
+          : { message: lines.join('\n'), title },
+        { dialogTitle: 'Share episode' }
+      );
+    } catch (e) {
+      Alert.alert('Share failed', String(e?.message || e));
+    }
+  }, [selectedEp, audioUrl]);
+
   // Format icon for the row label — visually distinguishes Debate / Pre-Mortem
   // / Memo / Catalysts / Quick Hit / Roundup / Portfolio Roundup at a glance.
   const FORMAT_ICON = {
@@ -417,6 +450,17 @@ export default function PodcastScreen() {
             </TouchableOpacity>
             <TouchableOpacity onPress={() => handleSeek(30)} style={styles.ctrlBtn}>
               <MaterialCommunityIcons name="fast-forward-30" size={28} color={colors.white} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleShareEpisode}
+              style={styles.shareBtn}
+              accessibilityLabel="Share episode"
+            >
+              <MaterialCommunityIcons
+                name={Platform.OS === 'ios' ? 'export-variant' : 'share-variant'}
+                size={20}
+                color={colors.white}
+              />
             </TouchableOpacity>
           </View>
 
@@ -535,6 +579,16 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg, gap: spacing.xl,
   },
   ctrlBtn: { padding: spacing.sm },
+  // Subtle, secondary action — small icon-only button at the far right of the
+  // controls row. Smaller than rewind/forward + lower opacity so it doesn't
+  // compete with playback for attention.
+  shareBtn: {
+    marginLeft: spacing.md,
+    padding: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    opacity: 0.85,
+  },
   playBtn: {
     width: 64, height: 64, borderRadius: 32, backgroundColor: colors.gold,
     alignItems: 'center', justifyContent: 'center', ...shadow.card,
