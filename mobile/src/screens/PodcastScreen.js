@@ -1,6 +1,6 @@
 // Build tag — bump on every JS change so we can verify the OTA landed.
 // Shown in the screen header so the device tells us which bundle is loaded.
-const PODCAST_BUILD = 'pc-v15-share-btn-20260525';
+const PODCAST_BUILD = 'pc-v16-public-share-20260525';
 
 /**
  * PodcastScreen — DGA HiTech Podcast player (mobile)
@@ -319,10 +319,28 @@ export default function PodcastScreen() {
     const ep = selectedEp();
     if (!ep) return;
     try {
-      const url   = audioUrl ||
-                     (await api.getPodcastAudioUrl(ep.ticker, ep.format || 'debate'));
+      const fmt = ep.format || 'debate';
+      // Try to mint a PUBLIC share link (HMAC-signed, 30-day TTL by default —
+      // no auth required to play, so recipients outside the app can listen).
+      // Fall back to the auth-required audio URL if minting fails for any
+      // reason (offline, server error, etc.).
+      let url = null;
+      let expiresLine = '';
+      try {
+        const minted = await api.mintPodcastShareLink(ep.ticker, fmt, 720);
+        if (minted && minted.url) {
+          url = minted.url;
+          if (minted.expires_in_hours) {
+            const days = Math.round(minted.expires_in_hours / 24);
+            expiresLine = `Link expires in ${days} day${days === 1 ? '' : 's'}.`;
+          }
+        }
+      } catch (_) { /* fall back to auth URL */ }
+      if (!url) {
+        url = audioUrl || (await api.getPodcastAudioUrl(ep.ticker, fmt));
+      }
       const title = cleanTitle(ep.title, ep.ticker, ep.format)
-                     || (shortTicker(ep.ticker) + ' · ' + (ep.format || 'episode'));
+                     || (shortTicker(ep.ticker) + ' · ' + fmt);
       const dateStr = fmtDateShort(ep.generated_at);
       const lines = [
         `DGA HiTech Podcast: ${title}`,
@@ -330,6 +348,7 @@ export default function PodcastScreen() {
         '',
         url,
         '',
+        expiresLine,
         'For informational purposes only. Not investment advice.',
       ].filter(Boolean);
       await Share.share(

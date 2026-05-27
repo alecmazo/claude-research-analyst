@@ -288,6 +288,18 @@ export const api = {
     return `${base}/api/podcast/${ticker}/audio.mp3?format=${encodeURIComponent(format)}`;
   },
 
+  // Mint an HMAC-signed PUBLIC share link for an episode (no auth required
+  // to play). Default TTL 30 days; pass a different number for shorter
+  // expiry. Returns { ok, url, expires_at } on success, throws otherwise.
+  mintPodcastShareLink: async (ticker, format = 'debate', ttl_hours = 720) => {
+    const r = await v2Fetch(
+      `/api/podcast/${encodeURIComponent(ticker)}/share-link?format=${encodeURIComponent(format)}&ttl_hours=${ttl_hours}`,
+      { method: 'POST' }
+    );
+    if (!r.ok) throw new Error(`share-link ${r.status}`);
+    return r.json();
+  },
+
   // ---------- Single-ticker analysis ----------
   // llmProvider: 'grok' (default) | 'claude' | 'both'
   startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>

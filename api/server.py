@@ -16977,23 +16977,22 @@ def podcast_status(ticker: str, format: str = "debate"):
     return {"ok": True, "ticker": tk, "format": format, **job}
 
 
-@app.get("/api/podcast/{ticker}/audio.mp3")
-def podcast_audio(ticker: str, format: str = "debate"):
-    """Stream the MP3 for (ticker, format). DB row → local file → Dropbox rehydrate."""
-    from fastapi.responses import FileResponse
-    tk = ticker.upper().strip()
+def _locate_or_rehydrate_mp3(tk: str, format: str) -> Path | None:
+    """Resolve the on-disk MP3 path for (ticker, format), rehydrating from
+    Dropbox if the local copy was wiped by a Railway restart. Returns None
+    if no audio exists anywhere. Shared by the authenticated audio endpoint
+    AND the public-mirror endpoint."""
+    tk = tk.upper().strip()
     local_path: str | None = None
     dropbox_path: str | None = None
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                # Try exact format first; if missing, fall back to whatever
-                # row exists for this ticker (handles legacy single-format rows).
                 cur.execute("""SELECT audio_local_path, audio_dropbox_path, format
-                               FROM analyst_podcasts
-                               WHERE ticker = %s
-                               ORDER BY (format = %s) DESC, generated_at DESC
-                               LIMIT 1""", (tk, format))
+                                 FROM analyst_podcasts
+                                WHERE ticker = %s
+                                ORDER BY (format = %s) DESC, generated_at DESC
+                                LIMIT 1""", (tk, format))
                 row = cur.fetchone()
                 if row:
                     local_path   = row.get("audio_local_path")
@@ -17002,14 +17001,10 @@ def podcast_audio(ticker: str, format: str = "debate"):
             pass
     if local_path:
         p = Path(local_path)
-        if p.exists():
-            return FileResponse(p, media_type="audio/mpeg", filename=p.name)
-    # Fallback to expected per-format location
+        if p.exists(): return p
     mp3_name = f"{tk}_{format}_podcast.mp3" if format != "debate" else f"{tk}_podcast.mp3"
     fallback = analyst.STOCKS_FOLDER / "podcasts" / mp3_name
-    if fallback.exists():
-        return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
-    # Dropbox rehydrate
+    if fallback.exists(): return fallback
     if dropbox_path:
         try:
             dbx = analyst._dropbox_client()
@@ -17017,11 +17012,132 @@ def podcast_audio(ticker: str, format: str = "debate"):
                 _, res = dbx.files_download(dropbox_path)
                 fallback.parent.mkdir(parents=True, exist_ok=True)
                 fallback.write_bytes(res.content)
-                return FileResponse(fallback, media_type="audio/mpeg", filename=fallback.name)
+                return fallback
         except Exception as e:
             print(f"⚠️  [podcast] dropbox rehydrate failed for {tk}/{format}: {e!s:.200}", flush=True)
-    return JSONResponse({"ok": False, "error": f"No {format} audio found for {tk}"},
-                        status_code=404)
+    return None
+
+
+# ── Share-link signing (HMAC-based, no DB rows for tokens) ─────────────
+def _share_signing_secret() -> str:
+    """Secret used to sign public share-link tokens. Prefers env var
+    SHARE_SIGNING_SECRET; falls back to a stable kv_store-backed key
+    generated on first call so links survive across restarts."""
+    s = os.environ.get("SHARE_SIGNING_SECRET", "").strip()
+    if s: return s
+    kv = _kv_get("podcast.share_signing_secret") or {}
+    cur = (kv.get("secret") or "").strip()
+    if cur: return cur
+    import secrets as _sec
+    new = _sec.token_urlsafe(48)
+    try: _kv_put("podcast.share_signing_secret", {"secret": new})
+    except Exception: pass
+    return new
+
+
+def _make_share_token(ticker: str, format: str, ttl_seconds: int = 30 * 86400) -> tuple[str, int]:
+    """Return (token, expires_unix). Token is base64url(payload + '.' + sig).
+    Payload = 'tk|fmt|exp', sig = HMAC-SHA256(secret, payload).hex[:32]."""
+    import base64 as _b64, time as _t
+    exp = int(_t.time()) + max(60, int(ttl_seconds))
+    payload = f"{ticker.upper()}|{format}|{exp}"
+    sig = hmac.new(_share_signing_secret().encode(), payload.encode(),
+                    hashlib.sha256).hexdigest()[:32]
+    raw = f"{payload}|{sig}".encode()
+    token = _b64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return token, exp
+
+
+def _verify_share_token(token: str) -> tuple[str, str]:
+    """Validate a share token. Returns (ticker, format). Raises HTTPException
+    on tampering / expiry / malformed input."""
+    import base64 as _b64, time as _t
+    try:
+        # Restore padding then decode
+        pad = "=" * (-len(token) % 4)
+        raw = _b64.urlsafe_b64decode((token + pad).encode()).decode()
+        tk, fmt, exp_s, sig = raw.split("|", 3)
+        exp = int(exp_s)
+    except Exception:
+        raise HTTPException(status_code=400, detail="malformed share token")
+    if _t.time() > exp:
+        raise HTTPException(status_code=410, detail="share link expired")
+    payload = f"{tk}|{fmt}|{exp}"
+    expected = hmac.new(_share_signing_secret().encode(), payload.encode(),
+                         hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        raise HTTPException(status_code=403, detail="invalid share token")
+    return tk, fmt
+
+
+@app.post("/api/podcast/{ticker}/share-link")
+def podcast_share_link(ticker: str, request: Request,
+                        format: str = "debate", ttl_hours: int = 720):
+    """Mint a signed, time-bounded public URL for an episode. The returned
+    URL bypasses auth so it can be texted/emailed/shared externally.
+
+    Defaults to a 30-day TTL (720 hours). Bound to [1 hour, 365 days].
+    Compliance disclaimer is already baked into the audio itself."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "Only GP can mint share links")
+    tk = ticker.upper().strip()
+    fmt = (format or "debate").strip().lower()
+    # Confirm the episode actually exists before handing out a link
+    if _locate_or_rehydrate_mp3(tk, fmt) is None:
+        raise HTTPException(404, f"No {fmt} audio found for {tk}")
+    ttl_h = max(1, min(int(ttl_hours or 720), 24 * 365))
+    token, exp_unix = _make_share_token(tk, fmt, ttl_seconds=ttl_h * 3600)
+    # Build absolute URL using the request's scheme + host
+    base = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    # Pretty filename hint so platforms render it nicely
+    pretty = f"DGA_{tk}_{fmt}.mp3"
+    public_url = f"{base}/api/public/podcast/{token}/audio.mp3?name={pretty}"
+    return {
+        "ok": True, "ticker": tk, "format": fmt,
+        "token": token,
+        "url":        public_url,
+        "expires_at": exp_unix,
+        "expires_in_hours": ttl_h,
+        "note": "Anyone with this link can stream the audio until it expires. "
+                "Disclaimer is in the audio itself.",
+    }
+
+
+@app.get("/api/public/podcast/{token}/audio.mp3")
+def podcast_public_audio(token: str, name: str | None = None):
+    """Public mirror of an episode's MP3. Auth bypassed (path ends in
+    /audio.mp3 so the middleware lets it through), validation via HMAC
+    share token. Streams the same file the authenticated endpoint serves."""
+    from fastapi.responses import FileResponse
+    tk, fmt = _verify_share_token(token)
+    p = _locate_or_rehydrate_mp3(tk, fmt)
+    if p is None:
+        raise HTTPException(404, f"Episode not found ({tk}/{fmt})")
+    # Use the user-supplied `name` (if reasonable) for the download filename;
+    # otherwise default to the on-disk name.
+    safe_name = (name or "").strip()[:80]
+    if not safe_name or not safe_name.lower().endswith(".mp3"):
+        safe_name = p.name
+    return FileResponse(
+        p, media_type="audio/mpeg", filename=safe_name,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/api/podcast/{ticker}/audio.mp3")
+def podcast_audio(ticker: str, format: str = "debate"):
+    """Stream the MP3 for (ticker, format). DB row → local file → Dropbox rehydrate."""
+    from fastapi.responses import FileResponse
+    p = _locate_or_rehydrate_mp3(ticker, format)
+    if p is None:
+        return JSONResponse({"ok": False,
+                              "error": f"No {format} audio found for {ticker.upper()}"},
+                             status_code=404)
+    return FileResponse(p, media_type="audio/mpeg", filename=p.name)
 
 
 @app.get("/api/podcast/speed-config")
