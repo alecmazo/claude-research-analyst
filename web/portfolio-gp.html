@@ -2905,6 +2905,38 @@
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
 
+    <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
+    <section class="panel" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">📡 Podcast Distribution (RSS / Apple / Spotify)</span>
+        <span class="panel-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
+      </header>
+      <div style="padding:16px 18px;">
+        <div style="font-size:11px;color:#64748b;margin-bottom:14px;line-height:1.55;">
+          Public RSS feed for syndication to Apple Podcasts / Spotify for Creators / Overcast / Pocket Casts.
+          Paste the URL below into each platform's "Submit a Podcast" / "Add by RSS" form.
+          <strong style="color:#92400e;">Submit only after counsel sign-off on the audio disclaimer wording.</strong>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:#0A1628;text-transform:uppercase;margin-bottom:4px;">RSS feed URL</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="rss-feed-url" readonly value=""
+              style="flex:1;height:32px;border:1px solid #cbd5e1;border-radius:6px;padding:0 11px;font-size:11.5px;font-family:'SF Mono',monospace;color:#1e293b;background:#f8fafc;">
+            <button id="rss-feed-copy" type="button" class="tab-btn">📋 Copy</button>
+            <a id="rss-feed-open" href="" target="_blank" rel="noopener" class="tab-btn" style="text-decoration:none;background:#fff;border:1px solid #cbd5e1;color:#475569;">▶ View XML</a>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:14px;">
+          <a href="https://podcastsconnect.apple.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">🍎 Apple Podcasts Connect →</a>
+          <a href="https://podcasters.spotify.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">🟢 Spotify for Creators →</a>
+          <a href="https://podcasters.google.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">📺 YouTube Studio →</a>
+        </div>
+        <div style="margin-top:14px;padding:10px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;font-size:10.5px;color:#92400e;line-height:1.55;">
+          <strong>Before submitting:</strong> Set <code>PODCAST_RSS_ARTWORK_URL</code> on Railway to a hosted 3000×3000 PNG/JPG (Apple requires square cover art ≥1400px). Override channel title / description / author via <code>PODCAST_RSS_TITLE</code> / <code>_DESCRIPTION</code> / <code>_AUTHOR</code> env vars.
+        </div>
+      </div>
+    </section>
+
     <!-- ⚖️ Compliance disclaimer (audio intro/outro for every episode) -->
     <section class="panel" style="margin-bottom:18px;">
       <header class="panel-head">
@@ -10557,6 +10589,30 @@
     _wireEmailDiag();
     loadRenameDropdown();
     loadDisclaimerConfig();
+    loadRssFeedPanel();
+  }
+
+  // ── 📡 RSS feed panel: surfaces the public feed URL + copy button ──
+  function loadRssFeedPanel() {
+    const feedUrl = window.location.origin + '/api/podcast/rss.xml';
+    const inp  = document.getElementById('rss-feed-url');
+    const open = document.getElementById('rss-feed-open');
+    const copy = document.getElementById('rss-feed-copy');
+    if (inp)  inp.value = feedUrl;
+    if (open) open.href = feedUrl;
+    if (copy && !copy.dataset.wired) {
+      copy.dataset.wired = '1';
+      copy.addEventListener('click', async function() {
+        try {
+          await navigator.clipboard.writeText(feedUrl);
+          const orig = copy.textContent;
+          copy.textContent = '✓ Copied!';
+          setTimeout(() => { copy.textContent = orig; }, 1500);
+        } catch (e) {
+          if (inp) { inp.select(); document.execCommand('copy'); }
+        }
+      });
+    }
   }
 
   // ── ⚖️ Compliance disclaimer panel ─────────────────────────────

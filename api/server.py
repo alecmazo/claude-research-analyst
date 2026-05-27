@@ -1095,7 +1095,7 @@ def _parse_captable(content: bytes, filename: str) -> tuple:
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1188,8 +1188,12 @@ async def auth_middleware(request: Request, call_next):
             or not path.startswith("/api/")
             # Podcast audio + RSS feed must be public so <audio> tags and
             # podcast platforms (Apple/Spotify) can stream without auth.
+            # /listen/<token> is the share landing page — also public so
+            # Twitter/LinkedIn/iMessage can render link previews + recipients
+            # who don't have an account can play the embedded audio.
             or path.endswith("/audio.mp3")
-            or path == "/api/podcast/rss.xml"):
+            or path == "/api/podcast/rss.xml"
+            or path.startswith("/listen/")):
         return await call_next(request)
 
     # ── v2 token (email+password JWT) — accepted on every /api/* path.
@@ -17088,15 +17092,19 @@ def podcast_share_link(ticker: str, request: Request,
         raise HTTPException(404, f"No {fmt} audio found for {tk}")
     ttl_h = max(1, min(int(ttl_hours or 720), 24 * 365))
     token, exp_unix = _make_share_token(tk, fmt, ttl_seconds=ttl_h * 3600)
-    # Build absolute URL using the request's scheme + host
+    # Build absolute URLs using the request's scheme + host
     base = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
-    # Pretty filename hint so platforms render it nicely
     pretty = f"DGA_{tk}_{fmt}.mp3"
-    public_url = f"{base}/api/public/podcast/{token}/audio.mp3?name={pretty}"
+    audio_url    = f"{base}/api/public/podcast/{token}/audio.mp3?name={pretty}"
+    landing_url  = f"{base}/listen/{token}"
     return {
         "ok": True, "ticker": tk, "format": fmt,
         "token": token,
-        "url":        public_url,
+        # `url` is the landing page (best for sharing — OG/Twitter previews
+        # render a card). `audio_url` is the raw MP3 (for pipes that need
+        # a direct media URL, e.g. RSS enclosures or embeddable players).
+        "url":        landing_url,
+        "audio_url":  audio_url,
         "expires_at": exp_unix,
         "expires_in_hours": ttl_h,
         "note": "Anyone with this link can stream the audio until it expires. "
@@ -17138,6 +17146,344 @@ def podcast_audio(ticker: str, format: str = "debate"):
                               "error": f"No {format} audio found for {ticker.upper()}"},
                              status_code=404)
     return FileResponse(p, media_type="audio/mpeg", filename=p.name)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# RSS feed + Listen landing page — public-facing distribution layer.
+# RSS feed is what Apple Podcasts / Spotify / Overcast subscribe to.
+# Landing page is what gets rendered when a share link is opened on the
+# web (Twitter card, LinkedIn preview, iMessage rich preview, etc.).
+# ═══════════════════════════════════════════════════════════════════════
+
+# Channel-level RSS metadata. Edit by setting these env vars on Railway;
+# defaults are conservative and counsel-reviewable.
+RSS_CHANNEL_TITLE       = os.environ.get("PODCAST_RSS_TITLE",       "DGA HiTech Podcast")
+RSS_CHANNEL_DESCRIPTION = os.environ.get("PODCAST_RSS_DESCRIPTION",
+    "Sharp, fast-paced equity research dialogue from DGA Capital — Marc the PM "
+    "moderates Rock (Grok) and Claudia (Claude) debating the long and short on each name. "
+    "Informational only; not investment advice.")
+RSS_CHANNEL_LANGUAGE    = os.environ.get("PODCAST_RSS_LANGUAGE",    "en-us")
+RSS_CHANNEL_AUTHOR      = os.environ.get("PODCAST_RSS_AUTHOR",      "DGA Capital")
+RSS_CHANNEL_OWNER_EMAIL = os.environ.get("PODCAST_RSS_OWNER_EMAIL", "reports@dgacapital.com")
+RSS_CHANNEL_CATEGORY    = os.environ.get("PODCAST_RSS_CATEGORY",    "Business")
+RSS_CHANNEL_SUBCATEGORY = os.environ.get("PODCAST_RSS_SUBCATEGORY", "Investing")
+RSS_CHANNEL_ARTWORK_URL = os.environ.get("PODCAST_RSS_ARTWORK_URL", "")  # 3000x3000 png/jpg
+
+def _rfc2822(dt) -> str:
+    """Format a datetime in RFC 2822 — the format RSS / Apple Podcasts expects."""
+    if dt is None:
+        from datetime import datetime as _dt, timezone as _tz
+        dt = _dt.now(_tz.utc)
+    from email.utils import format_datetime
+    return format_datetime(dt)
+
+
+def _xml_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") \
+                     .replace('"', "&quot;").replace("'", "&apos;")
+
+
+def _episode_summary(script_json) -> str:
+    """Extract a 200-300 char summary from the script for show-notes use.
+    Pulls the first Opus turn from a 'company_in_60' / 'cold_open' / 'executive_summary' /
+    'portfolio_snapshot' section, falling back to the first turn of the first section."""
+    import json as _j
+    try:
+        s = _j.loads(script_json) if isinstance(script_json, str) else script_json
+        for sec in (s.get("sections") or []):
+            sid = (sec.get("id") or "").lower()
+            if sid in ("executive_summary", "company_in_60",
+                        "cold_open", "portfolio_snapshot"):
+                for t in (sec.get("turns") or []):
+                    text = (t.get("text") or "").strip()
+                    if text:
+                        return text[:400]
+        # Fallback: first non-empty turn anywhere
+        for sec in (s.get("sections") or []):
+            for t in (sec.get("turns") or []):
+                text = (t.get("text") or "").strip()
+                if text:
+                    return text[:400]
+    except Exception:
+        pass
+    return ""
+
+
+def _clean_display_title(raw_title: str, ticker: str) -> str:
+    """Strip synthetic-ticker key form from titles ('PORTFOLIO_27TICKERS_...') and
+    fall back to a friendly default if title is missing."""
+    import re as _re
+    t = (raw_title or "").strip()
+    if t and not _re.match(r"^PORTFOLIO_\d+TICKERS?_\d+", t, _re.I):
+        return t
+    if ticker.startswith("PORTFOLIO_"):
+        return "Portfolio Roundup"
+    if ticker.startswith("ROUNDUP_"):
+        return "Roundup · " + ticker.replace("ROUNDUP_", "").replace(",", ", ")
+    return ticker
+
+
+@app.get("/api/podcast/rss.xml")
+def podcast_rss_feed(request: Request):
+    """Public RSS 2.0 feed with iTunes/Apple Podcasts extensions.
+    Subscribed by Apple Podcasts, Spotify, Overcast, Pocket Casts, etc.
+    No auth — entire feed is public once an episode has audio."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return Response(content="<rss><channel></channel></rss>",
+                          media_type="application/rss+xml")
+
+    base = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    feed_url = f"{base}/api/podcast/rss.xml"
+
+    items_xml: list[str] = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ticker, format, episode_title, generated_at, duration_sec,
+                       script_json, audio_local_path, audio_dropbox_path
+                  FROM analyst_podcasts
+                 WHERE audio_local_path IS NOT NULL OR audio_dropbox_path IS NOT NULL
+                 ORDER BY generated_at DESC
+                 LIMIT 200
+            """)
+            rows = cur.fetchall() or []
+        for r in rows:
+            tk = r["ticker"]
+            fmt = r.get("format") or "debate"
+            ep_title = _clean_display_title(r.get("episode_title"), tk)
+            summary  = _episode_summary(r.get("script_json")) or ep_title
+            duration = int(r.get("duration_sec") or 0)
+            # Mint a long-TTL (5y) share token so the same enclosure URL keeps
+            # working for years. Permanence matters for RSS — podcast clients
+            # cache GUIDs and revisit URLs on refresh.
+            token, _exp = _make_share_token(tk, fmt, ttl_seconds=5 * 365 * 86400)
+            enclosure_url = f"{base}/api/public/podcast/{token}/audio.mp3"
+            listen_url    = f"{base}/listen/{token}"
+            # Stable GUID — survives URL changes
+            guid = f"{tk}::{fmt}"
+            pub_date = _rfc2822(r.get("generated_at"))
+            # itunes:duration → HH:MM:SS
+            h = duration // 3600
+            m = (duration % 3600) // 60
+            s = duration % 60
+            itunes_duration = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+            # Build description with disclaimer footer for compliance
+            desc = (
+                f"{summary}\n\n"
+                f"DGA Capital is an exempt reporting adviser in California. "
+                f"This episode is for informational purposes only — "
+                f"it is not investment advice or a solicitation."
+            )
+            items_xml.append(
+                "    <item>\n"
+                f"      <title>{_xml_escape(ep_title)}</title>\n"
+                f"      <description><![CDATA[{desc}]]></description>\n"
+                f"      <itunes:summary><![CDATA[{desc}]]></itunes:summary>\n"
+                f"      <pubDate>{pub_date}</pubDate>\n"
+                f"      <guid isPermaLink=\"false\">{_xml_escape(guid)}</guid>\n"
+                f"      <link>{_xml_escape(listen_url)}</link>\n"
+                f"      <enclosure url=\"{_xml_escape(enclosure_url)}\" "
+                f"type=\"audio/mpeg\" length=\"0\"/>\n"
+                f"      <itunes:duration>{itunes_duration}</itunes:duration>\n"
+                f"      <itunes:author>{_xml_escape(RSS_CHANNEL_AUTHOR)}</itunes:author>\n"
+                f"      <itunes:explicit>false</itunes:explicit>\n"
+                "    </item>"
+            )
+    except Exception as e:
+        print(f"⚠️ rss feed query failed: {e!s:.200}", flush=True)
+
+    artwork_tag = (
+        f"    <itunes:image href=\"{_xml_escape(RSS_CHANNEL_ARTWORK_URL)}\"/>\n"
+        if RSS_CHANNEL_ARTWORK_URL else ""
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<rss version="2.0"\n'
+        '     xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"\n'
+        '     xmlns:content="http://purl.org/rss/1.0/modules/content/"\n'
+        '     xmlns:atom="http://www.w3.org/2005/Atom">\n'
+        '  <channel>\n'
+        f'    <title>{_xml_escape(RSS_CHANNEL_TITLE)}</title>\n'
+        f'    <link>{_xml_escape(base)}</link>\n'
+        f'    <description>{_xml_escape(RSS_CHANNEL_DESCRIPTION)}</description>\n'
+        f'    <language>{_xml_escape(RSS_CHANNEL_LANGUAGE)}</language>\n'
+        f'    <itunes:author>{_xml_escape(RSS_CHANNEL_AUTHOR)}</itunes:author>\n'
+        f'    <itunes:summary><![CDATA[{RSS_CHANNEL_DESCRIPTION}]]></itunes:summary>\n'
+        f'    <itunes:owner>\n'
+        f'      <itunes:name>{_xml_escape(RSS_CHANNEL_AUTHOR)}</itunes:name>\n'
+        f'      <itunes:email>{_xml_escape(RSS_CHANNEL_OWNER_EMAIL)}</itunes:email>\n'
+        f'    </itunes:owner>\n'
+        f'    <itunes:explicit>false</itunes:explicit>\n'
+        f'    <itunes:type>episodic</itunes:type>\n'
+        f'    <itunes:category text="{_xml_escape(RSS_CHANNEL_CATEGORY)}">\n'
+        f'      <itunes:category text="{_xml_escape(RSS_CHANNEL_SUBCATEGORY)}"/>\n'
+        f'    </itunes:category>\n'
+        f'{artwork_tag}'
+        f'    <atom:link href="{_xml_escape(feed_url)}" rel="self" type="application/rss+xml"/>\n'
+        f'    <copyright>© DGA Capital. All rights reserved.</copyright>\n'
+        + "\n".join(items_xml) + "\n"
+        '  </channel>\n'
+        '</rss>\n'
+    )
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8",
+                     headers={"Cache-Control": "public, max-age=600"})
+
+
+@app.get("/listen/{token}")
+def podcast_listen_landing(token: str, request: Request):
+    """Public web landing page for a share token. Renders the title,
+    date, brand, embedded HTML5 audio player, and compliance disclaimer.
+    OpenGraph + Twitter card meta tags so previews look great when
+    pasted into Twitter / LinkedIn / iMessage / Slack."""
+    try:
+        tk, fmt = _verify_share_token(token)
+    except HTTPException as e:
+        body = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>DGA Capital — Link Unavailable</title>
+<style>body{{font-family:-apple-system,Arial;background:#0A1628;color:#cbd5e1;
+margin:0;padding:60px 24px;text-align:center;}}h1{{color:#5BB8D4;font-size:22px;}}</style>
+</head><body><h1>This share link is no longer valid</h1>
+<p>{_xml_escape(str(e.detail))}.</p>
+<p style="opacity:0.6;">Ask the sender for a fresh link.</p></body></html>"""
+        return Response(content=body, media_type="text/html; charset=utf-8",
+                          status_code=e.status_code)
+
+    base = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    enclosure_url = f"{base}/api/public/podcast/{token}/audio.mp3"
+    page_url      = f"{base}/listen/{token}"
+
+    # Fetch episode metadata for the landing page
+    ep_title = f"{tk}: {fmt}"
+    gen_iso  = ""
+    summary  = ""
+    duration_sec = 0
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT episode_title, generated_at, script_json, duration_sec
+                                 FROM analyst_podcasts
+                                WHERE ticker = %s AND format = %s
+                                LIMIT 1""", (tk, fmt))
+                row = cur.fetchone()
+                if row:
+                    ep_title = _clean_display_title(row.get("episode_title"), tk)
+                    summary  = _episode_summary(row.get("script_json")) or ""
+                    duration_sec = int(row.get("duration_sec") or 0)
+                    if row.get("generated_at"):
+                        gen_iso = row["generated_at"].isoformat()
+        except Exception:
+            pass
+
+    # Friendly date
+    when_label = ""
+    if gen_iso:
+        try:
+            from datetime import datetime as _dt
+            dd = _dt.fromisoformat(gen_iso.replace("Z", "+00:00"))
+            when_label = dd.strftime("%B %-d, %Y")
+        except Exception:
+            when_label = gen_iso[:10]
+
+    # Duration label HH:MM
+    dur_label = ""
+    if duration_sec:
+        m, s = divmod(int(duration_sec), 60)
+        dur_label = f"{m} min {s:02d} sec"
+
+    # OpenGraph + Twitter card meta — controls how the link previews on
+    # Twitter, LinkedIn, iMessage, Slack, Discord, etc.
+    og_title       = ep_title
+    og_description = (summary[:200] + "…") if len(summary) > 200 else (summary or RSS_CHANNEL_DESCRIPTION[:200])
+    og_image       = RSS_CHANNEL_ARTWORK_URL  # blank if not configured — most platforms still render
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{_xml_escape(ep_title)} · DGA Capital</title>
+
+  <!-- OpenGraph (Facebook, LinkedIn, iMessage, Slack) -->
+  <meta property="og:type" content="music.song">
+  <meta property="og:title" content="{_xml_escape(og_title)}">
+  <meta property="og:description" content="{_xml_escape(og_description)}">
+  <meta property="og:url" content="{_xml_escape(page_url)}">
+  <meta property="og:site_name" content="DGA HiTech Podcast">
+  <meta property="og:audio" content="{_xml_escape(enclosure_url)}">
+  <meta property="og:audio:type" content="audio/mpeg">
+  {f'<meta property="og:image" content="{_xml_escape(og_image)}">' if og_image else ''}
+
+  <!-- Twitter card -->
+  <meta name="twitter:card" content="player">
+  <meta name="twitter:title" content="{_xml_escape(og_title)}">
+  <meta name="twitter:description" content="{_xml_escape(og_description)}">
+  <meta name="twitter:player" content="{_xml_escape(page_url)}">
+  <meta name="twitter:player:width" content="480">
+  <meta name="twitter:player:height" content="240">
+
+  <style>
+    :root {{
+      --navy: #0A1628; --navy-mid: #112233; --blue: #5BB8D4; --cyan: #84CCE3;
+      --slate: #475569; --light: #e2e8f0;
+    }}
+    html, body {{ margin: 0; padding: 0; background: var(--navy); color: var(--light);
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    .wrap {{ max-width: 680px; margin: 0 auto; padding: 56px 24px 40px; }}
+    .eyebrow {{ font-size: 11px; font-weight: 800; letter-spacing: 2.5px;
+                color: var(--blue); text-transform: uppercase; margin-bottom: 8px; }}
+    h1 {{ font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 8px;
+          color: #fff; line-height: 1.25; }}
+    .meta {{ font-size: 12.5px; color: #9bafc4; margin-bottom: 28px; letter-spacing: 0.3px; }}
+    .meta strong {{ color: var(--cyan); font-weight: 700; }}
+    .player {{ background: var(--navy-mid); border: 1px solid #1e3a5f;
+               border-radius: 12px; padding: 24px; box-shadow: 0 10px 32px rgba(0,0,0,0.3); }}
+    audio {{ width: 100%; outline: none; }}
+    .summary {{ margin-top: 28px; font-size: 14px; line-height: 1.65; color: #cbd5e1;
+                background: var(--navy-mid); border-left: 3px solid var(--blue);
+                border-radius: 4px; padding: 14px 18px; }}
+    .disc {{ margin-top: 36px; font-size: 11px; color: #6b7e92; line-height: 1.6;
+             border-top: 1px solid #1e3a5f; padding-top: 18px; }}
+    .brand {{ display: flex; align-items: center; gap: 10px; font-size: 13px;
+              font-weight: 700; color: #9bafc4; margin-bottom: 32px;
+              letter-spacing: 0.5px; }}
+    .brand .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }}
+    .actions {{ margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }}
+    .actions a {{ text-decoration: none; color: var(--cyan); font-size: 12px;
+                  font-weight: 700; padding: 7px 13px; border: 1px solid var(--cyan);
+                  border-radius: 6px; transition: background .15s; }}
+    .actions a:hover {{ background: rgba(91,184,212,0.12); }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span> DGA HITECH PODCAST</div>
+    <div class="eyebrow">Episode</div>
+    <h1>{_xml_escape(ep_title)}</h1>
+    <div class="meta">
+      {('<strong>' + when_label + '</strong>') if when_label else ''}
+      {(' · ' + dur_label) if (dur_label and when_label) else dur_label}
+    </div>
+    <div class="player">
+      <audio controls preload="metadata" src="{_xml_escape(enclosure_url)}"></audio>
+      <div class="actions">
+        <a href="{_xml_escape(enclosure_url)}" download>⬇ Download MP3</a>
+        <a href="https://podcasts.apple.com/" target="_blank" rel="noopener">Apple Podcasts</a>
+        <a href="https://open.spotify.com/" target="_blank" rel="noopener">Spotify</a>
+      </div>
+    </div>
+    {f'<div class="summary">{_xml_escape(summary)}</div>' if summary else ''}
+    <div class="disc">
+      DGA Capital is an exempt reporting adviser in California. This episode
+      is for informational and educational purposes only. It is not
+      investment advice, an offer to sell, or a solicitation to buy any
+      security. Holdings, opinions, and price targets discussed may change
+      without notice. Past performance is not indicative of future results.
+    </div>
+  </div>
+</body>
+</html>"""
+    return Response(content=html, media_type="text/html; charset=utf-8",
+                     headers={"Cache-Control": "public, max-age=600"})
 
 
 @app.get("/api/podcast/speed-config")
