@@ -1683,6 +1683,538 @@
     border-color: var(--panel-edge) !important;
   }
 </style>
+
+<!-- ═════════════════════════════════════════════════════════════════════
+     DESIGN SYSTEM v2 — "Editorial / Carta-Mercury"
+     Layered ON TOP of the legacy stylesheet (above) so all existing
+     functionality is preserved while we refine the visual language.
+     To disable: remove this <style> block + the Inter font <link>.
+     ─────────────────────────────────────────────────────────────────────
+     Loaded fonts: Inter (UI) + Inter Tight (display).
+═══════════════════════════════════════════════════════════════════════ -->
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet">
+
+<style id="design-v2">
+  :root {
+    /* ── Type scale (Carta/Linear-style: tight display + comfy body) ── */
+    --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-display: 'Inter Tight', 'Inter', -apple-system, sans-serif;
+    --font-mono:    'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+    --text-2xs:  10px;
+    --text-xs:   11px;
+    --text-sm:   12px;
+    --text-base: 13.5px;
+    --text-md:   14.5px;
+    --text-lg:   16px;
+    --text-xl:   19px;
+    --text-2xl:  24px;
+    --text-3xl:  30px;
+    --text-4xl:  36px;
+    --lh-tight:   1.2;
+    --lh-snug:    1.35;
+    --lh-normal:  1.5;
+    --lh-relaxed: 1.65;
+    --track-tight: -0.022em;
+    --track-snug:  -0.012em;
+    --track-base:  0;
+    --track-wide:  0.04em;
+
+    /* ── Color: brand + tonal ramps + semantic ── */
+    --brand-50:  #eff8fb;
+    --brand-100: #d6eef5;
+    --brand-200: #b3e0ec;
+    --brand-300: #84CCE3;  /* legacy --blue-light */
+    --brand-400: #5BB8D4;  /* legacy --blue (PRIMARY) */
+    --brand-500: #3E9AB8;  /* legacy --blue-dark */
+    --brand-600: #2d7d99;
+    --brand-700: #225f76;
+    --brand-800: #1a4858;
+    --brand-900: #0e2f3b;
+
+    --navy-50:   #f3f6fa;
+    --navy-100:  #e2e9f1;
+    --navy-200:  #c4d2e2;
+    --navy-300:  #93a8c2;
+    --navy-400:  #5f7896;
+    --navy-500:  #3d5371;
+    --navy-600:  #2a3e57;
+    --navy-700:  #1c2b40;
+    --navy-800:  #0f1d30;
+    --navy-900:  #0A1628;  /* legacy --navy */
+
+    --gray-50:   #fafbfc;
+    --gray-100:  #f4f6f8;
+    --gray-200:  #e6eaf0;
+    --gray-300:  #d3d9e1;
+    --gray-400:  #aab3bf;
+    --gray-500:  #7a8493;
+    --gray-600:  #58616f;
+    --gray-700:  #3d4654;
+    --gray-800:  #28303d;
+    --gray-900:  #16191f;
+
+    /* Semantic tokens (always reference tonal ramps above) */
+    --text-primary:    var(--navy-900);
+    --text-secondary:  var(--gray-600);
+    --text-tertiary:   var(--gray-500);
+    --text-quaternary: var(--gray-400);
+    --text-on-brand:   #ffffff;
+
+    --bg-canvas:    #f6f8fb;
+    --bg-surface:   #ffffff;
+    --bg-elevated:  #ffffff;
+    --bg-subtle:    var(--gray-50);
+
+    --border-subtle:  var(--gray-200);
+    --border-default: var(--gray-300);
+    --border-strong:  var(--gray-400);
+    --border-brand:   var(--brand-400);
+
+    --success-50: #ecfdf5; --success-500: #16a34a; --success-700: #047857;
+    --danger-50:  #fef2f2; --danger-500:  #dc2626; --danger-700:  #b91c1c;
+    --warn-50:    #fffbeb; --warn-500:    #d97706; --warn-700:    #92400e;
+    --info-50:    #eff6ff; --info-500:    #2563eb; --info-700:    #1e40af;
+
+    /* ── Spacing scale (4px grid) ── */
+    --space-0: 0;       --space-1: 4px;    --space-2: 8px;
+    --space-3: 12px;    --space-4: 16px;   --space-5: 20px;
+    --space-6: 24px;    --space-8: 32px;   --space-10: 40px;
+    --space-12: 48px;   --space-16: 64px;  --space-20: 80px;
+
+    /* ── Radius scale ── */
+    --r-sm:  4px;
+    --r-md:  6px;
+    --r-lg:  10px;
+    --r-xl:  14px;
+    --r-2xl: 20px;
+    --r-pill: 999px;
+
+    /* ── Shadow scale (warmer than pure black) ── */
+    --shadow-xs: 0 1px 2px 0 rgba(15, 29, 48, 0.04);
+    --shadow-sm: 0 1px 3px 0 rgba(15, 29, 48, 0.06), 0 1px 2px 0 rgba(15, 29, 48, 0.04);
+    --shadow-md: 0 4px 12px -2px rgba(15, 29, 48, 0.08), 0 2px 4px -1px rgba(15, 29, 48, 0.04);
+    --shadow-lg: 0 12px 24px -6px rgba(15, 29, 48, 0.12), 0 4px 8px -2px rgba(15, 29, 48, 0.06);
+    --shadow-xl: 0 24px 48px -12px rgba(15, 29, 48, 0.18);
+    --shadow-focus-brand: 0 0 0 3px rgba(91, 184, 212, 0.22);
+    --shadow-focus-danger: 0 0 0 3px rgba(220, 38, 38, 0.18);
+
+    /* ── Motion ── */
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --t-fast: 120ms;
+    --t-base: 200ms;
+    --t-slow: 320ms;
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Typography refresh: load Inter everywhere, drop the systemic uppercase
+  ──────────────────────────────────────────────────────────────────── */
+  html, body {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--lh-normal);
+    color: var(--text-primary);
+    background: var(--bg-canvas);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    letter-spacing: var(--track-tight);
+    color: var(--text-primary);
+    line-height: var(--lh-tight);
+    font-weight: 700;
+  }
+  /* Tab toolbar h2 (page titles) get the editorial size */
+  .tab-toolbar h2 {
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    letter-spacing: var(--track-tight);
+  }
+  /* Light, secondary body copy default */
+  p { line-height: var(--lh-relaxed); color: var(--text-secondary); }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Panel refresh: refined hairline border, subtler shadow, sentence-case
+     section title (drop tracking + uppercase shouting)
+  ──────────────────────────────────────────────────────────────────── */
+  .panel {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-sm);
+    margin-bottom: var(--space-4);
+    transition: box-shadow var(--t-base) var(--ease-out);
+  }
+  .panel-head, section.panel > details > summary.panel-head {
+    padding: var(--space-3) var(--space-5);
+    background: transparent;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .panel-title {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: var(--track-snug);
+    text-transform: none;
+  }
+  .panel-badge {
+    background: var(--gray-100);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 2px 9px;
+    border-radius: var(--r-pill);
+  }
+  .panel-action {
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .ac-chevron { color: var(--gray-400); font-size: var(--text-sm); }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Topbar v2: 56px height, refined active-tab pill, sentence-case links
+  ──────────────────────────────────────────────────────────────────── */
+  .topbar {
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    padding: 10px 24px;
+    height: 64px;
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-xs);
+  }
+  .topbar-link {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 6px 10px;
+    border-radius: var(--r-md);
+    transition: color var(--t-fast), background var(--t-fast);
+    border-bottom: none !important;
+  }
+  .topbar-link:hover { color: var(--text-primary); background: var(--gray-100); }
+  .topbar-link.active {
+    color: var(--brand-700);
+    background: var(--brand-50);
+    font-weight: 600;
+  }
+  .ribbon-wrap { top: 64px; }
+  .brand-logo {
+    height: 42px;
+    box-shadow: none;
+    background: transparent;
+    padding: 0;
+  }
+  .status-dot { box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18); }
+
+  /* Search input refresh */
+  .search-input {
+    background: var(--gray-50);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    transition: border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-fast);
+  }
+  .search-input:focus {
+    background: var(--bg-elevated);
+    border-color: var(--brand-400);
+    box-shadow: var(--shadow-focus-brand);
+  }
+  .search-kbd {
+    background: var(--gray-100);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    border-radius: var(--r-sm);
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Unified button system. All legacy button classes are normalized here.
+     Three variants × three sizes. Use semantic classes; legacy still works.
+  ──────────────────────────────────────────────────────────────────── */
+  .btn,
+  .tab-btn,
+  .builder-btn-primary,
+  .builder-btn-sec,
+  .pc-cta,
+  button.tab-btn.sm {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: var(--text-base);
+    letter-spacing: 0;
+    text-transform: none;
+    line-height: 1;
+    padding: 9px 16px;
+    border-radius: var(--r-md);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast),
+                color var(--t-fast), box-shadow var(--t-fast),
+                transform var(--t-fast);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .btn:active, .tab-btn:active, .builder-btn-primary:active, .pc-cta:active {
+    transform: translateY(0.5px);
+  }
+  .btn:focus-visible, .tab-btn:focus-visible, .builder-btn-primary:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus-brand);
+  }
+
+  /* Default neutral (tab-btn, sm) */
+  .tab-btn {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  .tab-btn:hover { background: var(--gray-50); border-color: var(--border-strong); }
+
+  /* Small variant */
+  .tab-btn.sm, button.tab-btn.sm {
+    padding: 5px 10px;
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  /* Primary */
+  .btn-primary,
+  .builder-btn-primary,
+  .pc-cta-primary {
+    background: var(--brand-400);
+    color: var(--text-on-brand);
+    border-color: var(--brand-400);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, var(--shadow-xs);
+  }
+  .btn-primary:hover,
+  .builder-btn-primary:hover,
+  .pc-cta-primary:hover {
+    background: var(--brand-500);
+    border-color: var(--brand-500);
+    opacity: 1;
+  }
+  .builder-btn-primary:disabled,
+  .pc-cta-primary:disabled,
+  .btn-primary:disabled {
+    background: var(--gray-200);
+    border-color: var(--gray-200);
+    color: var(--text-tertiary);
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  /* Secondary (outline) */
+  .btn-secondary, .builder-btn-sec {
+    background: transparent;
+    color: var(--brand-700);
+    border-color: var(--brand-300);
+  }
+  .btn-secondary:hover, .builder-btn-sec:hover {
+    background: var(--brand-50);
+    color: var(--brand-700);
+    border-color: var(--brand-400);
+  }
+
+  /* Ghost (transparent) */
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: transparent;
+  }
+  .btn-ghost:hover { background: var(--gray-100); color: var(--text-primary); }
+
+  /* Danger */
+  .btn-danger {
+    background: var(--danger-50);
+    color: var(--danger-700);
+    border-color: rgba(220, 38, 38, 0.25);
+  }
+  .btn-danger:hover { background: var(--danger-500); color: #fff; border-color: var(--danger-500); }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Unified form controls (input, select, textarea)
+  ──────────────────────────────────────────────────────────────────── */
+  input.settings-input,
+  select.settings-input,
+  .pc-select, .pc-or-saved,
+  #podcast-script-format, #podcast-script-ticker, #podcast-script-saved,
+  #podcast-audio-ticker, #podcast-audio-model, #podcast-audio-saved {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    padding: 8px 12px;
+    height: 36px;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+    line-height: 1.2;
+  }
+  input.settings-input:focus,
+  select.settings-input:focus,
+  .pc-select:focus, .pc-or-saved:focus,
+  #podcast-script-format:focus, #podcast-script-ticker:focus,
+  #podcast-audio-ticker:focus, #podcast-audio-model:focus {
+    outline: none;
+    border-color: var(--brand-400);
+    box-shadow: var(--shadow-focus-brand);
+  }
+  textarea {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    color: var(--text-primary);
+  }
+  textarea:focus {
+    outline: none;
+    border-color: var(--brand-400);
+    box-shadow: var(--shadow-focus-brand);
+  }
+  .pc-select-fmt { background: var(--brand-50); border-color: var(--brand-200); font-weight: 600; }
+
+  /* Field label refresh */
+  .pc-field-label,
+  .builder-field > span {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Index ribbon refresh: cleaner separators, better hover
+  ──────────────────────────────────────────────────────────────────── */
+  .ribbon-wrap {
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-xs);
+  }
+  .idx {
+    padding: var(--space-3) var(--space-5);
+    border-right: 1px solid var(--border-subtle);
+    transition: background var(--t-fast);
+  }
+  .idx:hover { background: var(--brand-50); }
+  .idx-name {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--text-tertiary);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .idx-px {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: var(--track-snug);
+  }
+  .idx-chg { font-weight: 600; font-size: var(--text-sm); }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Tables refresh — softer headers, better hover, no harsh borders
+  ──────────────────────────────────────────────────────────────────── */
+  .data-table th, .rep-table th, .builder-result-table th {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-tertiary);
+    letter-spacing: 0;
+    text-transform: none;
+    background: var(--gray-50);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 10px 14px;
+  }
+  .data-table td, .rep-table td {
+    font-size: var(--text-base);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Builder card refresh
+  ──────────────────────────────────────────────────────────────────── */
+  .builder-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xl);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-sm);
+  }
+  .builder-card-head {
+    font-family: var(--font-display);
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: var(--track-snug);
+    text-transform: none;
+    background: transparent;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: var(--space-3) var(--space-5);
+  }
+
+  /* ── Podcast card v2 polish ────────────────────────────────────── */
+  .pc-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-sm);
+    background: var(--bg-elevated);
+  }
+  .pc-card-head {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: 600;
+    letter-spacing: var(--track-snug);
+    background: linear-gradient(180deg, var(--brand-50) 0%, var(--brand-50) 80%, rgba(239,248,251,0) 100%);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .pc-section { padding: var(--space-5) var(--space-5); border-bottom: 1px solid var(--border-subtle); }
+  .pc-section-title {
+    font-family: var(--font-display);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .pc-section-desc { color: var(--text-secondary); }
+  .pc-or-label { color: var(--text-tertiary); letter-spacing: 0; text-transform: none; font-weight: 500; }
+  .pc-player-btn {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    border-radius: var(--r-md);
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Tab toolbar refresh — page title sits proudly
+  ──────────────────────────────────────────────────────────────────── */
+  .tab-toolbar {
+    padding: var(--space-5) var(--space-2) var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .tab-toolbar h2 {
+    color: var(--text-primary);
+    font-family: var(--font-display);
+  }
+
+  /* Body background — light editorial canvas */
+  body { background: var(--bg-canvas); }
+</style>
 </head>
 <body>
 
