@@ -2200,125 +2200,161 @@
     </div>
 
     <!-- ── DGA HiTech Podcast ─────────────────────────────────────── -->
-    <section class="builder-card" style="margin-bottom:16px;border:1px dashed #5BB8D4;background:#f0fbff;">
-      <header class="builder-card-head" style="background:#e0f4fc;color:#0A1628;">
-        🎙️ DGA HiTech Podcast
-      </header>
+    <!-- Scoped tokens so spacing/typography stay consistent across both rows -->
+    <style>
+      .pc-card { margin-bottom: 16px; border: 1px solid #c7e8f3; background: #fafdff; border-radius: 10px; overflow: hidden; }
+      .pc-card-head { background: #e0f4fc; color: #0A1628; font-weight: 800; font-size: 13px;
+                       letter-spacing: 0.3px; padding: 12px 18px; border-bottom: 1px solid #c7e8f3; }
+      .pc-section { padding: 16px 18px; border-bottom: 1px solid #e0f0f7; }
+      .pc-section:last-child { border-bottom: none; background: #f4fafd; }
+      .pc-section-title { font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+                          color: #0A1628; text-transform: uppercase; margin-bottom: 4px; }
+      .pc-section-desc { font-size: 11.5px; color: #64748b; line-height: 1.55; margin-bottom: 14px; }
+      .pc-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end;
+                margin-bottom: 10px; }
+      .pc-row-controls { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; min-width: 0; }
+      .pc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .pc-field-label { font-size: 9.5px; font-weight: 700; color: #475569;
+                        letter-spacing: 0.8px; text-transform: uppercase; }
+      .pc-select { font-size: 13px; padding: 8px 10px; border: 1px solid #c7e8f3;
+                   border-radius: 5px; background: #fff; min-width: 180px; }
+      .pc-select-fmt { background: #fffbeb; font-weight: 700; }
+      .pc-cta { padding: 9px 18px; font-size: 13px; font-weight: 800; border-radius: 5px;
+                cursor: pointer; white-space: nowrap; border: none; line-height: 1; }
+      .pc-cta-primary { background: #5BB8D4; color: #0A1628; }
+      .pc-cta-primary:hover { background: #4AA5C0; }
+      .pc-cta-primary:disabled { background: #b9d6e0; cursor: not-allowed; color: #5a6f7a; }
+      .pc-or-row { display: flex; align-items: center; gap: 10px; padding-top: 6px;
+                   margin-top: 10px; border-top: 1px dashed #d6e8ef; }
+      .pc-or-label { font-size: 10.5px; font-weight: 700; color: #94a3b8;
+                     letter-spacing: 1px; text-transform: uppercase; }
+      .pc-or-saved { flex: 1; font-size: 12.5px; padding: 7px 10px; border: 1px solid #c7e8f3;
+                     border-radius: 5px; background: #fff; }
+      .pc-stats { font-size: 11px; color: #64748b; font-family: 'SF Mono', monospace;
+                  margin-top: 8px; padding: 0 2px; min-height: 14px; }
+      .pc-player-btn { font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 4px;
+                       cursor: pointer; white-space: nowrap; }
+    </style>
+    <section class="pc-card">
+      <header class="pc-card-head">🎙️ DGA HiTech Podcast</header>
 
-      <!-- ── Script generator ─────────────────────────────────────── -->
-      <div style="border-top:1px solid #c7e8f3;padding:14px 18px;background:#fafdff;">
-        <div style="font-size:12.5px;color:#475569;line-height:1.55;margin-bottom:10px;">
-          <strong style="color:#0A1628;">🎬 Episode script generator (v0)</strong> —
-          pick a ticker with BOTH Grok + Claude reports. Generates the full
-          debate dialogue (Alec/Rock/Claude) and renders it as styled chat
-          bubbles below. <em>Read 2–3 samples before we build the audio side.</em>
-          Cost per script: <strong>~$0.20</strong> (Claude Opus, no TTS yet).
+      <!-- ── ① Script generator ───────────────────────────────────── -->
+      <div class="pc-section">
+        <div class="pc-section-title">① Script Generator</div>
+        <div class="pc-section-desc">
+          Pick a ticker with BOTH Grok + Claude reports. Generates dialogue
+          and renders it as styled chat bubbles. Read 2–3 samples before
+          building audio. <strong>~$0.20 / script</strong> (Claude Opus).
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <select id="podcast-script-format" title="Choose the episode structure"
-                  style="font-size:13px;padding:8px 10px;border:1px solid #c7e8f3;border-radius:4px;background:#fffbeb;font-weight:700;min-width:180px;">
-            <option value="debate"     selected>⚔️ Debate (Bull vs Bear)</option>
-            <option value="pre_mortem">🪦 Pre-Mortem (it failed — why?)</option>
-            <option value="memo">📋 Investment Memo</option>
-            <option value="catalysts">📅 Catalysts Calendar</option>
-            <option value="quick_hit">⚡ Quick Hit (5 min)</option>
-            <option value="roundup">📰 Roundup (2-4 tickers)</option>
-            <option value="portfolio_roundup">🧰 Portfolio Roundup (5-35 tickers, PM-style review)</option>
-          </select>
-          <select id="podcast-script-ticker" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;min-width:220px;">
-            <option value="">— select a ticker (needs both Grok + Claude) —</option>
-          </select>
-          <!-- Roundup chip-picker (hidden until format=roundup). Click to toggle.
-               Selected chips turn gold; counter shows X / 4. Way less awful UX
-               than <select multiple> which requires ⌘/Ctrl-click. -->
-          <div id="podcast-script-tickers-multi" style="display:none;flex-direction:column;gap:6px;width:100%;margin-top:8px;padding:10px;border:1px solid #fde68a;border-radius:6px;background:#fffbeb;">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#92400e;font-weight:700;">
-              <span id="ps-roundup-header">📰 Roundup — click 2-4 tickers</span>
-              <span id="ps-roundup-count" style="font-family:'SF Mono',monospace;">0 / 4 selected</span>
+
+        <!-- Primary controls: Format · Ticker · [Generate] -->
+        <div class="pc-row">
+          <div class="pc-row-controls">
+            <div class="pc-field" style="flex:0 0 220px;">
+              <label class="pc-field-label" for="podcast-script-format">Format</label>
+              <select id="podcast-script-format" class="pc-select pc-select-fmt" title="Choose the episode structure">
+                <option value="debate"     selected>⚔️ Debate (Bull vs Bear)</option>
+                <option value="pre_mortem">🪦 Pre-Mortem (it failed — why?)</option>
+                <option value="memo">📋 Investment Memo</option>
+                <option value="catalysts">📅 Catalysts Calendar</option>
+                <option value="quick_hit">⚡ Quick Hit (5 min)</option>
+                <option value="roundup">📰 Roundup (2-4 tickers)</option>
+                <option value="portfolio_roundup">🧰 Portfolio Roundup (5-35 tickers)</option>
+              </select>
             </div>
-            <div id="ps-roundup-chips" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;">
-              <span style="font-size:11px;color:#94a3b8;font-style:italic;">Loading…</span>
+            <div class="pc-field" style="flex:1 1 260px;">
+              <label class="pc-field-label" for="podcast-script-ticker">Ticker</label>
+              <select id="podcast-script-ticker" class="pc-select" style="min-width:0;">
+                <option value="">— select a ticker (needs both reports) —</option>
+              </select>
             </div>
           </div>
-          <button id="podcast-script-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
-            🎬 Generate script
-          </button>
-          <span style="font-size:11px;color:#94a3b8;font-weight:600;">or</span>
-          <select id="podcast-script-saved" title="Load a previously-generated script (no Claude spend)"
-                  style="font-size:13px;padding:8px 10px;border:1px solid #c7e8f3;border-radius:4px;background:#fff;min-width:240px;">
+          <button id="podcast-script-btn" class="pc-cta pc-cta-primary">🎬 Generate script</button>
+        </div>
+
+        <!-- Roundup chip-picker (only shown for roundup / portfolio_roundup) -->
+        <div id="podcast-script-tickers-multi" style="display:none;flex-direction:column;gap:6px;width:100%;padding:10px;border:1px solid #fde68a;border-radius:6px;background:#fffbeb;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#92400e;font-weight:700;">
+            <span id="ps-roundup-header">📰 Roundup — click 2-4 tickers</span>
+            <span id="ps-roundup-count" style="font-family:'SF Mono',monospace;">0 / 4 selected</span>
+          </div>
+          <div id="ps-roundup-chips" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;">
+            <span style="font-size:11px;color:#94a3b8;font-style:italic;">Loading…</span>
+          </div>
+        </div>
+
+        <!-- "Or open saved" — separate row, clearly secondary -->
+        <div class="pc-or-row">
+          <span class="pc-or-label">Or</span>
+          <select id="podcast-script-saved" class="pc-or-saved" title="Load a previously-generated script (no Claude spend)">
             <option value="">📂 Open a saved script…</option>
           </select>
-          <span id="podcast-script-stats" style="font-size:11px;color:#64748b;font-family:'SF Mono',monospace;"></span>
         </div>
+
+        <div id="podcast-script-stats" class="pc-stats"></div>
         <div id="podcast-script-render" style="display:none;margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:16px;max-height:600px;overflow-y:auto;"></div>
       </div>
 
-      <!-- ── Audio generator (v1) ─────────────────────────────────── -->
-      <div style="border-top:1px solid #c7e8f3;padding:14px 18px;background:#f4fafd;">
-        <div style="font-size:12.5px;color:#475569;line-height:1.55;margin-bottom:10px;">
-          <strong style="color:#0A1628;">🎧 Audio episode (v1)</strong> —
-          synthesizes the dialogue with OpenAI TTS using the voices you picked
-          in the Cast panel below, adds 5s intro + 5s outro music stings,
-          exports MP3. Cost: <strong>~$0.35–0.55</strong> per 8–10 min episode
-          (tts-1-hd). Audio mirrors to Dropbox
-          <code style="background:#fff;padding:1px 5px;border-radius:3px;">podcast/episodes/</code>.
+      <!-- ── ② Audio generator ────────────────────────────────────── -->
+      <div class="pc-section">
+        <div class="pc-section-title">② Audio Episode</div>
+        <div class="pc-section-desc">
+          Synthesizes the dialogue with OpenAI TTS using the voices in
+          <strong>🎭 Cast</strong> below, adds music stings + compliance disclaimer,
+          mirrors MP3 to Dropbox <code style="background:#fff;padding:1px 5px;border-radius:3px;">podcast/episodes/</code>.
+          <strong>~$0.35–0.55 / episode</strong> (tts-1-hd).
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <select id="podcast-audio-ticker" style="font-size:13px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;min-width:220px;">
-            <option value="">— select a ticker (needs both reports) —</option>
-          </select>
-          <select id="podcast-audio-model" style="font-size:12px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;" title="tts-1-hd is broadcast-quality; tts-1 is half cost; gpt-4o-mini-tts is cheapest">
-            <option value="tts-1-hd" selected>tts-1-hd (best, ~$0.50)</option>
-            <option value="tts-1">tts-1 (good, ~$0.25)</option>
-            <option value="gpt-4o-mini-tts">gpt-4o-mini-tts (draft, ~$0.01)</option>
-          </select>
-          <button id="podcast-audio-btn" class="builder-btn-primary" style="width:auto;padding:10px 18px;">
-            🎧 Generate audio
-          </button>
-          <span style="font-size:11px;color:#94a3b8;font-weight:600;">or</span>
-          <select id="podcast-audio-saved" title="Open a previously-generated episode"
-                  style="font-size:13px;padding:8px 10px;border:1px solid #c7e8f3;border-radius:4px;background:#fff;min-width:260px;">
+
+        <!-- Primary controls: Ticker · Quality · [Generate] -->
+        <div class="pc-row">
+          <div class="pc-row-controls">
+            <div class="pc-field" style="flex:1 1 220px;">
+              <label class="pc-field-label" for="podcast-audio-ticker">Ticker</label>
+              <select id="podcast-audio-ticker" class="pc-select" style="min-width:0;">
+                <option value="">— select a ticker (needs both reports) —</option>
+              </select>
+            </div>
+            <div class="pc-field" style="flex:0 0 200px;">
+              <label class="pc-field-label" for="podcast-audio-model">TTS quality</label>
+              <select id="podcast-audio-model" class="pc-select" title="tts-1-hd is broadcast-quality; tts-1 is half cost; gpt-4o-mini-tts is cheapest">
+                <option value="tts-1-hd" selected>tts-1-hd (best, ~$0.50)</option>
+                <option value="tts-1">tts-1 (good, ~$0.25)</option>
+                <option value="gpt-4o-mini-tts">gpt-4o-mini-tts (draft, ~$0.01)</option>
+              </select>
+            </div>
+          </div>
+          <button id="podcast-audio-btn" class="pc-cta pc-cta-primary">🎧 Generate audio</button>
+        </div>
+
+        <!-- "Or open saved" -->
+        <div class="pc-or-row">
+          <span class="pc-or-label">Or</span>
+          <select id="podcast-audio-saved" class="pc-or-saved" title="Open a previously-generated episode">
             <option value="">🎧 Open a saved episode…</option>
           </select>
         </div>
-        <div id="podcast-audio-progress" style="display:none;margin-top:10px;padding:10px 14px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;font-size:12px;color:#1e293b;">
+
+        <!-- Progress bar (only while generating) -->
+        <div id="podcast-audio-progress" style="display:none;margin-top:12px;padding:10px 14px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;font-size:12px;color:#1e293b;">
           <div id="podcast-audio-progress-label" style="font-family:'SF Mono',monospace;margin-bottom:6px;">Starting…</div>
           <div style="height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
             <div id="podcast-audio-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#5BB8D4,#3E9AB8);transition:width 0.4s ease;"></div>
           </div>
         </div>
-        <!-- ── Cast picker (who voices which character) ─────────────── -->
-        <details id="podcast-voice-cfg" style="margin-top:12px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;">
-          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
-            🎭 Cast — pick the voice for each character  <span style="color:#64748b;font-weight:500;">— applied at next audio generation</span>
-          </summary>
-          <div id="podcast-voice-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
-            <div style="color:#64748b;font-size:11px;">Loading…</div>
-          </div>
-        </details>
 
-        <!-- ── Voice speed table (UI override of TTS-generation speeds) ── -->
-        <details id="podcast-speed-cfg" style="margin-top:12px;background:#fff;border:1px solid #c7e8f3;border-radius:6px;">
-          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
-            🎚 Voice speed table  <span style="color:#64748b;font-weight:500;">— per-speaker × intensity (applied at TTS generation)</span>
-          </summary>
-          <div id="podcast-speed-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
-            <div style="color:#64748b;font-size:11px;">Loading…</div>
-          </div>
-        </details>
-
+        <!-- Active audio player (only when an episode is loaded) -->
         <div id="podcast-audio-player" style="display:none;margin-top:14px;padding:14px;background:#0A1628;color:#fff;border-radius:8px;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-            <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;flex:1;">—</div>
-            <button id="podcast-audio-share-btn"
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+            <div id="podcast-audio-player-title" style="font-size:14px;font-weight:800;letter-spacing:-0.2px;flex:1;min-width:200px;">—</div>
+            <button id="podcast-audio-share-btn" class="pc-player-btn"
               title="Generate a public share link (30-day expiry by default) — anyone with the link can play the audio, no login required."
-              style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🔗 Share Link</button>
-            <button id="podcast-audio-export-memo-btn"
+              style="background:transparent;color:#84CCE3;border:1px solid #84CCE3;">🔗 Share</button>
+            <button id="podcast-audio-export-memo-btn" class="pc-player-btn"
               title="Render this episode's script as a DGA Capital branded PDF memo (saved to the 📄 Memos tab)."
-              style="background:#5BB8D4;color:#0A1628;border:1px solid #5BB8D4;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">📄 Export Memo</button>
-            <button id="podcast-audio-delete-btn"
+              style="background:#5BB8D4;color:#0A1628;border:1px solid #5BB8D4;">📄 Export Memo</button>
+            <button id="podcast-audio-delete-btn" class="pc-player-btn"
               title="Delete this audio episode (MP3 + Dropbox copy). Script is kept — you can re-generate audio anytime."
-              style="background:transparent;color:#fca5a5;border:1px solid #fca5a5;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🗑️ Audio</button>
+              style="background:transparent;color:#fca5a5;border:1px solid #fca5a5;">🗑️</button>
           </div>
           <audio id="podcast-audio-el" controls preload="metadata" style="width:100%;"></audio>
           <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
@@ -2334,6 +2370,27 @@
             <span id="podcast-audio-player-meta" style="font-size:11px;color:#84CCE3;font-family:'SF Mono',monospace;margin-left:auto;">—</span>
           </div>
         </div>
+      </div>
+
+      <!-- ── ③ Voice configuration (collapsed by default) ─────────── -->
+      <div class="pc-section" style="background:#f4fafd;padding-top:12px;padding-bottom:12px;">
+        <div class="pc-section-title" style="margin-bottom:10px;">③ Voice configuration  <span style="font-size:10px;font-weight:500;color:#94a3b8;letter-spacing:0;text-transform:none;">— applied at next audio generation</span></div>
+        <details id="podcast-voice-cfg" style="background:#fff;border:1px solid #c7e8f3;border-radius:6px;margin-bottom:8px;">
+          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
+            🎭 Cast — pick the voice for each character
+          </summary>
+          <div id="podcast-voice-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
+            <div style="color:#64748b;font-size:11px;">Loading…</div>
+          </div>
+        </details>
+        <details id="podcast-speed-cfg" style="background:#fff;border:1px solid #c7e8f3;border-radius:6px;">
+          <summary style="cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:700;color:#0A1628;list-style:none;">
+            🎚 Voice speed — per-speaker × intensity
+          </summary>
+          <div id="podcast-speed-table" style="padding:12px 14px;border-top:1px solid #e2e8f0;font-size:12px;color:#1e293b;">
+            <div style="color:#64748b;font-size:11px;">Loading…</div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -2906,7 +2963,7 @@
   <div class="wide-shell">
 
     <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
-    <section class="panel" style="margin-bottom:18px;">
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
       <header class="panel-head">
         <span class="panel-title">📡 Podcast Distribution (RSS / Apple / Spotify)</span>
         <span class="panel-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
@@ -2938,7 +2995,7 @@
     </section>
 
     <!-- ⚖️ Compliance disclaimer (audio intro/outro for every episode) -->
-    <section class="panel" style="margin-bottom:18px;">
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
       <header class="panel-head">
         <span class="panel-title">⚖️ Podcast Compliance Disclaimer</span>
         <span class="panel-badge" id="disc-status" style="background:#dcfce7;color:#166534;">ON</span>
@@ -2994,7 +3051,7 @@
     <div class="wide-grid-2">
 
       <!-- Change Own Password -->
-      <section class="panel">
+      <section class="panel" data-collapsible="1">
         <header class="panel-head">
           <span class="panel-title">Change Your Password</span>
         </header>
@@ -3022,7 +3079,7 @@
       </section>
 
       <!-- Email Diagnostics -->
-      <section class="panel">
+      <section class="panel" data-collapsible="1">
         <header class="panel-head">
           <span class="panel-title">Email Diagnostics</span>
           <span class="panel-badge">Resend</span>
@@ -3050,7 +3107,7 @@
       </section>
 
       <!-- Automation Schedule -->
-      <section class="panel" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">Automation Schedule</span>
           <span class="panel-badge">Pacific Time</span>
@@ -3133,7 +3190,7 @@
       </section>
 
       <!-- Archived Reports -->
-      <section class="panel" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">Archived Reports</span>
           <span class="panel-badge" id="archived-count">—</span>
@@ -3143,7 +3200,7 @@
       </section>
 
       <!-- LP User Management -->
-      <section class="panel" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">LP User Management</span>
           <span class="panel-badge" id="lp-count-badge">—</span>
@@ -3174,7 +3231,7 @@
       </section>
 
       <!-- Admin User Management -->
-      <section class="panel" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">Admin User Management</span>
           <span class="panel-badge" style="background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);">GOD MODE</span>
@@ -3211,8 +3268,23 @@
         <div id="admin-roster" style="padding:12px 14px;font-size:11px;color:var(--dim);">Loading…</div>
       </section>
 
+      <!-- System Info — app version + service health (was buried) -->
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">🖥 System Info</span>
+          <span class="panel-badge" id="sys-info-badge">—</span>
+        </header>
+        <div style="padding:12px 14px;font-size:11.5px;color:#475569;line-height:1.7;font-family:'SF Mono',monospace;">
+          <div>Build:           <strong id="sys-build">—</strong></div>
+          <div>Server commit:   <strong id="sys-commit">—</strong></div>
+          <div>Backend status:  <strong id="sys-backend">—</strong></div>
+          <div>DB status:       <strong id="sys-db">—</strong></div>
+          <div>RSS feed:        <a id="sys-rss" href="" target="_blank" rel="noopener" style="color:#5BB8D4;">—</a></div>
+        </div>
+      </section>
+
       <!-- Create Fund / Managed Account -->
-      <section class="panel" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
         <header class="panel-head">
           <span class="panel-title">Fund Administration</span>
           <span class="panel-badge">GP ONLY</span>
@@ -10590,6 +10662,43 @@
     loadRenameDropdown();
     loadDisclaimerConfig();
     loadRssFeedPanel();
+    loadSystemInfoPanel();
+  }
+
+  // ── 🖥 System Info: surfaces app build + backend/DB health ──
+  async function loadSystemInfoPanel() {
+    const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+    setText('sys-build', (typeof DGA_BUILD !== 'undefined' ? DGA_BUILD : '—'));
+    const rss = document.getElementById('sys-rss');
+    if (rss) {
+      const url = window.location.origin + '/api/podcast/rss.xml';
+      rss.href = url; rss.textContent = url;
+    }
+    // /api/build returns the server-side build SHA + key statuses
+    try {
+      const r = await window.dgaFetch('/api/build');
+      if (r.ok) {
+        const j = await r.json();
+        setText('sys-commit', (j.commit_sha || j.build || '—').toString().slice(0, 12));
+        const badge = document.getElementById('sys-info-badge');
+        if (badge) { badge.textContent = 'OK'; badge.style.background = '#dcfce7'; badge.style.color = '#166534'; }
+        setText('sys-backend', '✓ reachable');
+      } else {
+        setText('sys-backend', '⚠ HTTP ' + r.status);
+      }
+    } catch (e) {
+      setText('sys-backend', '❌ unreachable');
+      const badge = document.getElementById('sys-info-badge');
+      if (badge) { badge.textContent = 'DOWN'; badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c'; }
+    }
+    // /api/diagnostics returns DB connection state
+    try {
+      const r = await window.dgaFetch('/api/diagnostics');
+      if (r.ok) {
+        const j = await r.json();
+        setText('sys-db', j.database === 'connected' || j.db_ok ? '✓ connected' : '⚠ ' + (j.database || 'unknown'));
+      }
+    } catch (_) { setText('sys-db', '— (check failed)'); }
   }
 
   // ── 📡 RSS feed panel: surfaces the public feed URL + copy button ──
