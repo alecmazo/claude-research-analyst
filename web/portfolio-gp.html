@@ -6,6 +6,11 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta name="theme-color" content="#FFFFFF">
 <title>DGA Capital — GP Terminal</title>
+
+<!-- Favicons (DGA monogram, inline SVG so no extra request) -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230A1628'/><text x='16' y='22' font-family='-apple-system,Arial,sans-serif' font-size='14' font-weight='800' fill='%235BB8D4' text-anchor='middle' letter-spacing='-0.5'>DGA</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='32' fill='%230A1628'/><text x='90' y='120' font-family='-apple-system,Arial,sans-serif' font-size='72' font-weight='800' fill='%235BB8D4' text-anchor='middle' letter-spacing='-2'>DGA</text></svg>">
+
 <script>window.PAGE_ROLE = 'gp';</script>
 <script src="/app/auth-guard.js"></script>
 <style>
@@ -2534,6 +2539,221 @@
     background: var(--bg-surface);
     color: var(--text-primary);
   }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     DEPLOY C — POLISH LAYER
+     Tab fade · Audio player polish · Print stylesheet · Onboarding tour
+  ═══════════════════════════════════════════════════════════════════ */
+
+  /* ── Tab routing fade — prevents the white flash on tab switch ───── */
+  .tab-panel { transition: opacity 180ms var(--ease-out); }
+  .tab-panel:not(.active) { opacity: 0; }
+  .tab-panel.active { opacity: 1; animation: tab-fade-in 220ms var(--ease-out) both; }
+  @keyframes tab-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Audio player: theme the native <audio> controls to match brand
+        in WebKit (Safari/Chrome). Falls back to default in Firefox. ── */
+  #podcast-audio-player audio { border-radius: var(--r-md); }
+  #podcast-audio-player audio::-webkit-media-controls-panel {
+    background: linear-gradient(180deg, #1e3a5f 0%, #18253f 100%);
+    border-radius: var(--r-md);
+  }
+  #podcast-audio-player audio::-webkit-media-controls-play-button,
+  #podcast-audio-player audio::-webkit-media-controls-current-time-display,
+  #podcast-audio-player audio::-webkit-media-controls-time-remaining-display,
+  #podcast-audio-player audio::-webkit-media-controls-mute-button {
+    color: #fff;
+    filter: brightness(1.1);
+  }
+  #podcast-audio-player audio::-webkit-media-controls-timeline {
+    filter: hue-rotate(-30deg) saturate(1.2);
+  }
+  /* Subtle accent line above the player card for polish */
+  #podcast-audio-player {
+    box-shadow: 0 0 0 1px rgba(91,184,212,0.18), var(--shadow-md);
+    position: relative;
+  }
+  #podcast-audio-player::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 16px; right: 16px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--brand-300), transparent);
+    opacity: 0.6;
+  }
+
+  /* ── Onboarding tour ────────────────────────────────────────────── */
+  #tour-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(10, 22, 40, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 9998;
+    opacity: 0;
+    transition: opacity 200ms var(--ease-out);
+    pointer-events: none;
+  }
+  #tour-backdrop.active { opacity: 1; pointer-events: auto; }
+  .tour-pop {
+    position: fixed;
+    z-index: 9999;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-xl), 0 0 0 1px var(--border-subtle);
+    padding: 22px 24px 20px;
+    max-width: 380px;
+    width: calc(100vw - 32px);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out);
+  }
+  .tour-pop.active { opacity: 1; transform: translateY(0); }
+  .tour-pop-eyebrow {
+    font-family: var(--font-display);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: var(--brand-500);
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+  }
+  .tour-pop-title {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: var(--track-tight);
+    margin-bottom: 8px;
+    line-height: var(--lh-tight);
+  }
+  .tour-pop-body {
+    font-size: var(--text-base);
+    color: var(--text-secondary);
+    line-height: var(--lh-relaxed);
+    margin-bottom: 18px;
+  }
+  .tour-pop-actions {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .tour-pop-prog {
+    margin-right: auto;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .tour-pop button {
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .tour-pop .tour-skip {
+    background: transparent;
+    color: var(--text-tertiary);
+    border-color: transparent;
+  }
+  .tour-pop .tour-skip:hover { color: var(--text-secondary); }
+  .tour-pop .tour-next {
+    background: var(--brand-400);
+    color: var(--text-on-brand);
+    border-color: var(--brand-400);
+  }
+  .tour-pop .tour-next:hover { background: var(--brand-500); }
+  .tour-target-highlight {
+    position: relative;
+    z-index: 9999;
+    box-shadow: 0 0 0 4px rgba(91, 184, 212, 0.55), var(--shadow-xl);
+    border-radius: var(--r-md);
+    transition: box-shadow 200ms var(--ease-out);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     PRINT STYLESHEET — clean A4 / Letter rendering for memos, reports,
+     and saved scripts. Hides chrome (topbar, ribbon, nav, buttons) and
+     gives proper page margins + serif body for legibility.
+  ═══════════════════════════════════════════════════════════════════ */
+  @media print {
+    @page { size: Letter; margin: 0.75in; }
+    html, body {
+      background: #fff !important;
+      color: #000 !important;
+      font-family: Georgia, 'Times New Roman', serif !important;
+      font-size: 11pt !important;
+      line-height: 1.5 !important;
+    }
+    /* Hide chrome */
+    .topbar, .ribbon-wrap, .topbar-right,
+    #toast-root, #theme-toggle,
+    .tab-toolbar button, .panel-action,
+    .builder-btn-primary, .builder-btn-sec,
+    .tab-btn, .pc-cta, .pc-player-btn,
+    #podcast-audio-player audio,
+    #podcast-audio-share-btn, #podcast-audio-export-memo-btn,
+    #podcast-audio-delete-btn, #podcast-audio-speed,
+    .ac-chevron, .panel-badge,
+    audio, video {
+      display: none !important;
+    }
+    /* All panels: flat, no shadow, page-break friendly */
+    .panel, .builder-card, .pc-card {
+      box-shadow: none !important;
+      border: 1px solid #ccc !important;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      margin-bottom: 12pt !important;
+    }
+    .panel-head, .builder-card-head, .pc-card-head {
+      background: #f5f5f5 !important;
+      color: #000 !important;
+      border-bottom: 1px solid #ccc !important;
+    }
+    .panel-title { color: #000 !important; font-weight: 700 !important; }
+    /* Open all collapsibles for print */
+    details[open], details {
+      display: block !important;
+    }
+    details > summary { background: #f5f5f5 !important; color: #000 !important; }
+    /* Tables print cleanly */
+    table { border-collapse: collapse; width: 100% !important; }
+    th, td {
+      border: 1px solid #ccc !important;
+      padding: 6pt !important;
+      color: #000 !important;
+      background: #fff !important;
+    }
+    th { background: #f0f0f0 !important; font-weight: 700 !important; }
+    /* Hide tabs except the active one */
+    .tab-panel { display: none !important; }
+    .tab-panel.active { display: block !important; opacity: 1 !important; }
+    /* No animation on print */
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+    /* DGA letterhead for print */
+    body::before {
+      content: 'DGA CAPITAL · CONFIDENTIAL';
+      display: block;
+      text-align: center;
+      font-family: var(--font-display);
+      font-size: 9pt;
+      letter-spacing: 2px;
+      color: #5BB8D4 !important;
+      margin-bottom: 16pt;
+      padding-bottom: 8pt;
+      border-bottom: 2pt solid #0A1628 !important;
+    }
+    /* Hyperlinks: print the URL after the text */
+    a[href^="http"]::after {
+      content: ' (' attr(href) ')';
+      font-size: 9pt; color: #555; word-wrap: break-word;
+    }
+  }
 </style>
 </head>
 <body>
@@ -4136,6 +4356,12 @@
           <div>Backend status:  <strong id="sys-backend">—</strong></div>
           <div>DB status:       <strong id="sys-db">—</strong></div>
           <div>RSS feed:        <a id="sys-rss" href="" target="_blank" rel="noopener" style="color:#5BB8D4;">—</a></div>
+        </div>
+        <div style="border-top:1px solid var(--border-subtle);padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <button id="replay-tour-btn" class="tab-btn" onclick="window.startDGATour && window.startDGATour();">
+            🗺 Take the tour
+          </button>
+          <span style="font-size:11.5px;color:var(--text-tertiary);">Replay the first-run onboarding any time.</span>
         </div>
       </section>
 
@@ -15026,6 +15252,144 @@
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(_injectHero, 0);
     setTimeout(_injectHero, 500);
+  });
+
+  // ── Onboarding tour ───────────────────────────────────────────────
+  // Sequential popovers highlighting the main surfaces. Triggered
+  // automatically on first visit (no localStorage flag); can be
+  // re-run manually via window.startDGATour() — wired into Settings.
+  const TOUR_KEY = 'dga_tour_completed_v1';
+  const TOUR_STEPS = [
+    { selector: 'header.topbar',
+      eyebrow: 'Welcome to DGA Capital',
+      title:   "Let's take 30 seconds.",
+      body:    "Quick tour of the GP terminal — what each tab does and where to find your work. You can replay this anytime from Settings." },
+    { selector: '.topbar-link[data-tab="research"]',
+      eyebrow: '① Research',
+      title:   'Generate ticker reports',
+      body:    'Pull research from Grok and Claude side-by-side. Today\'s movers feed into the Idea Generator on the right.' },
+    { selector: '.topbar-link[data-tab="lab"]',
+      eyebrow: '② LLM Lab',
+      title:   'Turn reports into podcasts',
+      body:    'Pick any ticker with both reports, generate a script in your chosen format (Debate, Memo, Catalysts...), then synthesize audio.' },
+    { selector: '.topbar-link[data-tab="memos"]',
+      eyebrow: '③ Memos',
+      title:   'Branded PDF memos',
+      body:    'Every podcast script can be exported as a DGA Capital PDF memo — assign to an account, attach a GP note, email it out.' },
+    { selector: '.topbar-link[data-tab="positions"]',
+      eyebrow: '④ Positions & Fund',
+      title:   'Live book + per-fund cuts',
+      body:    'See every fund and managed account in one view. Drill into a specific fund from the Fund tab.' },
+    { selector: '#theme-toggle',
+      eyebrow: '⑤ Make it yours',
+      title:   "Dark mode + Settings",
+      body:    'Switch themes here. Distribution (RSS), compliance disclaimer, automation schedule, and LP management all live under Settings.' },
+    { selector: 'header.topbar',
+      eyebrow: '✓ You\'re set',
+      title:   "Let's go.",
+      body:    "If you ever need to replay this tour, look for the 'Take the tour' button in Settings." },
+  ];
+  let _tourIdx = 0;
+  let _tourCleanup = [];
+  function _cleanupTour() {
+    _tourCleanup.forEach(fn => { try { fn(); } catch {} });
+    _tourCleanup = [];
+  }
+  function _renderTourStep(idx) {
+    _cleanupTour();
+    if (idx < 0 || idx >= TOUR_STEPS.length) return _endTour(true);
+    _tourIdx = idx;
+    const step = TOUR_STEPS[idx];
+    const target = document.querySelector(step.selector);
+    const backdrop = document.getElementById('tour-backdrop');
+    if (backdrop) backdrop.classList.add('active');
+    // Highlight target
+    if (target) {
+      target.classList.add('tour-target-highlight');
+      _tourCleanup.push(() => target.classList.remove('tour-target-highlight'));
+    }
+    // Build popover
+    let pop = document.getElementById('tour-pop');
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'tour-pop';
+      pop.className = 'tour-pop';
+      document.body.appendChild(pop);
+    }
+    pop.innerHTML =
+      '<div class="tour-pop-eyebrow"></div>' +
+      '<div class="tour-pop-title"></div>' +
+      '<div class="tour-pop-body"></div>' +
+      '<div class="tour-pop-actions">' +
+        '<span class="tour-pop-prog"></span>' +
+        '<button class="tour-skip">Skip tour</button>' +
+        '<button class="tour-next"></button>' +
+      '</div>';
+    pop.querySelector('.tour-pop-eyebrow').textContent = step.eyebrow || '';
+    pop.querySelector('.tour-pop-title').textContent   = step.title;
+    pop.querySelector('.tour-pop-body').textContent    = step.body;
+    pop.querySelector('.tour-pop-prog').textContent    = `${idx + 1} / ${TOUR_STEPS.length}`;
+    pop.querySelector('.tour-next').textContent = (idx === TOUR_STEPS.length - 1) ? 'Done' : 'Next →';
+    pop.querySelector('.tour-skip').onclick = () => _endTour(false);
+    pop.querySelector('.tour-next').onclick = () => _renderTourStep(idx + 1);
+    // Position pop near target — below by default; flip up if off-screen
+    requestAnimationFrame(() => {
+      pop.classList.add('active');
+      const rect = target ? target.getBoundingClientRect() : null;
+      const popRect = pop.getBoundingClientRect();
+      let top, left;
+      if (rect && rect.height < window.innerHeight / 2) {
+        // Try positioning below the target
+        top = rect.bottom + 14;
+        left = Math.max(16, Math.min(rect.left, window.innerWidth - popRect.width - 16));
+        if (top + popRect.height > window.innerHeight - 16) {
+          // Flip above
+          top = Math.max(16, rect.top - popRect.height - 14);
+        }
+      } else {
+        // Center on screen
+        top = Math.max(16, (window.innerHeight - popRect.height) / 2);
+        left = Math.max(16, (window.innerWidth - popRect.width) / 2);
+      }
+      pop.style.top  = top  + 'px';
+      pop.style.left = left + 'px';
+    });
+  }
+  function _endTour(completed) {
+    _cleanupTour();
+    const backdrop = document.getElementById('tour-backdrop');
+    if (backdrop) backdrop.classList.remove('active');
+    const pop = document.getElementById('tour-pop');
+    if (pop) {
+      pop.classList.remove('active');
+      setTimeout(() => { try { pop.remove(); } catch {} }, 240);
+    }
+    try { localStorage.setItem(TOUR_KEY, completed ? 'done' : 'skipped'); } catch {}
+    if (completed) {
+      try { window.toast('Welcome aboard. Replay the tour anytime from Settings.',
+                          { type: 'success', ttl: 5000 }); } catch {}
+    }
+  }
+  window.startDGATour = function() {
+    // Inject backdrop on demand
+    let bd = document.getElementById('tour-backdrop');
+    if (!bd) {
+      bd = document.createElement('div');
+      bd.id = 'tour-backdrop';
+      document.body.appendChild(bd);
+    }
+    _renderTourStep(0);
+  };
+  // Auto-trigger on first visit (post-DOM, post-tabs)
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      try {
+        if (!localStorage.getItem(TOUR_KEY)) {
+          // Only run for GP / admin (not on LP pages)
+          if (window.PAGE_ROLE === 'gp') window.startDGATour();
+        }
+      } catch {}
+    }, 1200);
   });
 })();
 </script>
