@@ -1774,6 +1774,68 @@ _INDEX_TICKERS = [
 _INDICES_CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
 _INDICES_TTL = 15  # seconds
 
+# ─── Per-ticker news cache (15-min TTL) ────────────────────────────────
+# Powers the inline headline strip under each saved-report row. Pure
+# yfinance pulls — zero LLM cost — with a short server-side cache so the
+# whole research page can render multiple rows without hammering Yahoo.
+_NEWS_CACHE: dict[str, dict] = {}
+_NEWS_TTL = 900  # 15 minutes
+
+
+def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
+    """Pull up to `limit` recent news items from yfinance. Returns a list
+    of {title, url, publisher, pub_ts} dicts. Cached in _NEWS_CACHE."""
+    tk = (ticker or "").upper().strip()
+    if not tk: return []
+    now = time.time()
+    hit = _NEWS_CACHE.get(tk)
+    if hit and (now - hit["ts"]) < _NEWS_TTL:
+        return hit["items"][:limit]
+    items: list[dict] = []
+    if _YFINANCE_OK:
+        try:
+            import yfinance as _yf
+            raw = _yf.Ticker(tk).news or []
+            for it in raw[:8]:
+                content = it.get("content") or {}
+                title = (it.get("title") or content.get("title") or "").strip()
+                url   = (it.get("link") or it.get("url")
+                          or (content.get("canonicalUrl") or {}).get("url", "")
+                          or (content.get("clickThroughUrl") or {}).get("url", "")).strip()
+                publisher = (it.get("publisher")
+                              or (content.get("provider") or {}).get("displayName", "")
+                              or "").strip()
+                pub_ts = it.get("providerPublishTime") or content.get("pubDate") or None
+                # Normalize ISO date string to unix ts if needed
+                if isinstance(pub_ts, str):
+                    try:
+                        from datetime import datetime as _dt
+                        pub_ts = int(_dt.fromisoformat(pub_ts.replace("Z", "+00:00")).timestamp())
+                    except Exception:
+                        pub_ts = None
+                if not title: continue
+                items.append({"title": title, "url": url,
+                                "publisher": publisher, "pub_ts": pub_ts})
+                if len(items) >= 5: break
+        except Exception as e:
+            print(f"⚠️  [news {tk}] fetch failed: {e!s:.150}", flush=True)
+    _NEWS_CACHE[tk] = {"ts": now, "items": items}
+    return items[:limit]
+
+
+@app.get("/api/news")
+def get_ticker_news(tickers: str = "", limit: int = 1):
+    """Batched news fetch for saved-report rows. ?tickers=AAPL,NVDA,MSFT
+    returns { 'AAPL': [...], 'NVDA': [...], ... }. Server caches each
+    ticker's items for 15 min to stay under Yahoo rate limits."""
+    out: dict[str, list] = {}
+    for raw in (tickers or "").split(","):
+        tk = raw.strip().upper()
+        if not tk: continue
+        out[tk] = _fetch_news_for_ticker(tk, limit=max(1, min(int(limit or 1), 3)))
+    return {"ok": True, "tickers": list(out.keys()),
+             "news": out, "ttl_seconds": _NEWS_TTL}
+
 
 @app.get("/api/market/indices")
 def market_indices():
