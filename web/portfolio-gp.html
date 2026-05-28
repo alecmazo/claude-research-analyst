@@ -4821,12 +4821,14 @@
     s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
     s.innerHTML = JSON.stringify({
       symbols: [
-        // Fully-qualified TradingView symbols. Without the exchange prefix,
-        // bare 'SPX'/'NDX' get resolved to whatever low-cap stock happens to
-        // share the ticker (a Canadian gold miner in one case — yikes).
-        ['S&P 500',     'SP:SPX|1D'],
-        ['Nasdaq 100',  'NASDAQ:NDX|1D'],
-        ['Dow Jones',   'DJ:DJI|1D'],
+        // Licensing note: SP:SPX, NASDAQ:NDX, DJ:DJI are paid feeds that
+        // require a TradingView subscription — the free widget shows a
+        // "ghost" placeholder for them. Use the ETF proxies (SPY/QQQ/DIA)
+        // which track the indices exactly and are real-time + free.
+        ['S&P 500',     'AMEX:SPY|1D'],
+        ['Nasdaq 100',  'NASDAQ:QQQ|1D'],
+        ['Dow Jones',   'AMEX:DIA|1D'],
+        ['Russell 2000','AMEX:IWM|1D'],
         ['VIX',         'CBOE:VIX|1D'],
         ['10Y Treasury','TVC:US10Y|1D'],
         ['DXY',         'TVC:DXY|1D'],
