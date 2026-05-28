@@ -300,6 +300,17 @@ export const api = {
     return r.json();
   },
 
+  // ---------- 🤖 AI Analyst (agentic) ----------
+  // Claude runs a tool-use loop over platform data (quotes, saved reports,
+  // SEC financials, news, YTD) and answers with cited numbers. GP-only —
+  // requires a v2 session (request() piggybacks the v2 token automatically).
+  startAgentic: (question) =>
+    request('/api/research/agentic', {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+  getAgentic: (jobId) => request(`/api/research/agentic/${encodeURIComponent(jobId)}`),
+
   // ---------- Single-ticker analysis ----------
   // llmProvider: 'grok' (default) | 'claude' | 'both'
   startAnalysis: (ticker, generateGamma = false, llmProvider = 'grok') =>

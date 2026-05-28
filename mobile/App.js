@@ -7,6 +7,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import * as Updates from 'expo-updates';
 
 import HomeScreen             from './src/screens/HomeScreen';
+import AnalystScreen          from './src/screens/AnalystScreen';
 import AnalysisScreen         from './src/screens/AnalysisScreen';
 import ReportScreen           from './src/screens/ReportScreen';
 import PortfolioSummaryScreen from './src/screens/PortfolioSummaryScreen';
@@ -29,6 +30,7 @@ function HomeStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Home"     component={HomeScreen} />
+      <Stack.Screen name="Analyst"  component={AnalystScreen} />
       <Stack.Screen name="Analysis" component={AnalysisScreen} />
       <Stack.Screen name="Report"   component={ReportScreen} />
     </Stack.Navigator>

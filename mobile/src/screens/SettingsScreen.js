@@ -13,7 +13,7 @@ import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
-const APP_BUILD = 'mobile-ui17-20260516';
+const APP_BUILD = 'mobile-ui18-ai-analyst-20260528';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtNextRun(secs) {

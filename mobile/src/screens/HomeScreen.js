@@ -710,6 +710,24 @@ export default function HomeScreen({ navigation, route }) {
         </View>
       </View>
 
+      {/* AI Analyst entry — agentic Q&A over platform data */}
+      <TouchableOpacity
+        style={styles.analystBanner}
+        onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
+        activeOpacity={0.85}
+      >
+        <View style={styles.analystBannerIcon}>
+          <Text style={styles.analystBannerEmoji}>🤖</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.analystBannerTitle}>AI Analyst</Text>
+          <Text style={styles.analystBannerSub}>
+            Ask anything across your coverage — live data, cited & verified
+          </Text>
+        </View>
+        <Text style={styles.analystBannerArrow}>›</Text>
+      </TouchableOpacity>
+
       {/* Market Pulse strip */}
       {pulseResults.length > 0 && (
         <View style={styles.pulseSection}>
@@ -856,6 +874,34 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   label:    { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 10 },
+
+  // AI Analyst banner
+  analystBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.navy,
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 4,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  analystBannerIcon: {
+    width: 40, height: 40, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 12,
+  },
+  analystBannerEmoji: { fontSize: 20 },
+  analystBannerTitle: { color: colors.white, fontWeight: '800', fontSize: 16, letterSpacing: 0.3 },
+  analystBannerSub:   { color: 'rgba(255,255,255,0.62)', fontSize: 12, marginTop: 2 },
+  analystBannerArrow: { color: colors.gold, fontSize: 28, fontWeight: '300', marginLeft: 8 },
   inputRow: { flexDirection: 'row', gap: 10 },
   input: {
     flex: 1,
