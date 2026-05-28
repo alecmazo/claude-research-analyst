@@ -1783,8 +1783,9 @@ _NEWS_TTL = 900  # 15 minutes
 
 
 def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
-    """Pull up to `limit` recent news items from yfinance. Returns a list
-    of {title, url, publisher, pub_ts} dicts. Cached in _NEWS_CACHE."""
+    """Pull up to `limit` recent news items. Tries yfinance.Ticker.news first;
+    falls back to Yahoo Finance RSS if that comes up empty (the .news API
+    has been intermittent for months). Cached in _NEWS_CACHE."""
     tk = (ticker or "").upper().strip()
     if not tk: return []
     now = time.time()
@@ -1792,6 +1793,8 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
     if hit and (now - hit["ts"]) < _NEWS_TTL:
         return hit["items"][:limit]
     items: list[dict] = []
+
+    # ── 1. yfinance.Ticker.news (preferred when it works) ──────────────
     if _YFINANCE_OK:
         try:
             import yfinance as _yf
@@ -1806,7 +1809,6 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
                               or (content.get("provider") or {}).get("displayName", "")
                               or "").strip()
                 pub_ts = it.get("providerPublishTime") or content.get("pubDate") or None
-                # Normalize ISO date string to unix ts if needed
                 if isinstance(pub_ts, str):
                     try:
                         from datetime import datetime as _dt
@@ -1818,7 +1820,48 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
                                 "publisher": publisher, "pub_ts": pub_ts})
                 if len(items) >= 5: break
         except Exception as e:
-            print(f"⚠️  [news {tk}] fetch failed: {e!s:.150}", flush=True)
+            print(f"⚠️  [news {tk}] yfinance failed: {e!s:.150}", flush=True)
+
+    # ── 2. Yahoo Finance RSS fallback ──────────────────────────────────
+    # When yfinance.news returns nothing, hit the public RSS feed directly.
+    # Has no API key, no rate limit issues, and uses a stable URL format.
+    if not items:
+        try:
+            import urllib.request as _req
+            import xml.etree.ElementTree as _ET
+            from email.utils import parsedate_to_datetime
+            rss_url = (f"https://feeds.finance.yahoo.com/rss/2.0/headline"
+                       f"?s={tk}&region=US&lang=en-US")
+            req = _req.Request(rss_url, headers={"User-Agent": "Mozilla/5.0 DGA-Research/1.0"})
+            with _req.urlopen(req, timeout=6) as resp:
+                xml_text = resp.read().decode("utf-8", "replace")
+            root = _ET.fromstring(xml_text)
+            channel = root.find("channel")
+            if channel is not None:
+                for it in channel.findall("item")[:5]:
+                    title = (it.findtext("title") or "").strip()
+                    link  = (it.findtext("link") or "").strip()
+                    pub   = (it.findtext("pubDate") or "").strip()
+                    src   = (it.findtext("source") or "").strip()
+                    pub_ts = None
+                    if pub:
+                        try:
+                            pub_ts = int(parsedate_to_datetime(pub).timestamp())
+                        except Exception:
+                            pass
+                    if not title:
+                        continue
+                    items.append({
+                        "title":     title,
+                        "url":       link,
+                        "publisher": src or "Yahoo Finance",
+                        "pub_ts":    pub_ts,
+                    })
+            if items:
+                print(f"📰 [news {tk}] RSS fallback yielded {len(items)} items", flush=True)
+        except Exception as e:
+            print(f"⚠️  [news {tk}] RSS fallback failed: {e!s:.150}", flush=True)
+
     _NEWS_CACHE[tk] = {"ts": now, "items": items}
     return items[:limit]
 

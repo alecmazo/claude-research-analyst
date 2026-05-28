@@ -2564,32 +2564,34 @@
   }
 
   /* ── Saved reports: inline news headline line ────────────────────── */
-  .rep-news-line {
-    display: block;
-    margin-top: 4px;
+  a.rep-news-line,
+  .rep-table .rep-news-line {
+    display: block !important;
+    margin-top: 6px;
     font-size: 11px;
     color: var(--text-secondary);
     line-height: 1.4;
     text-decoration: none;
-    max-width: 280px;
+    max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     transition: color var(--t-fast);
     font-weight: 500;
     padding-right: 8px;
+    cursor: pointer;
   }
-  .rep-news-line::before {
+  a.rep-news-line::before {
     content: '📰 ';
-    opacity: 0.55;
+    opacity: 0.6;
     margin-right: 2px;
   }
-  .rep-news-line:hover {
-    color: var(--brand-500);
+  a.rep-news-line:hover {
+    color: var(--brand-500) !important;
     text-decoration: underline;
   }
-  html[data-theme="dark"] .rep-news-line { color: var(--text-tertiary); }
-  html[data-theme="dark"] .rep-news-line:hover { color: var(--brand-300); }
+  html[data-theme="dark"] a.rep-news-line { color: var(--text-tertiary); }
+  html[data-theme="dark"] a.rep-news-line:hover { color: var(--brand-300) !important; }
 
   /* ── Tab routing fade — prevents the white flash on tab switch ───── */
   .tab-panel { transition: opacity 180ms var(--ease-out); }
@@ -4819,9 +4821,12 @@
     s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
     s.innerHTML = JSON.stringify({
       symbols: [
-        ['S&P 500',     'SPX|1D'],
-        ['Nasdaq 100',  'NDX|1D'],
-        ['Dow',         'DJI|1D'],
+        // Fully-qualified TradingView symbols. Without the exchange prefix,
+        // bare 'SPX'/'NDX' get resolved to whatever low-cap stock happens to
+        // share the ticker (a Canadian gold miner in one case — yikes).
+        ['S&P 500',     'SP:SPX|1D'],
+        ['Nasdaq 100',  'NASDAQ:NDX|1D'],
+        ['Dow Jones',   'DJ:DJI|1D'],
         ['VIX',         'CBOE:VIX|1D'],
         ['10Y Treasury','TVC:US10Y|1D'],
         ['DXY',         'TVC:DXY|1D'],
@@ -4858,7 +4863,9 @@
       lineColor: 'rgba(91, 184, 212, 1)',
       topColor:  'rgba(91, 184, 212, 0.35)',
       bottomColor: 'rgba(91, 184, 212, 0)',
-      dateRanges: ['1d|1','5d|5','1m|30','3m|60','6m|120','12m|1D','60m|1W','all|1M'],
+      // Date ranges shown as tabs. 'ytd|1D' is accepted by the TV widget
+      // and renders a "YTD" tab between 6M and 1Y.
+      dateRanges: ['1d|1','5d|5','1m|30','3m|60','6m|120','ytd|1D','12m|1D','60m|1W','all|1M'],
     });
     wrap.appendChild(s);
   }
@@ -4881,16 +4888,20 @@
     const tbody = document.getElementById('reports-tbody');
     if (!tbody) return;
     const rows = Array.from(tbody.querySelectorAll('tr[data-ticker]'));
-    if (!rows.length) return;
+    if (!rows.length) { console.log('[news] no report rows yet'); return; }
     const tickers = rows.map(r => r.getAttribute('data-ticker')).filter(Boolean);
     if (!tickers.length) return;
     try {
       const r = await window.dgaFetch(
         '/api/news?tickers=' + encodeURIComponent(tickers.join(',')) + '&limit=1'
       );
-      if (!r.ok) return;
+      if (!r.ok) { console.warn('[news] HTTP', r.status); return; }
       const j = await r.json();
       const newsMap = (j && j.news) || {};
+      const counts = {};
+      Object.keys(newsMap).forEach(k => counts[k] = (newsMap[k] || []).length);
+      console.log('[news] response counts', counts);
+      let injected = 0;
       rows.forEach(row => {
         const tk = row.getAttribute('data-ticker');
         const items = newsMap[tk] || [];
@@ -4904,6 +4915,8 @@
           line.className = 'rep-news-line';
           line.target = '_blank';
           line.rel = 'noopener';
+          // Stop the row's "open report" click handler from firing
+          line.addEventListener('click', e => e.stopPropagation());
           cell.appendChild(line);
         }
         const title = (first.title || '').slice(0, 90);
@@ -4911,7 +4924,9 @@
         line.href = first.url || '#';
         line.textContent = title + pub;
         line.title = (first.title || '') + (first.publisher ? '  (' + first.publisher + ')' : '');
+        injected++;
       });
+      console.log('[news] injected', injected, 'of', rows.length, 'rows');
     } catch (e) {
       console.warn('[news]', e);
     }
