@@ -4446,6 +4446,13 @@
           </button>
           <span style="font-size:11.5px;color:var(--text-tertiary);">Replay the first-run onboarding any time.</span>
         </div>
+        <div style="border-top:1px solid var(--border-subtle);padding:12px 14px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button id="model-check-btn" class="tab-btn">🤖 Check AI Analyst model</button>
+            <span style="font-size:11.5px;color:var(--text-tertiary);">Verify the configured <code>AGENTIC_MODEL</code> is live (lists models + pings it).</span>
+          </div>
+          <pre id="model-check-out" style="display:none;margin-top:10px;font-size:11px;font-family:'SF Mono',monospace;color:var(--text-primary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:6px;padding:10px 12px;max-height:260px;overflow:auto;"></pre>
+        </div>
       </section>
 
       <!-- Create Fund / Managed Account -->
@@ -5004,12 +5011,35 @@
         '</div>';
     }
 
+    // Keep the last result around so the "Draft memo" button can use it.
+    let _lastResult = null;
+    let _lastQuestion = '';
+
+    function renderVerification(v) {
+      if (!v) return '';
+      if (v.verdict === 'clean') {
+        return '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">' +
+               '✓ Verification pass: every numeric claim is backed by a tool call.</div>';
+      }
+      if (v.verdict === 'unchecked') {
+        return '<div style="margin-top:12px;padding:8px 12px;background:var(--gray-100);border:1px solid var(--border-subtle);border-radius:6px;font-size:11.5px;color:var(--text-tertiary);">' +
+               '⚠ Verification did not run (degraded gracefully).</div>';
+      }
+      const flags = (v.flags || []).map(f =>
+        `<li style="margin:3px 0;"><strong>${esc(f.issue||'flag')}:</strong> ${esc(f.claim||'')}` +
+        (f.note ? ` — <span style="color:var(--text-tertiary);">${esc(f.note)}</span>` : '') + '</li>'
+      ).join('');
+      return '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);">' +
+             `<strong>⚠ Verification flagged ${(v.flags||[]).length} claim(s) — review before sharing:</strong>` +
+             `<ul style="margin:6px 0 0;padding-left:18px;">${flags}</ul></div>`;
+    }
+
     function renderResult(r) {
+      _lastResult = r;
       const tools = (r.tool_calls || []).map(tc => {
         const ic = TOOL_ICON[tc.tool] || '🔧';
         return `<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">${ic} ${esc(tc.tool)}</span>`;
       }).join('');
-      // Render answer with light markdown (paragraphs + ** bold)
       const answer = esc(r.answer || '(no answer)')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\n\n/g, '</p><p style="margin:8px 0;">')
@@ -5018,14 +5048,53 @@
       out.innerHTML =
         '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
           `<div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">${answer}</p></div>` +
+          renderVerification(r.verification) +
           (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
-          `<div style="margin-top:8px;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</div>` +
+          '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<button id="agentic-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>' +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
+          '</div>' +
         '</div>';
+      const memoBtn = document.getElementById('agentic-memo-btn');
+      if (memoBtn) memoBtn.addEventListener('click', () => _draftMemoFromAnalysis());
+    }
+
+    async function _draftMemoFromAnalysis() {
+      if (!_lastResult) return;
+      const btn = document.getElementById('agentic-memo-btn');
+      const v = _lastResult.verification;
+      // Option D gate: if verification flagged claims, force an explicit ack.
+      if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+        const ok = confirm(
+          `⚠ Verification flagged ${v.flags.length} unsupported/contradicted claim(s).\n\n` +
+          `Memos can be emailed to LPs — are you sure you want to draft a memo from ` +
+          `this analysis without resolving them first?`);
+        if (!ok) return;
+      }
+      const title = prompt('Memo title:', (_lastQuestion || 'Research Memo').slice(0, 70));
+      if (title === null) return;
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Rendering PDF…'; }
+      try {
+        const r = await window.dgaFetch('/api/memos/from-analysis', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ question: _lastQuestion, answer: _lastResult.answer,
+                                 title: (title||'').trim() }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+        window.toast('✓ Memo saved — find it under the 📄 Memos tab to assign & email.',
+                     { type: 'success', ttl: 5000 });
+      } catch (e) {
+        window.toast('Memo draft failed: ' + e.message, { type: 'error' });
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '📄 Draft memo from this'; }
+      }
     }
 
     btn.addEventListener('click', async () => {
       const question = (qEl.value || '').trim();
       if (question.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
+      _lastQuestion = question;
       btn.disabled = true; btn.textContent = '⏳ Working…';
       out.style.display = 'block';
       out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Starting…</div>';
@@ -12116,6 +12185,41 @@
         setText('sys-db', j.database === 'connected' || j.db_ok ? '✓ connected' : '⚠ ' + (j.database || 'unknown'));
       }
     } catch (_) { setText('sys-db', '— (check failed)'); }
+
+    // 🤖 Model check button — verify AGENTIC_MODEL is live
+    const mcBtn = document.getElementById('model-check-btn');
+    const mcOut = document.getElementById('model-check-out');
+    if (mcBtn && !mcBtn.dataset.wired) {
+      mcBtn.dataset.wired = '1';
+      mcBtn.addEventListener('click', async () => {
+        mcBtn.disabled = true; mcBtn.textContent = '⏳ Checking…';
+        if (mcOut) { mcOut.style.display = 'block'; mcOut.textContent = 'Querying Anthropic…'; }
+        try {
+          const r = await window.dgaFetch('/api/models/check');
+          const j = await r.json();
+          const lines = [];
+          lines.push('configured AGENTIC_MODEL: ' + (j.configured_agentic_model || '—'));
+          lines.push('in models.list():        ' +
+            (j.agentic_model_in_list === true ? '✓ YES'
+             : j.agentic_model_in_list === false ? '❌ NO — not a valid API id'
+             : '? (list failed)'));
+          lines.push('ping:                    ' +
+            (j.ping_ok ? `✓ "${j.ping_reply}" (resolved: ${j.ping_resolved_model||'?'})`
+             : '❌ ' + (j.ping_error || 'failed')));
+          if (j.available_models && j.available_models.length) {
+            lines.push('');
+            lines.push('available models:');
+            j.available_models.forEach(m => lines.push('  • ' + m));
+          }
+          if (j.list_error) lines.push('\nlist error: ' + j.list_error);
+          if (mcOut) mcOut.textContent = lines.join('\n');
+        } catch (e) {
+          if (mcOut) mcOut.textContent = 'Check failed: ' + e.message;
+        } finally {
+          mcBtn.disabled = false; mcBtn.textContent = '🤖 Check AI Analyst model';
+        }
+      });
+    }
   }
 
   // ── 📡 RSS feed panel: surfaces the public feed URL + copy button ──

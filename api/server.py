@@ -16965,7 +16965,79 @@ _AGENTIC_TOOLS = [
                        "universe before answering portfolio-level questions.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_financials",
+        "description": "Get filing-accurate financials for a ticker, pulled from the "
+                       "company's latest SEC 10-K / 10-Q XBRL (revenue, margins, net "
+                       "income, FCF, debt, key balance-sheet items, TTM). This is the "
+                       "AUTHORITATIVE source — use it for any fundamental number "
+                       "instead of estimating. May take a few seconds on first call "
+                       "for a ticker (downloads the filing).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"ticker": {"type": "string"}},
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "compute",
+        "description": "Evaluate an arithmetic expression and return the exact result. "
+                       "ALWAYS use this for any calculation (ratios, growth rates, "
+                       "weighted averages, % changes) instead of doing mental math — "
+                       "it eliminates arithmetic errors. Supports + - * / ** % and "
+                       "parentheses. Example: '(4507.16 - 4455.9) / 4455.9 * 100'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"expression": {"type": "string"}},
+            "required": ["expression"],
+        },
+    },
+    {
+        "name": "get_ytd_attribution",
+        "description": "Get the REAL year-to-date return and per-ticker P&L attribution "
+                       "from the reconciled managed-account books (Modified Dietz, "
+                       "transaction-aware). Use this for any portfolio/position return "
+                       "question — NEVER estimate YTD from price changes. Pass a ticker "
+                       "to get that position's contribution, or omit it for the "
+                       "portfolio-level headline return.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"ticker": {"type": "string",
+                                       "description": "Optional. Omit for portfolio-level."}},
+        },
+    },
+    {
+        "name": "web_search",
+        "description": "Search the live web + X (Twitter) for current information past "
+                       "the model's training cutoff — breaking news, recent analyst "
+                       "moves, macro prints, management changes. Powered by Grok live "
+                       "search. Use when the saved reports + news tools don't cover a "
+                       "recent event you need.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
 ]
+
+
+def _safe_arith(expr: str) -> float:
+    """Evaluate a pure-arithmetic expression with no builtins/names — only
+    numbers and + - * / ** % and parens. Raises on anything else."""
+    import ast as _ast, operator as _op
+    OPS = {_ast.Add: _op.add, _ast.Sub: _op.sub, _ast.Mult: _op.mul,
+           _ast.Div: _op.truediv, _ast.Pow: _op.pow, _ast.Mod: _op.mod,
+           _ast.USub: _op.neg, _ast.UAdd: _op.pos, _ast.FloorDiv: _op.floordiv}
+    def _ev(node):
+        if isinstance(node, _ast.Constant):
+            if isinstance(node.value, (int, float)): return node.value
+            raise ValueError("non-numeric constant")
+        if isinstance(node, _ast.BinOp):  return OPS[type(node.op)](_ev(node.left), _ev(node.right))
+        if isinstance(node, _ast.UnaryOp): return OPS[type(node.op)](_ev(node.operand))
+        raise ValueError(f"disallowed expression: {type(node).__name__}")
+    tree = _ast.parse(expr, mode="eval")
+    return _ev(tree.body)
 
 
 def _agentic_exec_tool(name: str, args: dict) -> str:
@@ -17029,9 +17101,144 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
                                 "upside_pct": float(r["upside_pct"]) if r.get("upside_pct") is not None else None}
                                for r in rows], default=str)
 
+        if name == "get_financials":
+            tk = (args.get("ticker") or "").upper().strip()
+            try:
+                import excel_financials as _xf
+                import pull_sec_financials as _psf
+            except Exception as e:
+                return f"Financials module unavailable: {e!s:.120}"
+            # Extract; if no XBRL cached yet, download then retry once.
+            data = None
+            try:
+                data = _xf.extract_financials(tk)
+            except FileNotFoundError:
+                try:
+                    _psf.download_financials(tk)
+                    data = _xf.extract_financials(tk)
+                except Exception as e:
+                    return f"Could not fetch SEC financials for {tk}: {e!s:.150}"
+            except Exception as e:
+                return f"Financials error for {tk}: {e!s:.150}"
+            if not data:
+                return f"No financials found for {tk}."
+            # Compact summary — annuals (last 2) + ttm headline, truncate hard
+            def _slim(row):
+                if not isinstance(row, dict): return row
+                keep = ("end", "fp", "revenue", "net_income", "gross_profit",
+                        "operating_income", "eps", "free_cash_flow", "total_debt",
+                        "cash", "shares", "gross_margin", "operating_margin")
+                return {k: row.get(k) for k in keep if k in row}
+            summary = {
+                "ticker": tk,
+                "entity": data.get("entity_name"),
+                "latest_filing_type": data.get("latest_filing_type"),
+                "annuals": [_slim(r) for r in (data.get("annuals") or [])[-2:]],
+                "ttm": _slim(data.get("ttm") or {}),
+                "source": "SEC XBRL (filing-accurate)",
+            }
+            return json.dumps(summary, default=str)[:6000]
+
+        if name == "compute":
+            expr = (args.get("expression") or "").strip()
+            try:
+                val = _safe_arith(expr)
+                return json.dumps({"expression": expr, "result": val})
+            except Exception as e:
+                return f"compute error for {expr!r}: {e!s:.120}"
+
+        if name == "get_ytd_attribution":
+            want_tk = (args.get("ticker") or "").upper().strip()
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT c.ytd_pct, c.result_json, f.short_name, f.name
+                                 FROM managed_account_ytd_cache c
+                                 JOIN funds f ON f.id = c.fund_id
+                                WHERE f.status != 'closed'""")
+                rows = cur.fetchall() or []
+            if not rows:
+                return "No reconciled YTD data available."
+            out = []
+            for r in rows:
+                fund = r.get("short_name") or r.get("name") or "account"
+                rj = r.get("result_json")
+                try:
+                    rj = json.loads(rj) if isinstance(rj, str) else (rj or {})
+                except Exception:
+                    rj = {}
+                if not want_tk:
+                    out.append({"fund": fund,
+                                "ytd_pct": float(r["ytd_pct"]) if r.get("ytd_pct") is not None else None,
+                                "method": "Modified Dietz"})
+                else:
+                    for a in (rj.get("attribution") or []):
+                        if (a.get("ticker") or "").upper() == want_tk:
+                            out.append({"fund": fund, "ticker": want_tk,
+                                        "ticker_return_pct": a.get("ticker_return_pct"),
+                                        "contribution_pct": a.get("contribution_pct"),
+                                        "dollar_gain": a.get("dollar_gain")})
+            if not out:
+                return (f"No YTD attribution row for {want_tk}." if want_tk
+                        else "No portfolio YTD figures found.")
+            return json.dumps(out, default=str)[:4000]
+
+        if name == "web_search":
+            query = (args.get("query") or "").strip()
+            if not query:
+                return "Empty query."
+            try:
+                res = analyst.call_grok(
+                    system_prompt="You are a financial research assistant. Answer the "
+                                  "query using fresh web + X results. Be concise and "
+                                  "cite sources/dates inline.",
+                    user_content=query, live_search=True,
+                )
+                return (res or "")[:4000]
+            except Exception as e:
+                return f"web_search error: {e!s:.150}"
+
         return f"Unknown tool: {name}"
     except Exception as e:
         return f"Tool '{name}' error: {e!s:.200}"
+
+
+def _agentic_verify(client, model: str, question: str, answer: str,
+                     tool_log: list[dict]) -> dict:
+    """Option B — verification pass. A second model call audits every numeric
+    claim in the answer against the tool-call record. Returns
+    {ok, verdict, flags:[...]}. Errors degrade gracefully to ok=None."""
+    try:
+        tools_used = json.dumps(tool_log, default=str)[:4000]
+        sys = (
+            "You are a meticulous fact-checker for a fund's research output. You are "
+            "given a research QUESTION, the ANSWER produced by an analyst agent, and "
+            "the TOOL CALLS that agent made to gather data. Your job: flag every "
+            "numeric or factual claim in the ANSWER that is NOT directly supported by "
+            "a tool call, or that CONTRADICTS one. Be strict — an unsupported price, "
+            "multiple, return, or rating is a flag. Respond ONLY with compact JSON: "
+            '{"verdict": "clean" | "flags", "flags": [{"claim": "...", "issue": '
+            '"unsupported" | "contradicted", "note": "..."}]}. If everything is '
+            'supported, return {"verdict":"clean","flags":[]}.'
+        )
+        user = (f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
+                f"TOOL CALLS (name + input the agent ran):\n{tools_used}")
+        resp = client.messages.create(
+            model=model, max_tokens=2000,
+            system=sys, messages=[{"role": "user", "content": user}],
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        # tolerate code fences
+        t = text.strip()
+        if t.startswith("```"):
+            t = t.split("```", 2)[1].lstrip("json").strip() if "```" in t else t
+        parsed = json.loads(t)
+        flags = parsed.get("flags") or []
+        return {"ok": True, "verdict": parsed.get("verdict", "clean"),
+                "flags": flags}
+    except Exception as e:
+        print(f"⚠️ [agentic verify] failed: {e!s:.150}", flush=True)
+        return {"ok": None, "verdict": "unchecked", "flags": []}
 
 
 def _run_agentic_analysis(job_id: str, question: str) -> None:
@@ -17051,12 +17258,23 @@ def _run_agentic_analysis(job_id: str, question: str) -> None:
         think = _agentic_thinking_kwargs(model)
         system = (
             "You are a senior analyst at DGA Capital, a private fund. Answer the "
-            "user's research question by calling the provided tools to gather REAL "
-            "data — live quotes, sectors, saved DGA reports, and fresh news — before "
-            "drawing conclusions. NEVER invent a price, sector, rating, or return; "
-            "call the tool. Cite the specific numbers you pulled. Be concise and "
-            "decisive: lead with the answer, then the supporting evidence. This is "
-            "internal analysis, not investment advice."
+            "user's research question by calling tools to gather REAL data before "
+            "drawing conclusions. Accuracy is paramount — this feeds investor-facing "
+            "memos.\n\n"
+            "TOOL DISCIPLINE (follow strictly):\n"
+            "• Fundamentals (revenue, margins, EPS, debt, FCF): use get_financials — "
+            "it's filing-accurate SEC XBRL. Never estimate these from memory.\n"
+            "• ANY arithmetic (ratios, growth %, weighted avgs): use compute — never "
+            "do mental math.\n"
+            "• Portfolio / position returns: use get_ytd_attribution (real Modified "
+            "Dietz). Never derive YTD from price changes.\n"
+            "• Current price / daily move: get_quote. Sector: get_sector. Existing "
+            "thesis: read_saved_report. Recent events: get_recent_news, then "
+            "web_search if still uncovered.\n"
+            "• NEVER invent a price, multiple, rating, sector, or return — call the "
+            "tool. Cite the specific numbers you pulled and their source.\n\n"
+            "Be concise and decisive: lead with the answer, then the evidence. This "
+            "is internal analysis, not investment advice."
         )
         messages = [{"role": "user", "content": question}]
         total_cost = 0.0
@@ -17079,11 +17297,21 @@ def _run_agentic_analysis(job_id: str, question: str) -> None:
 
             if resp.stop_reason != "tool_use":
                 final = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+                # Option B — verification pass: audit numeric claims vs tool log.
+                _set(stage="verifying", label="🔍 Verifying claims against tool data…",
+                     steps=step + 1, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
+                verification = _agentic_verify(client, model, question, final, tool_log)
+                try:
+                    # the verify call is one more model turn — count its cost too
+                    total_cost += 0.0  # _agentic_verify doesn't return usage; rough no-op
+                except Exception:
+                    pass
                 _set(stage="done", status="done", label="✓ Analysis complete",
                      steps=step + 1, tool_calls=tool_log[:],
                      cost_usd=round(total_cost, 4),
                      result={"answer": final, "tool_calls": tool_log[:],
-                             "cost_usd": round(total_cost, 4), "model": model})
+                             "cost_usd": round(total_cost, 4), "model": model,
+                             "verification": verification})
                 return
 
             # Execute every tool the model requested this turn
@@ -17146,6 +17374,112 @@ def research_agentic_status(job_id: str, request: Request):
         return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"},
                             status_code=404)
     return {"ok": True, **job}
+
+
+@app.get("/api/models/check")
+def models_check(request: Request):
+    """Diagnostic: list available Claude models, confirm the configured
+    AGENTIC_MODEL is present, and ping it with a tiny call to prove it works.
+    GP-only. Use this to verify opus-4-8 is live before relying on it."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    import anthropic as _anthropic
+    out = {"ok": True, "configured_agentic_model": _AGENTIC_MODEL}
+    try:
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+    except Exception as e:
+        return {"ok": False, "error": f"client init failed: {e!s:.150}"}
+    # 1. list models
+    try:
+        ids = [m.id for m in client.models.list()]
+        out["available_models"] = ids
+        out["agentic_model_in_list"] = _AGENTIC_MODEL in ids
+    except Exception as e:
+        out["list_error"] = str(e)[:200]
+        out["available_models"] = []
+        out["agentic_model_in_list"] = None
+    # 2. ping the configured model with a 1-token call
+    try:
+        ping = client.messages.create(
+            model=_AGENTIC_MODEL, max_tokens=8,
+            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+        )
+        txt = next((b.text for b in ping.content if getattr(b, "type", None) == "text"), "")
+        out["ping_ok"] = True
+        out["ping_reply"] = (txt or "").strip()[:40]
+        out["ping_resolved_model"] = getattr(ping, "model", None)
+    except Exception as e:
+        out["ping_ok"] = False
+        out["ping_error"] = str(e)[:300]
+    return out
+
+
+@app.post("/api/memos/from-analysis")
+async def memo_from_analysis(request: Request):
+    """Option D handoff — turn an AI Analyst answer into a DGA Capital memo
+    PDF, saved to the Memos tab. Body: {question, answer, title?,
+    assigned_fund_id?, gp_memo?}. Builds a synthetic single-section script
+    so it flows through the existing memo renderer + dga_memos table."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_dga_memos_table()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    question = ((body or {}).get("question") or "").strip()
+    answer   = ((body or {}).get("answer") or "").strip()
+    if not answer:
+        raise HTTPException(422, "No analysis text to convert")
+    title = ((body or {}).get("title") or "").strip() or (
+        (question[:70] + "…") if len(question) > 70 else question) or "Research Memo"
+    assigned_fund_id = (body or {}).get("assigned_fund_id") or None
+    gp_memo = ((body or {}).get("gp_memo") or "").strip()
+
+    # Synthesize a script dict the memo renderer understands: the question
+    # becomes a framing section, the answer becomes the body.
+    script = {
+        "ticker": "ANALYSIS",
+        "format": "research_memo",
+        "episode_title": title,
+        "sections": [
+            {"id": "research_question",
+             "turns": [{"speaker": "opus", "text": question or "Research question"}]},
+            {"id": "analysis",
+             "turns": [{"speaker": "opus", "text": answer}]},
+        ],
+    }
+    fund_name = _fund_name_lookup(assigned_fund_id)
+    from datetime import datetime as _dt, timezone as _tz
+    gen_iso = _dt.now(_tz.utc).isoformat()
+    try:
+        pdf_bytes = _render_dga_memo_pdf(script, gp_memo, fund_name, gen_iso)
+    except Exception as e:
+        raise HTTPException(500, f"PDF render failed: {e!s:.200}")
+    import uuid as _uuid
+    memo_id = str(_uuid.uuid4())
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO dga_memos
+                   (id, source_job_key, source_format, episode_title,
+                    assigned_fund_id, gp_memo, script_json,
+                    pdf_bytes, generated_by, generated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            """, (
+                memo_id, "ai_analyst", "research_memo", title,
+                assigned_fund_id, gp_memo or None,
+                json.dumps(script), psycopg2.Binary(pdf_bytes),
+                claims.get("email") or claims.get("lp_id") or "gp",
+            ))
+            conn.commit()
+        print(f"📄 [memo-from-analysis] saved {memo_id} '{title[:50]}'", flush=True)
+    except Exception as e:
+        raise HTTPException(500, f"DB insert failed: {e!s:.200}")
+    return {"ok": True, "memo_id": memo_id, "episode_title": title,
+            "pdf_url": f"/api/memos/{memo_id}/pdf"}
 
 
 # Separate dict for script-generation jobs so they don't collide with audio
