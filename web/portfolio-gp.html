@@ -4821,19 +4821,21 @@
     s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
     s.innerHTML = JSON.stringify({
       symbols: [
-        // Licensing note: SP:SPX, NASDAQ:NDX, DJ:DJI are paid feeds that
-        // require a TradingView subscription — the free widget shows a
-        // "ghost" placeholder for them. Use the ETF proxies (SPY/QQQ/DIA)
-        // which track the indices exactly and are real-time + free.
-        ['S&P 500',     'AMEX:SPY|1D'],
-        ['Nasdaq 100',  'NASDAQ:QQQ|1D'],
-        ['Dow Jones',   'AMEX:DIA|1D'],
-        ['Russell 2000','AMEX:IWM|1D'],
-        ['VIX',         'CBOE:VIX|1D'],
-        ['10Y Treasury','TVC:US10Y|1D'],
-        ['DXY',         'TVC:DXY|1D'],
-        ['Gold',        'TVC:GOLD|1D'],
-        ['Crude WTI',   'TVC:USOIL|1D'],
+        // Licensing note: TradingView's free embed can't render licensed
+        // index/derivative feeds (SP:SPX, NASDAQ:NDX, DJ:DJI, CBOE:VIX,
+        // TVC:US10Y, TVC:DXY all show a "ghost" placeholder for free users).
+        // Use ETF proxies which are real-time + free and track the
+        // underlying instruments tightly.
+        ['S&P 500',     'AMEX:SPY|1D'],   // SPDR S&P 500 ETF
+        ['Nasdaq 100',  'NASDAQ:QQQ|1D'], // Invesco QQQ Trust
+        ['Dow Jones',   'AMEX:DIA|1D'],   // SPDR Dow Industrial ETF
+        ['Russell 2000','AMEX:IWM|1D'],   // iShares Russell 2000 ETF
+        ['VIX',         'AMEX:VIXY|1D'],  // ProShares VIX Short-Term Futures ETF
+        ['10Y Treasury','AMEX:IEF|1D'],   // iShares 7-10 Year Treasury Bond ETF (proxies 10Y; bond PRICE so inverse of yield)
+        ['Long Treasury','AMEX:TLT|1D'],  // iShares 20+ Year Treasury Bond ETF
+        ['US Dollar',   'AMEX:UUP|1D'],   // Invesco DB US Dollar Index Bullish Fund
+        ['Gold',        'TVC:GOLD|1D'],   // Free TVC continuous-CFD
+        ['Crude WTI',   'TVC:USOIL|1D'],  // Free TVC continuous-CFD
         ['Bitcoin',     'BITSTAMP:BTCUSD|1D'],
       ],
       chartOnly: false,
@@ -5128,6 +5130,15 @@
           '</tr>'
         );
       }).join('');
+
+      // Trigger inline news headlines once the rows are in the DOM. The
+      // old setTimeout-from-loadReports approach fired before this point
+      // because tbody.innerHTML is set inside the async quotes .then().
+      try {
+        if (typeof window.loadNewsForReports === 'function') {
+          setTimeout(window.loadNewsForReports, 0);
+        }
+      } catch {}
 
       // Click row → open default (Grok) report viewer; per-pill buttons get
       // their own opener handlers below

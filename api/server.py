@@ -1825,11 +1825,15 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
     # ── 2. Yahoo Finance RSS fallback ──────────────────────────────────
     # When yfinance.news returns nothing, hit the public RSS feed directly.
     # Has no API key, no rate limit issues, and uses a stable URL format.
+    import urllib.request as _req
+    import xml.etree.ElementTree as _ET
+    from email.utils import parsedate_to_datetime
+    def _strip_html(s: str) -> str:
+        import re as _re
+        return _re.sub(r"<[^>]+>", "", s or "").strip()
+
     if not items:
         try:
-            import urllib.request as _req
-            import xml.etree.ElementTree as _ET
-            from email.utils import parsedate_to_datetime
             rss_url = (f"https://feeds.finance.yahoo.com/rss/2.0/headline"
                        f"?s={tk}&region=US&lang=en-US")
             req = _req.Request(rss_url, headers={"User-Agent": "Mozilla/5.0 DGA-Research/1.0"})
@@ -1845,22 +1849,66 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
                     src   = (it.findtext("source") or "").strip()
                     pub_ts = None
                     if pub:
-                        try:
-                            pub_ts = int(parsedate_to_datetime(pub).timestamp())
-                        except Exception:
-                            pass
-                    if not title:
-                        continue
+                        try: pub_ts = int(parsedate_to_datetime(pub).timestamp())
+                        except Exception: pass
+                    if not title: continue
                     items.append({
                         "title":     title,
                         "url":       link,
                         "publisher": src or "Yahoo Finance",
                         "pub_ts":    pub_ts,
+                        "source":    "yahoo_rss",
                     })
             if items:
-                print(f"📰 [news {tk}] RSS fallback yielded {len(items)} items", flush=True)
+                print(f"📰 [news {tk}] Yahoo RSS yielded {len(items)} items", flush=True)
         except Exception as e:
-            print(f"⚠️  [news {tk}] RSS fallback failed: {e!s:.150}", flush=True)
+            print(f"⚠️  [news {tk}] Yahoo RSS failed: {e!s:.150}", flush=True)
+
+    # ── 3. Google News RSS fallback (most reliable, rate-limit-free) ───
+    # When both yfinance and Yahoo RSS come up empty, Google News almost
+    # always has fresh items keyed off "<ticker> stock".
+    if not items:
+        try:
+            from urllib.parse import quote as _q
+            query = _q(f"{tk} stock")
+            g_url = (f"https://news.google.com/rss/search"
+                     f"?q={query}&hl=en-US&gl=US&ceid=US:en")
+            req = _req.Request(g_url, headers={"User-Agent": "Mozilla/5.0 DGA-Research/1.0"})
+            with _req.urlopen(req, timeout=6) as resp:
+                xml_text = resp.read().decode("utf-8", "replace")
+            root = _ET.fromstring(xml_text)
+            channel = root.find("channel")
+            if channel is not None:
+                for it in channel.findall("item")[:5]:
+                    # Google News titles are formatted "Article title - Source"
+                    raw_title = (it.findtext("title") or "").strip()
+                    src = ""
+                    title = raw_title
+                    # The <source url="..."> child carries the publisher
+                    src_el = it.find("source")
+                    if src_el is not None and (src_el.text or "").strip():
+                        src = src_el.text.strip()
+                        # Strip trailing "- Source" from title if present
+                        if raw_title.endswith(" - " + src):
+                            title = raw_title[: -(len(src) + 3)].strip()
+                    link  = (it.findtext("link") or "").strip()
+                    pub   = (it.findtext("pubDate") or "").strip()
+                    pub_ts = None
+                    if pub:
+                        try: pub_ts = int(parsedate_to_datetime(pub).timestamp())
+                        except Exception: pass
+                    if not title: continue
+                    items.append({
+                        "title":     title,
+                        "url":       link,
+                        "publisher": src or "Google News",
+                        "pub_ts":    pub_ts,
+                        "source":    "google_news",
+                    })
+            if items:
+                print(f"📰 [news {tk}] Google News yielded {len(items)} items", flush=True)
+        except Exception as e:
+            print(f"⚠️  [news {tk}] Google News failed: {e!s:.150}", flush=True)
 
     _NEWS_CACHE[tk] = {"ts": now, "items": items}
     return items[:limit]
