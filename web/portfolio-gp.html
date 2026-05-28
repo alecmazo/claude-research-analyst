@@ -3064,31 +3064,6 @@
       </div>
     </section>
 
-    <!-- Hero analyze card -->
-    <div class="hero-card">
-      <div class="hero-label">Analyze Ticker</div>
-      <div class="hero-row">
-        <input id="hero-ticker" class="hero-input" placeholder="e.g. AAPL" autocapitalize="characters" autocomplete="off">
-        <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
-      </div>
-      <div id="hero-hint"></div>
-      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
-          <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
-          <select id="hero-llm" style="font-size:11px;font-weight:700;border:1px solid var(--panel-edge);border-radius:4px;padding:3px 6px;background:#fff;color:#0A1628;cursor:pointer;">
-            <option value="grok"   selected>Grok 4.20 (default)</option>
-            <option value="claude">Claude Opus 4.1</option>
-            <option value="both">Both (sequential ~5 min)</option>
-          </select>
-        </label>
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
-          <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
-        </label>
-        <span id="hero-gamma-status" style="font-size:9px;color:var(--dimmer);font-style:italic;">requires Gamma API key</span>
-      </div>
-    </div>
-
     <!-- Saved Reports -->
     <section class="panel" data-wid="saved-reports" data-expanded="1">
       <header class="panel-head">
@@ -3219,7 +3194,63 @@
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
   <aside class="col-right">
 
-    <!-- Market Scan -->
+    <!-- Hero analyze card — moved to top of right column -->
+    <div class="hero-card">
+      <div class="hero-label">Analyze Ticker</div>
+      <div class="hero-row">
+        <input id="hero-ticker" class="hero-input" placeholder="e.g. AAPL" autocapitalize="characters" autocomplete="off">
+        <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
+      </div>
+      <div id="hero-hint"></div>
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+          <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
+          <select id="hero-llm" style="font-size:11px;font-weight:700;border:1px solid var(--panel-edge);border-radius:4px;padding:3px 6px;background:#fff;color:#0A1628;cursor:pointer;">
+            <option value="grok"   selected>Grok 4.20 (default)</option>
+            <option value="claude">Claude Opus 4.1</option>
+            <option value="both">Both (sequential ~5 min)</option>
+          </select>
+        </label>
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+          <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
+        </label>
+        <span id="hero-gamma-status" style="font-size:9px;color:var(--dimmer);font-style:italic;">requires Gamma API key</span>
+      </div>
+    </div>
+
+    <!-- Daily Brief -->
+    <section class="panel" data-wid="daily-brief" style="overflow:visible;">
+      <details open>
+        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+          <span class="panel-title">Daily Brief</span>
+          <span class="panel-badge tab-meta" id="brief-meta">—</span>
+          <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;font-size:9px;"
+            onclick="event.stopPropagation();triggerBrief();">📰 Run</button>
+          <span class="ac-chevron" style="margin-left:4px;">›</span>
+        </summary>
+        <div id="brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
+          <div class="tab-loading">Loading…</div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Trending tickers — live watchlist quotes -->
+    <section class="panel" data-wid="watchlist-live">
+      <header class="panel-head">
+        <span class="panel-title">Today's Movers</span>
+        <span class="panel-badge" id="trending-count">LIVE</span>
+        <button id="trending-run-brief" type="button"
+                title="Run Daily Brief now (Grok live search · ~30-60s)"
+                style="margin-left:auto;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">📰 Run Brief</button>
+        <span class="panel-action" id="trending-action" style="cursor:default;margin-left:6px;">⟳ AUTO</span>
+      </header>
+      <div class="panel-body" style="padding:0" id="trending-rows">
+        <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Market Scan — moved to bottom of right column -->
     <section class="panel" data-wid="market-scan">
       <header class="panel-head">
         <span class="panel-title">Market Scan</span>
@@ -3240,40 +3271,6 @@
         </div>
         <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
       </div>
-    </section>
-
-    <!-- Trending tickers — live watchlist quotes -->
-    <section class="panel" data-wid="watchlist-live">
-      <header class="panel-head">
-        <span class="panel-title">Today's Movers</span>
-        <span class="panel-badge" id="trending-count">LIVE</span>
-        <button id="trending-run-brief" type="button"
-                title="Run Daily Brief now (Grok live search · ~30-60s)"
-                style="margin-left:auto;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">📰 Run Brief</button>
-        <span class="panel-action" id="trending-action" style="cursor:default;margin-left:6px;">⟳ AUTO</span>
-      </header>
-      <div class="panel-body" style="padding:0" id="trending-rows">
-        <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
-      </div>
-    </section>
-
-    <!-- Market Pulse removed — replaced by inline news headlines on each
-         saved-report row (no LLM token cost, refreshed every 15 min). -->
-
-    <!-- Daily Brief — moved up to fill the void -->
-    <section class="panel" data-wid="daily-brief" style="overflow:visible;">
-      <details open>
-        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
-          <span class="panel-title">Daily Brief</span>
-          <span class="panel-badge tab-meta" id="brief-meta">—</span>
-          <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;font-size:9px;"
-            onclick="event.stopPropagation();triggerBrief();">📰 Run</button>
-          <span class="ac-chevron" style="margin-left:4px;">›</span>
-        </summary>
-        <div id="brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
-          <div class="tab-loading">Loading…</div>
-        </div>
-      </details>
     </section>
 
   </aside>
