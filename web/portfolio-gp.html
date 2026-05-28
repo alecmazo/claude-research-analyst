@@ -2974,6 +2974,35 @@
       </div>
     </section>
 
+    <!-- ── 🤖 AI Analyst (agentic — Claude calls tools over our data) ─── -->
+    <section class="panel" data-wid="ai-analyst" data-collapsible="1" style="margin-bottom:12px;">
+      <header class="panel-head">
+        <span class="panel-title">🤖 AI Analyst</span>
+        <span class="panel-badge" id="agentic-model-badge" style="background:#f3e8ff;color:#6b21a8;">AGENTIC</span>
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-weight:500;">pulls live quotes · saved reports · news</span>
+      </header>
+      <div style="padding:14px 16px;">
+        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
+          Ask an open-ended research question. Claude autonomously pulls live quotes,
+          your saved Grok/Claude reports, sector data, and fresh news — then answers
+          with cited numbers. <em>Multi-step; ~$0.05–0.30 depending on depth.</em>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+          <textarea id="agentic-q" rows="2" placeholder="e.g. Compare NVDA and AMD on valuation and recent catalysts — which has more upside from here? Use our saved reports."
+            style="flex:1;border:1px solid var(--border-default);border-radius:6px;padding:9px 11px;font-size:13px;font-family:inherit;line-height:1.5;color:var(--text-primary);background:var(--bg-elevated);resize:vertical;"></textarea>
+          <button id="agentic-run-btn" class="btn-primary" style="white-space:nowrap;align-self:stretch;padding:0 18px;">🤖 Analyze</button>
+        </div>
+        <!-- Example chips -->
+        <div id="agentic-examples" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          <button class="agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Which of my covered names moved most today and why?</button>
+          <button class="agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Summarize the bull vs bear case on NVDA from our reports.</button>
+          <button class="agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Any fresh catalysts across my coverage this week?</button>
+        </div>
+        <!-- Live progress + result -->
+        <div id="agentic-out" style="display:none;margin-top:14px;"></div>
+      </div>
+    </section>
+
     <!-- ── Idea Generator (movers ≥ ±4% from your universe) ─────────── -->
     <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" style="margin-bottom:12px;">
       <header class="panel-head" id="idea-gen-head" style="cursor:pointer;user-select:none;">
@@ -4936,6 +4965,105 @@
     }
   }
   window.loadNewsForReports = loadNewsForReports;
+
+  // ── 🤖 AI Analyst (agentic) — kick off a run + poll live progress ──
+  (function wireAgentic() {
+    const btn = document.getElementById('agentic-run-btn');
+    const qEl = document.getElementById('agentic-q');
+    const out = document.getElementById('agentic-out');
+    if (!btn || !qEl || !out) return;
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+
+    document.querySelectorAll('.agentic-ex').forEach(chip => {
+      chip.addEventListener('click', () => { qEl.value = chip.textContent.trim(); qEl.focus(); });
+    });
+
+    const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
+    const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+                        get_recent_news:'📰', list_saved_reports:'📚' };
+
+    let pollTimer = null;
+    function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+    function renderProgress(d) {
+      const tools = (d.tool_calls || []).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        const arg = tc.input ? esc(JSON.stringify(tc.input).slice(0, 50)) : '';
+        return `<div style="font-size:11px;color:var(--text-secondary);padding:2px 0;">${ic} <strong>${esc(tc.tool)}</strong> <span style="color:var(--text-tertiary);font-family:'SF Mono',monospace;">${arg}</span></div>`;
+      }).join('');
+      const cost = d.cost_usd != null ? ` · 💸 $${Number(d.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>' +
+            `<span style="font-size:12px;font-weight:700;color:var(--text-primary);">${esc(d.label || 'Working…')}</span>` +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}</span>` +
+          '</div>' +
+          (tools ? `<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">${tools}</div>` : '') +
+        '</div>';
+    }
+
+    function renderResult(r) {
+      const tools = (r.tool_calls || []).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        return `<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">${ic} ${esc(tc.tool)}</span>`;
+      }).join('');
+      // Render answer with light markdown (paragraphs + ** bold)
+      const answer = esc(r.answer || '(no answer)')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n\n/g, '</p><p style="margin:8px 0;">')
+        .replace(/\n/g, '<br>');
+      const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
+          `<div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">${answer}</p></div>` +
+          (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
+          `<div style="margin-top:8px;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</div>` +
+        '</div>';
+    }
+
+    btn.addEventListener('click', async () => {
+      const question = (qEl.value || '').trim();
+      if (question.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
+      btn.disabled = true; btn.textContent = '⏳ Working…';
+      out.style.display = 'block';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Starting…</div>';
+      const t0 = Date.now();
+      try {
+        const r0 = await window.dgaFetch('/api/research/agentic', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ question }),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start');
+        const jobId = d0.job_id;
+        pollTimer = setInterval(async () => {
+          if (Date.now() - t0 > 180000) {   // 3-min hard cap
+            stopPoll(); out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 3 min.</div>';
+            btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
+          }
+          try {
+            const r = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+            const d = await r.json();
+            if (d.status === 'done' && d.result) {
+              stopPoll(); renderResult(d.result);
+              btn.disabled = false; btn.textContent = '🤖 Analyze';
+            } else if (d.status === 'error') {
+              stopPoll();
+              out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
+              btn.disabled = false; btn.textContent = '🤖 Analyze';
+            } else {
+              renderProgress(d);
+            }
+          } catch (_) { /* transient */ }
+        }, 1200);
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
+        btn.disabled = false; btn.textContent = '🤖 Analyze';
+      }
+    });
+  })();
 
   async function loadReports() {
     try {

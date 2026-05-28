@@ -16874,6 +16874,280 @@ except Exception:
 _podcast_jobs: dict[str, dict] = {}
 _podcast_jobs_lock = threading.Lock()
 
+# ═══════════════════════════════════════════════════════════════════════
+# AGENTIC FINANCIAL ANALYST — Claude runs a tool-use loop over the platform's
+# own data (live quotes, sector, saved Grok/Claude reports, fresh news) to
+# answer open-ended research questions. Multi-step + autonomous: the model
+# decides which tools to call and when it has enough to answer.
+#
+# Model: env AGENTIC_MODEL, defaults to the same Opus the rest of the app
+# uses (claude-opus-4-1) so it works TODAY with no 400s. Override to
+# claude-opus-4-7 / claude-opus-4-8 once you've confirmed the ID via
+# client.models.list(). Newer Opus needs adaptive thinking + effort instead
+# of budget_tokens — see _agentic_thinking_kwargs() which adapts by model.
+# ═══════════════════════════════════════════════════════════════════════
+_AGENTIC_MODEL = os.environ.get("AGENTIC_MODEL", "").strip() or getattr(
+    analyst, "CLAUDE_MODEL", "claude-opus-4-1-20250805")
+_AGENTIC_MAX_STEPS = 12          # hard cap on tool-call rounds (cost guard)
+_agentic_jobs: dict[str, dict] = {}
+
+
+def _agentic_thinking_kwargs(model: str) -> dict:
+    """Return model-appropriate thinking/effort kwargs. Opus 4.6+ uses
+    adaptive thinking + effort; 4.1/4.5 and earlier omit it (the old
+    budget_tokens API isn't worth the complexity here). Keeps us 400-free
+    across every model string."""
+    m = (model or "").lower()
+    if any(tag in m for tag in ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6")):
+        return {"thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"}}
+    return {}   # 4.1 / 4.5 / older: plain tool use, no thinking params
+
+
+# ── Tool schemas exposed to the agent ──────────────────────────────────
+_AGENTIC_TOOLS = [
+    {
+        "name": "get_quote",
+        "description": "Get the latest price and % change for one or more tickers. "
+                       "Use before making any claim about current price or daily move.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {"type": "string",
+                            "description": "Comma-separated symbols, e.g. 'NVDA,MSFT'."}
+            },
+            "required": ["tickers"],
+        },
+    },
+    {
+        "name": "get_sector",
+        "description": "Resolve a ticker's sector and industry (yfinance → SEC SIC "
+                       "fallback). Use to classify a name; never guess the sector.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"ticker": {"type": "string"}},
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "read_saved_report",
+        "description": "Read the full saved analyst report(s) for a ticker from the "
+                       "DGA research library (Grok and/or Claude versions). This is "
+                       "already-generated deep research — prefer it over re-deriving "
+                       "a thesis. Returns empty if no report exists for that ticker.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "provider": {"type": "string", "enum": ["grok", "claude", "both"],
+                             "description": "Which version to read. Default 'both'."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_recent_news",
+        "description": "Get the latest news headlines for a ticker (free, real-time, "
+                       "no LLM cost). Use to check for fresh catalysts or events.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "limit": {"type": "integer", "description": "1-3 headlines. Default 3."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "list_saved_reports",
+        "description": "List every ticker that has a saved report in the DGA library, "
+                       "with rating + upside if known. Use to discover the coverage "
+                       "universe before answering portfolio-level questions.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+
+
+def _agentic_exec_tool(name: str, args: dict) -> str:
+    """Execute one agent tool call against the platform's real data.
+    Returns a string (JSON or text) fed back to the model as tool_result."""
+    try:
+        if name == "get_quote":
+            tks = (args.get("tickers") or "").upper()
+            q = batch_quotes(tks) or {}
+            out = {tk: {"price": (q.get(tk) or {}).get("price"),
+                        "pct_change": (q.get(tk) or {}).get("pct_change")}
+                   for tk in [t.strip() for t in tks.split(",") if t.strip()]}
+            return json.dumps(out, default=str)
+
+        if name == "get_sector":
+            tk = (args.get("ticker") or "").upper().strip()
+            sec, ind = analyst.fetch_sector_and_industry(tk)
+            return json.dumps({"ticker": tk, "sector": sec, "industry": ind})
+
+        if name == "read_saved_report":
+            tk = (args.get("ticker") or "").upper().strip()
+            provider = (args.get("provider") or "both").lower()
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT report_md, report_md_claude, rating, price_target,
+                                      upside_pct, generated_at
+                                 FROM analyst_reports WHERE ticker = %s""", (tk,))
+                row = cur.fetchone()
+            if not row:
+                return f"No saved report for {tk}."
+            grok_md   = (row.get("report_md") or "").strip()
+            claude_md = (row.get("report_md_claude") or "").strip()
+            MAX = 8000   # truncate hard so one report can't blow the context
+            parts = [f"Ticker: {tk}  rating={row.get('rating')}  "
+                     f"target={row.get('price_target')}  upside={row.get('upside_pct')}%"]
+            if provider in ("grok", "both") and grok_md:
+                parts.append(f"\n══ GROK REPORT ══\n{grok_md[:MAX]}")
+            if provider in ("claude", "both") and claude_md:
+                parts.append(f"\n══ CLAUDE REPORT ══\n{claude_md[:MAX]}")
+            return "\n".join(parts) if len(parts) > 1 else f"No {provider} report text for {tk}."
+
+        if name == "get_recent_news":
+            tk = (args.get("ticker") or "").upper().strip()
+            lim = max(1, min(int(args.get("limit") or 3), 3))
+            items = _fetch_news_for_ticker(tk, limit=lim)
+            if not items:
+                return f"No recent news for {tk}."
+            return json.dumps([{"title": i["title"], "publisher": i.get("publisher"),
+                                "url": i.get("url")} for i in items], default=str)
+
+        if name == "list_saved_reports":
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT ticker, rating, upside_pct FROM analyst_reports
+                                WHERE archived IS NOT TRUE
+                                ORDER BY ticker LIMIT 200""")
+                rows = cur.fetchall() or []
+            return json.dumps([{"ticker": r["ticker"], "rating": r.get("rating"),
+                                "upside_pct": float(r["upside_pct"]) if r.get("upside_pct") is not None else None}
+                               for r in rows], default=str)
+
+        return f"Unknown tool: {name}"
+    except Exception as e:
+        return f"Tool '{name}' error: {e!s:.200}"
+
+
+def _run_agentic_analysis(job_id: str, question: str) -> None:
+    """Background worker: manual tool-use loop. Streams progress into
+    _agentic_jobs[job_id] so the UI can poll. Tracks cost per turn."""
+    import anthropic as _anthropic
+
+    def _set(**kw):
+        _agentic_jobs[job_id] = {**(_agentic_jobs.get(job_id) or {}), **kw,
+                                  "updated_at": time.time()}
+
+    _set(stage="queued", status="running", label="Starting…",
+         started_at=time.time(), steps=0, tool_calls=[], cost_usd=0.0)
+    try:
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+        model = _AGENTIC_MODEL
+        think = _agentic_thinking_kwargs(model)
+        system = (
+            "You are a senior analyst at DGA Capital, a private fund. Answer the "
+            "user's research question by calling the provided tools to gather REAL "
+            "data — live quotes, sectors, saved DGA reports, and fresh news — before "
+            "drawing conclusions. NEVER invent a price, sector, rating, or return; "
+            "call the tool. Cite the specific numbers you pulled. Be concise and "
+            "decisive: lead with the answer, then the supporting evidence. This is "
+            "internal analysis, not investment advice."
+        )
+        messages = [{"role": "user", "content": question}]
+        total_cost = 0.0
+        tool_log: list[dict] = []
+
+        for step in range(_AGENTIC_MAX_STEPS):
+            _set(stage="thinking", label=f"Reasoning (step {step+1}/{_AGENTIC_MAX_STEPS})…",
+                 steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
+            resp = client.messages.create(
+                model=model, max_tokens=8000,
+                system=system, tools=_AGENTIC_TOOLS, messages=messages,
+                **think,
+            )
+            # cost accounting
+            try:
+                u = resp.usage
+                total_cost += analyst.estimate_claude_cost(model, u.input_tokens, u.output_tokens)
+            except Exception:
+                pass
+
+            if resp.stop_reason != "tool_use":
+                final = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+                _set(stage="done", status="done", label="✓ Analysis complete",
+                     steps=step + 1, tool_calls=tool_log[:],
+                     cost_usd=round(total_cost, 4),
+                     result={"answer": final, "tool_calls": tool_log[:],
+                             "cost_usd": round(total_cost, 4), "model": model})
+                return
+
+            # Execute every tool the model requested this turn
+            messages.append({"role": "assistant", "content": resp.content})
+            results = []
+            for b in resp.content:
+                if getattr(b, "type", None) == "tool_use":
+                    label = f"{b.name}({json.dumps(b.input, default=str)[:60]})"
+                    tool_log.append({"tool": b.name, "input": b.input})
+                    _set(stage="tool", label=f"🔧 {label}",
+                         steps=step, tool_calls=tool_log[:],
+                         cost_usd=round(total_cost, 4))
+                    out = _agentic_exec_tool(b.name, b.input or {})
+                    results.append({"type": "tool_result", "tool_use_id": b.id,
+                                    "content": out})
+            messages.append({"role": "user", "content": results})
+
+        # Hit the step cap without a final answer
+        _set(stage="error", status="error",
+             label=f"❌ Reached {_AGENTIC_MAX_STEPS}-step limit without finishing",
+             error="step_limit", cost_usd=round(total_cost, 4))
+    except Exception as e:
+        print(f"❌ [agentic {job_id}] failed: {e!s:.500}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/research/agentic")
+async def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
+    """Kick off an agentic research run. Body: {question: str}.
+    Returns {ok, job_id}; poll GET /api/research/agentic/{job_id}."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    question = ((body or {}).get("question") or "").strip()
+    if len(question) < 4:
+        return JSONResponse({"ok": False, "error": "Ask a real question."}, status_code=400)
+    if len(question) > 2000:
+        question = question[:2000]
+    import uuid as _uuid
+    job_id = "AGENTIC_" + _uuid.uuid4().hex[:12]
+    _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
+                              "label": "Queued…", "started_at": time.time(),
+                              "updated_at": time.time(), "question": question,
+                              "steps": 0, "tool_calls": [], "cost_usd": 0.0}
+    background_tasks.add_task(_run_agentic_analysis, job_id, question)
+    print(f"🤖 [agentic] queued {job_id}: {question[:80]!r}  model={_AGENTIC_MODEL}", flush=True)
+    return {"ok": True, "job_id": job_id, "model": _AGENTIC_MODEL}
+
+
+@app.get("/api/research/agentic/{job_id}")
+def research_agentic_status(job_id: str, request: Request):
+    """Poll an agentic run. Returns live stage/label/tool_calls + final result."""
+    _claims_or_401(request)
+    job = _agentic_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"},
+                            status_code=404)
+    return {"ok": True, **job}
+
+
 # Separate dict for script-generation jobs so they don't collide with audio
 # generation (which uses _podcast_jobs). Schema is the same:
 #   {stage, current, total, label, status, started_at, [result], [error]}
