@@ -16201,6 +16201,24 @@ def _ensure_dga_memos_table() -> None:
                 print(f"⚠️ dga_memos ALTER skipped: {alter[-60:]!r} → {es}", flush=True)
 
 
+def _content_disposition(disposition: str, filename: str) -> str:
+    """Build an RFC 6266 / RFC 5987 safe Content-Disposition header value.
+
+    HTTP header values are encoded latin-1 by the ASGI server, so any non-
+    latin-1 character in the filename (e.g. an em-dash '—' U+2014 in a memo
+    title) raises UnicodeEncodeError → HTTP 500. We emit BOTH an ASCII-only
+    `filename=` fallback (for ancient clients) and a UTF-8 `filename*=` per
+    RFC 5987 so modern browsers show the real title.
+    """
+    import urllib.parse as _up
+    # ASCII fallback: drop anything outside latin-1, collapse to safe chars.
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "document"
+    ascii_name = ascii_name.replace('"', "").replace("\\", "")
+    utf8_name = _up.quote(filename, safe="")
+    return (f"{disposition}; filename=\"{ascii_name}\"; "
+            f"filename*=UTF-8''{utf8_name}")
+
+
 def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
                           generated_at_iso: str) -> bytes:
     """Render a podcast script as a DGA Capital memo PDF (reportlab platypus).
@@ -16649,7 +16667,8 @@ def download_memo_pdf(memo_id: str, request: Request):
         raise HTTPException(500, f"Fetch failed: {e!s:.200}")
     from fastapi.responses import Response as _Response
     return _Response(content=pdf_bytes, media_type="application/pdf",
-                     headers={"Content-Disposition": f'inline; filename="{title}.pdf"'})
+                     headers={"Content-Disposition":
+                              _content_disposition("inline", f"{title}.pdf")})
 
 
 @app.post("/api/memos/{memo_id}/email")
@@ -17223,22 +17242,69 @@ def _agentic_verify(client, model: str, question: str, answer: str,
         )
         user = (f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
                 f"TOOL CALLS (name + input the agent ran):\n{tools_used}")
+        # max_tokens generous: a long strategist dossier can produce many
+        # flags; 2000 was truncating mid-JSON → parse failure → "unchecked".
         resp = client.messages.create(
-            model=model, max_tokens=2000,
+            model=model, max_tokens=6000,
             system=sys, messages=[{"role": "user", "content": user}],
         )
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        # tolerate code fences
-        t = text.strip()
-        if t.startswith("```"):
-            t = t.split("```", 2)[1].lstrip("json").strip() if "```" in t else t
-        parsed = json.loads(t)
+        text = next((b.text for b in resp.content
+                     if getattr(b, "type", None) == "text"), "") or ""
+        parsed = _extract_json_object(text)
+        if parsed is None:
+            print(f"⚠️ [agentic verify] no JSON in response: {text[:200]!r}", flush=True)
+            return {"ok": None, "verdict": "unchecked", "flags": []}
+        verdict = parsed.get("verdict") or "clean"
         flags = parsed.get("flags") or []
-        return {"ok": True, "verdict": parsed.get("verdict", "clean"),
-                "flags": flags}
+        if flags and verdict == "clean":
+            verdict = "flags"   # model sometimes lists flags but forgets the verdict
+        return {"ok": True, "verdict": verdict, "flags": flags}
     except Exception as e:
         print(f"⚠️ [agentic verify] failed: {e!s:.150}", flush=True)
         return {"ok": None, "verdict": "unchecked", "flags": []}
+
+
+def _extract_json_object(text: str):
+    """Pull the first balanced top-level JSON object out of a model response,
+    tolerating code fences, leading prose, and trailing commentary. Returns a
+    dict or None. Robust against the 'Verification did not run' failure where a
+    strict json.loads() on the whole string throws on any surrounding text."""
+    if not text:
+        return None
+    t = text.strip()
+    # Strip a leading ```json / ``` fence if present.
+    if t.startswith("```"):
+        body = t.split("```", 2)
+        t = (body[1] if len(body) > 1 else t).lstrip()
+        if t[:4].lower() == "json":
+            t = t[4:].lstrip()
+    # Fast path: the whole thing is valid JSON.
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    # Scan for the first balanced {...}, respecting strings/escapes.
+    start = t.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(t)):
+            c = t[i]
+            if in_str:
+                if esc:        esc = False
+                elif c == "\\": esc = True
+                elif c == '"':  in_str = False
+            else:
+                if c == '"':    in_str = True
+                elif c == "{":  depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(t[start:i + 1])
+                        except Exception:
+                            break   # malformed; try next '{'
+        start = t.find("{", start + 1)
+    return None
 
 
 _AGENTIC_SYSTEM_DEFAULT = (
