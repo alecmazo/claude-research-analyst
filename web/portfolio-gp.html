@@ -703,7 +703,7 @@
   /* Sortable column headers in data-table */
   .data-table th[style*="cursor:pointer"]:hover { color: var(--blue); }
   .rep-table td {
-    padding: 9px 14px;
+    padding: 7px 14px;
     border-bottom: 1px solid rgba(0,0,0,0.04);
     font-size: 13px;
   }
@@ -767,17 +767,22 @@
   .rep-status-fail { cursor: pointer; }
   .rep-status-fail:hover { transform: scale(1.15); }
   /* 🔬 Compare with Claude button */
+  /* Action buttons (compare / podcast / refresh) stay hidden until the row
+     is hovered — keeps the resting row clean. They still occupy space (we
+     fade opacity, not display) so the layout never jumps on hover. */
   .rep-compare-btn {
     background: none; border: none; cursor: pointer;
     font-size: 11px; padding: 1px 4px; margin-left: 4px;
-    opacity: 0.45; transition: opacity .12s, background .12s;
+    opacity: 0; transition: opacity .12s, background .12s;
     vertical-align: middle; border-radius: 3px;
   }
-  .rep-compare-btn:hover { opacity: 1; background: #f0f9ff; }
-  /* 🎙️ Podcast button — same chrome as compare, slightly higher resting
-     opacity so users notice it exists. Gold-tint hover instead of blue. */
-  .rep-podcast-btn { opacity: 0.7; }
-  .rep-podcast-btn:hover { background: #fef9e7; }
+  .rep-table tbody tr:hover .rep-compare-btn { opacity: 0.5; }
+  .rep-table tbody tr:hover .rep-compare-btn:hover { opacity: 1; background: #f0f9ff; }
+  /* 🎙️ Podcast button — gold-tint hover instead of blue. */
+  .rep-table tbody tr:hover .rep-podcast-btn { opacity: 0.75; }
+  .rep-table tbody tr:hover .rep-podcast-btn:hover { background: #fef9e7; }
+  /* Keyboard accessibility: reveal on focus too. */
+  .rep-compare-btn:focus-visible { opacity: 1; background: #f0f9ff; }
 
   /* Side-by-side comparison modal */
   .cmp-modal-backdrop {
@@ -2578,7 +2583,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: color var(--t-fast);
+    transition: color var(--t-fast), opacity .2s ease;
     font-weight: 500;
     padding-right: 8px;
     cursor: pointer;
@@ -4966,9 +4971,12 @@
     if (!rows.length) { console.log('[news] no report rows yet'); return; }
     const tickers = rows.map(r => r.getAttribute('data-ticker')).filter(Boolean);
     if (!tickers.length) return;
+    // Tear down any previous rotation timer before rebuilding (re-render or
+    // refresh would otherwise leave orphaned intervals stacking up).
+    if (window._repNewsRotator) { clearInterval(window._repNewsRotator); window._repNewsRotator = null; }
     try {
       const r = await window.dgaFetch(
-        '/api/news?tickers=' + encodeURIComponent(tickers.join(',')) + '&limit=1'
+        '/api/news?tickers=' + encodeURIComponent(tickers.join(',')) + '&limit=3'
       );
       if (!r.ok) { console.warn('[news] HTTP', r.status); return; }
       const j = await r.json();
@@ -4976,12 +4984,19 @@
       const counts = {};
       Object.keys(newsMap).forEach(k => counts[k] = (newsMap[k] || []).length);
       console.log('[news] response counts', counts);
+      const rotating = [];   // lines that have >1 item to cycle through
       let injected = 0;
+      const paint = function(line, item) {
+        const title = (item.title || '').slice(0, 90);
+        const pub   = item.publisher ? ' · ' + item.publisher : '';
+        line.href = item.url || '#';
+        line.textContent = title + pub;
+        line.title = (item.title || '') + (item.publisher ? '  (' + item.publisher + ')' : '');
+      };
       rows.forEach(row => {
         const tk = row.getAttribute('data-ticker');
-        const items = newsMap[tk] || [];
+        const items = (newsMap[tk] || []).filter(it => it && it.title);
         if (!items.length) return;
-        const first = items[0];
         const cell = row.querySelector('td:first-child');
         if (!cell) return;
         let line = cell.querySelector('.rep-news-line');
@@ -4994,14 +5009,29 @@
           line.addEventListener('click', e => e.stopPropagation());
           cell.appendChild(line);
         }
-        const title = (first.title || '').slice(0, 90);
-        const pub   = first.publisher ? ' · ' + first.publisher : '';
-        line.href = first.url || '#';
-        line.textContent = title + pub;
-        line.title = (first.title || '') + (first.publisher ? '  (' + first.publisher + ')' : '');
+        paint(line, items[0]);
+        if (items.length > 1) {
+          line._items = items; line._idx = 0;
+          // Pause rotation while the user is reading (hovering) this headline.
+          line.addEventListener('mouseenter', () => { line._paused = true; });
+          line.addEventListener('mouseleave', () => { line._paused = false; });
+          rotating.push(line);
+        }
         injected++;
       });
-      console.log('[news] injected', injected, 'of', rows.length, 'rows');
+      console.log('[news] injected', injected, 'of', rows.length, 'rows;', rotating.length, 'rotating');
+      // One shared timer advances every rotating headline every 5s, fading
+      // out → swap → fade in so it reads like a ticker, not a flicker.
+      if (rotating.length) {
+        window._repNewsRotator = setInterval(() => {
+          rotating.forEach(line => {
+            if (line._paused || !line.isConnected) return;
+            line._idx = (line._idx + 1) % line._items.length;
+            line.style.opacity = '0';
+            setTimeout(() => { paint(line, line._items[line._idx]); line.style.opacity = ''; }, 220);
+          });
+        }, 5000);
+      }
     } catch (e) {
       console.warn('[news]', e);
     }
@@ -5465,6 +5495,29 @@
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
+  // Compact the analyst's stated as-of date (a free-text string like
+  // "May 22, 2026") into something tiny for the top line: "5d ago", "3w ago",
+  // or "May 22". Falls back to the original string when it can't be parsed.
+  // Returns { short, full } — full is shown as the hover tooltip.
+  function _repCompactAsOf(str) {
+    const full = (str || '').trim();
+    if (!full) return { short: '', full: '' };
+    const d = new Date(full);
+    if (isNaN(d.getTime())) return { short: full, full: full };
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    let short;
+    if (days < 0)       short = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    else if (days === 0) short = 'Today';
+    else if (days < 14)  short = days + 'd ago';
+    else if (days < 56)  short = Math.round(days / 7) + 'w ago';
+    else {
+      const curYr = new Date().getFullYear();
+      short = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            + (d.getFullYear() !== curYr ? " '" + String(d.getFullYear()).slice(-2) : '');
+    }
+    return { short: short, full: full };
+  }
+
   function renderReports(reports) {
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
@@ -5566,14 +5619,19 @@
               const gd = _cd(rep.report_date);
               const cd = _cd(rep.claude_report_date);
               if (gd && cd && gd !== cd) {
-                return '<div class="rep-date" style="line-height:1.3;">'
-                  + '<span title="Grok report as-of"><b style="color:#0A1628;">G</b> ' + _esc(gd) + '</span>'
+                const g = _repCompactAsOf(gd), c = _repCompactAsOf(cd);
+                return '<span class="rep-date">'
+                  + '<span title="Grok report as-of: ' + _esc(g.full) + '"><b style="color:#0A1628;">G</b> ' + _esc(g.short) + '</span>'
                   + ' · '
-                  + '<span title="Claude report as-of"><b style="color:#d97706;">C</b> ' + _esc(cd) + '</span>'
-                  + '</div>';
+                  + '<span title="Claude report as-of: ' + _esc(c.full) + '"><b style="color:#d97706;">C</b> ' + _esc(c.short) + '</span>'
+                  + '</span>';
               }
-              const single = gd || cd || dateStr;
-              return '<div class="rep-date">' + _esc(single) + '</div>';
+              const single = gd || cd;
+              if (single) {
+                const a = _repCompactAsOf(single);
+                return '<span class="rep-date" title="Report as-of: ' + _esc(a.full) + '">' + _esc(a.short) + '</span>';
+              }
+              return '<span class="rep-date">' + _esc(dateStr) + '</span>';
             })() +
           '</td>' +
           '<td class="rep-num">' +
