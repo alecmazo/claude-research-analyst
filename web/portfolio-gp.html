@@ -3003,6 +3003,39 @@
       </div>
     </section>
 
+    <!-- ── 🧭 Portfolio Strategist (agentic cross-book review → podcast/memo) ── -->
+    <section class="panel" data-wid="strategist" data-collapsible="1" style="margin-bottom:12px;">
+      <header class="panel-head">
+        <span class="panel-title">🧭 Portfolio Strategist</span>
+        <span class="panel-badge" style="background:#f3e8ff;color:#6b21a8;">AGENTIC · EV</span>
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-weight:500;">whole-book review → roundup podcast / memo</span>
+      </header>
+      <div style="padding:14px 16px;">
+        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;">
+          Full investment-committee review of an entire book. Claude reasons
+          <em>across</em> positions — concentration, correlation, EV, wipeout
+          scenarios — and proposes grounded, advisory adjustments. Then hand off
+          to a Portfolio Roundup podcast or a strategy memo. <em>~$0.30–1.00.</em>
+        </div>
+        <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label class="pc-field-label" for="strat-fund">Fund / account</label>
+            <select id="strat-fund" class="settings-input" style="min-width:240px;">
+              <option value="">— select a fund —</option>
+            </select>
+          </div>
+          <span style="font-size:10.5px;color:var(--text-tertiary);align-self:center;padding-bottom:8px;">or</span>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label class="pc-field-label">Upload book</label>
+            <input id="strat-file" type="file" accept=".csv,.tsv,.xlsx,.xls,.xlsm"
+              style="font-size:11px;max-width:200px;">
+          </div>
+          <button id="strat-run-btn" class="btn-primary" style="white-space:nowrap;padding:0 18px;align-self:stretch;">🧭 Run review</button>
+        </div>
+        <div id="strat-out" style="display:none;margin-top:14px;"></div>
+      </div>
+    </section>
+
     <!-- ── Idea Generator (movers ≥ ±4% from your universe) ─────────── -->
     <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" style="margin-bottom:12px;">
       <header class="panel-head" id="idea-gen-head" style="cursor:pointer;user-select:none;">
@@ -5130,6 +5163,187 @@
       } catch (e) {
         out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
         btn.disabled = false; btn.textContent = '🤖 Analyze';
+      }
+    });
+  })();
+
+  // ── 🧭 Portfolio Strategist — fund picker / upload → agentic review ──
+  (function wireStrategist() {
+    const btn = document.getElementById('strat-run-btn');
+    const fundSel = document.getElementById('strat-fund');
+    const fileEl = document.getElementById('strat-file');
+    const out = document.getElementById('strat-out');
+    if (!btn || !out || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
+    const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+                        get_recent_news:'📰', list_saved_reports:'📚',
+                        get_financials:'📊', compute:'🧮', get_ytd_attribution:'📈',
+                        web_search:'🌐' };
+    let _stratResult = null, _stratPositions = [], _stratTickers = [], _stratFund = '';
+
+    // Populate fund dropdown (reuse fund list)
+    (async () => {
+      try {
+        const r = await window.dgaFetch('/api/fund/list');
+        const j = await r.json();
+        const list = Array.isArray(j) ? j : (j.funds || []);
+        fundSel.innerHTML = '<option value="">— select a fund —</option>' +
+          list.filter(f => f && f.id).map(f =>
+            `<option value="${f.id}">${esc(f.short_name || f.name || f.id)}</option>`).join('');
+      } catch (_) {}
+    })();
+
+    function renderProgress(d) {
+      const tools = (d.tool_calls || []).slice(-8).map(tc => {
+        const ic = TOOL_ICON[tc.tool] || '🔧';
+        return `<div style="font-size:11px;color:var(--text-secondary);padding:1px 0;">${ic} <strong>${esc(tc.tool)}</strong> <span style="color:var(--text-tertiary);font-family:'SF Mono',monospace;">${esc(JSON.stringify(tc.input||{}).slice(0,46))}</span></div>`;
+      }).join('');
+      const cost = d.cost_usd != null ? ` · 💸 $${Number(d.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>' +
+            `<span style="font-size:12px;font-weight:700;color:var(--text-primary);">${esc(d.label||'Working…')}</span>` +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}</span>` +
+          '</div>' + (tools ? `<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">${tools}</div>` : '') +
+        '</div>';
+    }
+
+    function renderVerification(v) {
+      if (!v) return '';
+      if (v.verdict === 'clean') return '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
+      if (v.verdict === 'unchecked') return '<div style="margin-top:12px;padding:8px 12px;background:var(--gray-100);border:1px solid var(--border-subtle);border-radius:6px;font-size:11.5px;color:var(--text-tertiary);">⚠ Verification did not run.</div>';
+      const flags = (v.flags||[]).map(f => `<li style="margin:3px 0;"><strong>${esc(f.issue||'flag')}:</strong> ${esc(f.claim||'')}${f.note?` — <span style="color:var(--text-tertiary);">${esc(f.note)}</span>`:''}</li>`).join('');
+      return `<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ Verification flagged ${(v.flags||[]).length} claim(s) — review before sharing:</strong><ul style="margin:6px 0 0;padding-left:18px;">${flags}</ul></div>`;
+    }
+
+    function renderResult(r) {
+      _stratResult = r;
+      const answer = esc(r.answer || '(no answer)')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^#{1,4}\s*(.+)$/gm, '<div style="font-weight:800;color:var(--text-primary);margin:12px 0 4px;font-size:13px;">$1</div>')
+        .replace(/\n\n/g, '</p><p style="margin:8px 0;">').replace(/\n/g, '<br>');
+      const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
+      out.innerHTML =
+        '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
+          `<div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">${answer}</p></div>` +
+          renderVerification(r.verification) +
+          '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+            '<button id="strat-roundup-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;">🎙️ Generate Portfolio Roundup</button>' +
+            '<button id="strat-memo-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">📄 Draft strategy memo</button>' +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
+          '</div>' +
+        '</div>';
+      document.getElementById('strat-roundup-btn')?.addEventListener('click', _handoffRoundup);
+      document.getElementById('strat-memo-btn')?.addEventListener('click', _handoffMemo);
+    }
+
+    async function _handoffRoundup() {
+      if (_stratTickers.length < 5) {
+        window.toast('Portfolio Roundup needs ≥5 tickers; this book has ' + _stratTickers.length + '.', {type:'warn'});
+        return;
+      }
+      const b = document.getElementById('strat-roundup-btn');
+      b.disabled = true; b.textContent = '⏳ Queuing…';
+      try {
+        const r = await window.dgaFetch('/api/podcast-portfolio-roundup/script', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ tickers: _stratTickers, positions: _stratPositions }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Failed');
+        window.toast('🎙️ Portfolio Roundup queued — open LLM Lab → "Open a saved script" in ~2-4 min, then generate audio.', {type:'success', ttl:6000});
+      } catch (e) {
+        window.toast('Roundup handoff failed: ' + e.message, {type:'error'});
+      } finally { b.disabled = false; b.textContent = '🎙️ Generate Portfolio Roundup'; }
+    }
+
+    async function _handoffMemo() {
+      if (!_stratResult) return;
+      const v = _stratResult.verification;
+      if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+        if (!confirm(`⚠ Verification flagged ${v.flags.length} claim(s). Memos can reach LPs — draft anyway?`)) return;
+      }
+      const title = prompt('Memo title:', (_stratFund ? _stratFund + ' — Strategy Review' : 'Portfolio Strategy Review'));
+      if (title === null) return;
+      const b = document.getElementById('strat-memo-btn');
+      b.disabled = true; b.textContent = '⏳ Rendering…';
+      try {
+        const r = await window.dgaFetch('/api/memos/from-analysis', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ question: 'Portfolio strategy review: ' + (_stratFund||'uploaded book'),
+                                 answer: _stratResult.answer, title: (title||'').trim() }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+        window.toast('✓ Strategy memo saved — Memos tab to assign & email.', {type:'success', ttl:5000});
+      } catch (e) {
+        window.toast('Memo draft failed: ' + e.message, {type:'error'});
+      } finally { b.disabled = false; b.textContent = '📄 Draft strategy memo'; }
+    }
+
+    async function start(payload, fundLabel) {
+      _stratFund = fundLabel || '';
+      btn.disabled = true; btn.textContent = '⏳ Reviewing…';
+      out.style.display = 'block';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Loading book…</div>';
+      const t0 = Date.now();
+      try {
+        const r0 = await window.dgaFetch('/api/research/portfolio-strategist', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const d0 = await r0.json();
+        if (!d0.ok) throw new Error(d0.error || 'Failed to start');
+        _stratPositions = d0.positions || []; _stratTickers = d0.tickers || [];
+        if (d0.fund_name) _stratFund = d0.fund_name;
+        const jobId = d0.job_id;
+        const timer = setInterval(async () => {
+          if (Date.now() - t0 > 300000) {   // 5-min cap (portfolio is heavier)
+            clearInterval(timer); out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 5 min.</div>';
+            btn.disabled = false; btn.textContent = '🧭 Run review'; return;
+          }
+          try {
+            const r = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+            const d = await r.json();
+            if (d.status === 'done' && d.result) {
+              clearInterval(timer); renderResult(d.result);
+              btn.disabled = false; btn.textContent = '🧭 Run review';
+            } else if (d.status === 'error') {
+              clearInterval(timer);
+              out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
+              btn.disabled = false; btn.textContent = '🧭 Run review';
+            } else { renderProgress(d); }
+          } catch (_) {}
+        }, 1400);
+      } catch (e) {
+        out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
+        btn.disabled = false; btn.textContent = '🧭 Run review';
+      }
+    }
+
+    btn.addEventListener('click', async () => {
+      const fundId = fundSel.value;
+      const file = fileEl.files && fileEl.files[0];
+      if (fundId) {
+        start({ fund_id: fundId }, fundSel.options[fundSel.selectedIndex]?.textContent);
+      } else if (file) {
+        // Upload → parse via the existing roundup upload parser, then strategist
+        btn.disabled = true; btn.textContent = '⏳ Parsing file…';
+        try {
+          const fd = new FormData(); fd.append('file', file); fd.append('parse_only', 'true');
+          const up = await window.dgaFetch('/api/podcast-portfolio-roundup/upload', { method:'POST', body: fd });
+          const uj = await up.json();
+          if (!uj.ok) throw new Error(uj.detail || uj.error || 'Parse failed');
+          // parse_only=true → just parsed positions, no podcast job spun up.
+          start({ positions: uj.positions || [] }, 'uploaded book');
+        } catch (e) {
+          window.toast('Upload failed: ' + e.message, {type:'error'});
+          btn.disabled = false; btn.textContent = '🧭 Run review';
+        }
+      } else {
+        window.toast('Pick a fund or upload a portfolio file.', {type:'warn'});
       }
     });
   })();

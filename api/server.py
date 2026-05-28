@@ -17241,9 +17241,34 @@ def _agentic_verify(client, model: str, question: str, answer: str,
         return {"ok": None, "verdict": "unchecked", "flags": []}
 
 
-def _run_agentic_analysis(job_id: str, question: str) -> None:
+_AGENTIC_SYSTEM_DEFAULT = (
+    "You are a senior analyst at DGA Capital, a private fund. Answer the "
+    "user's research question by calling tools to gather REAL data before "
+    "drawing conclusions. Accuracy is paramount — this feeds investor-facing "
+    "memos.\n\n"
+    "TOOL DISCIPLINE (follow strictly):\n"
+    "• Fundamentals (revenue, margins, EPS, debt, FCF): use get_financials — "
+    "it's filing-accurate SEC XBRL. Never estimate these from memory.\n"
+    "• ANY arithmetic (ratios, growth %, weighted avgs): use compute — never "
+    "do mental math.\n"
+    "• Portfolio / position returns: use get_ytd_attribution (real Modified "
+    "Dietz). Never derive YTD from price changes.\n"
+    "• Current price / daily move: get_quote. Sector: get_sector. Existing "
+    "thesis: read_saved_report. Recent events: get_recent_news, then "
+    "web_search if still uncovered.\n"
+    "• NEVER invent a price, multiple, rating, sector, or return — call the "
+    "tool. Cite the specific numbers you pulled and their source.\n\n"
+    "Be concise and decisive: lead with the answer, then the evidence. This "
+    "is internal analysis, not investment advice."
+)
+
+
+def _run_agentic_analysis(job_id: str, question: str,
+                           system_override: str | None = None) -> None:
     """Background worker: manual tool-use loop. Streams progress into
-    _agentic_jobs[job_id] so the UI can poll. Tracks cost per turn."""
+    _agentic_jobs[job_id] so the UI can poll. Tracks cost per turn.
+    system_override lets specialized modes (Portfolio Strategist) swap the
+    persona while reusing the same loop, tools, and verification."""
     import anthropic as _anthropic
 
     def _set(**kw):
@@ -17256,26 +17281,7 @@ def _run_agentic_analysis(job_id: str, question: str) -> None:
         client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
         model = _AGENTIC_MODEL
         think = _agentic_thinking_kwargs(model)
-        system = (
-            "You are a senior analyst at DGA Capital, a private fund. Answer the "
-            "user's research question by calling tools to gather REAL data before "
-            "drawing conclusions. Accuracy is paramount — this feeds investor-facing "
-            "memos.\n\n"
-            "TOOL DISCIPLINE (follow strictly):\n"
-            "• Fundamentals (revenue, margins, EPS, debt, FCF): use get_financials — "
-            "it's filing-accurate SEC XBRL. Never estimate these from memory.\n"
-            "• ANY arithmetic (ratios, growth %, weighted avgs): use compute — never "
-            "do mental math.\n"
-            "• Portfolio / position returns: use get_ytd_attribution (real Modified "
-            "Dietz). Never derive YTD from price changes.\n"
-            "• Current price / daily move: get_quote. Sector: get_sector. Existing "
-            "thesis: read_saved_report. Recent events: get_recent_news, then "
-            "web_search if still uncovered.\n"
-            "• NEVER invent a price, multiple, rating, sector, or return — call the "
-            "tool. Cite the specific numbers you pulled and their source.\n\n"
-            "Be concise and decisive: lead with the answer, then the evidence. This "
-            "is internal analysis, not investment advice."
-        )
+        system = system_override or _AGENTIC_SYSTEM_DEFAULT
         messages = [{"role": "user", "content": question}]
         total_cost = 0.0
         tool_log: list[dict] = []
@@ -17480,6 +17486,181 @@ async def memo_from_analysis(request: Request):
         raise HTTPException(500, f"DB insert failed: {e!s:.200}")
     return {"ok": True, "memo_id": memo_id, "episode_title": title,
             "pdf_url": f"/api/memos/{memo_id}/pdf"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PORTFOLIO STRATEGIST — agentic cross-book analysis. Reuses the agentic
+# loop + tools + verification, but with a portfolio persona and a
+# pre-loaded book (real positions + weights + per-name upside from saved
+# reports + reconciled YTD). Grounded + advisory: it reasons across the
+# whole portfolio and proposes adjustments, grounding EV in the calculator.
+# Hands off to the Portfolio Roundup podcast + strategy memo.
+# ═══════════════════════════════════════════════════════════════════════
+def _load_fund_positions(fund_id: str) -> list[dict]:
+    """Return [{ticker, weight_pct}] for a fund's live book (market-value
+    weights from tax_lots, cash excluded)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    rows = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT s.symbol, s.asset_class, SUM(tl.quantity) AS qty
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.fund_id::text = %s AND tl.closed_at IS NULL
+                   AND tl.quantity > 0 AND s.asset_class != 'cash'
+                 GROUP BY s.symbol, s.asset_class
+            """, (str(fund_id),))
+            rows = cur.fetchall() or []
+    except Exception as e:
+        print(f"⚠️ _load_fund_positions failed: {e!s:.150}", flush=True)
+        return []
+    syms = [r["symbol"] for r in rows if r.get("symbol")]
+    if not syms:
+        return []
+    prices = _fetch_prices(syms)
+    valued = []
+    for r in rows:
+        sym = r["symbol"]; qty = float(r.get("qty") or 0)
+        px = float((prices.get(sym) or {}).get("price") or 0) if isinstance(prices.get(sym), dict) else float(prices.get(sym) or 0)
+        mv = qty * px
+        if mv > 0:
+            valued.append({"ticker": sym.upper(), "mv": mv})
+    total = sum(v["mv"] for v in valued) or 1.0
+    return [{"ticker": v["ticker"], "weight_pct": round(v["mv"] / total * 100, 2)}
+            for v in sorted(valued, key=lambda x: -x["mv"])]
+
+
+def _build_strategist_context(positions: list[dict], fund_name: str | None) -> str:
+    """Enrich positions with per-name upside/rating (saved reports), sector,
+    and produce a grounded context block for the strategist prompt."""
+    tickers = [p["ticker"] for p in positions if p.get("ticker")]
+    reports = {}
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL") and tickers:
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT ticker, rating, upside_pct, price_target
+                                 FROM analyst_reports WHERE ticker = ANY(%s)""",
+                            (tickers,))
+                for r in cur.fetchall() or []:
+                    reports[r["ticker"].upper()] = r
+        except Exception:
+            pass
+    lines = []
+    ev_terms = []
+    for p in positions:
+        tk = p["ticker"]; w = float(p.get("weight_pct") or 0)
+        rep = reports.get(tk) or {}
+        up = rep.get("upside_pct")
+        rating = rep.get("rating") or "—"
+        has_report = tk in reports
+        if up is not None:
+            ev_terms.append(w / 100.0 * float(up))
+        lines.append(
+            f"  {tk:<7} {w:5.1f}%  rating={rating:<10} "
+            f"upside={'%+.1f%%' % float(up) if up is not None else 'n/a':<8} "
+            f"{'[has saved report]' if has_report else '[NO report]'}")
+    mech_ev = sum(ev_terms) if ev_terms else None
+    ctx = [
+        f"PORTFOLIO ({fund_name or 'uploaded book'}) — {len(positions)} positions:",
+        *lines,
+    ]
+    if mech_ev is not None:
+        ctx.append(f"\nMechanical EV (Σ weight × report-upside, current weights): "
+                   f"{mech_ev:+.2f}%-pts  — this is the baseline you reason against.")
+    ctx.append("\nNote: 'upside' is from each name's saved DGA report. Names marked "
+               "[NO report] have no thesis on file — flag that as a gap.")
+    return "\n".join(ctx)
+
+
+_STRATEGIST_SYSTEM = (
+    "You are the Chief Investment Officer at DGA Capital running an investment-"
+    "committee review of the WHOLE book below. Your job: cross-portfolio "
+    "analysis and GROUNDED, ADVISORY adjustments to optimize expected value "
+    "while controlling risk. This feeds an investor podcast + memo, so accuracy "
+    "is paramount.\n\n"
+    "Reason ACROSS positions — not name-by-name in isolation. Specifically surface "
+    "what a mechanical optimizer is blind to: concentration (single-name + sector + "
+    "factor), correlation / theme overlap (the 'illusion of breadth' — e.g. 6 names "
+    "that are really one AI-capex trade), catalyst clustering, and wipeout scenarios.\n\n"
+    "TOOL DISCIPLINE: use compute for ALL math (EV, weighted avgs, % deltas — never "
+    "mental math); get_financials for any fundamental; get_ytd_attribution for real "
+    "returns; read_saved_report to ground each name's thesis; get_recent_news / "
+    "web_search for fresh catalysts. NEVER invent a number.\n\n"
+    "Deliver a structured dossier with these sections, in order:\n"
+    "1. SNAPSHOT — sector mix, top concentrations, real YTD (cite the tool).\n"
+    "2. CONCENTRATION & CORRELATION X-RAY — where the book is secretly one bet.\n"
+    "3. EXPECTED VALUE — the mechanical EV baseline (compute it), then your "
+    "reasoned read: which high-EV suggestions to TAKE and which to VETO and why.\n"
+    "4. SUGGESTED ADJUSTMENTS — specific trims/adds with sizing deltas "
+    "(e.g. 'NVDA 12.4% → 9%') and, for each, the rationale AND what it funds. "
+    "Advisory only — the GP decides.\n"
+    "5. WIPEOUT SCENARIOS — 2-3 specific drawdown paths + rough probability.\n"
+    "6. BOTTOM LINE — the single highest-conviction move this week.\n\n"
+    "Be specific and decisive. Internal analysis, not investment advice."
+)
+
+
+@app.post("/api/research/portfolio-strategist")
+async def research_portfolio_strategist(req: Request, background_tasks: BackgroundTasks):
+    """Kick off an agentic whole-portfolio analysis. Body either:
+      {fund_id: "..."}                      → analyze a fund's live book, OR
+      {positions: [{ticker, weight_pct}]}   → analyze an uploaded/explicit book
+    Returns {ok, job_id, tickers, positions} — the positions are echoed so the
+    frontend can hand off to the Portfolio Roundup podcast."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    fund_id = (body or {}).get("fund_id") or None
+    positions = (body or {}).get("positions") or []
+    fund_name = None
+
+    if fund_id:
+        positions = _load_fund_positions(fund_id)
+        fund_name = _fund_name_lookup(fund_id)
+        if not positions:
+            return JSONResponse({"ok": False, "error": "No live positions for that fund."},
+                                status_code=400)
+    else:
+        # Normalize uploaded/explicit positions
+        norm = []
+        for p in positions:
+            tk = (p.get("ticker") or "").upper().strip()
+            if not tk: continue
+            norm.append({"ticker": tk, "weight_pct": round(float(p.get("weight_pct") or 0), 2)})
+        positions = norm
+    if len(positions) < 3:
+        return JSONResponse({"ok": False, "error": "Need at least 3 positions."},
+                            status_code=400)
+    positions = positions[:40]
+    tickers = [p["ticker"] for p in positions]
+
+    context = _build_strategist_context(positions, fund_name)
+    question = (
+        f"Run a full investment-committee review of this book and propose grounded, "
+        f"advisory adjustments to optimize expected value while controlling risk.\n\n"
+        f"{context}\n\n"
+        f"Work through every section of your dossier. Use the tools to ground every "
+        f"number — pull each name's saved report, compute the EV math, check real "
+        f"YTD, and surface cross-portfolio risks the weights alone don't show."
+    )
+    import uuid as _uuid
+    job_id = "STRAT_" + _uuid.uuid4().hex[:12]
+    _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
+                              "label": "Queued · portfolio review", "started_at": time.time(),
+                              "updated_at": time.time(), "question": question,
+                              "steps": 0, "tool_calls": [], "cost_usd": 0.0,
+                              "mode": "strategist", "positions": positions,
+                              "tickers": tickers, "fund_name": fund_name}
+    background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM)
+    print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name}", flush=True)
+    return {"ok": True, "job_id": job_id, "tickers": tickers,
+            "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}
 
 
 # Separate dict for script-generation jobs so they don't collide with audio
@@ -18888,6 +19069,7 @@ async def podcast_portfolio_roundup_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     sleeve_name: str = Form(""),
+    parse_only: bool = Form(False),
 ):
     """Upload a portfolio file → parse → kick off a Portfolio Roundup with
     REAL positions + weights (no more invented concentration claims).
@@ -18929,6 +19111,12 @@ async def podcast_portfolio_roundup_upload(
         if is_decimal: w *= 100
         positions.append({"ticker": tk, "weight_pct": round(w, 2)})
         tickers.append(tk)
+
+    # parse_only: the Portfolio Strategist just needs the parsed positions —
+    # don't run the 5-ticker bound or kick off a podcast job. Return early.
+    if parse_only:
+        return {"ok": True, "positions": positions, "tickers": tickers,
+                "parse_only": True}
 
     # Sanity bounds the engine enforces
     if len(tickers) < 5:
