@@ -893,7 +893,9 @@
     0%, 100% { opacity: 0; }
     50%      { opacity: 1; }
   }
-  .rep-date { color: var(--dim); font-size: 10px; }
+  /* Date sits INLINE on the ticker's top line (next to the refresh icon),
+     so the row below is free for the inline news headline. */
+  .rep-date { color: var(--dim); font-size: 10px; display: inline-block; margin-left: 6px; vertical-align: middle; }
   .rep-num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", monospace; }
 
   /* ── RIGHT COLUMN: Trending + News ──────────────────────────── */
@@ -5557,8 +5559,12 @@
             // sees each engine's analysis date. When they match (or only one
             // ran), show a single date. Falls back to the server timestamp.
             (function() {
-              const gd = (rep.report_date || '').trim();
-              const cd = (rep.claude_report_date || '').trim();
+              // Clean leaked markdown/emoji from header-extracted dates:
+              // '⚡ **May 22, 2026**' → 'May 22, 2026'. Fixes rows stored
+              // before the server-side _clean_report_date() landed.
+              const _cd = function(s){ return (s||'').replace(/\*/g,'').replace(/^[^A-Za-z0-9]+/,'').replace(/[\s.,;:|]+$/,'').trim(); };
+              const gd = _cd(rep.report_date);
+              const cd = _cd(rep.claude_report_date);
               if (gd && cd && gd !== cd) {
                 return '<div class="rep-date" style="line-height:1.3;">'
                   + '<span title="Grok report as-of"><b style="color:#0A1628;">G</b> ' + _esc(gd) + '</span>'

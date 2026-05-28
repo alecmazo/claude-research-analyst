@@ -7186,15 +7186,29 @@ def _extract_report_date(md: str) -> str | None:
     head = md[:2000]
     m = _REPORT_DATE_RE.search(head)
     if m:
-        d = m.group(1).strip().rstrip(".,").rstrip("*").strip()
+        d = _clean_report_date(m.group(1))
         if d and len(d) <= 50:
             return d
     m2 = _REPORT_DATE_RE_ALT.search(head)
     if m2:
-        d = m2.group(1).strip().rstrip(".,")
+        d = _clean_report_date(m2.group(1))
         if d and len(d) <= 50:
             return d
     return None
+
+
+def _clean_report_date(raw: str) -> str:
+    """Strip markdown + leading emoji/symbol junk that leaks from report
+    headers. e.g. '⚡ **May 22, 2026**' → 'May 22, 2026'. We strip any
+    leading run of non-alphanumerics (emoji, asterisks, spaces, pipes) and
+    trailing asterisks/punctuation, then collapse whitespace."""
+    if not raw:
+        return ""
+    d = raw.strip()
+    d = re.sub(r"^[\W_]+", "", d)        # leading emoji/**/| etc.
+    d = re.sub(r"[*\s.,;:|]+$", "", d)   # trailing markdown/punctuation
+    d = re.sub(r"\s+", " ", d).strip()
+    return d
 
 
 def _db_upsert_report(
