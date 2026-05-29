@@ -5575,7 +5575,7 @@
       }
       const title = prompt('Memo title:', (_lastQuestion || 'Research Memo').slice(0, 70));
       if (title === null) return;
-      if (btn) { btn.disabled = true; btn.textContent = '⏳ Rendering PDF…'; }
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Drafting LP memo… (~20s)'; }
       try {
         const r = await window.dgaFetch('/api/memos/from-analysis', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -5800,7 +5800,7 @@
       const title = prompt('Memo title:', (_stratFund ? _stratFund + ' — Strategy Review' : 'Portfolio Strategy Review'));
       if (title === null) return;
       const b = document.getElementById('strat-memo-btn');
-      b.disabled = true; b.textContent = '⏳ Rendering…';
+      b.disabled = true; b.textContent = '⏳ Drafting LP memo… (~20s)';
       try {
         const r = await window.dgaFetch('/api/memos/from-analysis', {
           method:'POST', headers:{'Content-Type':'application/json'},

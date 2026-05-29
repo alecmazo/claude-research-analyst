@@ -16254,11 +16254,16 @@ def _memo_md_inline(text: str) -> str:
 
 def _memo_md_flowables(md_text: str, S: dict) -> list:
     """Parse a markdown body into reportlab flowables: headings, bullet &
-    numbered lists, horizontal rules, and paragraphs — with inline formatting.
-    S is a dict of ParagraphStyles: body, h2, h3, bullet."""
-    from reportlab.platypus import Paragraph, HRFlowable
+    numbered lists, horizontal rules, GFM pipe TABLES, and paragraphs — with
+    inline formatting. S is a dict of ParagraphStyles: body, h2, h3, bullet,
+    tcell, thead, plus numeric 'width' (content width in points)."""
+    from reportlab.platypus import Paragraph, HRFlowable, Table, TableStyle
     from reportlab.lib import colors as _c
+    NAVY = _c.HexColor("#0A1628")
+    ZEBRA = _c.HexColor("#f1f5f9")
+    GRID = _c.HexColor("#e2e8f0")
     out, para_buf, bullet_buf, num_buf = [], [], [], []
+    lines = (md_text or "").replace("\r\n", "\n").split("\n")
 
     def flush_para():
         if para_buf:
@@ -16280,30 +16285,69 @@ def _memo_md_flowables(md_text: str, S: dict) -> list:
     def flush_all():
         flush_para(); flush_bullets(); flush_nums()
 
-    for raw in (md_text or "").replace("\r\n", "\n").split("\n"):
+    def _split_row(r):
+        return [c.strip() for c in re.sub(r"^\s*\|", "", re.sub(r"\|\s*$", "", r)).split("|")]
+
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
         st = raw.strip()
+        # GFM table: a header row with '|' followed by a |---|---| separator
+        if "|" in st and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*\|[\s:|-]*$", lines[i + 1]):
+            flush_all()
+            heads = _split_row(st)
+            ncol = len(heads)
+            i += 2
+            rows = []
+            while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                cells = _split_row(lines[i])
+                cells = (cells + [""] * ncol)[:ncol]   # pad/truncate to header width
+                rows.append(cells)
+                i += 1
+            data = [[Paragraph(_memo_md_inline(h), S["thead"]) for h in heads]]
+            for r in rows:
+                data.append([Paragraph(_memo_md_inline(c), S["tcell"]) for c in r])
+            width = float(S.get("width") or 460)
+            col_w = [width / ncol] * ncol
+            tbl = Table(data, colWidths=col_w, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_c.white, ZEBRA]),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.4, GRID),
+                ("LINEAFTER", (0, 0), (-2, -1), 0.4, GRID),
+                ("BOX", (0, 0), (-1, -1), 0.5, GRID),
+            ]))
+            out.append(tbl)
+            from reportlab.platypus import Spacer as _Sp
+            out.append(_Sp(1, 8))
+            continue
         if not st:
-            flush_all(); continue
+            flush_all(); i += 1; continue
         if re.match(r"^([-*_])\1{2,}$", st):                  # horizontal rule
             flush_all()
             out.append(HRFlowable(width="100%", thickness=0.5,
                                   color=_c.HexColor("#cbd5e1"), spaceBefore=5, spaceAfter=7))
-            continue
+            i += 1; continue
         m_h = re.match(r"^(#{1,4})\s+(.*)$", st)
         if m_h:
             flush_all()
             lvl = len(m_h.group(1))
             txt = m_h.group(2).strip().rstrip("#").strip()
             out.append(Paragraph(_memo_md_inline(txt), S["h2" if lvl <= 2 else "h3"]))
-            continue
+            i += 1; continue
         m_b = re.match(r"^[-*•]\s+(.*)$", st)
         if m_b:
-            flush_para(); flush_nums(); bullet_buf.append(m_b.group(1).strip()); continue
+            flush_para(); flush_nums(); bullet_buf.append(m_b.group(1).strip()); i += 1; continue
         m_n = re.match(r"^\d+[.)]\s+(.*)$", st)
         if m_n:
-            flush_para(); flush_bullets(); num_buf.append(m_n.group(1).strip()); continue
+            flush_para(); flush_bullets(); num_buf.append(m_n.group(1).strip()); i += 1; continue
         flush_bullets(); flush_nums()
-        para_buf.append(st)
+        para_buf.append(st); i += 1
     flush_all()
     return out
 
@@ -16395,7 +16439,12 @@ def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
         textColor=colors.HexColor("#334155"), leading=13.5, spaceBefore=9, spaceAfter=3)
     md_bullet = ParagraphStyle("md_bullet", fontName="Helvetica", fontSize=10.5,
         textColor=DARK, leading=14.5, spaceAfter=3, leftIndent=14, firstLineIndent=-10)
-    MD_STYLES = {"body": md_body, "h2": md_h2, "h3": md_h3, "bullet": md_bullet}
+    md_tcell = ParagraphStyle("md_tcell", fontName="Helvetica", fontSize=8.5,
+        textColor=DARK, leading=11.5)
+    md_thead = ParagraphStyle("md_thead", fontName="Helvetica-Bold", fontSize=8,
+        textColor=colors.white, leading=11)
+    MD_STYLES = {"body": md_body, "h2": md_h2, "h3": md_h3, "bullet": md_bullet,
+                 "tcell": md_tcell, "thead": md_thead, "width": doc.width}
     p_focus = ParagraphStyle("focus", fontName="Helvetica-Oblique", fontSize=9.5,
         textColor=GREY, leading=13, spaceAfter=2)
 
@@ -16739,6 +16788,53 @@ def memos_diag(request: Request):
             out["recent"] = rows
     except Exception as e:
         out["ok"] = False; out["error"] = str(e)[:300]
+    return out
+
+
+@app.get("/api/memos/selftest")
+def memos_selftest(request: Request, download: int = 0):
+    """Diagnose the memo PDF pipeline — especially logo embedding. Returns JSON
+    {logo_exists, pillow, render_ok, pdf_bytes}; with ?download=1 streams a
+    one-page sample memo PDF so you can visually confirm the logo renders."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    logo = BRANDING_DIR / "dga_logo.png"
+    out = {"ok": True, "logo_path": str(logo), "logo_exists": logo.exists()}
+    try:
+        import PIL
+        out["pillow"] = getattr(PIL, "__version__", "installed")
+    except Exception as e:
+        out["pillow"] = f"MISSING — {e!s:.80} (logo cannot embed without Pillow)"
+    sample = {
+        "format": "research_memo", "episode_title": "Memo Pipeline Self-Test",
+        "sections": [
+            {"id": "research_question", "turns": [{"speaker": "opus", "text": "Logo + table render check"}]},
+            {"id": "analysis", "turns": [{"speaker": "opus", "text":
+                "## Executive Summary\n\nIf you can see the **DGA Capital logo** at the top "
+                "and the table below has a navy header, the pipeline is healthy.\n\n"
+                "## Positions\n\n"
+                "| Position | Weight | Thesis | View | Action |\n"
+                "|----------|--------|--------|------|--------|\n"
+                "| NVDA | 18% | AI compute leader | Demand ahead of supply | Hold |\n"
+                "| INTC | 6% | Foundry optionality | Contested rating, momentum-priced | Trim |\n\n"
+                "## Portfolio Actions\n\n- Trim INTC into strength\n- Maintain NVDA core\n\n"
+                "## Key Risks\n\n- Concentration in AI hardware\n- Rate sensitivity"}]},
+        ],
+    }
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        pdf = _render_dga_memo_pdf(sample, "", "Self-Test Fund", _dt.now(_tz.utc).isoformat())
+        out["render_ok"] = True
+        out["pdf_bytes"] = len(pdf)
+    except Exception as e:
+        out["render_ok"] = False
+        out["render_error"] = str(e)[:300]
+        return JSONResponse(out, status_code=500)
+    if download:
+        from fastapi.responses import Response as _Response
+        return _Response(content=pdf, media_type="application/pdf",
+                         headers={"Content-Disposition": _content_disposition("inline", "memo-selftest.pdf")})
     return out
 
 
@@ -17786,12 +17882,72 @@ def models_check(request: Request):
     return out
 
 
+_LP_MEMO_SYSTEM = (
+    "You are an investment writer producing a CONFIDENTIAL, LP-facing investment "
+    "memorandum for DGA Capital, a private fund. Convert the analyst material "
+    "below into a polished, DRY, institutional memo in the register of a Goldman "
+    "Sachs / Morgan Stanley research note. NO personas, NO dialogue, NO first "
+    "person, NO 'I think'. Third-person, factual, decision-oriented.\n\n"
+    "Output GitHub-flavored MARKDOWN with EXACTLY these sections, in this order:\n\n"
+    "## Executive Summary\n"
+    "2–4 sentences: the Fund's overall stance and the single most important action.\n\n"
+    "## Positions\n"
+    "A markdown table with these exact columns:\n"
+    "| Position | Weight | Thesis | View | Action |\n"
+    "- Position: ticker (add the company name if known)\n"
+    "- Weight: the portfolio weight if the source states one, else —\n"
+    "- Thesis: one concise clause on WHY the Fund holds it\n"
+    "- View: the current analytical read — synthesize the bull and bear cases "
+    "into ONE neutral, informational sentence (no he-said/she-said)\n"
+    "- Action: exactly one of Hold / Add / Trim / Exit / Under review\n"
+    "Include every position discussed in the source.\n\n"
+    "## Portfolio Actions\n"
+    "Bullet list of the SPECIFIC changes the Fund is making or evaluating "
+    "(sizing changes, initiations, exits, hedges), each with a one-line rationale. "
+    "If the source implies no changes, say so explicitly.\n\n"
+    "## Key Risks\n"
+    "3–5 concise bullets.\n\n"
+    "HARD RULES: Never fabricate tickers, weights, prices, or numbers that are "
+    "not in the source — use — when unknown. Keep every cell short and skimmable. "
+    "Do NOT append a disclaimer (the document template adds one)."
+)
+
+
+def _synthesize_lp_memo(source_text: str, fund_name: str | None = None) -> str:
+    """Processing step: rewrite raw analyst material into a structured LP memo
+    (exec summary + per-position table + actions + risks) via Claude. Falls back
+    to the original text if the model call fails, so a memo always renders."""
+    import anthropic as _anthropic
+    try:
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+    except Exception:
+        return source_text
+    ctx = (f"FUND: {fund_name}\n\n" if fund_name else "")
+    user = ctx + "ANALYST MATERIAL TO CONVERT INTO THE MEMO:\n\n" + (source_text or "")[:30000]
+    for mdl in (_AGENTIC_MODEL, _TRANSCRIPT_EXTRACT_MODEL):
+        try:
+            resp = client.messages.create(
+                model=mdl, max_tokens=4000,
+                system=_LP_MEMO_SYSTEM,
+                messages=[{"role": "user", "content": user}],
+            )
+            txt = next((b.text for b in resp.content
+                        if getattr(b, "type", None) == "text"), "") or ""
+            if txt.strip() and "## " in txt:
+                return txt.strip()
+        except Exception as e:
+            print(f"⚠️ [lp memo synth] {mdl} failed: {e!s:.150}", flush=True)
+            continue
+    return source_text
+
+
 @app.post("/api/memos/from-analysis")
 async def memo_from_analysis(request: Request):
-    """Option D handoff — turn an AI Analyst answer into a DGA Capital memo
-    PDF, saved to the Memos tab. Body: {question, answer, title?,
-    assigned_fund_id?, gp_memo?}. Builds a synthetic single-section script
-    so it flows through the existing memo renderer + dga_memos table."""
+    """Option D handoff — turn an AI Analyst / Strategist answer into a DGA
+    Capital LP memo PDF, saved to the Memos tab. Body: {question, answer,
+    title?, assigned_fund_id?, gp_memo?, lp_memo?}. When lp_memo (default True),
+    the raw analysis is RE-PROCESSED into a structured institutional memo
+    (per-position table + actions + risks) before rendering."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -17808,9 +17964,15 @@ async def memo_from_analysis(request: Request):
         (question[:70] + "…") if len(question) > 70 else question) or "Research Memo"
     assigned_fund_id = (body or {}).get("assigned_fund_id") or None
     gp_memo = ((body or {}).get("gp_memo") or "").strip()
+    lp_memo = bool((body or {}).get("lp_memo", True))
+
+    fund_name = _fund_name_lookup(assigned_fund_id)
+    # Processing step — convert the conversational/raw analysis into a dry,
+    # LP-grade institutional memo with a position table + actions.
+    body_text = _synthesize_lp_memo(answer, fund_name) if lp_memo else answer
 
     # Synthesize a script dict the memo renderer understands: the question
-    # becomes a framing section, the answer becomes the body.
+    # becomes a small focus line, the processed body becomes the memo body.
     script = {
         "ticker": "ANALYSIS",
         "format": "research_memo",
@@ -17819,10 +17981,9 @@ async def memo_from_analysis(request: Request):
             {"id": "research_question",
              "turns": [{"speaker": "opus", "text": question or "Research question"}]},
             {"id": "analysis",
-             "turns": [{"speaker": "opus", "text": answer}]},
+             "turns": [{"speaker": "opus", "text": body_text}]},
         ],
     }
-    fund_name = _fund_name_lookup(assigned_fund_id)
     from datetime import datetime as _dt, timezone as _tz
     gen_iso = _dt.now(_tz.utc).isoformat()
     try:
