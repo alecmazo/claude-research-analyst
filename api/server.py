@@ -18457,27 +18457,31 @@ def _extract_youtube_id(url: str) -> str | None:
 
 
 def _yt_fetch_segments(vid: str) -> list[dict]:
-    """Fetch caption segments [{text, start}]. Handles both the v1.x instance
-    API and the legacy v0.6.x classmethod API of youtube-transcript-api."""
+    """Fetch caption segments [{text, start}] for a video id. Supports both the
+    v1.x instance API (.fetch → FetchedTranscript) and the legacy v0.6.x
+    classmethod (.get_transcript). Real fetch errors (IP block, captions
+    disabled, none found) are surfaced verbatim, not masked by a fallback."""
     from youtube_transcript_api import YouTubeTranscriptApi
     langs = ["en", "en-US", "en-GB"]
-    # v1.x: instance .fetch() returning objects with .text/.start
+    # ── v1.x: instance .fetch() ──────────────────────────────────────────
+    inst = None
     try:
         inst = YouTubeTranscriptApi()
-        fetched = inst.fetch(vid, languages=langs)
-        out = []
-        for s in fetched:
-            out.append({"text": getattr(s, "text", "") or "",
-                        "start": float(getattr(s, "start", 0) or 0)})
-        if out:
-            return out
-    except AttributeError:
-        pass
     except Exception:
-        # fall through to legacy API before giving up
-        pass
-    raw = YouTubeTranscriptApi.get_transcript(vid, languages=langs)
-    return [{"text": s.get("text", ""), "start": float(s.get("start", 0) or 0)} for s in raw]
+        inst = None
+    if inst is not None and hasattr(inst, "fetch"):
+        fetched = inst.fetch(vid, languages=langs)   # let real errors propagate
+        if hasattr(fetched, "to_raw_data"):
+            raw = fetched.to_raw_data()
+            return [{"text": s.get("text", "") or "",
+                     "start": float(s.get("start", 0) or 0)} for s in raw]
+        return [{"text": getattr(s, "text", "") or "",
+                 "start": float(getattr(s, "start", 0) or 0)} for s in fetched]
+    # ── legacy v0.6.x: classmethod .get_transcript() ─────────────────────
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):
+        raw = YouTubeTranscriptApi.get_transcript(vid, languages=langs)
+        return [{"text": s.get("text", ""), "start": float(s.get("start", 0) or 0)} for s in raw]
+    raise RuntimeError("youtube-transcript-api: no usable fetch()/get_transcript() method")
 
 
 def _yt_metadata(url: str) -> dict:
