@@ -5307,10 +5307,20 @@
           const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
           if (s.status === 'done') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
-            box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '+_trEsc(s.label||'Done')+'</div>');
+            const n = (s.result && s.result.chunks_indexed) || 0;
+            const errs = (s.result && s.result.errors) || [];
+            if (n > 0) {
+              box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '+_trEsc(s.label||'Done')+'</div>');
+              window.toast('✓ Earnings calls indexed.', {type:'success'});
+            } else {
+              // 0 indexed — show WHY, with sample errors from the sync.
+              const errHtml = errs.length ? '<div style="margin-top:6px;font-family:\'SF Mono\',monospace;font-size:10.5px;color:#92400e;max-height:120px;overflow:auto;">'+errs.map(e=>_trEsc(e)).join('<br>')+'</div>' : '';
+              box('<div style="background:var(--warn-50);border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:var(--warn-700);"><strong>'+_trEsc(s.label||'Indexed 0')+'</strong>'+errHtml+'<div style="margin-top:8px;"><button id="tr-probe-btn" style="font-size:11px;background:#fff;border:1px solid #fde68a;color:#92400e;padding:3px 9px;border-radius:5px;cursor:pointer;">Run diagnostic probe</button></div></div>');
+              const pb = document.getElementById('tr-probe-btn');
+              if (pb) pb.addEventListener('click', _probeApiNinjas);
+            }
             btn.disabled=false; btn.textContent='Sync saved-report tickers';
             _loadCallCoverage();
-            window.toast('✓ Earnings calls indexed.', {type:'success'});
           } else if (s.status === 'error') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
@@ -5323,6 +5333,25 @@
     } catch (e) {
       box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
       btn.disabled=false; btn.textContent='Sync saved-report tickers';
+    }
+  }
+
+  async function _probeApiNinjas() {
+    const status = document.getElementById('tr-sync-status');
+    const tk = (prompt('Probe API Ninjas earnings transcript for which ticker?', 'AAPL') || '').trim();
+    if (!tk) return;
+    status.innerHTML += '<div id="tr-probe-out" style="margin-top:8px;font-size:11px;color:var(--text-secondary);">Probing ' + _trEsc(tk) + '…</div>';
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/calls/probe?ticker=' + encodeURIComponent(tk))).json();
+      const rows = (d.attempts || []).map(a =>
+        '<div style="font-family:\'SF Mono\',monospace;font-size:10.5px;">' + _trEsc(a.quarter) + ': status ' + a.status +
+        (a.ok ? ' ✓ ' + a.transcript_chars + ' chars' : ' ✗ ' + _trEsc(String(a.error || '').slice(0,140)) + (a.keys ? ' keys=' + _trEsc(JSON.stringify(a.keys)) : '')) +
+        '</div>').join('');
+      document.getElementById('tr-probe-out').innerHTML =
+        '<div style="margin-top:6px;padding:8px 10px;background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:6px;">' +
+        '<div style="font-size:11px;font-weight:700;margin-bottom:4px;">API Ninjas probe · key set: ' + (d.api_ninjas_key_set ? 'yes' : 'NO') + '</div>' + rows + '</div>';
+    } catch (e) {
+      document.getElementById('tr-probe-out').innerHTML = '<div style="color:#b91c1c;font-size:11px;">Probe failed: ' + _trEsc(e.message) + '</div>';
     }
   }
 

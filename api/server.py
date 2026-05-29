@@ -18316,69 +18316,76 @@ def _chunk_call_text(text: str, words_per_chunk: int = 300, overlap: int = 40) -
     return chunks
 
 
-def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict | None:
-    """One earnings-call transcript from API Ninjas. Returns {transcript, date}
-    or None if unavailable. Requires API_NINJAS_KEY."""
+def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict:
+    """One earnings-call transcript from API Ninjas. Always returns a dict:
+      ok=True  → {ok, status, transcript, date}
+      ok=False → {ok, status, error[, keys]}
+    Never raises or silently returns None — so the sync job can report WHY a
+    fetch came back empty (403 premium gate vs. no data vs. bad shape)."""
     key = os.environ.get("API_NINJAS_KEY")
     if not key:
-        raise RuntimeError("API_NINJAS_KEY not set")
+        return {"ok": False, "status": 0, "error": "API_NINJAS_KEY not set"}
     import requests
+    url = "https://api.api-ninjas.com/v1/earningstranscript"
     try:
-        r = requests.get("https://api.api-ninjas.com/v1/earningstranscript",
-                         params={"ticker": ticker, "year": year, "quarter": quarter},
+        r = requests.get(url, params={"ticker": ticker, "year": year, "quarter": quarter},
                          headers={"X-Api-Key": key}, timeout=30)
-        if not r.ok:
-            return None
-        j = r.json()
-        if isinstance(j, list):
-            j = j[0] if j else {}
-        txt = (j or {}).get("transcript") or ""
-        if not txt or len(txt) < 500:
-            return None
-        return {"transcript": txt, "date": (j or {}).get("date")}
     except Exception as e:
-        print(f"⚠️ [api-ninjas {ticker} {year}Q{quarter}] {e!s:.150}", flush=True)
-        return None
+        return {"ok": False, "status": -1, "error": f"request failed: {e!s:.160}"}
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "error": (r.text or "")[:300]}
+    try:
+        j = r.json()
+    except Exception:
+        return {"ok": False, "status": 200, "error": "non-JSON body: " + (r.text or "")[:200]}
+    if isinstance(j, list):
+        j = j[0] if j else {}
+    txt = ((j or {}).get("transcript") or "").strip()
+    if not txt:
+        return {"ok": False, "status": 200, "error": "empty transcript",
+                "keys": list((j or {}).keys()) if isinstance(j, dict) else None}
+    return {"ok": True, "status": 200, "transcript": txt, "date": (j or {}).get("date")}
 
 
-def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> int:
+def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
     """Pull recent earnings calls for one ticker, chunk + embed + store.
-    Returns the number of NEW chunks indexed. Skips quarters already indexed."""
+    Returns {indexed, found:[quarters], errors:[str]}. Skips quarters already
+    indexed. Walks back 3 years so we still index established names even if the
+    very newest quarter isn't in API Ninjas' DB yet."""
     from datetime import datetime as _dt
     cur_year = _dt.utcnow().year
-    indexed = 0
-    got = 0
-    # Walk back from the current year/quarter
-    candidates = []
-    for y in (cur_year, cur_year - 1):
-        for q in (4, 3, 2, 1):
-            candidates.append((y, q))
+    indexed, got = 0, 0
+    found, errors = [], []
+    candidates = [(y, q) for y in (cur_year, cur_year - 1, cur_year - 2)
+                         for q in (4, 3, 2, 1)]
     for (y, q) in candidates:
         if got >= max_quarters:
             break
         qtag = f"{y}Q{q}"
-        # Skip if already indexed
-        try:
+        try:                                  # skip if already indexed
             with _fund_conn() as conn, conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM call_chunks WHERE ticker=%s AND quarter=%s LIMIT 1",
                             (ticker, qtag))
                 if cur.fetchone():
-                    got += 1
-                    continue
+                    got += 1; found.append(qtag); continue
         except Exception:
             pass
-        data = _fetch_api_ninjas_transcript(ticker, y, q)
-        if not data:
+        res = _fetch_api_ninjas_transcript(ticker, y, q)
+        if not res.get("ok"):
+            # Record only "real" failures (auth/quota/shape), not the expected
+            # "future quarter has no data yet" 200-empty misses.
+            st = res.get("status")
+            if st not in (200,) or res.get("error") != "empty transcript":
+                errors.append(f"{qtag}: [{st}] {str(res.get('error'))[:120]}")
             continue
-        got += 1
-        chunks = _chunk_call_text(data["transcript"])
+        got += 1; found.append(qtag)
+        chunks = _chunk_call_text(res["transcript"])
         if not chunks:
             continue
         try:
             embs = _embed_texts(chunks)
         except Exception as e:
-            print(f"⚠️ [calls embed {ticker} {qtag}] {e!s:.150}", flush=True)
-            continue
+            errors.append(f"{qtag}: embed failed {e!s:.100}"); continue
         try:
             with _fund_conn() as conn, conn.cursor() as cur:
                 for idx, (ch, emb) in enumerate(zip(chunks, embs)):
@@ -18386,14 +18393,13 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> int:
                         INSERT INTO call_chunks (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding)
                         VALUES (%s,%s,%s,NULL,%s,%s,%s)
                         ON CONFLICT (ticker, quarter, chunk_idx) DO NOTHING
-                    """, (ticker, qtag, data.get("date"), idx, ch, json.dumps(emb)))
+                    """, (ticker, qtag, res.get("date"), idx, ch, json.dumps(emb)))
                     indexed += 1
                 conn.commit()
         except Exception as e:
-            print(f"⚠️ [calls store {ticker} {qtag}] {e!s:.150}", flush=True)
-            continue
+            errors.append(f"{qtag}: store failed {e!s:.100}"); continue
         print(f"📞 [calls] {ticker} {qtag}: indexed {len(chunks)} chunks", flush=True)
-    return indexed
+    return {"indexed": indexed, "found": found, "errors": errors}
 
 
 def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
@@ -18406,16 +18412,31 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
     try:
         _ensure_transcripts_tables()
         total_indexed = 0
+        names_with_calls = 0
+        all_errors = []
         for i, tk in enumerate(tickers):
             _set(stage="syncing", label=f"📞 {tk} ({i+1}/{len(tickers)})…", done=i)
             try:
-                total_indexed += _sync_one_ticker_calls(tk, max_quarters=max_quarters)
+                r = _sync_one_ticker_calls(tk, max_quarters=max_quarters)
+                total_indexed += r.get("indexed", 0)
+                if r.get("found"):
+                    names_with_calls += 1
+                for e in (r.get("errors") or [])[:2]:
+                    all_errors.append(f"{tk} {e}")
             except Exception as e:
+                all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
             _set(indexed=total_indexed)
-        _set(stage="done", status="done", done=len(tickers),
-             label=f"✓ Indexed {total_indexed} passages across {len(tickers)} names",
-             result={"tickers": tickers, "chunks_indexed": total_indexed})
+        # Build an honest label: if nothing indexed, surface the dominant reason.
+        if total_indexed > 0:
+            label = f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
+        else:
+            reason = all_errors[0] if all_errors else "no transcripts returned by API Ninjas"
+            label = f"⚠ Indexed 0 passages — {reason[:160]}"
+        _set(stage="done", status="done", done=len(tickers), label=label,
+             result={"tickers": tickers, "chunks_indexed": total_indexed,
+                     "names_with_calls": names_with_calls,
+                     "errors": all_errors[:12]})
     except Exception as e:
         print(f"❌ [call sync {job_id}] {e!s:.300}", flush=True)
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
@@ -18641,6 +18662,34 @@ def transcripts_calls_coverage(request: Request):
                 "quarters": int(r["quarters"]), "chunks": int(r["chunks"])} for r in rows]}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/transcripts/calls/probe")
+def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
+                            year: int = 0, quarter: int = 0):
+    """Diagnostic: hit API Ninjas once and return the raw status/error/shape so
+    we can see exactly why a sync indexed nothing. Defaults to the most recent
+    likely-available quarter. GP-only."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    from datetime import datetime as _dt
+    has_key = bool(os.environ.get("API_NINJAS_KEY"))
+    attempts = []
+    if year and quarter:
+        cand = [(int(year), int(quarter))]
+    else:
+        cy = _dt.utcnow().year
+        cand = [(cy, 1), (cy - 1, 4), (cy - 1, 3), (cy - 1, 2), (cy - 1, 1)]
+    for (y, q) in cand:
+        res = _fetch_api_ninjas_transcript((ticker or "AAPL").upper().strip(), y, q)
+        attempts.append({"quarter": f"{y}Q{q}", "status": res.get("status"),
+                         "ok": res.get("ok"),
+                         "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
+                         "error": res.get("error"), "keys": res.get("keys")})
+        if res.get("ok"):
+            break
+    return {"ok": True, "api_ninjas_key_set": has_key, "ticker": ticker, "attempts": attempts}
 
 
 # Separate dict for script-generation jobs so they don't collide with audio
