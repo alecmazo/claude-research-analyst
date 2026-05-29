@@ -3066,6 +3066,14 @@
           <button id="strat-run-btn" class="btn-primary" style="white-space:nowrap;padding:0 18px;align-self:stretch;">🧭 Run review</button>
         </div>
         <div id="strat-out" style="display:none;margin-top:14px;"></div>
+        <!-- Saved committee reviews (persist across builds) -->
+        <details id="strat-archive" style="margin-top:14px;border-top:1px solid var(--border-subtle);padding-top:10px;">
+          <summary style="cursor:pointer;font-size:11.5px;font-weight:700;color:var(--text-secondary);list-style:none;display:flex;align-items:center;gap:6px;">
+            📋 Past committee reviews <span id="strat-archive-count" style="font-weight:500;color:var(--text-tertiary);"></span>
+            <span style="margin-left:auto;font-size:10px;color:var(--text-tertiary);font-weight:500;">saved to DB + Dropbox · survives rebuilds</span>
+          </summary>
+          <div id="strat-archive-list" style="margin-top:8px;"></div>
+        </details>
       </div>
     </section>
 
@@ -5709,7 +5717,7 @@
                         get_recent_news:'📰', list_saved_reports:'📚',
                         get_financials:'📊', compute:'🧮', get_ytd_attribution:'📈',
                         web_search:'🌐' };
-    let _stratResult = null, _stratPositions = [], _stratTickers = [], _stratFund = '';
+    let _stratResult = null, _stratPositions = [], _stratTickers = [], _stratFund = '', _stratJobId = null;
 
     // Populate fund dropdown (reuse fund list)
     (async () => {
@@ -5756,13 +5764,62 @@
           `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
           renderVerification(r.verification) +
           '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+            '<button id="strat-pdf-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">🖨 Full review PDF</button>' +
             '<button id="strat-roundup-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;">🎙️ Generate Portfolio Roundup</button>' +
             '<button id="strat-memo-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">📄 Draft strategy memo</button>' +
             `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
           '</div>' +
+          '<div style="margin-top:6px;font-size:10px;color:var(--text-tertiary);">✓ Saved automatically — find it under “Past committee reviews” after any rebuild.</div>' +
         '</div>';
+      document.getElementById('strat-pdf-btn')?.addEventListener('click', () => { if (_stratJobId) _openReviewPdf(_stratJobId); });
       document.getElementById('strat-roundup-btn')?.addEventListener('click', _handoffRoundup);
       document.getElementById('strat-memo-btn')?.addEventListener('click', _handoffMemo);
+      _loadStratArchive();
+    }
+
+    // Open the full-review PDF in a new tab (blob carries the auth header).
+    async function _openReviewPdf(reviewId) {
+      try {
+        const r = await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(reviewId) + '/pdf');
+        if (!r.ok) throw new Error('PDF not ready (HTTP ' + r.status + ')');
+        const blob = await r.blob();
+        window.open(URL.createObjectURL(blob), '_blank');
+      } catch (e) { window.toast('Could not open review PDF: ' + e.message, {type:'error'}); }
+    }
+
+    async function _loadStratArchive() {
+      const wrap = document.getElementById('strat-archive-list');
+      const cnt = document.getElementById('strat-archive-count');
+      if (!wrap) return;
+      try {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews')).json();
+        const revs = (d && d.reviews) || [];
+        if (cnt) cnt.textContent = '(' + revs.length + ')';
+        if (!revs.length) { wrap.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">No saved reviews yet.</div>'; return; }
+        wrap.innerHTML = revs.map(rv =>
+          '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:11.5px;">' +
+            '<span style="font-weight:700;color:var(--text-primary);">' + esc(rv.fund_name || 'Portfolio') + '</span>' +
+            '<span style="color:var(--text-tertiary);">' + esc((rv.tickers||'').split(',').slice(0,6).join(', ')) + ((rv.tickers||'').split(',').length>6?'…':'') + '</span>' +
+            '<span style="margin-left:auto;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;font-size:10px;">' + (rv.generated_at ? new Date(rv.generated_at).toLocaleString() : '') + '</span>' +
+            '<button class="strat-arch-view btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">View</button>' +
+            '<button class="strat-arch-pdf btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
+          '</div>').join('');
+        wrap.querySelectorAll('.strat-arch-pdf').forEach(b => b.addEventListener('click', () => _openReviewPdf(b.dataset.id)));
+        wrap.querySelectorAll('.strat-arch-view').forEach(b => b.addEventListener('click', () => _viewStratArchive(b.dataset.id)));
+      } catch (_) {
+        wrap.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">Could not load past reviews.</div>';
+      }
+    }
+
+    async function _viewStratArchive(id) {
+      try {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(id))).json();
+        if (!d.ok || !d.review) throw new Error(d.error || 'not found');
+        _stratResult = d.review; _stratJobId = id;
+        out.style.display = 'block';
+        renderResult(d.review);
+        out.scrollIntoView({behavior:'smooth', block:'start'});
+      } catch (e) { window.toast('Could not open review: ' + e.message, {type:'error'}); }
     }
 
     let _stratRoundupPoll = null;
@@ -5891,6 +5948,7 @@
         _stratPositions = d0.positions || []; _stratTickers = d0.tickers || [];
         if (d0.fund_name) _stratFund = d0.fund_name;
         const jobId = d0.job_id;
+        _stratJobId = jobId;   // == the persisted review id (used for the PDF)
         const timer = setInterval(async () => {
           if (Date.now() - t0 > 300000) {   // 5-min cap (portfolio is heavier)
             clearInterval(timer); out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 5 min.</div>';
@@ -5938,6 +5996,9 @@
         window.toast('Pick a fund or upload a portfolio file.', {type:'warn'});
       }
     });
+
+    // Show saved reviews on load so they're available after any rebuild.
+    setTimeout(_loadStratArchive, 0);
   })();
 
   async function loadReports() {

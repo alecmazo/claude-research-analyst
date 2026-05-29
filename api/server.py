@@ -10202,6 +10202,10 @@ async def _on_startup_run_migrations() -> None:
         _ensure_transcripts_tables()
     except Exception as _e:
         print(f"[startup] transcripts table init skipped: {_e}")
+    try:
+        _ensure_strategist_reviews_table()
+    except Exception as _e:
+        print(f"[startup] strategist_reviews table init skipped: {_e}")
     # Wire DB-backed overlay into auth_v2 so LP assignments persist
     # in PostgreSQL rather than relying on the overlay file alone.
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -17724,6 +17728,73 @@ _AGENTIC_SYSTEM_DEFAULT = (
 )
 
 
+def _ensure_strategist_reviews_table() -> None:
+    """Persist full Portfolio Strategist committee reviews so they survive
+    Railway redeploys (the live job dict is in-memory and wiped on restart)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS strategist_reviews (
+                    id           TEXT PRIMARY KEY,
+                    fund_id      TEXT,
+                    fund_name    TEXT,
+                    tickers      TEXT,
+                    question     TEXT,
+                    answer       TEXT,
+                    verification JSONB,
+                    cost_usd     NUMERIC,
+                    model        TEXT,
+                    generated_by TEXT,
+                    generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS strategist_reviews_gen_idx ON strategist_reviews(generated_at DESC)")
+            conn.commit()
+    except Exception as e:
+        print(f"❌ _ensure_strategist_reviews_table: {e!s:.200}", flush=True)
+
+
+def _persist_strategist_review(job_id: str, job: dict, answer: str,
+                                verification: dict, cost_usd: float, model: str) -> None:
+    """Insert one completed strategist review. Best-effort, never raises."""
+    _ensure_strategist_reviews_table()
+    try:
+        tickers = ", ".join(job.get("tickers") or [])[:600]
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO strategist_reviews
+                    (id, fund_id, fund_name, tickers, question, answer,
+                     verification, cost_usd, model, generated_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (id) DO NOTHING
+            """, (job_id, job.get("fund_id"), job.get("fund_name"), tickers,
+                  (job.get("question") or "")[:4000], answer or "",
+                  json.dumps(verification or {}), cost_usd, model,
+                  job.get("generated_by") or "gp"))
+            conn.commit()
+        print(f"🧭 [strategist] persisted review {job_id} ({tickers[:60]})", flush=True)
+    except Exception as e:
+        print(f"⚠️ [strategist persist insert] {e!s:.150}", flush=True)
+
+
+def _render_strategist_review_pdf(review: dict) -> bytes:
+    """Render the FULL committee review (verbatim, not the concise LP memo) as a
+    branded PDF using the memo renderer in research-memo mode."""
+    fund = review.get("fund_name") or "Portfolio"
+    date_str = (review.get("generated_at") or "")[:10]
+    title = f"Investment Committee Review — {fund}"
+    script = {
+        "ticker": "STRATEGIST", "format": "research_memo", "episode_title": title,
+        "tickers": [t.strip() for t in (review.get("tickers") or "").split(",") if t.strip()],
+        "sections": [
+            {"id": "analysis", "turns": [{"speaker": "opus", "text": review.get("answer") or ""}]},
+        ],
+    }
+    return _render_dga_memo_pdf(script, "", fund, review.get("generated_at") or date_str)
+
+
 def _run_agentic_analysis(job_id: str, question: str,
                            system_override: str | None = None) -> None:
     """Background worker: manual tool-use loop. Streams progress into
@@ -17779,6 +17850,15 @@ def _run_agentic_analysis(job_id: str, question: str,
                      result={"answer": final, "tool_calls": tool_log[:],
                              "cost_usd": round(total_cost, 4), "model": model,
                              "verification": verification})
+                # Persist Portfolio Strategist reviews so the full committee
+                # dossier survives dyno restarts (in-memory jobs do not).
+                try:
+                    jr = _agentic_jobs.get(job_id) or {}
+                    if jr.get("mode") == "strategist":
+                        _persist_strategist_review(job_id, jr, final, verification,
+                                                   round(total_cost, 4), model)
+                except Exception as _pe:
+                    print(f"⚠️ [strategist persist] {_pe!s:.150}", flush=True)
                 return
 
             # Execute every tool the model requested this turn
@@ -18182,11 +18262,106 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
                               "updated_at": time.time(), "question": question,
                               "steps": 0, "tool_calls": [], "cost_usd": 0.0,
                               "mode": "strategist", "positions": positions,
-                              "tickers": tickers, "fund_name": fund_name}
+                              "tickers": tickers, "fund_name": fund_name,
+                              "fund_id": fund_id,
+                              "generated_by": claims.get("email") or claims.get("lp_id") or "gp"}
     background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM)
     print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers,
             "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}
+
+
+@app.get("/api/research/strategist/reviews")
+def strategist_reviews_list(request: Request):
+    """List saved Portfolio Strategist committee reviews (newest first)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_strategist_reviews_table()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id, fund_name, tickers, cost_usd, model, generated_at,
+                                  length(answer) AS answer_len
+                             FROM strategist_reviews
+                            ORDER BY generated_at DESC LIMIT 100""")
+            rows = cur.fetchall() or []
+        return {"ok": True, "reviews": [{
+            "id": r["id"], "fund_name": r.get("fund_name"), "tickers": r.get("tickers"),
+            "cost_usd": float(r["cost_usd"]) if r.get("cost_usd") is not None else None,
+            "model": r.get("model"), "answer_len": int(r.get("answer_len") or 0),
+            "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+        } for r in rows]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/research/strategist/reviews/{review_id}")
+def strategist_review_get(review_id: str, request: Request):
+    """Full committee review (markdown answer + verification)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id, fund_name, tickers, question, answer, verification,
+                                  cost_usd, model, generated_at
+                             FROM strategist_reviews WHERE id = %s""", (review_id,))
+            r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Review not found")
+        return {"ok": True, "review": {
+            "id": r["id"], "fund_name": r.get("fund_name"), "tickers": r.get("tickers"),
+            "question": r.get("question"), "answer": r.get("answer"),
+            "verification": r.get("verification"),
+            "cost_usd": float(r["cost_usd"]) if r.get("cost_usd") is not None else None,
+            "model": r.get("model"),
+            "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+        }}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/research/strategist/reviews/{review_id}/pdf")
+def strategist_review_pdf(review_id: str, request: Request):
+    """Render the FULL committee review as a branded, printable PDF and stream
+    it inline (browser viewer = print/save). Also archives a copy to the
+    Dropbox app folder under /Committee Reviews/."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id, fund_name, tickers, answer, generated_at
+                             FROM strategist_reviews WHERE id = %s""", (review_id,))
+            r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Review not found")
+        review = {"fund_name": r.get("fund_name"), "tickers": r.get("tickers"),
+                  "answer": r.get("answer"),
+                  "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else ""}
+        pdf = _render_strategist_review_pdf(review)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"PDF render failed: {e!s:.200}")
+    fund = (r.get("fund_name") or "Portfolio").replace("/", "_")
+    date_str = (review["generated_at"] or "")[:10]
+    fname = f"IC-Review_{fund}_{date_str}.pdf".replace(" ", "_")
+    # Best-effort archive to Dropbox /Committee Reviews/
+    try:
+        dbx = analyst._dropbox_client()
+        if dbx:
+            import dropbox as _dx
+            folder = (analyst._dropbox_folder() or "")
+            path = f"{folder}/Committee Reviews/{fname}"
+            dbx.files_upload(pdf, path, mode=_dx.files.WriteMode.overwrite)
+    except Exception as _be:
+        print(f"⚠️ [IC review dropbox archive] {_be!s:.120}", flush=True)
+    from fastapi.responses import Response as _Response
+    return _Response(content=pdf, media_type="application/pdf",
+                     headers={"Content-Disposition": _content_disposition("inline", fname)})
 
 
 # ═══════════════════════════════════════════════════════════════════════
