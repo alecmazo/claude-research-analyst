@@ -10198,6 +10198,10 @@ def _hydrate_analyst_reports_to_db() -> None:
 @app.on_event("startup")
 async def _on_startup_run_migrations() -> None:
     _apply_self_migrations()
+    try:
+        _ensure_transcripts_tables()
+    except Exception as _e:
+        print(f"[startup] transcripts table init skipped: {_e}")
     # Wire DB-backed overlay into auth_v2 so LP assignments persist
     # in PostgreSQL rather than relying on the overlay file alone.
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -17052,6 +17056,62 @@ _AGENTIC_TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "list_transcripts",
+        "description": "List ingested interview/keynote transcripts in the DGA "
+                       "library (e.g. Jensen Huang interviews). Returns id, person, "
+                       "title, and which companies were extracted. Use to discover "
+                       "what primary-source spoken material is available before "
+                       "answering questions about what executives have said.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "person": {"type": "string", "description": "Optional name filter."},
+                "ticker": {"type": "string", "description": "Optional: only transcripts that mention this ticker."},
+            },
+        },
+    },
+    {
+        "name": "read_transcript",
+        "description": "Read a stored interview/keynote transcript by id (full text + "
+                       "the companies/tickers extracted from it with the speaker's "
+                       "sentiment and exact quotes). Use after list_transcripts.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"transcript_id": {"type": "string"}},
+            "required": ["transcript_id"],
+        },
+    },
+    {
+        "name": "search_transcripts",
+        "description": "Full-text search across all ingested interview/keynote "
+                       "transcripts for a keyword or phrase. Returns matching "
+                       "transcripts with snippets. Use to find who said what about a "
+                       "topic across the whole transcript library.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_call_transcripts",
+        "description": "Semantic search over a company's INDEXED EARNINGS-CALL "
+                       "transcripts. Returns the most relevant passages (with quarter "
+                       "+ date) for your query — management commentary on margins, "
+                       "guidance, demand, capex, etc. This is the authoritative source "
+                       "for 'what did management say about X'. Returns empty if that "
+                       "ticker's calls aren't indexed yet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "query": {"type": "string", "description": "What you want from the call, e.g. 'foundry gross margin outlook'."},
+                "k": {"type": "integer", "description": "How many passages (1-12, default 6)."},
+            },
+            "required": ["ticker", "query"],
+        },
+    },
 ]
 
 
@@ -17231,6 +17291,99 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
             except Exception as e:
                 return f"web_search error: {e!s:.150}"
 
+        if name == "list_transcripts":
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            _ensure_transcripts_tables()
+            person = (args.get("person") or "").strip()
+            tk = (args.get("ticker") or "").upper().strip()
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                if tk:
+                    cur.execute("""
+                        SELECT DISTINCT t.id, t.person, t.title, t.created_at
+                          FROM transcripts t
+                          JOIN transcript_entities e ON e.transcript_id = t.id
+                         WHERE t.source='youtube' AND e.ticker = %s
+                         ORDER BY t.created_at DESC LIMIT 60""", (tk,))
+                elif person:
+                    cur.execute("""SELECT id, person, title, created_at FROM transcripts
+                                    WHERE source='youtube' AND person ILIKE %s
+                                    ORDER BY created_at DESC LIMIT 60""", (f"%{person}%",))
+                else:
+                    cur.execute("""SELECT id, person, title, created_at FROM transcripts
+                                    WHERE source='youtube' ORDER BY created_at DESC LIMIT 60""")
+                rows = cur.fetchall() or []
+                out = []
+                for r in rows:
+                    cur.execute("""SELECT company, ticker, sentiment FROM transcript_entities
+                                    WHERE transcript_id = %s ORDER BY id LIMIT 25""", (r["id"],))
+                    ents = cur.fetchall() or []
+                    out.append({"id": r["id"], "person": r.get("person"),
+                                "title": r.get("title"),
+                                "date": r["created_at"].isoformat() if r.get("created_at") else None,
+                                "companies": [{"company": e.get("company"), "ticker": e.get("ticker"),
+                                               "sentiment": e.get("sentiment")} for e in ents]})
+            if not out:
+                return "No transcripts ingested yet."
+            return json.dumps(out, default=str)[:6000]
+
+        if name == "read_transcript":
+            tid = (args.get("transcript_id") or "").strip()
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT person, title, channel, summary, full_text
+                                 FROM transcripts WHERE id = %s""", (tid,))
+                t = cur.fetchone()
+                if not t:
+                    return f"No transcript with id {tid}."
+                cur.execute("""SELECT company, ticker, sentiment, quote, theme
+                                 FROM transcript_entities WHERE transcript_id = %s ORDER BY id""", (tid,))
+                ents = cur.fetchall() or []
+            return json.dumps({
+                "person": t.get("person"), "title": t.get("title"),
+                "channel": t.get("channel"), "summary": t.get("summary"),
+                "entities": [dict(e) for e in ents],
+                "full_text": (t.get("full_text") or "")[:9000],
+            }, default=str)
+
+        if name == "search_transcripts":
+            query = (args.get("query") or "").strip()
+            if not query:
+                return "Empty query."
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            _ensure_transcripts_tables()
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, person, title,
+                           ts_headline('english', full_text,
+                                       plainto_tsquery('english', %s),
+                                       'MaxFragments=2,MinWords=8,MaxWords=28') AS snippet
+                      FROM transcripts
+                     WHERE source='youtube'
+                       AND to_tsvector('english', coalesce(full_text,'')) @@ plainto_tsquery('english', %s)
+                     ORDER BY created_at DESC LIMIT 8
+                """, (query, query))
+                rows = cur.fetchall() or []
+            if not rows:
+                return f"No transcript passages matched {query!r}."
+            return json.dumps([{"id": r["id"], "person": r.get("person"),
+                                "title": r.get("title"),
+                                "snippet": re.sub(r"\s+", " ", (r.get("snippet") or "")).strip()}
+                               for r in rows], default=str)[:6000]
+
+        if name == "search_call_transcripts":
+            tk = (args.get("ticker") or "").upper().strip()
+            query = (args.get("query") or "").strip()
+            if not tk or not query:
+                return "Provide ticker and query."
+            hits = _search_call_chunks(tk, query, k=int(args.get("k") or 6))
+            if not hits:
+                return (f"No indexed earnings-call passages for {tk}. "
+                        f"It may not be synced yet — calls are indexed on demand.")
+            return json.dumps({"ticker": tk, "passages": hits}, default=str)[:6000]
+
         return f"Unknown tool: {name}"
     except Exception as e:
         return f"Tool '{name}' error: {e!s:.200}"
@@ -17336,6 +17489,11 @@ _AGENTIC_SYSTEM_DEFAULT = (
     "• Current price / daily move: get_quote. Sector: get_sector. Existing "
     "thesis: read_saved_report. Recent events: get_recent_news, then "
     "web_search if still uncovered.\n"
+    "• Primary-source spoken word: search_call_transcripts for what MANAGEMENT "
+    "said on earnings calls (margins, guidance, demand) — quote it. "
+    "list_transcripts / read_transcript / search_transcripts for ingested "
+    "interviews & keynotes (e.g. a CEO naming suppliers or trends). When a "
+    "question is about what someone SAID, check these before the open web.\n"
     "• NEVER invent a price, multiple, rating, sector, or return — call the "
     "tool. Cite the specific numbers you pulled and their source.\n\n"
     "Be concise and decisive: lead with the answer, then the evidence. This "
@@ -17741,6 +17899,621 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
     print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers,
             "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TRANSCRIPT INTELLIGENCE — Part A (YouTube/interview transcripts) and
+# Part B (earnings-call RAG index). Both feed the same agentic AI Analyst
+# via four new tools. YouTube transcripts are stored whole + entity-mapped;
+# earnings calls are chunked + embedded so the bot retrieves only the
+# relevant passages (cheap per-query token cost, never the whole call).
+# ═══════════════════════════════════════════════════════════════════════
+_transcript_jobs: dict[str, dict] = {}           # YouTube ingest jobs
+_call_sync_jobs: dict[str, dict] = {}            # earnings-call sync jobs
+
+_TRANSCRIPT_EXTRACT_MODEL = (os.environ.get("TRANSCRIPT_MODEL", "").strip()
+                             or "claude-sonnet-4-6")
+_EMBED_MODEL = "text-embedding-3-small"          # 1536-dim, ~$0.02/1M tokens
+
+
+def _ensure_transcripts_tables() -> None:
+    """Create transcript tables. Idempotent. Embeddings are stored as JSONB
+    float arrays (cosine computed in Python) — no pgvector extension needed,
+    which keeps this portable across Postgres images."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS transcripts (
+                    id            TEXT PRIMARY KEY,
+                    source        TEXT NOT NULL DEFAULT 'youtube',
+                    person        TEXT,
+                    ticker        TEXT,
+                    title         TEXT,
+                    video_url     TEXT,
+                    channel       TEXT,
+                    published_at  TEXT,
+                    full_text     TEXT,
+                    summary       TEXT,
+                    word_count    INTEGER,
+                    created_by    TEXT,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS transcripts_created_idx ON transcripts(created_at DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS transcripts_ticker_idx  ON transcripts(ticker)")
+            cur.execute("CREATE INDEX IF NOT EXISTS transcripts_fts_idx ON transcripts "
+                        "USING gin(to_tsvector('english', coalesce(full_text,'')))")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS transcript_entities (
+                    id            BIGSERIAL PRIMARY KEY,
+                    transcript_id TEXT NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+                    company       TEXT,
+                    ticker        TEXT,
+                    sentiment     TEXT,
+                    quote         TEXT,
+                    timestamp_sec INTEGER,
+                    theme         TEXT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS transcript_entities_tid_idx    ON transcript_entities(transcript_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS transcript_entities_ticker_idx ON transcript_entities(ticker)")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS call_chunks (
+                    id          BIGSERIAL PRIMARY KEY,
+                    ticker      TEXT NOT NULL,
+                    quarter     TEXT,
+                    call_date   TEXT,
+                    speaker     TEXT,
+                    chunk_idx   INTEGER,
+                    chunk_text  TEXT NOT NULL,
+                    embedding   JSONB,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS call_chunks_ticker_idx ON call_chunks(ticker)")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS call_chunks_uniq ON call_chunks(ticker, quarter, chunk_idx)")
+            conn.commit()
+    except Exception as e:
+        print(f"❌ _ensure_transcripts_tables failed: {e!s:.300}", flush=True)
+
+
+# ── YouTube fetch ──────────────────────────────────────────────────────
+def _extract_youtube_id(url: str) -> str | None:
+    """Parse an 11-char YouTube video id from any common URL shape."""
+    if not url:
+        return None
+    url = url.strip()
+    m = re.search(r"(?:v=|/shorts/|youtu\.be/|/embed/|/live/)([A-Za-z0-9_-]{11})", url)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", url):   # bare id
+        return url
+    return None
+
+
+def _yt_fetch_segments(vid: str) -> list[dict]:
+    """Fetch caption segments [{text, start}]. Handles both the v1.x instance
+    API and the legacy v0.6.x classmethod API of youtube-transcript-api."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+    langs = ["en", "en-US", "en-GB"]
+    # v1.x: instance .fetch() returning objects with .text/.start
+    try:
+        inst = YouTubeTranscriptApi()
+        fetched = inst.fetch(vid, languages=langs)
+        out = []
+        for s in fetched:
+            out.append({"text": getattr(s, "text", "") or "",
+                        "start": float(getattr(s, "start", 0) or 0)})
+        if out:
+            return out
+    except AttributeError:
+        pass
+    except Exception:
+        # fall through to legacy API before giving up
+        pass
+    raw = YouTubeTranscriptApi.get_transcript(vid, languages=langs)
+    return [{"text": s.get("text", ""), "start": float(s.get("start", 0) or 0)} for s in raw]
+
+
+def _yt_metadata(url: str) -> dict:
+    """Title + channel via the free oEmbed endpoint (no API key)."""
+    try:
+        import requests
+        r = requests.get("https://www.youtube.com/oembed",
+                         params={"url": url, "format": "json"}, timeout=10)
+        if r.ok:
+            j = r.json()
+            return {"title": j.get("title"), "channel": j.get("author_name")}
+    except Exception:
+        pass
+    return {"title": None, "channel": None}
+
+
+# ── Entity extraction (Claude) ─────────────────────────────────────────
+_TRANSCRIPT_EXTRACT_SYSTEM = (
+    "You read interview/keynote transcripts and extract every PUBLICLY-TRADED "
+    "company a public-market investor could act on. For each, capture the "
+    "speaker's actual stance and the exact sentence they said it in. Ignore the "
+    "speaker's own employer unless they make a forward-looking claim about it. "
+    "Map each company to its US-listed ticker when you are confident; use null "
+    "for private/unknown. Respond with ONLY compact JSON, no prose:\n"
+    '{"summary": "2-3 sentence gist of the conversation", "entities": ['
+    '{"company": "...", "ticker": "NVDA"|null, "sentiment": "bull"|"bear"|"neutral", '
+    '"quote": "exact sentence from the transcript", "theme": "short tag e.g. AI capex"}]}'
+    "\nDo not invent companies or tickers — only what is actually discussed."
+)
+
+
+def _extract_transcript_entities(text: str) -> dict:
+    """One Claude call → {summary, entities:[...]}. Tries the cheap model first,
+    falls back to the agentic model on error. Degrades to empty on failure."""
+    import anthropic as _anthropic
+    snippet = (text or "")[:42000]   # keep the extraction call bounded
+    client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+    user = f"TRANSCRIPT:\n{snippet}"
+    for mdl in (_TRANSCRIPT_EXTRACT_MODEL, _AGENTIC_MODEL):
+        try:
+            resp = client.messages.create(
+                model=mdl, max_tokens=4000,
+                system=_TRANSCRIPT_EXTRACT_SYSTEM,
+                messages=[{"role": "user", "content": user}],
+            )
+            txt = next((b.text for b in resp.content
+                        if getattr(b, "type", None) == "text"), "") or ""
+            parsed = _extract_json_object(txt)
+            if parsed is not None:
+                ents = parsed.get("entities") or []
+                # normalize
+                clean = []
+                for e in ents:
+                    if not isinstance(e, dict):
+                        continue
+                    comp = (e.get("company") or "").strip()
+                    if not comp:
+                        continue
+                    tk = (e.get("ticker") or "") or None
+                    tk = (tk.upper().strip() if isinstance(tk, str) else None) or None
+                    sent = (e.get("sentiment") or "neutral").lower().strip()
+                    if sent not in ("bull", "bear", "neutral"):
+                        sent = "neutral"
+                    clean.append({"company": comp[:120], "ticker": tk,
+                                  "sentiment": sent, "quote": (e.get("quote") or "")[:600],
+                                  "theme": (e.get("theme") or "")[:80]})
+                return {"summary": (parsed.get("summary") or "")[:1000], "entities": clean}
+        except Exception as e:
+            print(f"⚠️ [transcript extract] {mdl} failed: {e!s:.150}", flush=True)
+            continue
+    return {"summary": "", "entities": []}
+
+
+def _approx_timestamp(quote: str, segments: list[dict]) -> int | None:
+    """Best-effort: find the segment whose text overlaps the quote, return its
+    start time in seconds. Used to deep-link YouTube at the right moment."""
+    if not quote or not segments:
+        return None
+    q = re.sub(r"\s+", " ", quote.lower())[:40]
+    if not q:
+        return None
+    for s in segments:
+        st = re.sub(r"\s+", " ", (s.get("text") or "").lower())
+        if st and (st in q or q[:20] in st):
+            return int(s.get("start") or 0)
+    return None
+
+
+def _run_youtube_ingest(job_id: str, url: str, person: str, created_by: str) -> None:
+    """Background worker: fetch transcript → extract entities → persist."""
+    import uuid as _uuid
+    def _set(**kw):
+        _transcript_jobs[job_id] = {**(_transcript_jobs.get(job_id) or {}), **kw,
+                                     "updated_at": time.time()}
+    _set(stage="queued", status="running", label="Queued…", started_at=time.time())
+    try:
+        _ensure_transcripts_tables()
+        vid = _extract_youtube_id(url)
+        if not vid:
+            raise ValueError("Could not parse a YouTube video ID from that URL.")
+        canonical = f"https://www.youtube.com/watch?v={vid}"
+        _set(stage="fetching", label="📥 Fetching transcript…")
+        segments = _yt_fetch_segments(vid)
+        text = " ".join((s.get("text") or "").replace("\n", " ") for s in segments).strip()
+        if len(text) < 200:
+            raise ValueError("Transcript too short or unavailable (video may have no captions).")
+        meta = _yt_metadata(canonical)
+        wc = len(text.split())
+        _set(stage="extracting", label=f"🔍 Extracting companies ({wc:,} words)…")
+        extracted = _extract_transcript_entities(text)
+        _set(stage="saving", label="💾 Saving…")
+        tid = str(_uuid.uuid4())
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO transcripts
+                    (id, source, person, ticker, title, video_url, channel,
+                     published_at, full_text, summary, word_count, created_by)
+                VALUES (%s,'youtube',%s,NULL,%s,%s,%s,NULL,%s,%s,%s,%s)
+            """, (tid, (person or "").strip() or (meta.get("channel") or None),
+                  meta.get("title") or f"YouTube {vid}", canonical, meta.get("channel"),
+                  text, extracted.get("summary"), wc, created_by))
+            for e in extracted.get("entities") or []:
+                cur.execute("""
+                    INSERT INTO transcript_entities
+                        (transcript_id, company, ticker, sentiment, quote, timestamp_sec, theme)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                """, (tid, e["company"], e.get("ticker"), e.get("sentiment"),
+                      e.get("quote"), _approx_timestamp(e.get("quote") or "", segments),
+                      e.get("theme")))
+            conn.commit()
+        _set(stage="done", status="done", label="✓ Transcript ingested",
+             result={"transcript_id": tid, "title": meta.get("title"),
+                     "word_count": wc, "entities": extracted.get("entities") or [],
+                     "summary": extracted.get("summary")})
+        print(f"📺 [transcript] ingested {tid} '{(meta.get('title') or vid)[:50]}' "
+              f"({len(extracted.get('entities') or [])} entities)", flush=True)
+    except Exception as e:
+        print(f"❌ [transcript ingest {job_id}] {e!s:.300}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+# ── Embeddings + earnings-call RAG ─────────────────────────────────────
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    """Batch-embed with OpenAI text-embedding-3-small. Returns list of vectors."""
+    if not texts:
+        return []
+    from openai import OpenAI
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    client = OpenAI(api_key=key)
+    out: list[list[float]] = []
+    for i in range(0, len(texts), 96):
+        batch = [t[:8000] for t in texts[i:i + 96]]
+        resp = client.embeddings.create(model=_EMBED_MODEL, input=batch)
+        out.extend([d.embedding for d in resp.data])
+    return out
+
+
+def _chunk_call_text(text: str, words_per_chunk: int = 300, overlap: int = 40) -> list[str]:
+    """Split a long earnings transcript into overlapping ~300-word passages."""
+    words = (text or "").split()
+    if not words:
+        return []
+    chunks, i = [], 0
+    step = max(1, words_per_chunk - overlap)
+    while i < len(words):
+        chunk = " ".join(words[i:i + words_per_chunk]).strip()
+        if chunk:
+            chunks.append(chunk)
+        i += step
+    return chunks
+
+
+def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict | None:
+    """One earnings-call transcript from API Ninjas. Returns {transcript, date}
+    or None if unavailable. Requires API_NINJAS_KEY."""
+    key = os.environ.get("API_NINJAS_KEY")
+    if not key:
+        raise RuntimeError("API_NINJAS_KEY not set")
+    import requests
+    try:
+        r = requests.get("https://api.api-ninjas.com/v1/earningstranscript",
+                         params={"ticker": ticker, "year": year, "quarter": quarter},
+                         headers={"X-Api-Key": key}, timeout=30)
+        if not r.ok:
+            return None
+        j = r.json()
+        if isinstance(j, list):
+            j = j[0] if j else {}
+        txt = (j or {}).get("transcript") or ""
+        if not txt or len(txt) < 500:
+            return None
+        return {"transcript": txt, "date": (j or {}).get("date")}
+    except Exception as e:
+        print(f"⚠️ [api-ninjas {ticker} {year}Q{quarter}] {e!s:.150}", flush=True)
+        return None
+
+
+def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> int:
+    """Pull recent earnings calls for one ticker, chunk + embed + store.
+    Returns the number of NEW chunks indexed. Skips quarters already indexed."""
+    from datetime import datetime as _dt
+    cur_year = _dt.utcnow().year
+    indexed = 0
+    got = 0
+    # Walk back from the current year/quarter
+    candidates = []
+    for y in (cur_year, cur_year - 1):
+        for q in (4, 3, 2, 1):
+            candidates.append((y, q))
+    for (y, q) in candidates:
+        if got >= max_quarters:
+            break
+        qtag = f"{y}Q{q}"
+        # Skip if already indexed
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM call_chunks WHERE ticker=%s AND quarter=%s LIMIT 1",
+                            (ticker, qtag))
+                if cur.fetchone():
+                    got += 1
+                    continue
+        except Exception:
+            pass
+        data = _fetch_api_ninjas_transcript(ticker, y, q)
+        if not data:
+            continue
+        got += 1
+        chunks = _chunk_call_text(data["transcript"])
+        if not chunks:
+            continue
+        try:
+            embs = _embed_texts(chunks)
+        except Exception as e:
+            print(f"⚠️ [calls embed {ticker} {qtag}] {e!s:.150}", flush=True)
+            continue
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                for idx, (ch, emb) in enumerate(zip(chunks, embs)):
+                    cur.execute("""
+                        INSERT INTO call_chunks (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding)
+                        VALUES (%s,%s,%s,NULL,%s,%s,%s)
+                        ON CONFLICT (ticker, quarter, chunk_idx) DO NOTHING
+                    """, (ticker, qtag, data.get("date"), idx, ch, json.dumps(emb)))
+                    indexed += 1
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️ [calls store {ticker} {qtag}] {e!s:.150}", flush=True)
+            continue
+        print(f"📞 [calls] {ticker} {qtag}: indexed {len(chunks)} chunks", flush=True)
+    return indexed
+
+
+def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
+    """Background worker: build/refresh the earnings RAG index for tickers."""
+    def _set(**kw):
+        _call_sync_jobs[job_id] = {**(_call_sync_jobs.get(job_id) or {}), **kw,
+                                    "updated_at": time.time()}
+    _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
+         total=len(tickers), done=0, indexed=0)
+    try:
+        _ensure_transcripts_tables()
+        total_indexed = 0
+        for i, tk in enumerate(tickers):
+            _set(stage="syncing", label=f"📞 {tk} ({i+1}/{len(tickers)})…", done=i)
+            try:
+                total_indexed += _sync_one_ticker_calls(tk, max_quarters=max_quarters)
+            except Exception as e:
+                print(f"⚠️ [call sync {tk}] {e!s:.150}", flush=True)
+            _set(indexed=total_indexed)
+        _set(stage="done", status="done", done=len(tickers),
+             label=f"✓ Indexed {total_indexed} passages across {len(tickers)} names",
+             result={"tickers": tickers, "chunks_indexed": total_indexed})
+    except Exception as e:
+        print(f"❌ [call sync {job_id}] {e!s:.300}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+def _search_call_chunks(ticker: str, query: str, k: int = 6) -> list[dict]:
+    """Semantic retrieval over one ticker's indexed earnings-call chunks.
+    Embeds the query, cosine-ranks the ticker's chunks in Python, returns top-k."""
+    ticker = (ticker or "").upper().strip()
+    if not ticker or not query:
+        return []
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    rows = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT quarter, call_date, chunk_text, embedding
+                             FROM call_chunks WHERE ticker = %s""", (ticker,))
+            rows = cur.fetchall() or []
+    except Exception as e:
+        print(f"⚠️ [_search_call_chunks {ticker}] {e!s:.150}", flush=True)
+        return []
+    if not rows:
+        return []
+    try:
+        import numpy as np
+        qvec = np.array(_embed_texts([query])[0], dtype="float32")
+        mats, meta = [], []
+        for r in rows:
+            emb = r.get("embedding")
+            if isinstance(emb, str):
+                try: emb = json.loads(emb)
+                except Exception: emb = None
+            if not emb:
+                continue
+            mats.append(emb); meta.append(r)
+        if not mats:
+            return []
+        M = np.array(mats, dtype="float32")
+        sims = (M @ qvec) / (np.linalg.norm(M, axis=1) * (np.linalg.norm(qvec) + 1e-9) + 1e-9)
+        order = np.argsort(-sims)[:max(1, min(int(k or 6), 12))]
+        out = []
+        for i in order:
+            r = meta[int(i)]
+            out.append({"quarter": r.get("quarter"), "call_date": r.get("call_date"),
+                        "score": round(float(sims[int(i)]), 3),
+                        "passage": (r.get("chunk_text") or "")[:900]})
+        return out
+    except Exception as e:
+        print(f"⚠️ [_search_call_chunks rank {ticker}] {e!s:.150}", flush=True)
+        return []
+
+
+# ── Transcript endpoints ───────────────────────────────────────────────
+@app.post("/api/transcripts/youtube")
+async def transcripts_youtube_ingest(req: Request, background_tasks: BackgroundTasks):
+    """Ingest a YouTube transcript. Body: {url, person?}. Returns {job_id}."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    url = ((body or {}).get("url") or "").strip()
+    person = ((body or {}).get("person") or "").strip()
+    if not _extract_youtube_id(url):
+        return JSONResponse({"ok": False, "error": "Provide a valid YouTube URL."}, status_code=400)
+    import uuid as _uuid
+    job_id = "YT_" + _uuid.uuid4().hex[:12]
+    _transcript_jobs[job_id] = {"stage": "queued", "status": "running",
+                                 "label": "Queued…", "started_at": time.time(),
+                                 "updated_at": time.time()}
+    background_tasks.add_task(_run_youtube_ingest, job_id, url, person,
+                             claims.get("email") or claims.get("lp_id") or "gp")
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/api/transcripts/jobs/{job_id}")
+def transcripts_job_status(job_id: str, request: Request):
+    """Poll a YouTube ingest job."""
+    _claims_or_401(request)
+    job = _transcript_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
+    return {"ok": True, **job}
+
+
+@app.get("/api/transcripts")
+def transcripts_list(request: Request):
+    """List ingested transcripts (newest first) with entity counts."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_transcripts_tables()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT t.id, t.source, t.person, t.title, t.video_url, t.channel,
+                       t.summary, t.word_count, t.created_at,
+                       COUNT(e.id) AS n_entities
+                  FROM transcripts t
+             LEFT JOIN transcript_entities e ON e.transcript_id = t.id
+                 WHERE t.source = 'youtube'
+              GROUP BY t.id
+              ORDER BY t.created_at DESC LIMIT 200
+            """)
+            rows = cur.fetchall() or []
+        return {"ok": True, "transcripts": [{
+            "id": r["id"], "person": r.get("person"), "title": r.get("title"),
+            "video_url": r.get("video_url"), "channel": r.get("channel"),
+            "summary": r.get("summary"), "word_count": r.get("word_count"),
+            "n_entities": int(r.get("n_entities") or 0),
+            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+        } for r in rows]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/transcripts/{transcript_id}")
+def transcripts_detail(transcript_id: str, request: Request):
+    """Full transcript text + extracted entities."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id, person, title, video_url, channel, summary,
+                                  full_text, word_count, created_at
+                             FROM transcripts WHERE id = %s""", (transcript_id,))
+            t = cur.fetchone()
+            if not t:
+                raise HTTPException(404, "Transcript not found")
+            cur.execute("""SELECT company, ticker, sentiment, quote, timestamp_sec, theme
+                             FROM transcript_entities WHERE transcript_id = %s
+                            ORDER BY id""", (transcript_id,))
+            ents = cur.fetchall() or []
+        return {"ok": True,
+                "transcript": {**{k: t.get(k) for k in
+                    ("id", "person", "title", "video_url", "channel", "summary", "full_text", "word_count")},
+                    "created_at": t["created_at"].isoformat() if t.get("created_at") else None},
+                "entities": ents}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.delete("/api/transcripts/{transcript_id}")
+def transcripts_delete(transcript_id: str, request: Request):
+    """Delete a transcript (entities cascade)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM transcripts WHERE id = %s", (transcript_id,))
+            conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.post("/api/transcripts/calls/sync")
+async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
+    """Build/refresh the earnings-call RAG index. Body: {tickers?, max_quarters?}.
+    If tickers omitted, uses every ticker in Saved Reports."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not os.environ.get("API_NINJAS_KEY"):
+        return JSONResponse({"ok": False, "error": "API_NINJAS_KEY not set on server."}, status_code=400)
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
+    max_quarters = max(1, min(int((body or {}).get("max_quarters") or 4), 8))
+    if not tickers:
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
+                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
+        except Exception:
+            tickers = []
+    tickers = tickers[:40]
+    if not tickers:
+        return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
+    import uuid as _uuid
+    job_id = "CALLSYNC_" + _uuid.uuid4().hex[:12]
+    _call_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
+                                "started_at": time.time(), "updated_at": time.time(),
+                                "total": len(tickers), "done": 0, "indexed": 0}
+    background_tasks.add_task(_run_call_sync, job_id, tickers, max_quarters)
+    print(f"📞 [call sync] queued {job_id}  {len(tickers)} tickers  q={max_quarters}", flush=True)
+    return {"ok": True, "job_id": job_id, "tickers": tickers}
+
+
+@app.get("/api/transcripts/calls/sync/{job_id}")
+def transcripts_calls_sync_status(job_id: str, request: Request):
+    """Poll an earnings-call sync job."""
+    _claims_or_401(request)
+    job = _call_sync_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
+    return {"ok": True, **job}
+
+
+@app.get("/api/transcripts/calls/coverage")
+def transcripts_calls_coverage(request: Request):
+    """Which tickers/quarters are indexed in the earnings RAG store."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_transcripts_tables()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT ticker, COUNT(DISTINCT quarter) AS quarters,
+                                  COUNT(*) AS chunks
+                             FROM call_chunks GROUP BY ticker ORDER BY ticker""")
+            rows = cur.fetchall() or []
+        return {"ok": True, "coverage": [{"ticker": r["ticker"],
+                "quarters": int(r["quarters"]), "chunks": int(r["chunks"])} for r in rows]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
 # Separate dict for script-generation jobs so they don't collide with audio

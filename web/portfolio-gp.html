@@ -2830,6 +2830,7 @@
     <span class="topbar-link active" data-tab="research">Research</span>
     <span class="topbar-link" data-tab="builder">Builder</span>
     <span class="topbar-link" data-tab="lab">LLM Lab</span>
+    <span class="topbar-link" data-tab="transcripts">Transcripts</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
@@ -3664,6 +3665,98 @@
     </section>
   </div>
 </div><!-- #tab-lab -->
+
+
+<!-- ══ TRANSCRIPTS TAB ═════════════════════════════════════════ -->
+<div id="tab-transcripts" class="tab-panel">
+  <div class="wide-shell" style="max-width:1300px;margin:18px auto;padding:0 20px;">
+    <div class="tab-toolbar" style="display:flex;align-items:baseline;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+      <h2 style="margin:0;font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#0A1628;">🎙️ Transcripts</h2>
+      <div style="font-size:11.5px;color:#64748b;flex:1;min-width:240px;">
+        Ingest interview &amp; keynote transcripts (paste a YouTube link), auto-extract the companies mentioned,
+        and index earnings calls — then mine it all with the AI Analyst.
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;">
+      <!-- ── Ingest YouTube ── -->
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">📥 Ingest a YouTube transcript</span>
+        </header>
+        <div class="panel-body" style="padding:14px 16px;">
+          <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
+            Paste a YouTube URL (interview, keynote, fireside). We pull the transcript, extract every public company
+            mentioned with the speaker's stance + exact quote, and store it. <em>~$0.02–0.05 / video.</em>
+          </div>
+          <input id="tr-url" placeholder="https://www.youtube.com/watch?v=…"
+            style="width:100%;box-sizing:border-box;border:1px solid var(--border-default);border-radius:6px;padding:9px 11px;font-size:13px;margin-bottom:8px;background:var(--bg-elevated);color:var(--text-primary);">
+          <div style="display:flex;gap:8px;">
+            <input id="tr-person" placeholder="Speaker (optional, e.g. Jensen Huang)"
+              style="flex:1;border:1px solid var(--border-default);border-radius:6px;padding:9px 11px;font-size:13px;background:var(--bg-elevated);color:var(--text-primary);">
+            <button id="tr-ingest-btn" class="btn-primary" style="white-space:nowrap;padding:0 18px;">Ingest ▶</button>
+          </div>
+          <div id="tr-ingest-status" style="margin-top:10px;"></div>
+        </div>
+      </section>
+
+      <!-- ── Earnings RAG index ── -->
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">📞 Earnings-call index</span>
+          <span class="panel-badge" id="tr-coverage-badge" style="background:#e0f2fe;color:#075985;">—</span>
+        </header>
+        <div class="panel-body" style="padding:14px 16px;">
+          <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
+            Index recent earnings calls for your covered names (API Ninjas). Transcripts are chunked &amp; embedded so the
+            AI Analyst retrieves only the relevant passages — not the whole call. <em>Pennies to index.</em>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button id="tr-sync-btn" class="btn-primary" style="padding:0 16px;">Sync saved-report tickers</button>
+            <label style="font-size:11px;color:var(--text-secondary);">quarters:
+              <input id="tr-sync-quarters" type="number" min="1" max="8" value="4"
+                style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
+            </label>
+          </div>
+          <div id="tr-sync-status" style="margin-top:10px;"></div>
+          <div id="tr-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── AI Analyst (transcript-scoped) ── -->
+    <section class="panel" style="margin-top:14px;">
+      <header class="panel-head">
+        <span class="panel-title">🤖 Ask the transcripts</span>
+        <span class="panel-badge" style="background:#f3e8ff;color:#6b21a8;">AGENTIC</span>
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-weight:500;">reads transcripts + earnings calls + your reports</span>
+      </header>
+      <div style="padding:14px 16px;">
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+          <textarea id="tr-agentic-q" rows="2" placeholder="e.g. Which companies did Jensen Huang mention bullishly that we don't already cover? What did INTC management say about foundry margins?"
+            style="flex:1;border:1px solid var(--border-default);border-radius:6px;padding:9px 11px;font-size:13px;font-family:inherit;line-height:1.5;color:var(--text-primary);background:var(--bg-elevated);resize:vertical;"></textarea>
+          <button id="tr-agentic-run-btn" class="btn-primary" style="white-space:nowrap;align-self:stretch;padding:0 18px;">🤖 Analyze</button>
+        </div>
+        <div id="tr-agentic-examples" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          <button class="tr-agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Which names did our ingested speakers mention that we don't cover yet?</button>
+          <button class="tr-agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Summarize what NVDA management said about demand on recent calls.</button>
+        </div>
+        <div id="tr-agentic-out" style="display:none;margin-top:14px;"></div>
+      </div>
+    </section>
+
+    <!-- ── Ingested transcripts ── -->
+    <section class="panel" style="margin-top:14px;">
+      <header class="panel-head">
+        <span class="panel-title">Ingested transcripts</span>
+        <span class="panel-badge" id="tr-list-count">—</span>
+      </header>
+      <div id="tr-list" class="panel-body" style="padding:0;">
+        <div style="padding:18px;font-size:12px;color:var(--text-tertiary);text-align:center;">Loading…</div>
+      </div>
+    </section>
+  </div>
+</div><!-- #tab-transcripts -->
 
 
 <!-- ══ IDEAS TAB ═══════════════════════════════════════════════ -->
@@ -4718,6 +4811,7 @@
     settings:  () => loadSettingsTab(),
     reports:   () => loadReportsTab(),
     memos:     () => loadMemosTab(),
+    transcripts: () => _initTranscriptsTab(),
   };
 
   function showTab(name) {
@@ -5035,6 +5129,251 @@
   }
   window.loadNewsForReports = loadNewsForReports;
 
+  // ══════════════════════════════════════════════════════════════
+  // TRANSCRIPTS TAB — ingest YouTube, earnings sync, transcript-scoped AI
+  // ══════════════════════════════════════════════════════════════
+  let _trWired = false;
+  function _trEsc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
+  const _TR_TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
+    get_recent_news:'📰', list_saved_reports:'📚', get_financials:'📊', compute:'🧮',
+    get_ytd_attribution:'📈', web_search:'🌐', list_transcripts:'🎙️',
+    read_transcript:'📜', search_transcripts:'🔎', search_call_transcripts:'📞' };
+
+  function _initTranscriptsTab() {
+    if (!_trWired) { _wireTranscripts(); _trWired = true; }
+    _loadTranscriptList();
+    _loadCallCoverage();
+  }
+
+  function _wireTranscripts() {
+    const ingestBtn = document.getElementById('tr-ingest-btn');
+    if (ingestBtn) ingestBtn.addEventListener('click', _ingestYouTube);
+    const syncBtn = document.getElementById('tr-sync-btn');
+    if (syncBtn) syncBtn.addEventListener('click', _syncEarningsCalls);
+    document.querySelectorAll('.tr-agentic-ex').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const q = document.getElementById('tr-agentic-q');
+        if (q) { q.value = chip.textContent.trim(); q.focus(); }
+      });
+    });
+    const aBtn = document.getElementById('tr-agentic-run-btn');
+    if (aBtn) aBtn.addEventListener('click', _runTranscriptAgentic);
+  }
+
+  // ── Ingest a YouTube transcript ──
+  let _trIngestPoll = null;
+  async function _ingestYouTube() {
+    const url = (document.getElementById('tr-url').value || '').trim();
+    const person = (document.getElementById('tr-person').value || '').trim();
+    const status = document.getElementById('tr-ingest-status');
+    if (!url) { window.toast('Paste a YouTube URL first.', {type:'warn'}); return; }
+    const btn = document.getElementById('tr-ingest-btn');
+    btn.disabled = true; btn.textContent = '⏳ …';
+    if (_trIngestPoll) { clearInterval(_trIngestPoll); _trIngestPoll = null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/youtube', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ url, person }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      const spin = (label) => box('<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:9px;"><span style="width:9px;height:9px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span><span style="font-size:12px;font-weight:600;color:var(--text-primary);">'+_trEsc(label)+'</span></div>');
+      spin('Queued…');
+      const t0 = Date.now();
+      _trIngestPoll = setInterval(async () => {
+        if (Date.now() - t0 > 180000) { clearInterval(_trIngestPoll); _trIngestPoll=null; box('<div style="font-size:12px;color:var(--warn-700);">⚠ Timed out after 3 min.</div>'); btn.disabled=false; btn.textContent='Ingest ▶'; return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/jobs/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done' && s.result) {
+            clearInterval(_trIngestPoll); _trIngestPoll=null;
+            const ents = (s.result.entities || []);
+            const chips = ents.map(e => '<span style="font-size:10.5px;background:'+(e.sentiment==='bull'?'#dcfce7':e.sentiment==='bear'?'#fee2e2':'var(--gray-100)')+';border:1px solid var(--border-subtle);padding:2px 8px;border-radius:11px;margin:0 4px 4px 0;display:inline-block;">'+(e.sentiment==='bull'?'▲ ':e.sentiment==='bear'?'▼ ':'')+_trEsc(e.company)+(e.ticker?' ('+_trEsc(e.ticker)+')':'')+'</span>').join('');
+            box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:11px 13px;"><div style="font-size:12.5px;font-weight:700;color:var(--success-700);margin-bottom:6px;">✓ '+_trEsc(s.result.title||'Transcript')+' — '+(s.result.word_count||0).toLocaleString()+' words, '+ents.length+' companies</div>'+(chips?'<div style="margin-top:6px;">'+chips+'</div>':'<div style="font-size:11px;color:var(--text-tertiary);">No public companies extracted.</div>')+'</div>');
+            document.getElementById('tr-url').value = ''; document.getElementById('tr-person').value = '';
+            btn.disabled=false; btn.textContent='Ingest ▶';
+            _loadTranscriptList();
+            window.toast('✓ Transcript ingested.', {type:'success'});
+          } else if (s.status === 'error') {
+            clearInterval(_trIngestPoll); _trIngestPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            btn.disabled=false; btn.textContent='Ingest ▶';
+          } else {
+            spin(s.label || 'Working…');
+          }
+        } catch(_) {}
+      }, 1800);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      btn.disabled=false; btn.textContent='Ingest ▶';
+    }
+  }
+
+  // ── Sync earnings calls ──
+  let _trSyncPoll = null;
+  async function _syncEarningsCalls() {
+    const status = document.getElementById('tr-sync-status');
+    const q = parseInt(document.getElementById('tr-sync-quarters').value || '4', 10);
+    const btn = document.getElementById('tr-sync-btn');
+    btn.disabled = true; btn.textContent = '⏳ Queuing…';
+    if (_trSyncPoll) { clearInterval(_trSyncPoll); _trSyncPoll=null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/calls/sync', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ max_quarters: q }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      box('<div style="font-size:12px;color:var(--text-secondary);">📞 Indexing '+(j.tickers||[]).length+' tickers…</div>');
+      const t0 = Date.now();
+      _trSyncPoll = setInterval(async () => {
+        if (Date.now() - t0 > 600000) { clearInterval(_trSyncPoll); _trSyncPoll=null; btn.disabled=false; btn.textContent='Sync saved-report tickers'; return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done') {
+            clearInterval(_trSyncPoll); _trSyncPoll=null;
+            box('<div style="background:var(--success-50);border:1px solid #bbf7d0;border-radius:8px;padding:9px 12px;font-size:12px;color:var(--success-700);">✓ '+_trEsc(s.label||'Done')+'</div>');
+            btn.disabled=false; btn.textContent='Sync saved-report tickers';
+            _loadCallCoverage();
+            window.toast('✓ Earnings calls indexed.', {type:'success'});
+          } else if (s.status === 'error') {
+            clearInterval(_trSyncPoll); _trSyncPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            btn.disabled=false; btn.textContent='Sync saved-report tickers';
+          } else {
+            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
+          }
+        } catch(_) {}
+      }, 2500);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      btn.disabled=false; btn.textContent='Sync saved-report tickers';
+    }
+  }
+
+  async function _loadCallCoverage() {
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/calls/coverage')).json();
+      const cov = (d && d.coverage) || [];
+      const badge = document.getElementById('tr-coverage-badge');
+      const el = document.getElementById('tr-coverage');
+      if (badge) badge.textContent = cov.length ? (cov.length + ' names') : 'empty';
+      if (el) el.innerHTML = cov.length
+        ? cov.map(c => '<span style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q</span>').join('')
+        : 'No earnings calls indexed yet.';
+    } catch(_) {}
+  }
+
+  async function _loadTranscriptList() {
+    const list = document.getElementById('tr-list');
+    if (!list) return;
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts')).json();
+      const items = (d && d.transcripts) || [];
+      const cnt = document.getElementById('tr-list-count');
+      if (cnt) cnt.textContent = String(items.length);
+      if (!items.length) { list.innerHTML = '<div style="padding:18px;font-size:12px;color:var(--text-tertiary);text-align:center;">No transcripts yet — paste a YouTube link above.</div>'; return; }
+      list.innerHTML = items.map(t =>
+        '<div class="tr-row" data-tid="'+_trEsc(t.id)+'" style="padding:12px 16px;border-bottom:1px solid var(--border-subtle);cursor:pointer;">' +
+          '<div style="display:flex;align-items:baseline;gap:8px;">' +
+            '<span style="font-weight:700;color:var(--text-primary);font-size:13px;flex:1;">'+_trEsc(t.title||'Untitled')+'</span>' +
+            '<span style="font-size:10.5px;color:var(--text-tertiary);">'+(t.n_entities||0)+' cos · '+((t.word_count||0).toLocaleString())+'w</span>' +
+            '<button class="tr-del" data-tid="'+_trEsc(t.id)+'" title="Delete" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:13px;padding:0 2px;">×</button>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">'+_trEsc(t.person||t.channel||'')+(t.created_at?' · '+new Date(t.created_at).toLocaleDateString():'')+'</div>' +
+          (t.summary?'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:5px;line-height:1.45;">'+_trEsc(t.summary)+'</div>':'') +
+          '<div class="tr-detail" id="tr-detail-'+_trEsc(t.id)+'" style="display:none;margin-top:8px;"></div>' +
+        '</div>'
+      ).join('');
+      list.querySelectorAll('.tr-del').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this transcript?')) return;
+        await window.dgaFetch('/api/transcripts/' + encodeURIComponent(b.dataset.tid), { method:'DELETE' });
+        _loadTranscriptList();
+      }));
+      list.querySelectorAll('.tr-row').forEach(row => row.addEventListener('click', () => _toggleTranscriptDetail(row.dataset.tid)));
+    } catch (e) {
+      list.innerHTML = '<div style="padding:18px;font-size:12px;color:#b91c1c;">Failed to load: '+_trEsc(e.message)+'</div>';
+    }
+  }
+
+  async function _toggleTranscriptDetail(tid) {
+    const el = document.getElementById('tr-detail-' + tid);
+    if (!el) return;
+    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);">Loading…</div>';
+    try {
+      const d = await (await window.dgaFetch('/api/transcripts/' + encodeURIComponent(tid))).json();
+      const ents = (d && d.entities) || [];
+      const vurl = d.transcript && d.transcript.video_url;
+      const rows = ents.map(e => {
+        const col = e.sentiment==='bull'?'#16a34a':e.sentiment==='bear'?'#dc2626':'var(--text-tertiary)';
+        const ic  = e.sentiment==='bull'?'▲':e.sentiment==='bear'?'▼':'•';
+        const link = (vurl && e.timestamp_sec) ? vurl + '&t=' + e.timestamp_sec + 's' : vurl;
+        return '<div style="padding:5px 0;border-top:1px dashed var(--border-subtle);font-size:11.5px;">' +
+          '<span style="color:'+col+';font-weight:700;">'+ic+' '+_trEsc(e.company)+(e.ticker?' ('+_trEsc(e.ticker)+')':'')+'</span>' +
+          (e.theme?' <span style="color:var(--text-tertiary);">· '+_trEsc(e.theme)+'</span>':'') +
+          (e.quote?'<div style="color:var(--text-secondary);font-style:italic;margin-top:2px;">“'+_trEsc(e.quote)+'” '+(link?'<a href="'+_trEsc(link)+'" target="_blank" rel="noopener" style="font-style:normal;color:var(--brand-500);">↗</a>':'')+'</div>':'') +
+        '</div>';
+      }).join('');
+      el.innerHTML = (rows || '<div style="font-size:11px;color:var(--text-tertiary);">No companies extracted.</div>') +
+        (vurl?'<div style="margin-top:8px;"><a href="'+_trEsc(vurl)+'" target="_blank" rel="noopener" style="font-size:11px;color:var(--brand-500);">▶ Open on YouTube</a></div>':'');
+    } catch (e) {
+      el.innerHTML = '<div style="font-size:11px;color:#b91c1c;">'+_trEsc(e.message)+'</div>';
+    }
+  }
+
+  // ── Transcript-scoped AI Analyst (reuses /api/research/agentic) ──
+  let _trAgPoll = null;
+  async function _runTranscriptAgentic() {
+    const qEl = document.getElementById('tr-agentic-q');
+    const out = document.getElementById('tr-agentic-out');
+    const btn = document.getElementById('tr-agentic-run-btn');
+    const q = (qEl.value || '').trim();
+    if (q.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
+    out.style.display = 'block';
+    btn.disabled = true; btn.textContent = '⏳ …';
+    if (_trAgPoll) { clearInterval(_trAgPoll); _trAgPoll=null; }
+    const renderProg = d => {
+      const tools = (d.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<div style="font-size:11px;color:var(--text-secondary);padding:2px 0;">'+ic+' <strong>'+_trEsc(tc.tool)+'</strong> <span style="color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+_trEsc(JSON.stringify(tc.input||{}).slice(0,50))+'</span></div>'; }).join('');
+      const cost = d.cost_usd!=null?' · 💸 $'+Number(d.cost_usd).toFixed(3):'';
+      out.innerHTML = '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span><span style="font-size:12px;font-weight:700;color:var(--text-primary);">'+_trEsc(d.label||'Working…')+'</span><span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+(d.steps||0)+' steps'+cost+'</span></div>'+(tools?'<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">'+tools+'</div>':'')+'</div>';
+    };
+    const renderResult = r => {
+      const tools = (r.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">'+ic+' '+_trEsc(tc.tool)+'</span>'; }).join('');
+      const answer = _trEsc(r.answer||'(no answer)').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p style="margin:8px 0;">').replace(/\n/g,'<br>');
+      const cost = r.cost_usd!=null?'💸 $'+Number(r.cost_usd).toFixed(3):'';
+      let vf = '';
+      const v = r.verification;
+      if (v && v.verdict==='clean') vf = '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
+      else if (v && v.verdict==='flags' && (v.flags||[]).length) vf = '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ '+(v.flags||[]).length+' claim(s) flagged — review before sharing.</strong></div>';
+      out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);"><div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">'+answer+'</p></div>'+vf+(tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')+'<div style="margin-top:10px;text-align:right;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</div></div>';
+    };
+    try {
+      const r = await window.dgaFetch('/api/research/agentic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q }) });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id; const t0 = Date.now();
+      renderProg({ label:'Starting…', steps:0, tool_calls:[] });
+      _trAgPoll = setInterval(async () => {
+        if (Date.now() - t0 > 240000) { clearInterval(_trAgPoll); _trAgPoll=null; out.innerHTML='<div style="font-size:12px;color:var(--warn-700);">⚠ Timed out.</div>'; btn.disabled=false; btn.textContent='🤖 Analyze'; return; }
+        try {
+          const d = await (await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId))).json();
+          if (d.status==='done' && d.result) { clearInterval(_trAgPoll); _trAgPoll=null; renderResult(d.result); btn.disabled=false; btn.textContent='🤖 Analyze'; }
+          else if (d.status==='error') { clearInterval(_trAgPoll); _trAgPoll=null; out.innerHTML='<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(d.label||d.error||'failed')+'</div>'; btn.disabled=false; btn.textContent='🤖 Analyze'; }
+          else renderProg(d);
+        } catch(_) {}
+      }, 1500);
+    } catch (e) {
+      out.innerHTML = '<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>';
+      btn.disabled=false; btn.textContent='🤖 Analyze';
+    }
+  }
+
   // ── 🤖 AI Analyst (agentic) — kick off a run + poll live progress ──
   (function wireAgentic() {
     const btn = document.getElementById('agentic-run-btn');
@@ -5050,7 +5389,10 @@
 
     const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
     const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
-                        get_recent_news:'📰', list_saved_reports:'📚' };
+                        get_recent_news:'📰', list_saved_reports:'📚',
+                        get_financials:'📊', compute:'🧮', get_ytd_attribution:'📈',
+                        web_search:'🌐', list_transcripts:'🎙️', read_transcript:'📜',
+                        search_transcripts:'🔎', search_call_transcripts:'📞' };
 
     let pollTimer = null;
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
