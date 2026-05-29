@@ -3733,15 +3733,24 @@
         </header>
         <div class="panel-body" style="padding:14px 16px;">
           <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
-            Index the latest earnings call for your covered names (Grok live-search). Transcripts are chunked &amp; embedded so the
-            AI Analyst retrieves only the relevant passages — not the whole call. <em>Pennies to index.</em>
+            Index earnings calls for your covered names so the AI Analyst retrieves only the relevant passages.
+            <strong>Backfill history</strong> pulls years of calls from a public dataset (free) and backs them up to your Dropbox;
+            <strong>Latest call</strong> grabs the freshest quarter via Grok.
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button id="tr-sync-btn" class="btn-primary" style="padding:0 16px;">Sync saved-report tickers</button>
-            <label style="font-size:11px;color:var(--text-secondary);">quarters:
-              <input id="tr-sync-quarters" type="number" min="1" max="8" value="4"
+          <!-- Historical backfill (Hugging Face → Dropbox backup) -->
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <button id="tr-backfill-btn" class="btn-primary" style="padding:0 16px;">📚 Backfill history</button>
+            <label style="font-size:11px;color:var(--text-secondary);">years back:
+              <input id="tr-backfill-years" type="number" min="1" max="20" value="3"
                 style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
             </label>
+            <button id="tr-restore-btn" class="btn-secondary" style="font-size:11px;padding:4px 11px;" title="Rebuild the index from your last Dropbox backup (no re-download)">♻ Restore from Dropbox</button>
+          </div>
+          <!-- Latest-quarter top-up via Grok -->
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px dashed var(--border-subtle);padding-top:8px;">
+            <button id="tr-sync-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">⚡ Latest call (Grok)</button>
+            <input id="tr-sync-quarters" type="hidden" value="1">
+            <span style="font-size:10.5px;color:var(--text-tertiary);">grabs the newest call per name</span>
           </div>
           <div id="tr-sync-status" style="margin-top:10px;"></div>
           <div id="tr-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
@@ -5223,6 +5232,10 @@
     if (ingestBtn) ingestBtn.addEventListener('click', _ingestYouTube);
     const syncBtn = document.getElementById('tr-sync-btn');
     if (syncBtn) syncBtn.addEventListener('click', _syncEarningsCalls);
+    const backfillBtn = document.getElementById('tr-backfill-btn');
+    if (backfillBtn) backfillBtn.addEventListener('click', () => _backfillCalls(false));
+    const restoreBtn = document.getElementById('tr-restore-btn');
+    if (restoreBtn) restoreBtn.addEventListener('click', () => _backfillCalls(true));
     document.querySelectorAll('.tr-agentic-ex').forEach(chip => {
       chip.addEventListener('click', () => {
         const q = document.getElementById('tr-agentic-q');
@@ -5303,7 +5316,7 @@
       box('<div style="font-size:12px;color:var(--text-secondary);">📞 Indexing '+(j.tickers||[]).length+' tickers…</div>');
       const t0 = Date.now();
       _trSyncPoll = setInterval(async () => {
-        if (Date.now() - t0 > 1500000) { clearInterval(_trSyncPoll); _trSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>'); btn.disabled=false; btn.textContent='Sync saved-report tickers'; return; }
+        if (Date.now() - t0 > 1500000) { clearInterval(_trSyncPoll); _trSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>'); btn.disabled=false; btn.textContent='⚡ Latest call (Grok)'; return; }
         try {
           const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
           if (s.status === 'done') {
@@ -5320,12 +5333,12 @@
               const pb = document.getElementById('tr-probe-btn');
               if (pb) pb.addEventListener('click', _probeApiNinjas);
             }
-            btn.disabled=false; btn.textContent='Sync saved-report tickers';
+            btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
             _loadCallCoverage();
           } else if (s.status === 'error') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
-            btn.disabled=false; btn.textContent='Sync saved-report tickers';
+            btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
           } else {
             box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
           }
@@ -5333,7 +5346,53 @@
       }, 2500);
     } catch (e) {
       box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
-      btn.disabled=false; btn.textContent='Sync saved-report tickers';
+      btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
+    }
+  }
+
+  // ── Backfill history from Hugging Face (or restore from Dropbox) ──
+  let _trBackfillPoll = null;
+  async function _backfillCalls(restore) {
+    const status = document.getElementById('tr-sync-status');
+    const years = parseInt(document.getElementById('tr-backfill-years').value || '3', 10);
+    const btn = document.getElementById(restore ? 'tr-restore-btn' : 'tr-backfill-btn');
+    const origLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = restore ? '⏳ Restoring…' : '⏳ Pulling…'; }
+    if (_trBackfillPoll) { clearInterval(_trBackfillPoll); _trBackfillPoll = null; }
+    const box = h => { status.innerHTML = h; };
+    try {
+      const r = await window.dgaFetch('/api/transcripts/calls/backfill', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ years_back: years, restore_from_dropbox: !!restore }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      const jobId = j.job_id;
+      box('<div style="font-size:12px;color:var(--text-secondary);">'+(restore?'♻ Restoring from Dropbox…':'📚 Pulling years of calls from the dataset (first scan ~1 min)…')+'</div>');
+      const t0 = Date.now();
+      _trBackfillPoll = setInterval(async () => {
+        if (Date.now() - t0 > 1500000) { clearInterval(_trBackfillPoll); _trBackfillPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage shortly.</div>'); if(btn){btn.disabled=false;btn.textContent=origLabel;} return; }
+        try {
+          const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
+          if (s.status === 'done') {
+            clearInterval(_trBackfillPoll); _trBackfillPoll=null;
+            const n = (s.result && s.result.chunks_indexed) || 0;
+            box('<div style="background:'+(n>0?'var(--success-50);border:1px solid #bbf7d0;color:var(--success-700)':'var(--warn-50);border:1px solid #fde68a;color:var(--warn-700)')+';border-radius:8px;padding:9px 12px;font-size:12px;">'+(n>0?'✓ ':'⚠ ')+_trEsc(s.label||'Done')+'</div>');
+            if(btn){btn.disabled=false;btn.textContent=origLabel;}
+            _loadCallCoverage();
+            if (n>0) window.toast('✓ Earnings-call history indexed.', {type:'success'});
+          } else if (s.status === 'error') {
+            clearInterval(_trBackfillPoll); _trBackfillPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            if(btn){btn.disabled=false;btn.textContent=origLabel;}
+          } else {
+            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
+          }
+        } catch(_) {}
+      }, 2500);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      if(btn){btn.disabled=false;btn.textContent=origLabel;}
     }
   }
 

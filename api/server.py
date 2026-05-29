@@ -18707,6 +18707,177 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
 
 
+# ── Historical backfill: Hugging Face dataset via DuckDB + Dropbox backup ──
+_HF_TRANSCRIPT_DATASET = os.environ.get(
+    "HF_TRANSCRIPT_DATASET", "kurry/sp500_earnings_transcripts").strip()
+_DBX_TRANSCRIPTS_BACKUP = "/earnings_transcripts_backup.jsonl.gz"
+
+
+def _hf_parquet_urls(dataset: str = None, config: str = "default", split: str = "train") -> list:
+    """Resolve the auto-converted Parquet file URLs for an HF dataset via the
+    datasets-server API (no big download to enumerate)."""
+    import requests
+    ds = dataset or _HF_TRANSCRIPT_DATASET
+    url = f"https://huggingface.co/api/datasets/{ds}/parquet/{config}/{split}"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    # API returns either a bare list of URLs or {"parquet_files":[{"url":...}]}
+    if isinstance(data, dict):
+        if "parquet_files" in data:
+            return [f.get("url") for f in data["parquet_files"] if f.get("url")]
+        # nested {config:{split:[urls]}}
+        urls = []
+        for cfg in data.values():
+            if isinstance(cfg, dict):
+                for sp in cfg.values():
+                    if isinstance(sp, list):
+                        urls.extend(sp)
+        return urls
+    return list(data or [])
+
+
+def _backfill_from_hf(tickers: list[str], years_back: int = 3) -> list[dict]:
+    """Use DuckDB to read the HF transcript Parquet filtered to our tickers +
+    recent years. Predicate/projection pushdown keeps memory low. Returns
+    [{symbol, year, quarter, date, content}]."""
+    import duckdb
+    from datetime import datetime as _dt
+    urls = _hf_parquet_urls()
+    if not urls:
+        raise RuntimeError("Could not resolve HF parquet URLs")
+    cutoff = _dt.utcnow().year - max(1, int(years_back or 3))
+    syms = ",".join("'" + t.replace("'", "").upper() + "'" for t in tickers if t)
+    if not syms:
+        return []
+    url_list = "[" + ",".join("'" + u + "'" for u in urls) + "]"
+    con = duckdb.connect()
+    try:
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+    except Exception as e:
+        print(f"⚠️ duckdb httpfs load: {e!s:.120}", flush=True)
+    q = (f"SELECT upper(symbol) AS symbol, year, quarter, "
+         f"CAST(date AS VARCHAR) AS date, content "
+         f"FROM read_parquet({url_list}) "
+         f"WHERE upper(symbol) IN ({syms}) AND year >= {cutoff} "
+         f"ORDER BY symbol, year, quarter")
+    rows = con.execute(q).fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def _index_call_rows(rows: list[dict], on_progress=None) -> tuple:
+    """Chunk + embed + store a list of transcript rows. Returns
+    (indexed_chunks, {ticker: n_quarters})."""
+    indexed, per = 0, {}
+    n = len(rows)
+    for i, row in enumerate(rows):
+        tk = (row.get("symbol") or "").upper().strip()
+        y, q = row.get("year"), row.get("quarter")
+        if not tk or y is None or q is None:
+            continue
+        qtag = f"{int(y)}Q{int(q)}"
+        if _already_indexed(tk, qtag):
+            per[tk] = per.get(tk, 0) + 1
+            if on_progress and i % 10 == 0: on_progress(i, n, indexed)
+            continue
+        cnt, err = _store_call_chunks(tk, qtag, (row.get("date") or "")[:10], row.get("content") or "")
+        if not err:
+            indexed += cnt
+            per[tk] = per.get(tk, 0) + 1
+        if on_progress and i % 5 == 0:
+            on_progress(i, n, indexed)
+    return indexed, per
+
+
+def _dropbox_backup_transcripts(rows: list[dict]) -> tuple:
+    """Save the filtered transcript corpus to the Dropbox app folder as a
+    gzipped JSONL backup. Returns (ok, path_or_error)."""
+    try:
+        dbx = analyst._dropbox_client()
+    except Exception as e:
+        return False, f"dropbox client error: {e!s:.100}"
+    if not dbx:
+        return False, "Dropbox not configured"
+    try:
+        import gzip, io as _io, dropbox as _dx
+        buf = _io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            for r in rows:
+                rec = {k: r.get(k) for k in ("symbol", "year", "quarter", "date", "content")}
+                gz.write((json.dumps(rec, default=str) + "\n").encode("utf-8"))
+        data = buf.getvalue()
+        folder = analyst._dropbox_folder() or ""
+        path = folder + _DBX_TRANSCRIPTS_BACKUP
+        dbx.files_upload(data, path, mode=_dx.files.WriteMode.overwrite)
+        return True, f"{path} ({len(data)//1024} KB)"
+    except Exception as e:
+        return False, f"upload failed: {e!s:.120}"
+
+
+def _dropbox_restore_transcripts() -> list[dict]:
+    """Load the transcript corpus back from the Dropbox app-folder backup."""
+    dbx = analyst._dropbox_client()
+    if not dbx:
+        raise RuntimeError("Dropbox not configured")
+    import gzip
+    folder = analyst._dropbox_folder() or ""
+    path = folder + _DBX_TRANSCRIPTS_BACKUP
+    _md, resp = dbx.files_download(path)
+    raw = gzip.decompress(resp.content).decode("utf-8")
+    rows = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if line:
+            try: rows.append(json.loads(line))
+            except Exception: pass
+    return rows
+
+
+def _run_calls_backfill(job_id: str, tickers: list[str], years_back: int,
+                         restore: bool = False, backup: bool = True) -> None:
+    """Background worker: bulk-index historical transcripts from Hugging Face
+    (or restore from the Dropbox backup), then back up to Dropbox."""
+    def _set(**kw):
+        _call_sync_jobs[job_id] = {**(_call_sync_jobs.get(job_id) or {}), **kw,
+                                    "updated_at": time.time()}
+    _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
+         total=0, done=0, indexed=0)
+    try:
+        _ensure_transcripts_tables()
+        if restore:
+            _set(stage="loading", label="📥 Restoring transcripts from Dropbox backup…")
+            rows = _dropbox_restore_transcripts()
+            if tickers:
+                ts = {t.upper() for t in tickers}
+                rows = [r for r in rows if (r.get("symbol") or "").upper() in ts]
+        else:
+            _set(stage="loading", label="📥 Pulling history from Hugging Face (DuckDB)…")
+            rows = _backfill_from_hf(tickers, years_back)
+        if not rows:
+            _set(stage="done", status="done",
+                 label="⚠ No transcripts matched (check tickers / dataset coverage).",
+                 result={"chunks_indexed": 0, "transcripts": 0, "names": []})
+            return
+        _set(stage="indexing", label=f"🧮 Indexing {len(rows)} transcripts…", total=len(rows))
+        indexed, per = _index_call_rows(
+            rows, on_progress=lambda i, n, ix: _set(done=i, indexed=ix,
+                                                    label=f"🧮 Indexing… {i}/{n} ({ix} passages)"))
+        backup_note = ""
+        if backup and not restore and rows:
+            _set(stage="backup", label="☁️ Backing up to Dropbox…", indexed=indexed)
+            ok, info = _dropbox_backup_transcripts(rows)
+            backup_note = " · ☁️ backed up" if ok else f" · backup skipped ({info[:60]})"
+        _set(stage="done", status="done", done=len(rows), indexed=indexed,
+             label=f"✓ Indexed {indexed} passages from {len(per)} names ({len(rows)} calls){backup_note}",
+             result={"chunks_indexed": indexed, "transcripts": len(rows),
+                     "names": sorted(per.keys()), "source": "dropbox" if restore else "huggingface"})
+    except Exception as e:
+        print(f"❌ [backfill {job_id}] {e!s:.300}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
 def _search_call_chunks(ticker: str, query: str, k: int = 6) -> list[dict]:
     """Semantic retrieval over one ticker's indexed earnings-call chunks.
     Embeds the query, cosine-ranks the ticker's chunks in Python, returns top-k."""
@@ -18904,6 +19075,42 @@ async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks
     background_tasks.add_task(_run_call_sync, job_id, tickers, max_quarters)
     print(f"📞 [call sync] queued {job_id}  {len(tickers)} tickers  q={max_quarters}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers}
+
+
+@app.post("/api/transcripts/calls/backfill")
+async def transcripts_calls_backfill(req: Request, background_tasks: BackgroundTasks):
+    """Bulk-index HISTORICAL earnings calls from the Hugging Face dataset
+    (multi-quarter depth), or restore from the Dropbox backup. Body:
+    {tickers?, years_back?, restore_from_dropbox?}. Polls the same job endpoint
+    as sync. Backs up the pulled corpus to Dropbox automatically."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    restore = bool((body or {}).get("restore_from_dropbox"))
+    years_back = max(1, min(int((body or {}).get("years_back") or 3), 20))
+    tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
+    if not tickers:
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
+                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
+        except Exception:
+            tickers = []
+    tickers = tickers[:60]
+    if not tickers and not restore:
+        return JSONResponse({"ok": False, "error": "No tickers to backfill."}, status_code=400)
+    import uuid as _uuid
+    job_id = "BACKFILL_" + _uuid.uuid4().hex[:12]
+    _call_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
+                                "started_at": time.time(), "updated_at": time.time(),
+                                "total": 0, "done": 0, "indexed": 0}
+    background_tasks.add_task(_run_calls_backfill, job_id, tickers, years_back, restore)
+    print(f"📚 [backfill] queued {job_id}  {len(tickers)} tickers  yrs={years_back}  restore={restore}", flush=True)
+    return {"ok": True, "job_id": job_id, "tickers": tickers, "restore": restore}
 
 
 @app.get("/api/transcripts/calls/sync/{job_id}")
