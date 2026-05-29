@@ -18508,11 +18508,114 @@ def _fetch_api_ninjas_transcript(ticker: str, year: int, quarter: int) -> dict:
     return {"ok": True, "status": 200, "transcript": txt, "date": (j or {}).get("date")}
 
 
+# Default earnings-transcript source. API Ninjas' endpoint is premium-only, so
+# we default to Grok live-search (reuses the existing xAI key, no new signup).
+_CALL_SOURCE = (os.environ.get("CALL_TRANSCRIPT_SOURCE", "").strip().lower() or "grok")
+
+_GROK_CALL_SYSTEM = (
+    "You are an earnings-call transcript retrieval tool. Using live web search, "
+    "find the company's MOST RECENT reported quarterly earnings call transcript "
+    "(prefer a full, free transcript such as The Motley Fool / fool.com). "
+    "Respond in EXACTLY this format and nothing else:\n"
+    "QUARTER: <YYYYQn>\n"
+    "DATE: <YYYY-MM-DD or unknown>\n"
+    "---\n"
+    "<the transcript: management's prepared remarks AND the analyst Q&A, quoted "
+    "as fully and verbatim as the published transcript allows — reproduce the "
+    "speakers' actual words, do NOT summarize, paraphrase, or add commentary>\n\n"
+    "If you genuinely cannot find a real transcript, reply with exactly: NO_TRANSCRIPT"
+)
+
+
+def _fetch_grok_call_transcript(ticker: str) -> dict:
+    """Retrieve the latest earnings-call transcript via Grok live-search.
+    Returns {ok, transcript, quarter, date} or {ok:False, status, error}."""
+    try:
+        out = analyst.call_grok(system_prompt=_GROK_CALL_SYSTEM,
+                                user_content=f"Company ticker: {ticker}. "
+                                             f"Retrieve its most recent reported earnings call transcript.",
+                                live_search=True) or ""
+    except Exception as e:
+        return {"ok": False, "status": -1, "error": f"grok error: {e!s:.160}"}
+    out = (out or "").strip()
+    if not out or "NO_TRANSCRIPT" in out[:80].upper():
+        return {"ok": False, "status": 200, "error": "Grok found no transcript"}
+    quarter = date = None
+    m = re.search(r"QUARTER:\s*([0-9]{4}\s*Q\s*[1-4])", out, re.I)
+    if m:
+        quarter = re.sub(r"\s+", "", m.group(1)).upper()
+    m = re.search(r"DATE:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", out)
+    if m:
+        date = m.group(1)
+    body = out.split("---", 1)[1].strip() if "---" in out else out
+    if len(body) < 400:
+        return {"ok": False, "status": 200, "error": f"transcript too short ({len(body)} chars)"}
+    if not quarter:
+        if date:
+            y, mo = int(date[:4]), int(date[5:7])
+            quarter = f"{y}Q{max(1, (mo - 1) // 3 + 1)}"   # rough calendar quarter
+        else:
+            quarter = "latest"
+    return {"ok": True, "status": 200, "transcript": body, "quarter": quarter, "date": date}
+
+
+def _store_call_chunks(ticker: str, qtag: str, call_date, transcript: str) -> tuple:
+    """Chunk + embed + store one transcript. Returns (indexed_count, error|None)."""
+    chunks = _chunk_call_text(transcript)
+    if not chunks:
+        return 0, "no chunks"
+    try:
+        embs = _embed_texts(chunks)
+    except Exception as e:
+        return 0, f"embed failed {e!s:.100}"
+    n = 0
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for idx, (ch, emb) in enumerate(zip(chunks, embs)):
+                cur.execute("""
+                    INSERT INTO call_chunks (ticker, quarter, call_date, speaker, chunk_idx, chunk_text, embedding)
+                    VALUES (%s,%s,%s,NULL,%s,%s,%s)
+                    ON CONFLICT (ticker, quarter, chunk_idx) DO NOTHING
+                """, (ticker, qtag, call_date, idx, ch, json.dumps(emb)))
+                n += 1
+            conn.commit()
+    except Exception as e:
+        return 0, f"store failed {e!s:.100}"
+    print(f"📞 [calls] {ticker} {qtag}: indexed {len(chunks)} chunks", flush=True)
+    return n, None
+
+
+def _already_indexed(ticker: str, qtag: str) -> bool:
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM call_chunks WHERE ticker=%s AND quarter=%s LIMIT 1",
+                        (ticker, qtag))
+            return bool(cur.fetchone())
+    except Exception:
+        return False
+
+
 def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
-    """Pull recent earnings calls for one ticker, chunk + embed + store.
-    Returns {indexed, found:[quarters], errors:[str]}. Skips quarters already
-    indexed. Walks back 3 years so we still index established names even if the
-    very newest quarter isn't in API Ninjas' DB yet."""
+    """Index recent earnings calls for one ticker. Returns
+    {indexed, found:[quarters], errors:[str]}. Source defaults to Grok
+    live-search (API Ninjas transcripts are premium-gated)."""
+    if _CALL_SOURCE == "grok":
+        indexed, found, errors = 0, [], []
+        res = _fetch_grok_call_transcript(ticker)
+        if not res.get("ok"):
+            errors.append(f"[{res.get('status')}] {str(res.get('error'))[:120]}")
+            return {"indexed": 0, "found": [], "errors": errors}
+        qtag = res.get("quarter") or "latest"
+        if _already_indexed(ticker, qtag):
+            return {"indexed": 0, "found": [qtag], "errors": []}
+        n, err = _store_call_chunks(ticker, qtag, res.get("date"), res["transcript"])
+        if err:
+            errors.append(f"{qtag}: {err}")
+        else:
+            found.append(qtag); indexed += n
+        return {"indexed": indexed, "found": found, "errors": errors}
+
+    # ── API Ninjas path (premium) — multi-quarter walk-back ──
     from datetime import datetime as _dt
     cur_year = _dt.utcnow().year
     indexed, got = 0, 0
@@ -18592,7 +18695,8 @@ def _run_call_sync(job_id: str, tickers: list[str], max_quarters: int) -> None:
         if total_indexed > 0:
             label = f"✓ Indexed {total_indexed} passages across {names_with_calls} names"
         else:
-            reason = all_errors[0] if all_errors else "no transcripts returned by API Ninjas"
+            src = "Grok" if _CALL_SOURCE == "grok" else "API Ninjas"
+            reason = all_errors[0] if all_errors else f"no transcripts returned by {src}"
             label = f"⚠ Indexed 0 passages — {reason[:160]}"
         _set(stage="done", status="done", done=len(tickers), label=label,
              result={"tickers": tickers, "chunks_indexed": total_indexed,
@@ -18768,8 +18872,14 @@ async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
-    if not os.environ.get("API_NINJAS_KEY"):
+    if _CALL_SOURCE == "api_ninjas" and not os.environ.get("API_NINJAS_KEY"):
         return JSONResponse({"ok": False, "error": "API_NINJAS_KEY not set on server."}, status_code=400)
+    if _CALL_SOURCE == "grok":
+        try:
+            if not analyst.get_grok_api_key():
+                raise ValueError("no key")
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Grok/xAI key not configured on server."}, status_code=400)
     try:
         body = await req.json()
     except Exception:
@@ -18828,29 +18938,37 @@ def transcripts_calls_coverage(request: Request):
 @app.get("/api/transcripts/calls/probe")
 def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
                             year: int = 0, quarter: int = 0):
-    """Diagnostic: hit API Ninjas once and return the raw status/error/shape so
-    we can see exactly why a sync indexed nothing. Defaults to the most recent
-    likely-available quarter. GP-only."""
+    """Diagnostic: fetch one transcript from the ACTIVE source and return the
+    raw status/error/shape so we can see why a sync indexed nothing. GP-only."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
-    from datetime import datetime as _dt
-    has_key = bool(os.environ.get("API_NINJAS_KEY"))
+    tk = (ticker or "AAPL").upper().strip()
     attempts = []
+    if _CALL_SOURCE == "grok":
+        res = _fetch_grok_call_transcript(tk)
+        attempts.append({"quarter": res.get("quarter") or "latest",
+                         "status": res.get("status"), "ok": res.get("ok"),
+                         "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
+                         "date": res.get("date"), "error": res.get("error")})
+        return {"ok": True, "source": "grok", "ticker": tk, "attempts": attempts}
+    from datetime import datetime as _dt
     if year and quarter:
         cand = [(int(year), int(quarter))]
     else:
         cy = _dt.utcnow().year
         cand = [(cy, 1), (cy - 1, 4), (cy - 1, 3), (cy - 1, 2), (cy - 1, 1)]
     for (y, q) in cand:
-        res = _fetch_api_ninjas_transcript((ticker or "AAPL").upper().strip(), y, q)
+        res = _fetch_api_ninjas_transcript(tk, y, q)
         attempts.append({"quarter": f"{y}Q{q}", "status": res.get("status"),
                          "ok": res.get("ok"),
                          "transcript_chars": len(res.get("transcript") or "") if res.get("ok") else 0,
                          "error": res.get("error"), "keys": res.get("keys")})
         if res.get("ok"):
             break
-    return {"ok": True, "api_ninjas_key_set": has_key, "ticker": ticker, "attempts": attempts}
+    return {"ok": True, "source": "api_ninjas",
+            "api_ninjas_key_set": bool(os.environ.get("API_NINJAS_KEY")),
+            "ticker": tk, "attempts": attempts}
 
 
 # Separate dict for script-generation jobs so they don't collide with audio
