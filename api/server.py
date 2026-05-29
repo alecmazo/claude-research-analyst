@@ -16237,10 +16237,82 @@ def _content_disposition(disposition: str, filename: str) -> str:
             f"filename*=UTF-8''{utf8_name}")
 
 
+def _memo_md_inline(text: str) -> str:
+    """Convert inline markdown in a memo line to reportlab markup. Escapes HTML
+    first, then applies bold/italic/code/links so `**x**`, `*x*`, `` `x` `` and
+    [t](url) render properly instead of showing raw markdown characters."""
+    import html as _h
+    s = _h.escape(text or "")
+    s = re.sub(r"`([^`]+)`", r'<font face="Courier">\1</font>', s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"__(.+?)__", r"<b>\1</b>", s)
+    s = re.sub(r"(?<![\*\w])\*(?!\s)(.+?)(?<!\s)\*(?![\*\w])", r"<i>\1</i>", s)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2" color="#1565c0">\1</a>', s)
+    # any leftover stray markdown bullets/markers at line start
+    return s
+
+
+def _memo_md_flowables(md_text: str, S: dict) -> list:
+    """Parse a markdown body into reportlab flowables: headings, bullet &
+    numbered lists, horizontal rules, and paragraphs — with inline formatting.
+    S is a dict of ParagraphStyles: body, h2, h3, bullet."""
+    from reportlab.platypus import Paragraph, HRFlowable
+    from reportlab.lib import colors as _c
+    out, para_buf, bullet_buf, num_buf = [], [], [], []
+
+    def flush_para():
+        if para_buf:
+            txt = " ".join(x.strip() for x in para_buf).strip()
+            if txt:
+                out.append(Paragraph(_memo_md_inline(txt), S["body"]))
+            para_buf.clear()
+
+    def flush_bullets():
+        for b in bullet_buf:
+            out.append(Paragraph("•&nbsp;&nbsp;" + _memo_md_inline(b), S["bullet"]))
+        bullet_buf.clear()
+
+    def flush_nums():
+        for i, b in enumerate(num_buf, 1):
+            out.append(Paragraph(f"<b>{i}.</b>&nbsp;&nbsp;" + _memo_md_inline(b), S["bullet"]))
+        num_buf.clear()
+
+    def flush_all():
+        flush_para(); flush_bullets(); flush_nums()
+
+    for raw in (md_text or "").replace("\r\n", "\n").split("\n"):
+        st = raw.strip()
+        if not st:
+            flush_all(); continue
+        if re.match(r"^([-*_])\1{2,}$", st):                  # horizontal rule
+            flush_all()
+            out.append(HRFlowable(width="100%", thickness=0.5,
+                                  color=_c.HexColor("#cbd5e1"), spaceBefore=5, spaceAfter=7))
+            continue
+        m_h = re.match(r"^(#{1,4})\s+(.*)$", st)
+        if m_h:
+            flush_all()
+            lvl = len(m_h.group(1))
+            txt = m_h.group(2).strip().rstrip("#").strip()
+            out.append(Paragraph(_memo_md_inline(txt), S["h2" if lvl <= 2 else "h3"]))
+            continue
+        m_b = re.match(r"^[-*•]\s+(.*)$", st)
+        if m_b:
+            flush_para(); flush_nums(); bullet_buf.append(m_b.group(1).strip()); continue
+        m_n = re.match(r"^\d+[.)]\s+(.*)$", st)
+        if m_n:
+            flush_para(); flush_bullets(); num_buf.append(m_n.group(1).strip()); continue
+        flush_bullets(); flush_nums()
+        para_buf.append(st)
+    flush_all()
+    return out
+
+
 def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
                           generated_at_iso: str) -> bytes:
-    """Render a podcast script as a DGA Capital memo PDF (reportlab platypus).
-    Sections become narrative chapters; turns become attributed paragraphs.
+    """Render a DGA Capital memo PDF (reportlab platypus) with a branded logo
+    letterhead. Analysis-style memos (research_memo) render their markdown body
+    properly (headings/bullets/bold); podcast scripts keep speaker attribution.
     No external dependencies beyond reportlab (already installed)."""
     import io as _io
     import html as _html
@@ -16250,6 +16322,7 @@ def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
     from reportlab.lib import colors
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak,
+        Image as _RLImage,
     )
     from reportlab.lib.enums import TA_LEFT
 
@@ -16313,15 +16386,48 @@ def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
         textColor=NAVY, leading=14.5, alignment=TA_LEFT)
     p_disc = ParagraphStyle("disclaimer", fontName="Helvetica", fontSize=7.5,
         textColor=GREY, leading=10.5, spaceBefore=10)
+    # Markdown body styles (for analysis-style memos)
+    md_body = ParagraphStyle("md_body", fontName="Helvetica", fontSize=10.5,
+        textColor=DARK, leading=15, spaceAfter=7, alignment=TA_LEFT)
+    md_h2 = ParagraphStyle("md_h2", fontName="Helvetica-Bold", fontSize=12.5,
+        textColor=NAVY, leading=15, spaceBefore=13, spaceAfter=5)
+    md_h3 = ParagraphStyle("md_h3", fontName="Helvetica-Bold", fontSize=10.8,
+        textColor=colors.HexColor("#334155"), leading=13.5, spaceBefore=9, spaceAfter=3)
+    md_bullet = ParagraphStyle("md_bullet", fontName="Helvetica", fontSize=10.5,
+        textColor=DARK, leading=14.5, spaceAfter=3, leftIndent=14, firstLineIndent=-10)
+    MD_STYLES = {"body": md_body, "h2": md_h2, "h3": md_h3, "bullet": md_bullet}
+    p_focus = ParagraphStyle("focus", fontName="Helvetica-Oblique", fontSize=9.5,
+        textColor=GREY, leading=13, spaceAfter=2)
+
+    fmt_raw = (script.get("format") or "memo").lower()
+    is_analysis = fmt_raw in ("research_memo", "analysis", "strategy_memo")
 
     flow = []
+    # ── Branded letterhead ───────────────────────────────────────────────
+    try:
+        _logo = BRANDING_DIR / "dga_logo.png"
+        if _logo.exists():
+            # Read natural dims from a probe, then pass explicit width/height to
+            # the constructor — setting drawWidth/drawHeight post-construction
+            # is unreliable (reportlab keeps natural size and overflows).
+            _probe = _RLImage(str(_logo))
+            _nw = float(getattr(_probe, "imageWidth", 0) or 649)
+            _nh = float(getattr(_probe, "imageHeight", 0) or 184)
+            tw = 1.9 * inch
+            img = _RLImage(str(_logo), width=tw, height=tw * (_nh / _nw))
+            img.hAlign = "LEFT"
+            flow.append(img)
+            flow.append(Spacer(1, 10))
+    except Exception as _e:
+        print(f"⚠️ memo logo embed skipped: {_e!s:.120}", flush=True)
+
     # ── Header block ─────────────────────────────────────────────────────
-    flow.append(Paragraph("DGA CAPITAL · INVESTMENT MEMO", h_eyebrow))
+    flow.append(Paragraph("CONFIDENTIAL INVESTMENT MEMORANDUM", h_eyebrow))
     flow.append(Paragraph(_html.escape(episode_title), h_title))
     if fund_name:
-        flow.append(Paragraph(f"For: <b>{_html.escape(fund_name)}</b>", h_fund))
+        flow.append(Paragraph(f"Prepared for: <b>{_html.escape(fund_name)}</b>", h_fund))
     flow.append(Paragraph(
-        f"{date_str} &nbsp;·&nbsp; Format: {_html.escape(fmt)}"
+        f"{date_str} &nbsp;·&nbsp; {_html.escape(fmt)}"
         + (f" &nbsp;·&nbsp; Coverage: {_html.escape(tickers_str)}" if tickers_str else ""),
         h_meta))
     flow.append(Spacer(1, 6))
@@ -16348,23 +16454,44 @@ def _render_dga_memo_pdf(script: dict, gp_memo: str, fund_name: str | None,
         flow.append(tbl)
         flow.append(Spacer(1, 12))
 
-    # ── Sections ─────────────────────────────────────────────────────────
-    for sec in (script.get("sections") or []):
-        sid = (sec.get("id") or "").replace("_", " ").strip()
-        title = sid.title() if sid else "Section"
-        turns = sec.get("turns") or []
-        if not turns:
-            continue
-        flow.append(Paragraph(_html.escape(title), h_section))
-        flow.append(HRFlowable(width="40%", thickness=1.2, color=BLUE,
-                                spaceBefore=0, spaceAfter=6, hAlign="LEFT"))
-        for t in turns:
-            text = _html.escape(t.get("text") or "")
-            sp_name, sp_color_hex = _sp(t.get("speaker"))
-            flow.append(Paragraph(
-                f'<b><font color="{sp_color_hex}">{_html.escape(sp_name)}:</font></b> {text}',
-                p_turn,
-            ))
+    # ── Body ─────────────────────────────────────────────────────────────
+    if is_analysis:
+        # Analysis-style memo: the body is markdown (headings, bullets, bold).
+        # Render it richly, with no nonsensical speaker labels. A short
+        # "research question" section becomes a focus line under the header.
+        for sec in (script.get("sections") or []):
+            sid = (sec.get("id") or "").lower().strip()
+            turns = sec.get("turns") or []
+            if not turns:
+                continue
+            body_md = "\n\n".join((t.get("text") or "") for t in turns).strip()
+            if not body_md:
+                continue
+            if sid == "research_question":
+                flow.append(Paragraph("FOCUS", h_eyebrow))
+                flow.append(Paragraph(_memo_md_inline(body_md), p_focus))
+                flow.append(Spacer(1, 8))
+            else:
+                flow.extend(_memo_md_flowables(body_md, MD_STYLES))
+    else:
+        # Podcast/dialogue memo: keep speaker-attributed turns, with inline
+        # markdown so any **bold** renders rather than showing asterisks.
+        for sec in (script.get("sections") or []):
+            sid = (sec.get("id") or "").replace("_", " ").strip()
+            title = sid.title() if sid else "Section"
+            turns = sec.get("turns") or []
+            if not turns:
+                continue
+            flow.append(Paragraph(_html.escape(title), h_section))
+            flow.append(HRFlowable(width="40%", thickness=1.2, color=BLUE,
+                                    spaceBefore=0, spaceAfter=6, hAlign="LEFT"))
+            for t in turns:
+                sp_name, sp_color_hex = _sp(t.get("speaker"))
+                flow.append(Paragraph(
+                    f'<b><font color="{sp_color_hex}">{_html.escape(sp_name)}:</font></b> '
+                    + _memo_md_inline(t.get("text") or ""),
+                    p_turn,
+                ))
 
     # ── Disclaimer ───────────────────────────────────────────────────────
     flow.append(Spacer(1, 16))

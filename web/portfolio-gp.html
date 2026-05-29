@@ -2600,6 +2600,31 @@
   html[data-theme="dark"] a.rep-news-line { color: var(--text-tertiary); }
   html[data-theme="dark"] a.rep-news-line:hover { color: var(--brand-300) !important; }
 
+  /* ── Rendered markdown (agentic answers: AI Analyst, Strategist, Transcripts) ── */
+  .md-rendered p { margin: 0 0 9px; }
+  .md-rendered p:last-child { margin-bottom: 0; }
+  .md-rendered .md-h { font-weight: 800; color: var(--text-primary); line-height: 1.3; }
+  .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 15px; margin: 15px 0 6px; }
+  .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 12.5px; color: var(--text-secondary); margin: 12px 0 4px; text-transform: none; letter-spacing: 0; }
+  .md-rendered ul.md-list, .md-rendered ol.md-list { margin: 6px 0 10px; padding-left: 22px; }
+  .md-rendered li { margin: 3px 0; }
+  .md-rendered code { font-family: 'SF Mono', ui-monospace, monospace; font-size: 0.88em; background: var(--gray-100); padding: 1px 5px; border-radius: 4px; }
+  .md-rendered .md-hr { border: none; border-top: 1px solid var(--border-subtle); margin: 12px 0; }
+  .md-rendered a { color: var(--brand-500, #5BB8D4); }
+  .md-rendered table.md-table { border-collapse: collapse; width: 100%; margin: 11px 0 13px; font-size: 12px; line-height: 1.4; }
+  .md-rendered table.md-table th {
+    background: var(--navy, #0A1628); color: #fff; text-align: left;
+    padding: 7px 10px; font-weight: 700; font-size: 10.5px; letter-spacing: 0.4px;
+    text-transform: uppercase; white-space: nowrap;
+  }
+  .md-rendered table.md-table td {
+    padding: 6px 10px; border-bottom: 1px solid var(--border-subtle);
+    vertical-align: top; color: var(--text-primary);
+  }
+  .md-rendered table.md-table tr:nth-child(even) td { background: var(--bg-subtle, #f8fafc); }
+  .md-rendered table.md-table tr:hover td { background: rgba(91,184,212,0.10); }
+  .md-rendered table.md-table { display: block; overflow-x: auto; }
+
   /* ── Tab routing fade — prevents the white flash on tab switch ───── */
   .tab-panel { transition: opacity 180ms var(--ease-out); }
   .tab-panel:not(.active) { opacity: 0; }
@@ -5132,6 +5157,53 @@
   // ══════════════════════════════════════════════════════════════
   // TRANSCRIPTS TAB — ingest YouTube, earnings sync, transcript-scoped AI
   // ══════════════════════════════════════════════════════════════
+  // ── Shared markdown → HTML (used by every agentic answer renderer) ──
+  // Handles headings, bold/italic/code, bullet & numbered lists, horizontal
+  // rules, links, and GFM pipe TABLES. Wrap output in a .md-rendered div.
+  function _dgaEscHtml(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function _dgaInline(s){
+    s = _dgaEscHtml(s);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*\w])\*(?!\s)([^*]+?)\*(?![*\w])/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  }
+  function _dgaMarkdown(md){
+    const lines = (md||'').replace(/\r\n/g, '\n').split('\n');
+    let html = '', i = 0, listType = null, listItems = [], para = [];
+    const flushList = () => { if (listItems.length){ html += '<'+listType+' class="md-list">'+listItems.map(x=>'<li>'+_dgaInline(x)+'</li>').join('')+'</'+listType+'>'; listItems=[]; listType=null; } };
+    const flushPara = () => { if (para.length){ html += '<p>'+_dgaInline(para.join(' '))+'</p>'; para=[]; } };
+    const flushAll  = () => { flushPara(); flushList(); };
+    const splitRow  = r => r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+    while (i < lines.length){
+      const raw = lines[i], st = raw.trim();
+      // GFM table: header row with |, next line is the |---|---| separator
+      if (st.indexOf('|') >= 0 && i+1 < lines.length &&
+          /^\s*\|?[\s:|-]*-[\s:|-]*\|[\s:|-]*$/.test(lines[i+1])){
+        flushAll();
+        const heads = splitRow(st); i += 2; const rows = [];
+        while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim()){ rows.push(lines[i]); i++; }
+        let t = '<table class="md-table"><thead><tr>'+heads.map(h=>'<th>'+_dgaInline(h)+'</th>').join('')+'</tr></thead><tbody>';
+        rows.forEach(r => { const c = splitRow(r); t += '<tr>'+c.map(x=>'<td>'+_dgaInline(x)+'</td>').join('')+'</tr>'; });
+        html += t + '</tbody></table>'; continue;
+      }
+      if (!st){ flushAll(); i++; continue; }
+      if (/^([-*_])\1{2,}$/.test(st)){ flushAll(); html += '<hr class="md-hr">'; i++; continue; }
+      let m = st.match(/^(#{1,4})\s+(.*)$/);
+      if (m){ flushAll(); html += '<div class="md-h md-h'+m[1].length+'">'+_dgaInline(m[2].replace(/#+$/,'').trim())+'</div>'; i++; continue; }
+      m = st.match(/^[-*•]\s+(.*)$/);
+      if (m){ flushPara(); if (listType && listType!=='ul') flushList(); listType='ul'; listItems.push(m[1]); i++; continue; }
+      m = st.match(/^\d+[.)]\s+(.*)$/);
+      if (m){ flushPara(); if (listType && listType!=='ol') flushList(); listType='ol'; listItems.push(m[1]); i++; continue; }
+      flushList(); para.push(st); i++;
+    }
+    flushAll();
+    return html || '<p>'+_dgaInline(md||'')+'</p>';
+  }
+  window._dgaMarkdown = _dgaMarkdown;
+
   let _trWired = false;
   function _trEsc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
   const _TR_TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
@@ -5345,13 +5417,13 @@
     };
     const renderResult = r => {
       const tools = (r.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">'+ic+' '+_trEsc(tc.tool)+'</span>'; }).join('');
-      const answer = _trEsc(r.answer||'(no answer)').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p style="margin:8px 0;">').replace(/\n/g,'<br>');
+      const answer = _dgaMarkdown(r.answer||'(no answer)');
       const cost = r.cost_usd!=null?'💸 $'+Number(r.cost_usd).toFixed(3):'';
       let vf = '';
       const v = r.verification;
       if (v && v.verdict==='clean') vf = '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
       else if (v && v.verdict==='flags' && (v.flags||[]).length) vf = '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ '+(v.flags||[]).length+' claim(s) flagged — review before sharing.</strong></div>';
-      out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);"><div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">'+answer+'</p></div>'+vf+(tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')+'<div style="margin-top:10px;text-align:right;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</div></div>';
+      out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);"><div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">'+answer+'</div>'+vf+(tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')+'<div style="margin-top:10px;text-align:right;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</div></div>';
     };
     try {
       const r = await window.dgaFetch('/api/research/agentic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q }) });
@@ -5444,14 +5516,11 @@
         const ic = TOOL_ICON[tc.tool] || '🔧';
         return `<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">${ic} ${esc(tc.tool)}</span>`;
       }).join('');
-      const answer = esc(r.answer || '(no answer)')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n\n/g, '</p><p style="margin:8px 0;">')
-        .replace(/\n/g, '<br>');
+      const answer = _dgaMarkdown(r.answer || '(no answer)');
       const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
       out.innerHTML =
         '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
-          `<div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">${answer}</p></div>` +
+          `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
           renderVerification(r.verification) +
           (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
           '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
@@ -5591,14 +5660,11 @@
 
     function renderResult(r) {
       _stratResult = r;
-      const answer = esc(r.answer || '(no answer)')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^#{1,4}\s*(.+)$/gm, '<div style="font-weight:800;color:var(--text-primary);margin:12px 0 4px;font-size:13px;">$1</div>')
-        .replace(/\n\n/g, '</p><p style="margin:8px 0;">').replace(/\n/g, '<br>');
+      const answer = _dgaMarkdown(r.answer || '(no answer)');
       const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
       out.innerHTML =
         '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
-          `<div style="font-size:13.5px;line-height:1.6;color:var(--text-primary);"><p style="margin:0 0 8px;">${answer}</p></div>` +
+          `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
           renderVerification(r.verification) +
           '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
             '<button id="strat-roundup-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;">🎙️ Generate Portfolio Roundup</button>' +
