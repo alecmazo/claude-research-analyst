@@ -17265,6 +17265,40 @@ _AGENTIC_TOOLS = [
         },
     },
     {
+        "name": "scan_wheel",
+        "description": "Scan live option chains for 'wheel' candidates on one or "
+                       "more tickers — covered calls (sell against shares you own) "
+                       "and cash-secured puts (get paid to maybe buy lower). FOR "
+                       "EACH tenor bucket (weekly / monthly / quarterly) it returns "
+                       "the single best strike to SELL: the highest annualized "
+                       "premium yield whose assignment probability stays within the "
+                       "delta cap. Use for ANY question about selling options, "
+                       "premium income, covered calls, cash-secured puts, or where "
+                       "implied volatility / premium is richest. The math "
+                       "(Black-Scholes delta = assignment proxy, annualized yield, "
+                       "breakeven, effective buy price, IV-vs-realized 'richness') is "
+                       "computed EXACTLY by the engine — report it, never recompute "
+                       "it. Live data: pass a few tickers (slower for many). For a "
+                       "full-portfolio sweep, point the user to the Options tab.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {"type": "string",
+                            "description": "Comma-separated symbols, e.g. 'INTC,AMD'."},
+                "delta_max": {"type": "number",
+                              "description": "Assignment-probability cap (option "
+                                             "delta, 0-1). Default 0.30. Lower = "
+                                             "safer, more likely to keep the stock; "
+                                             "higher = richer premium but likelier "
+                                             "assignment."},
+                "side": {"type": "string", "enum": ["both", "calls", "puts"],
+                         "description": "calls = covered calls only, puts = "
+                                        "cash-secured puts only. Default both."},
+            },
+            "required": ["tickers"],
+        },
+    },
+    {
         "name": "compute",
         "description": "Evaluate an arithmetic expression and return the exact result. "
                        "ALWAYS use this for any calculation (ratios, growth rates, "
@@ -17397,6 +17431,23 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
             tk = (args.get("ticker") or "").upper().strip()
             sec, ind = analyst.fetch_sector_and_industry(tk)
             return json.dumps({"ticker": tk, "sector": sec, "industry": ind})
+
+        if name == "scan_wheel":
+            import options_engine as _opt
+            tks = [t.strip().upper() for t in (args.get("tickers") or "").split(",")
+                   if t.strip()][:8]   # cap: this tool runs synchronously
+            if not tks:
+                return "No tickers provided. Pass comma-separated symbols."
+            try:
+                dmax = float(args.get("delta_max") or 0.30)
+            except Exception:
+                dmax = 0.30
+            dmax = max(0.05, min(dmax, 0.95))
+            side = (args.get("side") or "both").lower()
+            if side not in ("both", "calls", "puts"):
+                side = "both"
+            res = _opt.scan_wheel(tks, delta_max=dmax, side=side)
+            return json.dumps(res, default=str)
 
         if name == "read_saved_report":
             tk = (args.get("ticker") or "").upper().strip()
@@ -18516,17 +18567,55 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
+def _yt_proxy_config():
+    """Build a youtube-transcript-api proxy_config from env, or None.
+
+    YouTube blanket-blocks datacenter/cloud IPs for transcript fetches (the
+    "RequestBlocked / your IP is a cloud provider" error). The library's
+    sanctioned fix is to route requests through a RESIDENTIAL proxy. This is
+    opt-in: with no env vars set we return None and behaviour is unchanged.
+
+    Supported (first match wins):
+      • Webshare residential (recommended by the library):
+          WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
+      • Any generic HTTP/HTTPS proxy URL:
+          YT_PROXY_HTTP and/or YT_PROXY_HTTPS  (e.g. http://user:pass@host:port)
+    """
+    import os as _os
+    ws_user = _os.environ.get("WEBSHARE_PROXY_USERNAME")
+    ws_pass = _os.environ.get("WEBSHARE_PROXY_PASSWORD")
+    http_url = _os.environ.get("YT_PROXY_HTTP")
+    https_url = _os.environ.get("YT_PROXY_HTTPS")
+    try:
+        if ws_user and ws_pass:
+            from youtube_transcript_api.proxies import WebshareProxyConfig
+            return WebshareProxyConfig(proxy_username=ws_user, proxy_password=ws_pass)
+        if http_url or https_url:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            return GenericProxyConfig(http_url=http_url or https_url,
+                                      https_url=https_url or http_url)
+    except Exception as e:
+        print(f"[yt] proxy config ignored: {e!s:.120}", flush=True)
+    return None
+
+
 def _yt_fetch_segments(vid: str) -> list[dict]:
     """Fetch caption segments [{text, start}] for a video id. Supports both the
     v1.x instance API (.fetch → FetchedTranscript) and the legacy v0.6.x
     classmethod (.get_transcript). Real fetch errors (IP block, captions
-    disabled, none found) are surfaced verbatim, not masked by a fallback."""
+    disabled, none found) are surfaced verbatim, not masked by a fallback.
+
+    If a residential proxy is configured (see _yt_proxy_config), requests are
+    routed through it — required when this server runs on a cloud IP that
+    YouTube blocks."""
     from youtube_transcript_api import YouTubeTranscriptApi
     langs = ["en", "en-US", "en-GB"]
+    proxy_config = _yt_proxy_config()
     # ── v1.x: instance .fetch() ──────────────────────────────────────────
     inst = None
     try:
-        inst = YouTubeTranscriptApi()
+        inst = YouTubeTranscriptApi(proxy_config=proxy_config) if proxy_config \
+            else YouTubeTranscriptApi()
     except Exception:
         inst = None
     if inst is not None and hasattr(inst, "fetch"):
@@ -19723,6 +19812,130 @@ def financials_sync_status(job_id: str, request: Request):
     """Poll a financials sync job."""
     _claims_or_401(request)
     job = _fin_sync_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
+    return {"ok": True, **job}
+
+
+# ─────────────────────────── Options wheel scanner ───────────────────────────
+# Full-portfolio sweep for covered-call + cash-secured-put "wheel" candidates.
+# Mirrors the financials-sync background-job pattern. The math lives in
+# options_engine.py; this layer only resolves the universe and runs the sweep.
+_options_scan_jobs: dict[str, dict] = {}
+
+
+def _held_tickers() -> list:
+    """Distinct symbols currently held (open tax-lots) across all funds — the
+    covered-call universe (you must own shares to sell calls against them)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT DISTINCT s.symbol AS symbol
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.closed_at IS NULL AND tl.quantity > 0
+            """)
+            return sorted({(r.get("symbol") or "").strip().upper()
+                           for r in (cur.fetchall() or []) if r.get("symbol")})
+    except Exception as e:
+        print(f"[options scan] held-tickers query failed: {e!s:.150}", flush=True)
+        return []
+
+
+def _run_options_scan(job_id: str, calls_tickers: list, puts_tickers: list,
+                      delta_max: float) -> None:
+    """Background worker: scan covered calls over holdings, cash-secured puts
+    over the watchlist, ranking each list by IV-vs-realized vol richness."""
+    import options_engine as _opt
+
+    def _set(**kw):
+        _options_scan_jobs[job_id] = {**(_options_scan_jobs.get(job_id) or {}), **kw,
+                                      "updated_at": time.time()}
+    total = len(calls_tickers) + len(puts_tickers)
+    _set(stage="scanning", status="running", label="Starting…", total=total, done=0)
+    try:
+        cc_rows, csp_rows, done = [], [], 0
+        for tk in calls_tickers:
+            _set(label=f"⚙ {tk} calls ({done+1}/{total})…", done=done)
+            try:
+                cc_rows.append(_opt.scan_ticker(tk, delta_max=delta_max, side="calls"))
+            except Exception as e:
+                cc_rows.append({"ticker": tk, "ok": False, "error": f"{e!s:.150}"})
+            done += 1
+        for tk in puts_tickers:
+            _set(label=f"⚙ {tk} puts ({done+1}/{total})…", done=done)
+            try:
+                csp_rows.append(_opt.scan_ticker(tk, delta_max=delta_max, side="puts"))
+            except Exception as e:
+                csp_rows.append({"ticker": tk, "ok": False, "error": f"{e!s:.150}"})
+            done += 1
+        cc_rows.sort(key=lambda r: (r.get("iv_hv_ratio") or 0), reverse=True)
+        csp_rows.sort(key=lambda r: (r.get("iv_hv_ratio") or 0), reverse=True)
+        ok_n = sum(1 for r in cc_rows + csp_rows if r.get("ok"))
+        _set(stage="done", status="done", done=total,
+             label=f"✓ Scanned {ok_n}/{total} names",
+             result={"delta_max": delta_max,
+                     "covered_calls": cc_rows,
+                     "cash_secured_puts": csp_rows,
+                     "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    except Exception as e:
+        print(f"❌ [options scan {job_id}] {e!s:.300}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+@app.post("/api/options/scan")
+async def options_scan(req: Request, background_tasks: BackgroundTasks):
+    """Queue a wheel scan. Body: {delta_max?, side?, tickers?}. With no tickers,
+    sweeps held names for covered calls and the watchlist for cash-secured puts."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    body = body or {}
+    try:
+        delta_max = float(body.get("delta_max") or 0.30)
+    except Exception:
+        delta_max = 0.30
+    delta_max = max(0.05, min(delta_max, 0.95))
+    side = (body.get("side") or "both").lower()
+    if side not in ("both", "calls", "puts"):
+        side = "both"
+    explicit = [str(t).upper().strip() for t in (body.get("tickers") or [])
+                if t and str(t).strip()]
+    if explicit:
+        calls_tickers = explicit if side in ("both", "calls") else []
+        puts_tickers = explicit if side in ("both", "puts") else []
+    else:
+        held = _filter_scan_tickers(_held_tickers())
+        watch = _filter_scan_tickers(analyst.load_watchlist())
+        calls_tickers = held[:60] if side in ("both", "calls") else []
+        puts_tickers = watch[:60] if side in ("both", "puts") else []
+    if not calls_tickers and not puts_tickers:
+        return JSONResponse({"ok": False,
+                             "error": "No tickers to scan (no holdings or watchlist found)."},
+                            status_code=400)
+    import uuid as _uuid
+    job_id = "OPTSCAN_" + _uuid.uuid4().hex[:12]
+    _options_scan_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
+                                  "started_at": time.time(), "updated_at": time.time(),
+                                  "total": len(calls_tickers) + len(puts_tickers), "done": 0}
+    background_tasks.add_task(_run_options_scan, job_id, calls_tickers, puts_tickers, delta_max)
+    print(f"⚙ [options scan] queued {job_id}  CC={len(calls_tickers)} "
+          f"CSP={len(puts_tickers)} dmax={delta_max}", flush=True)
+    return {"ok": True, "job_id": job_id, "calls_tickers": calls_tickers,
+            "puts_tickers": puts_tickers, "delta_max": delta_max}
+
+
+@app.get("/api/options/scan/{job_id}")
+def options_scan_status(job_id: str, request: Request):
+    """Poll an options wheel scan job."""
+    _claims_or_401(request)
+    job = _options_scan_jobs.get(job_id)
     if not job:
         return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
     return {"ok": True, **job}

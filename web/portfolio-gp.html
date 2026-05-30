@@ -1923,6 +1923,15 @@
     background: var(--brand-50);
     font-weight: 600;
   }
+  /* Divides the Research portal (left) from Fund Administration (right). */
+  .topbar-divider {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 1px;
+    height: 24px;
+    background: var(--gray-300);
+    margin: 0 7px;
+  }
   .ribbon-wrap { top: 64px; }
   .brand-logo {
     height: 42px;
@@ -2858,7 +2867,10 @@
     <span class="topbar-link" data-tab="transcripts">Transcripts</span>
     <span class="topbar-link" data-tab="financials">Financials</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
+    <span class="topbar-divider" role="separator" aria-hidden="true"
+          title="Research  |  Fund Administration"></span>
     <span class="topbar-link" data-tab="positions">Positions</span>
+    <span class="topbar-link" data-tab="options">Options</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="reports">Reports</span>
     <span class="topbar-link" data-tab="memos">Memos</span>
@@ -4283,6 +4295,36 @@
 
 
 <!-- ══ MEMOS TAB ═══════════════════════════════════════════════ -->
+<div id="tab-options" class="tab-panel">
+  <div class="wide-shell">
+    <div class="tab-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2>🎯 Options Wheel <span style="font-size:11px;font-weight:500;color:var(--mid);">— covered calls on holdings · cash-secured puts on watchlist</span></h2>
+      <span style="flex:1;"></span>
+      <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">
+        Max assignment Δ
+        <input id="opt-delta" type="number" min="0.05" max="0.95" step="0.05" value="0.30"
+               title="Cap on assignment probability (option delta). Lower = safer / more likely to keep the stock; higher = richer premium but likelier to be assigned."
+               style="width:72px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;background:#fff;color:#1e293b;">
+      </label>
+      <button class="tab-btn" id="opt-scan-btn" type="button">⚡ Scan portfolio</button>
+    </div>
+    <div id="opt-status" style="margin-top:10px;font-size:12px;color:var(--dim);">Set your max assignment Δ and run a scan. Holdings are scanned for covered calls; your watchlist for cash-secured puts.</div>
+    <section class="panel" style="margin-top:14px;">
+      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📈 Covered calls <span style="font-weight:500;color:var(--mid);">— on names you hold</span></h3>
+      <div id="opt-cc"></div>
+    </section>
+    <section class="panel" style="margin-top:14px;">
+      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📉 Cash-secured puts <span style="font-weight:500;color:var(--mid);">— on watchlist names you'd enter</span></h3>
+      <div id="opt-csp"></div>
+    </section>
+    <div style="margin-top:10px;font-size:11px;color:var(--dim);line-height:1.5;">
+      Each tenor (weekly / monthly / quarterly) shows the best strike to <b>sell</b>: highest annualized premium yield with assignment probability ≤ your Δ cap.
+      <b>IV/HV</b> &gt; 1 (green) = implied vol above the stock's own realized vol → premium is relatively rich. Δ ≈ chance of assignment. Informational only — not investment advice.
+    </div>
+  </div>
+</div><!-- #tab-options -->
+
+
 <div id="tab-memos" class="tab-panel">
   <div class="wide-shell">
     <div class="tab-toolbar" style="display:flex;align-items:center;gap:10px;">
@@ -4934,6 +4976,7 @@
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
+    options:   () => loadOptionsTab(),
     research:  () => { loadBrief(); loadIdeaFeed(true); },
     builder:   () => _initBuilderTab(),
     lab:       () => _initLabTab(),
@@ -4959,6 +5002,89 @@
   document.querySelectorAll('.topbar-link[data-tab]').forEach(l => {
     l.addEventListener('click', () => showTab(l.dataset.tab));
   });
+
+  // ── Options Wheel tab ──────────────────────────────────────────────────
+  let _optPoll = null;
+  function loadOptionsTab() {
+    const btn = document.getElementById('opt-scan-btn');
+    if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', _optRunScan); }
+  }
+  async function _optRunScan() {
+    const btn = document.getElementById('opt-scan-btn');
+    const status = document.getElementById('opt-status');
+    let delta = parseFloat(document.getElementById('opt-delta').value);
+    if (!(delta > 0)) delta = 0.30;
+    delta = Math.max(0.05, Math.min(delta, 0.95));
+    if (_optPoll) { clearInterval(_optPoll); _optPoll = null; }
+    btn.disabled = true;
+    status.textContent = 'Queuing scan…';
+    document.getElementById('opt-cc').innerHTML = '';
+    document.getElementById('opt-csp').innerHTML = '';
+    try {
+      const r = await window.dgaFetch('/api/options/scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta_max: delta }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      status.textContent = `Scanning ${j.calls_tickers.length} holdings + ${j.puts_tickers.length} watchlist names…`;
+      _optPoll = setInterval(async () => {
+        try {
+          const pr = await window.dgaFetch('/api/options/scan/' + j.job_id);
+          const pj = await pr.json();
+          if (pj.label) status.textContent = pj.label;
+          if (pj.status === 'done') {
+            clearInterval(_optPoll); _optPoll = null; btn.disabled = false;
+            _optRenderResult(pj.result);
+          } else if (pj.status === 'error') {
+            clearInterval(_optPoll); _optPoll = null; btn.disabled = false;
+            status.textContent = '❌ ' + (pj.error || pj.label || 'scan failed');
+          }
+        } catch (e) { /* transient poll error — keep waiting */ }
+      }, 1500);
+    } catch (e) {
+      status.textContent = '❌ ' + e.message; btn.disabled = false;
+    }
+  }
+  function _optBucketCell(c, kind) {
+    if (!c) return '<td style="color:#cbd5e1;text-align:center;">—</td>';
+    const yld = kind === 'cc' ? c.static_return_annualized : c.yield_on_cash_annualized;
+    const extra = kind === 'cc'
+      ? `cushion ${(c.downside_cushion * 100).toFixed(1)}%`
+      : `buy $${c.effective_buy_price}`;
+    return `<td style="font-variant-numeric:tabular-nums;">
+      <div style="font-weight:700;">$${c.strike} · ${c.dte}d</div>
+      <div style="font-size:11px;color:#64748b;">$${c.premium} · ${(yld * 100).toFixed(0)}% ann · Δ${c.assignment_prob}</div>
+      <div style="font-size:10px;color:#94a3b8;">${extra}</div>
+    </td>`;
+  }
+  function _optTable(rows, kind) {
+    const key = kind === 'cc' ? 'covered_calls' : 'cash_secured_puts';
+    const ok = (rows || []).filter(r => r.ok && r[key]);
+    if (!ok.length) return '<div style="padding:16px;color:#94a3b8;font-size:12px;">No candidates found (no liquid strikes within your Δ cap, or no positions in this universe).</div>';
+    let html = `<table class="builder-result-table" style="width:100%;"><thead><tr>
+      <th>Ticker</th><th>Spot</th><th>IV/HV</th><th>Weekly</th><th>Monthly</th><th>Quarterly</th></tr></thead><tbody>`;
+    for (const r of ok) {
+      const m = r[key];
+      const rich = (r.iv_hv_ratio != null && r.iv_hv_ratio >= 1) ? '#16a34a' : '#64748b';
+      html += `<tr>
+        <td class="tk">${r.ticker}</td>
+        <td style="font-variant-numeric:tabular-nums;">$${r.spot}</td>
+        <td style="color:${rich};font-weight:700;">${r.iv_hv_ratio != null ? r.iv_hv_ratio : '—'}</td>
+        ${_optBucketCell(m.weekly, kind)}
+        ${_optBucketCell(m.monthly, kind)}
+        ${_optBucketCell(m.quarterly, kind)}
+      </tr>`;
+    }
+    return html + '</tbody></table>';
+  }
+  function _optRenderResult(res) {
+    if (!res) return;
+    document.getElementById('opt-cc').innerHTML = _optTable(res.covered_calls, 'cc');
+    document.getElementById('opt-csp').innerHTML = _optTable(res.cash_secured_puts, 'csp');
+    document.getElementById('opt-status').textContent =
+      `Δ ≤ ${res.delta_max} · scanned ${res.scanned_at} · ranked by premium richness (implied vs. realized vol)`;
+  }
 
   // ── Quick Actions (panel removed — kept for any remaining data-action buttons) ──
   document.querySelectorAll('.quick-btn[data-action]').forEach(btn => {
