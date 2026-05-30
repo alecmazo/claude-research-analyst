@@ -19610,7 +19610,7 @@ def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
     return n
 
 
-def _sync_one_ticker_financials(ticker: str, years_back: int = 5) -> dict:
+def _sync_one_ticker_financials(ticker: str, years_back: int = 10) -> dict:
     """Pull SEC XBRL history for one ticker and persist it. Returns
     {stored, periods, entity, errors}."""
     import sec_edgar_xbrl as _edgar
@@ -19696,7 +19696,7 @@ async def financials_sync(req: Request, background_tasks: BackgroundTasks):
         body = await req.json()
     except Exception:
         body = {}
-    years_back = max(1, min(int((body or {}).get("years_back") or 5), 15))
+    years_back = max(1, min(int((body or {}).get("years_back") or 10), 20))
     tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
     if not tickers:
         try:

@@ -913,7 +913,7 @@ def _duration_ends(facts: dict, metrics: tuple, lo: int, hi: int) -> dict[str, s
 
 def extract_financials_history(
     ticker: str,
-    years_back: int = 5,
+    years_back: int = 10,
     user_agent: str | None = None,
 ) -> dict[str, Any]:
     """Pull a multi-year history of financials from SEC XBRL, keyed by period
@@ -932,7 +932,7 @@ def extract_financials_history(
     entity_name = facts.get("entityName") or ticker.upper()
 
     from datetime import datetime as _dt
-    cutoff = _dt.utcnow().year - max(1, int(years_back or 5))
+    cutoff = _dt.utcnow().year - max(1, int(years_back or 10))
     errors: list[str] = []
 
     rev_ni = ("Revenue", "NetIncome")

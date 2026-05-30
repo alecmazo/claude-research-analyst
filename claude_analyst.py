@@ -6979,7 +6979,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         # trend — not just the latest filing. One extra companyfacts fetch.
         try:
             _hist = edgar.extract_financials_history(
-                ticker, years_back=5, user_agent=get_sec_user_agent())
+                ticker, years_back=10, user_agent=get_sec_user_agent())
             _hist_block = edgar.format_history_block(_hist)
             if _hist_block:
                 verified_block = (verified_block + "\n\n" + _hist_block

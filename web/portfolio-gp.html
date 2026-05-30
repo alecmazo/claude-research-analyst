@@ -3825,7 +3825,7 @@
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
           <label style="font-size:11px;color:var(--text-secondary);">years back:
-            <input id="fin-years" type="number" min="1" max="15" value="5"
+            <input id="fin-years" type="number" min="1" max="20" value="10"
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
           <input id="fin-tickers" placeholder="tickers (optional, e.g. INTC NVDA) — blank = all covered names"
@@ -5617,7 +5617,7 @@
   async function _syncFinancials() {
     const status = document.getElementById('fin-sync-status');
     const btn = document.getElementById('fin-sync-btn');
-    const years = parseInt(document.getElementById('fin-years').value || '5', 10);
+    const years = parseInt(document.getElementById('fin-years').value || '10', 10);
     const tickers = (document.getElementById('fin-tickers').value || '')
       .toUpperCase().split(/[^A-Z.]+/).filter(Boolean);
     const box = h => { status.innerHTML = h; };
