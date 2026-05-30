@@ -19134,8 +19134,15 @@ def _run_calls_backfill(job_id: str, tickers: list[str], years_back: int,
             _set(stage="backup", label="☁️ Backing up to Dropbox…", indexed=indexed)
             ok, info = _dropbox_backup_transcripts(rows)
             backup_note = " · ☁️ backed up" if ok else f" · backup skipped ({info[:60]})"
+        # 0 NEW passages with rows present just means everything was already
+        # indexed on a prior run — that's "up to date", not a failure.
+        if indexed > 0:
+            label = f"✓ Indexed {indexed} new passages from {len(per)} names ({len(rows)} calls){backup_note}"
+        else:
+            label = (f"✓ Already up to date — {len(rows)} calls across {len(per)} names "
+                     f"already indexed{backup_note}. Use ⚡ Latest calls to extend past the dataset cutoff.")
         _set(stage="done", status="done", done=len(rows), indexed=indexed,
-             label=f"✓ Indexed {indexed} passages from {len(per)} names ({len(rows)} calls){backup_note}",
+             label=label,
              result={"chunks_indexed": indexed, "transcripts": len(rows),
                      "names": sorted(per.keys()), "source": "dropbox" if restore else "huggingface"})
     except Exception as e:
