@@ -6974,6 +6974,21 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         if verified_block is None:
             verified_block = ""
 
+        # Append a multi-year quarterly + annual TREND block (best-effort) so the
+        # report can discuss trajectory — growth, margin direction, cash-flow
+        # trend — not just the latest filing. One extra companyfacts fetch.
+        try:
+            _hist = edgar.extract_financials_history(
+                ticker, years_back=5, user_agent=get_sec_user_agent())
+            _hist_block = edgar.format_history_block(_hist)
+            if _hist_block:
+                verified_block = (verified_block + "\n\n" + _hist_block
+                                  if verified_block else _hist_block)
+                print(f"   ✅ Appended multi-year trend block "
+                      f"({len(_hist.get('rows', []))} periods).")
+        except Exception as _hx:  # noqa: BLE001
+            print(f"   ⚠️  Multi-year trend block skipped: {_hx!s:.150}")
+
         # Cache the raw extract for auditing.
         try:
             with open(audit_path, "w") as f:

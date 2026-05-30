@@ -1034,6 +1034,54 @@ def _fmt_eps(val) -> str:
         return "N/A"
 
 
+def format_history_block(history: dict, max_quarters: int = 10, max_annuals: int = 5) -> str:
+    """Render the multi-year trend (from extract_financials_history) as a compact
+    LLM-readable block. Quarters and annuals are listed oldest → newest so the
+    trajectory reads naturally. Returns '' if there's no history."""
+    rows = (history or {}).get("rows") or []
+    if not rows:
+        return ""
+    qs = sorted([r for r in rows if r.get("period_type") == "quarter"],
+                key=lambda r: r.get("end", ""))[-max_quarters:]
+    ans = sorted([r for r in rows if r.get("period_type") == "annual"],
+                 key=lambda r: r.get("end", ""))[-max_annuals:]
+    L: list[str] = []
+    L.append(f"=== MULTI-YEAR FINANCIAL TREND FOR {history.get('ticker','')} "
+             f"(SEC XBRL, calendar-labeled, $ in millions, oldest → newest) ===")
+    L.append("Use this for TRAJECTORY/trend commentary (growth, margin direction, "
+             "cash-flow trend). Cash flow is discrete per quarter; a '*' marks a "
+             "derived Q4 (FY − Q1..Q3). Margins are percentages.")
+    if ans:
+        L.append("")
+        L.append("[ANNUAL]")
+        L.append("FY | End | Revenue | GrossM% | OpM% | NetInc | NetM% | CompInc | OCF | FCF | Assets | Equity | TotalDebt")
+        for r in ans:
+            L.append(" | ".join([
+                f"FY{r.get('fy','')}", str(r.get("end", "")),
+                _fmt_money(r.get("Revenue")), _fmt_pct(r.get("GrossMargin")),
+                _fmt_pct(r.get("OperatingMargin")), _fmt_money(r.get("NetIncome")),
+                _fmt_pct(r.get("NetMargin")), _fmt_money(r.get("ComprehensiveIncome")),
+                _fmt_money(r.get("OperatingCashFlow")), _fmt_money(r.get("FreeCashFlow")),
+                _fmt_money(r.get("TotalAssets")), _fmt_money(r.get("StockholdersEquity")),
+                _fmt_money(r.get("TotalDebt")),
+            ]))
+    if qs:
+        L.append("")
+        L.append("[QUARTERLY]")
+        L.append("Period | End | Revenue | GrossM% | OpM% | NetInc | NetM% | CompInc | DilEPS | OCF | FCF")
+        for r in qs:
+            tag = f"{r.get('fy','')}{r.get('fp','')}" + ("*" if r.get("derived") else "")
+            L.append(" | ".join([
+                tag, str(r.get("end", "")),
+                _fmt_money(r.get("Revenue")), _fmt_pct(r.get("GrossMargin")),
+                _fmt_pct(r.get("OperatingMargin")), _fmt_money(r.get("NetIncome")),
+                _fmt_pct(r.get("NetMargin")), _fmt_money(r.get("ComprehensiveIncome")),
+                _fmt_eps(r.get("DilutedEPS")), _fmt_money(r.get("OperatingCashFlow")),
+                _fmt_money(r.get("FreeCashFlow")),
+            ]))
+    return "\n".join(L)
+
+
 def format_verified_block(data: dict) -> str:
     """Produce the VERIFIED_FINANCIAL_DATA text block the LLM must use."""
     lines: list[str] = []

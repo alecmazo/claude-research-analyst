@@ -5561,6 +5561,45 @@
     return Number(v).toFixed(2);
   }
 
+  // Tiny inline-SVG sparkline (native — no chart lib). vals are chronological.
+  function _finSpark(vals, opts) {
+    opts = opts || {};
+    const w = opts.w || 150, h = opts.h || 34, pad = 3;
+    const nums = vals.filter(v => v !== null && v !== undefined && isFinite(v));
+    if (nums.length < 2) return '';
+    let mn = Math.min(...nums), mx = Math.max(...nums);
+    if (mn === mx) { mn -= 1; mx += 1; }
+    const span = mx - mn, n = vals.length;
+    const x = i => pad + (i * (w - 2 * pad) / (n - 1));
+    const y = v => pad + (h - 2 * pad) * (1 - (v - mn) / span);
+    let d = '', started = false;
+    vals.forEach((v, i) => {
+      if (v === null || v === undefined || !isFinite(v)) return;
+      d += (started ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
+      started = true;
+    });
+    const col = opts.color || (nums[nums.length - 1] >= nums[0] ? '#16a34a' : '#dc2626');
+    let base = '';
+    if (mn < 0 && mx > 0) {
+      const zy = y(0).toFixed(1);
+      base = '<line x1="' + pad + '" y1="' + zy + '" x2="' + (w - pad) + '" y2="' + zy + '" stroke="var(--border-subtle)" stroke-width="1" stroke-dasharray="2,2"/>';
+    }
+    let li = -1;
+    for (let i = vals.length - 1; i >= 0; i--) { if (vals[i] !== null && vals[i] !== undefined && isFinite(vals[i])) { li = i; break; } }
+    const dot = li >= 0 ? '<circle cx="' + x(li).toFixed(1) + '" cy="' + y(vals[li]).toFixed(1) + '" r="2" fill="' + col + '"/>' : '';
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="display:block;">' + base + '<path d="' + d.trim() + '" fill="none" stroke="' + col + '" stroke-width="1.5"/>' + dot + '</svg>';
+  }
+  function _finSparkCard(label, vals, fmt) {
+    const svg = _finSpark(vals);
+    if (!svg) return '';
+    let last;
+    for (let i = vals.length - 1; i >= 0; i--) { const v = vals[i]; if (v !== null && v !== undefined && isFinite(v)) { last = v; break; } }
+    return '<div style="flex:1;min-width:128px;border:1px solid var(--border-subtle);border-radius:8px;padding:8px 10px;">' +
+      '<div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;">' + label + '</div>' +
+      '<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin:2px 0 4px;">' + (last !== undefined ? fmt(last) : '—') + '</div>' +
+      svg + '</div>';
+  }
+
   async function _loadFinCoverage() {
     try {
       const d = await (await window.dgaFetch('/api/financials/coverage')).json();
@@ -5651,6 +5690,15 @@
       if (!d.ok) throw new Error(d.error || 'Failed');
       const rows = d.rows || [];
       if (!rows.length) { out.innerHTML = 'No '+period+' data for '+_trEsc(tk)+'. Try “Sync from SEC” first.'; return; }
+      // Trend sparklines (chronological, oldest → newest).
+      const chrono = [...rows].reverse();
+      const series = k => chrono.map(r => (r[k] === null || r[k] === undefined) ? null : Number(r[k]));
+      const sparks = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        _finSparkCard('Revenue', series('revenue'), _finM) +
+        _finSparkCard('Net margin', series('net_margin'), _finPct) +
+        _finSparkCard('Net income', series('net_income'), _finM) +
+        _finSparkCard('Free cash flow', series('free_cash_flow'), _finM) +
+        '</div>';
       const head = '<tr><th style="text-align:left;">'+_trEsc(tk)+'</th>' + _FIN_COLS.map(c=>'<th style="text-align:right;padding:0 6px;">'+c.l+'</th>').join('') + '</tr>';
       const body = rows.map(r => {
         const lbl = r.fy + (r.fp==='FY'?' FY':' '+r.fp) + (r.derived?'*':'');
@@ -5660,6 +5708,7 @@
         '</tr>';
       }).join('');
       out.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:6px;">'+_trEsc(d.entity_name||tk)+' · '+rows.length+' periods · $ in millions · <span title="derived">*</span>=derived Q4</div>' +
+        sparks +
         '<table style="border-collapse:collapse;width:100%;font-size:11px;">'+head+body+'</table>';
     } catch (e) {
       out.innerHTML = '<span style="color:#b91c1c;">Failed: '+_trEsc(e.message)+'</span>';
