@@ -17244,6 +17244,27 @@ _AGENTIC_TOOLS = [
         },
     },
     {
+        "name": "get_financials_history",
+        "description": "Get a MULTI-YEAR quarterly + annual financial history for a "
+                       "ticker from the persisted SEC XBRL store (income statement, "
+                       "balance sheet, cash flow, AND comprehensive income). Use this "
+                       "for TRENDS over time — revenue/margin trajectory, multi-quarter "
+                       "or YoY comparisons, cash-flow trends — which get_financials "
+                       "(latest filing only) cannot provide. Returns compact periods "
+                       "newest-first; margins are fractions, $ are absolute, derived=Q4 "
+                       "is computed (FY−Q1..Q3). Empty if the ticker isn't synced yet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "period_type": {"type": "string", "enum": ["quarter", "annual", "all"],
+                                "description": "Default 'quarter'."},
+                "limit": {"type": "integer", "description": "Max periods (default 12)."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "compute",
         "description": "Evaluate an arithmetic expression and return the exact result. "
                        "ALWAYS use this for any calculation (ratios, growth rates, "
@@ -17458,6 +17479,45 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
                 "source": "SEC XBRL (filing-accurate)",
             }
             return json.dumps(summary, default=str)[:6000]
+
+        if name == "get_financials_history":
+            tk = (args.get("ticker") or "").upper().strip()
+            pt = args.get("period_type") or "quarter"
+            if pt not in ("quarter", "annual", "all"):
+                pt = "quarter"
+            lim = max(1, min(int(args.get("limit") or 12), 40))
+            try:
+                _ensure_financials_table()
+                rows = _fin_rows_for_ticker(tk, pt)[:lim]
+            except Exception as e:
+                return f"Financials store error for {tk}: {e!s:.140}"
+            if not rows:
+                return (f"No stored financial history for {tk}. Use get_financials for "
+                        f"the latest filing, or sync the Financials store first.")
+            keep = ("fy", "fp", "period_end", "derived", "revenue", "gross_margin",
+                    "operating_income", "operating_margin", "net_income", "net_margin",
+                    "comprehensive_income", "other_comprehensive_income", "diluted_eps",
+                    "operating_cash_flow", "free_cash_flow", "cash", "total_debt",
+                    "total_assets", "stockholders_equity")
+            def _slim(r):
+                out = {}
+                for k in keep:
+                    v = r.get(k)
+                    if v is None:
+                        continue
+                    if k in ("fy", "fp", "derived"):
+                        out[k] = v
+                    elif hasattr(v, "isoformat"):
+                        out[k] = v.isoformat()
+                    else:
+                        try: out[k] = round(float(v), 4)
+                        except Exception: out[k] = v
+                return out
+            payload = {"ticker": tk, "entity": rows[0].get("entity_name"),
+                       "period_type": pt,
+                       "note": "$ absolute; margins are fractions; derived=Q4 (FY−Q1..Q3); source: SEC XBRL store",
+                       "periods": [_slim(r) for r in rows]}
+            return json.dumps(payload, default=str)[:9000]
 
         if name == "compute":
             expr = (args.get("expression") or "").strip()

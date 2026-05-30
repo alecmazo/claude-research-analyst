@@ -2856,6 +2856,7 @@
     <span class="topbar-link" data-tab="builder">Builder</span>
     <span class="topbar-link" data-tab="lab">LLM Lab</span>
     <span class="topbar-link" data-tab="transcripts">Transcripts</span>
+    <span class="topbar-link" data-tab="financials">Financials</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
@@ -3802,6 +3803,91 @@
     </section>
   </div>
 </div><!-- #tab-transcripts -->
+
+
+<!-- ══ FINANCIALS TAB ══════════════════════════════════════════ -->
+<div id="tab-financials" class="tab-panel">
+  <div class="wide-shell" style="max-width:1300px;margin:18px auto;padding:0 20px;">
+    <div class="tab-toolbar"><h2>Financial statements</h2></div>
+    <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin:-6px 0 14px;">
+      Structured income statement, balance sheet, cash flow &amp; comprehensive income pulled from
+      <strong>SEC EDGAR XBRL</strong> — queryable, multi-year, quarterly + annual. Cash flow is
+      de-cumulated to discrete quarters; Q4 is derived (FY − Q1–Q3). $ in millions unless noted.
+    </div>
+
+    <!-- ── Sync / build ── -->
+    <section class="panel">
+      <header class="panel-head">
+        <span class="panel-title">📊 Financials store</span>
+        <span class="panel-badge" id="fin-coverage-badge" style="background:#e0f2fe;color:#075985;">—</span>
+      </header>
+      <div class="panel-body" style="padding:14px 16px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
+          <label style="font-size:11px;color:var(--text-secondary);">years back:
+            <input id="fin-years" type="number" min="1" max="15" value="5"
+              style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
+          </label>
+          <input id="fin-tickers" placeholder="tickers (optional, e.g. INTC NVDA) — blank = all covered names"
+            style="flex:1;min-width:240px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+        </div>
+        <div id="fin-sync-status" style="margin-top:10px;"></div>
+        <div id="fin-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
+      </div>
+    </section>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin-top:14px;">
+      <!-- ── Per-company time series ── -->
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">📈 Company history</span>
+        </header>
+        <div class="panel-body" style="padding:14px 16px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+            <input id="fin-co-ticker" placeholder="Ticker (e.g. INTC)" maxlength="8"
+              style="width:130px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:13px;text-transform:uppercase;background:var(--bg-elevated);color:var(--text-primary);">
+            <select id="fin-co-period" style="border:1px solid var(--border-default);border-radius:6px;padding:7px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+              <option value="quarter">Quarterly</option>
+              <option value="annual">Annual</option>
+            </select>
+            <button id="fin-co-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">View ▶</button>
+          </div>
+          <div id="fin-co-out" style="overflow:auto;font-size:11px;color:var(--text-tertiary);">Pick a ticker to see its financial history.</div>
+        </div>
+      </section>
+
+      <!-- ── Cross-company screen ── -->
+      <section class="panel">
+        <header class="panel-head">
+          <span class="panel-title">🔎 Screen</span>
+        </header>
+        <div class="panel-body" style="padding:14px 16px;">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+            <select id="fin-scr-period" style="border:1px solid var(--border-default);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+              <option value="quarter">Latest quarter</option>
+              <option value="annual">Latest FY</option>
+            </select>
+            <span style="font-size:11px;color:var(--text-secondary);">sort by</span>
+            <select id="fin-scr-order" style="border:1px solid var(--border-default);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+              <option value="revenue">Revenue</option>
+              <option value="net_income">Net income</option>
+              <option value="net_margin">Net margin</option>
+              <option value="gross_margin">Gross margin</option>
+              <option value="operating_margin">Operating margin</option>
+              <option value="ebitda_margin">EBITDA margin</option>
+              <option value="free_cash_flow">Free cash flow</option>
+              <option value="total_assets">Total assets</option>
+              <option value="total_debt">Total debt</option>
+              <option value="diluted_eps">Diluted EPS</option>
+            </select>
+            <button id="fin-scr-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;">Run ▶</button>
+          </div>
+          <div id="fin-scr-out" style="overflow:auto;font-size:11px;color:var(--text-tertiary);">Run a screen across your covered names.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div><!-- #tab-financials -->
 
 
 <!-- ══ IDEAS TAB ═══════════════════════════════════════════════ -->
@@ -4858,6 +4944,7 @@
     reports:   () => loadReportsTab(),
     memos:     () => loadMemosTab(),
     transcripts: () => _initTranscriptsTab(),
+    financials: () => _initFinancialsTab(),
   };
 
   function showTab(name) {
@@ -5439,6 +5526,172 @@
         ? cov.map(c => '<span style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q</span>').join('')
         : 'No earnings calls indexed yet.';
     } catch(_) {}
+  }
+
+  // ══ Financials tab ═══════════════════════════════════════════════
+  let _finWired = false;
+  function _initFinancialsTab() {
+    if (!_finWired) {
+      const sb = document.getElementById('fin-sync-btn');
+      if (sb) sb.addEventListener('click', _syncFinancials);
+      const cb = document.getElementById('fin-co-btn');
+      if (cb) cb.addEventListener('click', _viewFinCompany);
+      const ct = document.getElementById('fin-co-ticker');
+      if (ct) ct.addEventListener('keydown', e => { if (e.key === 'Enter') _viewFinCompany(); });
+      const rb = document.getElementById('fin-scr-btn');
+      if (rb) rb.addEventListener('click', _runFinScreen);
+      _finWired = true;
+    }
+    _loadFinCoverage();
+  }
+
+  // millions, with commas; handles negatives and nulls
+  function _finM(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v) / 1e6;
+    if (!isFinite(n)) return '—';
+    return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function _finPct(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    return (Number(v) * 100).toFixed(1) + '%';
+  }
+  function _finEps(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    return Number(v).toFixed(2);
+  }
+
+  async function _loadFinCoverage() {
+    try {
+      const d = await (await window.dgaFetch('/api/financials/coverage')).json();
+      const cov = (d && d.coverage) || [];
+      const badge = document.getElementById('fin-coverage-badge');
+      const el = document.getElementById('fin-coverage');
+      if (badge) badge.textContent = cov.length ? (cov.length + ' names') : 'empty';
+      if (el) el.innerHTML = cov.length
+        ? cov.map(c => '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')+'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>').join('')
+        : 'No financials stored yet — click “Sync from SEC”.';
+    } catch(_) {}
+  }
+
+  let _finSyncPoll = null;
+  async function _syncFinancials() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-sync-btn');
+    const years = parseInt(document.getElementById('fin-years').value || '5', 10);
+    const tickers = (document.getElementById('fin-tickers').value || '')
+      .toUpperCase().split(/[^A-Z.]+/).filter(Boolean);
+    const box = h => { status.innerHTML = h; };
+    btn.disabled = true; btn.textContent = '⏳ Queuing…';
+    if (_finSyncPoll) { clearInterval(_finSyncPoll); _finSyncPoll = null; }
+    try {
+      const r = await window.dgaFetch('/api/financials/sync', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ years_back: years, tickers }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for '+(j.tickers||[]).length+' names…</div>');
+      const t0 = Date.now();
+      _finSyncPoll = setInterval(async () => {
+        if (Date.now() - t0 > 1500000) { clearInterval(_finSyncPoll); _finSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still working in the background — check coverage shortly.</div>'); btn.disabled=false; btn.textContent='⬇️ Sync from SEC'; return; }
+        try {
+          const s = await (await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(j.job_id))).json();
+          if (s.status === 'done') {
+            clearInterval(_finSyncPoll); _finSyncPoll=null;
+            const n = (s.result && s.result.periods_stored) || 0;
+            const errs = (s.result && s.result.errors) || [];
+            const ok = n > 0;
+            const errHtml = errs.length ? '<div style="margin-top:6px;font-family:\'SF Mono\',monospace;font-size:10.5px;color:#92400e;max-height:120px;overflow:auto;">'+errs.map(e=>_trEsc(e)).join('<br>')+'</div>' : '';
+            box('<div style="background:'+(ok?'var(--success-50);border:1px solid #bbf7d0;color:var(--success-700)':'var(--warn-50);border:1px solid #fde68a;color:var(--warn-700)')+';border-radius:8px;padding:9px 12px;font-size:12px;">'+(ok?'✓ ':'⚠ ')+_trEsc(s.label||'Done')+errHtml+'</div>');
+            if (ok) window.toast('✓ Financials synced from SEC.', {type:'success'});
+            btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
+            _loadFinCoverage();
+          } else if (s.status === 'error') {
+            clearInterval(_finSyncPoll); _finSyncPoll=null;
+            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
+            btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
+          } else {
+            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
+          }
+        } catch(_) {}
+      }, 2500);
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
+      btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
+    }
+  }
+
+  // Column spec shared by the company-history and screen tables.
+  const _FIN_COLS = [
+    { k:'revenue', l:'Revenue', f:_finM },
+    { k:'gross_margin', l:'GM%', f:_finPct },
+    { k:'operating_income', l:'OpInc', f:_finM },
+    { k:'operating_margin', l:'OpM%', f:_finPct },
+    { k:'net_income', l:'NetInc', f:_finM },
+    { k:'net_margin', l:'NetM%', f:_finPct },
+    { k:'comprehensive_income', l:'CompInc', f:_finM },
+    { k:'diluted_eps', l:'DilEPS', f:_finEps },
+    { k:'operating_cash_flow', l:'OCF', f:_finM },
+    { k:'free_cash_flow', l:'FCF', f:_finM },
+    { k:'cash', l:'Cash', f:_finM },
+    { k:'total_debt', l:'Debt', f:_finM },
+    { k:'total_assets', l:'Assets', f:_finM },
+    { k:'stockholders_equity', l:'Equity', f:_finM },
+  ];
+
+  async function _viewFinCompany() {
+    const out = document.getElementById('fin-co-out');
+    const tk = (document.getElementById('fin-co-ticker').value || '').trim().toUpperCase();
+    const period = document.getElementById('fin-co-period').value || 'quarter';
+    if (!tk) { out.textContent = 'Enter a ticker.'; return; }
+    out.innerHTML = 'Loading '+_trEsc(tk)+'…';
+    try {
+      const d = await (await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '?period_type=' + period)).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const rows = d.rows || [];
+      if (!rows.length) { out.innerHTML = 'No '+period+' data for '+_trEsc(tk)+'. Try “Sync from SEC” first.'; return; }
+      const head = '<tr><th style="text-align:left;">'+_trEsc(tk)+'</th>' + _FIN_COLS.map(c=>'<th style="text-align:right;padding:0 6px;">'+c.l+'</th>').join('') + '</tr>';
+      const body = rows.map(r => {
+        const lbl = r.fy + (r.fp==='FY'?' FY':' '+r.fp) + (r.derived?'*':'');
+        return '<tr style="border-top:1px solid var(--border-subtle);">' +
+          '<td style="font-family:\'SF Mono\',monospace;white-space:nowrap;padding:3px 8px 3px 0;" title="period end '+_trEsc(r.period_end||'')+'">'+_trEsc(lbl)+'</td>' +
+          _FIN_COLS.map(c=>'<td style="text-align:right;padding:3px 6px;font-variant-numeric:tabular-nums;">'+c.f(r[c.k])+'</td>').join('') +
+        '</tr>';
+      }).join('');
+      out.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:6px;">'+_trEsc(d.entity_name||tk)+' · '+rows.length+' periods · $ in millions · <span title="derived">*</span>=derived Q4</div>' +
+        '<table style="border-collapse:collapse;width:100%;font-size:11px;">'+head+body+'</table>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:#b91c1c;">Failed: '+_trEsc(e.message)+'</span>';
+    }
+  }
+
+  async function _runFinScreen() {
+    const out = document.getElementById('fin-scr-out');
+    const period = document.getElementById('fin-scr-period').value || 'quarter';
+    const order = document.getElementById('fin-scr-order').value || 'revenue';
+    out.innerHTML = 'Running…';
+    try {
+      const d = await (await window.dgaFetch('/api/financials/screen?period_type=' + period + '&order=' + order + '&desc=true')).json();
+      if (!d.ok) throw new Error(d.error || 'Failed');
+      const rows = d.rows || [];
+      if (!rows.length) { out.innerHTML = 'Nothing stored yet — “Sync from SEC” first.'; return; }
+      const cols = _FIN_COLS;
+      const head = '<tr><th style="text-align:left;padding-right:6px;">Name</th><th style="text-align:left;padding-right:8px;">Period</th>' +
+        cols.map(c=>'<th style="text-align:right;padding:0 6px;'+(c.k===order?'color:var(--blue);':'')+'">'+c.l+'</th>').join('') + '</tr>';
+      const body = rows.map(r => {
+        const lbl = r.fy + (r.fp==='FY'?' FY':' '+r.fp) + (r.derived?'*':'');
+        return '<tr style="border-top:1px solid var(--border-subtle);">' +
+          '<td style="font-family:\'SF Mono\',monospace;font-weight:700;padding:3px 6px 3px 0;">'+_trEsc(r.ticker)+'</td>' +
+          '<td style="font-family:\'SF Mono\',monospace;white-space:nowrap;color:var(--text-tertiary);padding-right:8px;">'+_trEsc(lbl)+'</td>' +
+          cols.map(c=>'<td style="text-align:right;padding:3px 6px;font-variant-numeric:tabular-nums;'+(c.k===order?'color:var(--blue);font-weight:600;':'')+'">'+c.f(r[c.k])+'</td>').join('') +
+        '</tr>';
+      }).join('');
+      out.innerHTML = '<div style="color:var(--text-secondary);margin-bottom:6px;">'+rows.length+' names · '+(period==='quarter'?'latest quarter':'latest FY')+' · $ in millions</div>' +
+        '<table style="border-collapse:collapse;width:100%;font-size:11px;">'+head+body+'</table>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:#b91c1c;">Failed: '+_trEsc(e.message)+'</span>';
+    }
   }
 
   async function _loadTranscriptList() {
