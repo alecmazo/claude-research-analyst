@@ -3743,7 +3743,7 @@
           <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
             Index earnings calls for your covered names so the AI Analyst retrieves only the relevant passages.
             <strong>Backfill history</strong> pulls years of calls from a public dataset (free) and backs them up to your Dropbox;
-            <strong>Latest call</strong> grabs the freshest quarter via Grok.
+            <strong>Latest calls</strong> fills forward via Grok — every quarter from the dataset cutoff up to the newest reported call.
           </div>
           <!-- Historical backfill (Hugging Face → Dropbox backup) -->
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
@@ -3756,9 +3756,12 @@
           </div>
           <!-- Latest-quarter top-up via Grok -->
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px dashed var(--border-subtle);padding-top:8px;">
-            <button id="tr-sync-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">⚡ Latest call (Grok)</button>
-            <input id="tr-sync-quarters" type="hidden" value="1">
-            <span style="font-size:10.5px;color:var(--text-tertiary);">grabs the newest call per name</span>
+            <button id="tr-sync-btn" class="btn-secondary" style="padding:0 14px;font-size:12px;">⚡ Latest calls (Grok)</button>
+            <label style="font-size:11px;color:var(--text-secondary);">quarters:
+              <input id="tr-sync-quarters" type="number" min="1" max="8" value="6"
+                style="width:44px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
+            </label>
+            <span style="font-size:10.5px;color:var(--text-tertiary);">fills forward to the newest reported quarter per name</span>
           </div>
           <div id="tr-sync-status" style="margin-top:10px;"></div>
           <div id="tr-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
@@ -5324,7 +5327,7 @@
       box('<div style="font-size:12px;color:var(--text-secondary);">📞 Indexing '+(j.tickers||[]).length+' tickers…</div>');
       const t0 = Date.now();
       _trSyncPoll = setInterval(async () => {
-        if (Date.now() - t0 > 1500000) { clearInterval(_trSyncPoll); _trSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>'); btn.disabled=false; btn.textContent='⚡ Latest call (Grok)'; return; }
+        if (Date.now() - t0 > 1500000) { clearInterval(_trSyncPoll); _trSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still indexing in the background — check coverage in a few minutes.</div>'); btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)'; return; }
         try {
           const s = await (await window.dgaFetch('/api/transcripts/calls/sync/' + encodeURIComponent(jobId))).json();
           if (s.status === 'done') {
@@ -5341,12 +5344,12 @@
               const pb = document.getElementById('tr-probe-btn');
               if (pb) pb.addEventListener('click', _probeApiNinjas);
             }
-            btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
+            btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
             _loadCallCoverage();
           } else if (s.status === 'error') {
             clearInterval(_trSyncPoll); _trSyncPoll=null;
             box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
-            btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
+            btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
           } else {
             box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
           }
@@ -5354,7 +5357,7 @@
       }, 2500);
     } catch (e) {
       box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
-      btn.disabled=false; btn.textContent='⚡ Latest call (Grok)';
+      btn.disabled=false; btn.textContent='⚡ Latest calls (Grok)';
     }
   }
 

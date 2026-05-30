@@ -18705,17 +18705,45 @@ _GROK_CALL_SYSTEM = (
     "If you genuinely cannot find a real transcript, reply with exactly: NO_TRANSCRIPT"
 )
 
+# Per-quarter variant: used by the walk-back so we can fill EVERY recent quarter
+# (the HF backfill dataset ends ~Q1 2025, and the "latest only" fetch above left
+# the quarters between that cutoff and today perpetually missing).
+_GROK_CALL_Q_SYSTEM = (
+    "You are an earnings-call transcript retrieval tool. Using live web search, "
+    "find the company's earnings call transcript for the SPECIFIC fiscal quarter "
+    "the user names (prefer a full, free transcript such as The Motley Fool / "
+    "fool.com or the company IR site). Respond in EXACTLY this format and nothing "
+    "else:\n"
+    "QUARTER: <YYYYQn>\n"
+    "DATE: <YYYY-MM-DD or unknown>\n"
+    "---\n"
+    "<the transcript: management's prepared remarks AND the analyst Q&A, quoted "
+    "as fully and verbatim as the published transcript allows — reproduce the "
+    "speakers' actual words, do NOT summarize, paraphrase, or add commentary>\n\n"
+    "QUARTER must be the quarter the transcript actually covers. If that quarter "
+    "has not been reported yet, or you cannot find a real transcript for it, "
+    "reply with exactly: NO_TRANSCRIPT"
+)
 
-def _fetch_grok_call_transcript(ticker: str) -> dict:
-    """Retrieve the latest earnings-call transcript via Grok live-search.
-    Returns {ok, transcript, quarter, date} or {ok:False, status, error}."""
-    try:
-        out = analyst.call_grok(system_prompt=_GROK_CALL_SYSTEM,
-                                user_content=f"Company ticker: {ticker}. "
-                                             f"Retrieve its most recent reported earnings call transcript.",
-                                live_search=True) or ""
-    except Exception as e:
-        return {"ok": False, "status": -1, "error": f"grok error: {e!s:.160}"}
+
+def _recent_quarters(n: int) -> list[tuple]:
+    """The `n` most recent calendar quarters, newest first, starting from the
+    quarter we are currently in (which may not have reported yet)."""
+    from datetime import datetime as _dt
+    now = _dt.utcnow()
+    y, q = now.year, (now.month - 1) // 3 + 1
+    out = []
+    for _ in range(max(1, n)):
+        out.append((y, q))
+        q -= 1
+        if q == 0:
+            q, y = 4, y - 1
+    return out
+
+
+def _parse_grok_transcript(out: str, default_quarter: str = None) -> dict:
+    """Parse a Grok transcript response into
+    {ok, transcript, quarter, date} or {ok:False, status, error}."""
     out = (out or "").strip()
     if not out or "NO_TRANSCRIPT" in out[:80].upper():
         return {"ok": False, "status": 200, "error": "Grok found no transcript"}
@@ -18734,8 +18762,38 @@ def _fetch_grok_call_transcript(ticker: str) -> dict:
             y, mo = int(date[:4]), int(date[5:7])
             quarter = f"{y}Q{max(1, (mo - 1) // 3 + 1)}"   # rough calendar quarter
         else:
-            quarter = "latest"
+            quarter = default_quarter or "latest"
     return {"ok": True, "status": 200, "transcript": body, "quarter": quarter, "date": date}
+
+
+def _fetch_grok_call_transcript(ticker: str) -> dict:
+    """Retrieve the latest earnings-call transcript via Grok live-search.
+    Returns {ok, transcript, quarter, date} or {ok:False, status, error}."""
+    try:
+        out = analyst.call_grok(system_prompt=_GROK_CALL_SYSTEM,
+                                user_content=f"Company ticker: {ticker}. "
+                                             f"Retrieve its most recent reported earnings call transcript.",
+                                live_search=True) or ""
+    except Exception as e:
+        return {"ok": False, "status": -1, "error": f"grok error: {e!s:.160}"}
+    return _parse_grok_transcript(out)
+
+
+def _fetch_grok_call_transcript_for_quarter(ticker: str, year: int, quarter: int) -> dict:
+    """Retrieve ONE specific quarter's earnings-call transcript via Grok
+    live-search. Returns the same shape as _fetch_grok_call_transcript."""
+    qtag = f"{year}Q{quarter}"
+    sfd = f"{year}-{(quarter - 1) * 3 + 1:02d}-01"   # bias search to >= quarter start
+    try:
+        out = analyst.call_grok(
+            system_prompt=_GROK_CALL_Q_SYSTEM,
+            user_content=(f"Company ticker: {ticker}. Retrieve the earnings call "
+                          f"transcript for fiscal {qtag} (the call held to discuss "
+                          f"that quarter's results)."),
+            live_search=True, search_from_date=sfd) or ""
+    except Exception as e:
+        return {"ok": False, "status": -1, "error": f"grok error: {e!s:.160}"}
+    return _parse_grok_transcript(out, default_quarter=qtag)
 
 
 def _store_call_chunks(ticker: str, qtag: str, call_date, transcript: str) -> tuple:
@@ -18779,19 +18837,47 @@ def _sync_one_ticker_calls(ticker: str, max_quarters: int = 4) -> dict:
     {indexed, found:[quarters], errors:[str]}. Source defaults to Grok
     live-search (API Ninjas transcripts are premium-gated)."""
     if _CALL_SOURCE == "grok":
+        # Walk recent calendar quarters newest-first, fetching each MISSING one
+        # via Grok live-search. This fills the gap between the Hugging Face
+        # backfill cutoff (~Q1 2025) and the latest reported quarter — the old
+        # behaviour grabbed only the single most-recent call, so 3-4 quarters
+        # stayed perpetually missing. Already-indexed quarters are skipped for
+        # free (no Grok call), so re-running sync just extends forward cheaply.
         indexed, found, errors = 0, [], []
-        res = _fetch_grok_call_transcript(ticker)
-        if not res.get("ok"):
-            errors.append(f"[{res.get('status')}] {str(res.get('error'))[:120]}")
-            return {"indexed": 0, "found": [], "errors": errors}
-        qtag = res.get("quarter") or "latest"
-        if _already_indexed(ticker, qtag):
-            return {"indexed": 0, "found": [qtag], "errors": []}
-        n, err = _store_call_chunks(ticker, qtag, res.get("date"), res["transcript"])
-        if err:
-            errors.append(f"{qtag}: {err}")
-        else:
-            found.append(qtag); indexed += n
+        seen, new_count, consec_miss = set(), 0, 0
+        for (y, q) in _recent_quarters(max_quarters + 4):
+            if new_count >= max_quarters:
+                break
+            qtag = f"{y}Q{q}"
+            if _already_indexed(ticker, qtag):
+                if qtag not in found:
+                    found.append(qtag)
+                consec_miss = 0
+                continue
+            res = _fetch_grok_call_transcript_for_quarter(ticker, y, q)
+            if not res.get("ok"):
+                # The current (not-yet-reported) quarter is an expected miss;
+                # only give up after a couple of consecutive empty quarters
+                # once we've already landed at least one real transcript.
+                consec_miss += 1
+                st = res.get("status")
+                if st not in (200,):
+                    errors.append(f"{qtag}: [{st}] {str(res.get('error'))[:120]}")
+                if consec_miss >= 3 and found:
+                    break
+                continue
+            consec_miss = 0
+            act = res.get("quarter") or qtag            # trust Grok's detected quarter
+            if act in seen or _already_indexed(ticker, act):
+                if act not in found:
+                    found.append(act)
+                continue
+            seen.add(act)
+            n, err = _store_call_chunks(ticker, act, res.get("date"), res["transcript"])
+            if err:
+                errors.append(f"{act}: {err}")
+            else:
+                found.append(act); indexed += n; new_count += 1
         return {"indexed": indexed, "found": found, "errors": errors}
 
     # ── API Ninjas path (premium) — multi-quarter walk-back ──
