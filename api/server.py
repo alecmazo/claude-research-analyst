@@ -19450,6 +19450,308 @@ def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
             "ticker": tk, "attempts": attempts}
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Structured financial statements (SEC EDGAR XBRL → queryable Postgres store)
+# ─────────────────────────────────────────────────────────────────────────
+# The analyst report flow already pulls SEC XBRL data, but throws away the
+# parsed numbers after rendering them into prose. This store PERSISTS a
+# multi-year quarterly + annual history (income statement, balance sheet,
+# cash flow, comprehensive income) so it can be screened across companies,
+# charted per company, and cited consistently by the AI Analyst.
+# ═══════════════════════════════════════════════════════════════════════
+_fin_sync_jobs: dict[str, dict] = {}             # financials sync jobs
+
+# Extractor metric name (CamelCase) → DB column (snake_case). Insertion order
+# defines the column order used when binding values, so keep them in sync.
+_FIN_COLMAP = {
+    "Revenue": "revenue", "CostOfRevenue": "cost_of_revenue", "GrossProfit": "gross_profit",
+    "OperatingIncome": "operating_income", "NetIncome": "net_income",
+    "ComprehensiveIncome": "comprehensive_income",
+    "OtherComprehensiveIncome": "other_comprehensive_income",
+    "RnD": "rnd", "DepreciationAmortization": "dep_amort",
+    "OperatingCashFlow": "operating_cash_flow", "CapEx": "capex",
+    "FreeCashFlow": "free_cash_flow", "Dividends": "dividends", "BuybacksCash": "buybacks",
+    "EBITDA": "ebitda", "DilutedEPS": "diluted_eps", "DilutedShares": "diluted_shares",
+    "SharesOutstanding": "shares_outstanding", "Cash": "cash",
+    "ShortTermInvestments": "short_term_investments", "TotalAssets": "total_assets",
+    "TotalLiabilities": "total_liabilities", "StockholdersEquity": "stockholders_equity",
+    "LongTermDebt": "long_term_debt", "ShortTermDebt": "short_term_debt", "TotalDebt": "total_debt",
+    "GrossMargin": "gross_margin", "OperatingMargin": "operating_margin",
+    "NetMargin": "net_margin", "EBITDAMargin": "ebitda_margin",
+}
+
+
+def _ensure_financials_table() -> None:
+    """Create the company_financials store. Idempotent. PK is (ticker,
+    period_type, period_end) — robust to non-calendar filers whose fiscal-year
+    end coincides with a calendar-quarter end (the annual and the Q row share an
+    end date but differ in period_type)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    num_cols = ",\n                    ".join(f"{c} NUMERIC" for c in _FIN_COLMAP.values())
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS company_financials (
+                    ticker        TEXT NOT NULL,
+                    cik           TEXT,
+                    entity_name   TEXT,
+                    period_type   TEXT NOT NULL,
+                    fy            INTEGER NOT NULL,
+                    fp            TEXT NOT NULL,
+                    period_end    DATE NOT NULL,
+                    period_start  DATE,
+                    filed         DATE,
+                    accession     TEXT,
+                    derived       BOOLEAN DEFAULT FALSE,
+                    {num_cols},
+                    metrics_json  JSONB,
+                    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (ticker, period_type, period_end)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS company_fin_ticker_idx ON company_financials(ticker, period_end DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS company_fin_period_idx ON company_financials(period_type, period_end DESC)")
+            conn.commit()
+    except Exception as e:
+        print(f"❌ _ensure_financials_table failed: {e!s:.300}", flush=True)
+
+
+def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
+    """Upsert extractor history rows into company_financials. Returns count."""
+    if not rows:
+        return 0
+    meta_cols = ["ticker", "cik", "entity_name", "period_type", "fy", "fp",
+                 "period_end", "period_start", "filed", "accession", "derived"]
+    num_cols = list(_FIN_COLMAP.values())
+    all_cols = meta_cols + num_cols + ["metrics_json"]
+    ph = ",".join(["%s"] * len(all_cols))
+    upd = [c for c in all_cols if c not in ("ticker", "period_type", "period_end")]
+    set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in upd) + ", updated_at=now()"
+    sql = (f"INSERT INTO company_financials ({','.join(all_cols)}) VALUES ({ph}) "
+           f"ON CONFLICT (ticker, period_type, period_end) DO UPDATE SET {set_clause}")
+    def _num(v):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    n = 0
+    with _fund_conn() as conn, conn.cursor() as cur:
+        for r in rows:
+            end = r.get("end")
+            if not end or r.get("fy") is None:
+                continue
+            vals = [ticker.upper(), (cik or None), (entity_name or None),
+                    r.get("period_type"), int(r.get("fy")), r.get("fp"), end,
+                    (r.get("start") or None), (r.get("filed") or None),
+                    (r.get("accession") or None), bool(r.get("derived"))]
+            vals += [_num(r.get(metric)) for metric in _FIN_COLMAP]
+            vals.append(json.dumps({k: v for k, v in r.items() if k != "_tags"}, default=str))
+            cur.execute(sql, vals)
+            n += 1
+        conn.commit()
+    return n
+
+
+def _sync_one_ticker_financials(ticker: str, years_back: int = 5) -> dict:
+    """Pull SEC XBRL history for one ticker and persist it. Returns
+    {stored, periods, entity, errors}."""
+    import sec_edgar_xbrl as _edgar
+    try:
+        ua = analyst.get_sec_user_agent()
+    except Exception as e:
+        return {"stored": 0, "periods": 0, "errors": [f"SEC_USER_AGENT not set: {e!s:.80}"]}
+    try:
+        res = _edgar.extract_financials_history(ticker, years_back=years_back, user_agent=ua)
+    except Exception as e:
+        return {"stored": 0, "periods": 0, "errors": [f"{ticker}: {e!s:.140}"]}
+    rows = res.get("rows") or []
+    try:
+        stored = _store_financials_rows(ticker, res.get("cik"), res.get("entity_name"), rows)
+    except Exception as e:
+        return {"stored": 0, "periods": len(rows), "errors": [f"{ticker} store failed: {e!s:.120}"]}
+    return {"stored": stored, "periods": len(rows),
+            "entity": res.get("entity_name"), "errors": res.get("errors") or []}
+
+
+def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
+    """Background worker: build/refresh the structured financials store."""
+    def _set(**kw):
+        _fin_sync_jobs[job_id] = {**(_fin_sync_jobs.get(job_id) or {}), **kw,
+                                   "updated_at": time.time()}
+    _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
+         total=len(tickers), done=0, stored=0)
+    try:
+        _ensure_financials_table()
+        total_stored, names_ok, all_errors = 0, 0, []
+        for i, tk in enumerate(tickers):
+            _set(stage="syncing", label=f"📊 {tk} ({i+1}/{len(tickers)})…", done=i)
+            try:
+                r = _sync_one_ticker_financials(tk, years_back=years_back)
+                total_stored += r.get("stored", 0)
+                if r.get("stored"):
+                    names_ok += 1
+                for e in (r.get("errors") or [])[:1]:
+                    all_errors.append(f"{tk}: {e}")
+            except Exception as e:
+                all_errors.append(f"{tk}: {e!s:.100}")
+                print(f"⚠️ [fin sync {tk}] {e!s:.150}", flush=True)
+            _set(stored=total_stored)
+            time.sleep(0.2)   # be polite to SEC (≈ stays well under their rate cap)
+        if total_stored > 0:
+            label = f"✓ Stored {total_stored} periods across {names_ok} names"
+        else:
+            label = f"⚠ Stored 0 periods — {(all_errors[0] if all_errors else 'no data returned')[:150]}"
+        _set(stage="done", status="done", done=len(tickers), label=label,
+             result={"periods_stored": total_stored, "names": names_ok,
+                     "errors": all_errors[:12]})
+    except Exception as e:
+        print(f"❌ [fin sync {job_id}] {e!s:.300}", flush=True)
+        _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
+    """Time series for one ticker, newest first."""
+    where = "WHERE ticker=%s"
+    params = [ticker.upper()]
+    if period_type in ("annual", "quarter"):
+        where += " AND period_type=%s"
+        params.append(period_type)
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM company_financials {where} "
+                    f"ORDER BY period_end DESC", params)
+        return cur.fetchall() or []
+
+
+@app.post("/api/financials/sync")
+async def financials_sync(req: Request, background_tasks: BackgroundTasks):
+    """Build/refresh the structured financials store from SEC EDGAR XBRL.
+    Body: {tickers?, years_back?}. If tickers omitted, uses Saved Reports."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        if not analyst.get_sec_user_agent():
+            raise ValueError("no UA")
+    except Exception:
+        return JSONResponse({"ok": False, "error": "SEC_USER_AGENT not configured on server."}, status_code=400)
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    years_back = max(1, min(int((body or {}).get("years_back") or 5), 15))
+    tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
+    if not tickers:
+        try:
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
+                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
+        except Exception:
+            tickers = []
+    tickers = tickers[:80]
+    if not tickers:
+        return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
+    import uuid as _uuid
+    job_id = "FINSYNC_" + _uuid.uuid4().hex[:12]
+    _fin_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
+                               "started_at": time.time(), "updated_at": time.time(),
+                               "total": len(tickers), "done": 0, "stored": 0}
+    background_tasks.add_task(_run_financials_sync, job_id, tickers, years_back)
+    print(f"📊 [fin sync] queued {job_id}  {len(tickers)} tickers  yrs={years_back}", flush=True)
+    return {"ok": True, "job_id": job_id, "tickers": tickers}
+
+
+@app.get("/api/financials/sync/{job_id}")
+def financials_sync_status(job_id: str, request: Request):
+    """Poll a financials sync job."""
+    _claims_or_401(request)
+    job = _fin_sync_jobs.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
+    return {"ok": True, **job}
+
+
+@app.get("/api/financials/coverage")
+def financials_coverage(request: Request):
+    """What's in the store: per-ticker period counts and date range."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_financials_table()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT ticker, max(entity_name) AS entity_name,
+                       count(*) FILTER (WHERE period_type='quarter') AS quarters,
+                       count(*) FILTER (WHERE period_type='annual')  AS annuals,
+                       max(period_end) AS latest, min(period_end) AS earliest
+                  FROM company_financials GROUP BY ticker ORDER BY ticker
+            """)
+            rows = cur.fetchall() or []
+        return {"ok": True, "coverage": [{
+            "ticker": r["ticker"], "entity_name": r.get("entity_name"),
+            "quarters": int(r["quarters"] or 0), "annuals": int(r["annuals"] or 0),
+            "latest": r["latest"].isoformat() if r.get("latest") else None,
+            "earliest": r["earliest"].isoformat() if r.get("earliest") else None,
+        } for r in rows]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/financials/screen")
+def financials_screen(request: Request, period_type: str = "quarter",
+                      metric: str = "", op: str = "", value: float = None,
+                      order: str = "revenue", desc: bool = True, limit: int = 200):
+    """Cross-company snapshot: the latest period per ticker (one row each),
+    optionally filtered by a metric threshold and sorted. Use period_type=
+    'quarter' (default) or 'annual'. Screening is limited to the metrics in this
+    store — price-based ratios (P/E etc.) need the live market snapshot."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_financials_table()
+    pt = period_type if period_type in ("quarter", "annual") else "quarter"
+    valid_cols = set(_FIN_COLMAP.values())
+    order_col = order if order in valid_cols else "revenue"
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT DISTINCT ON (ticker) *
+                  FROM company_financials WHERE period_type=%s
+              ORDER BY ticker, period_end DESC
+            """, [pt])
+            rows = cur.fetchall() or []
+        # Optional metric filter (applied in Python; the set is small — one row/name).
+        if metric in valid_cols and op in ("gt", "lt", "gte", "lte") and value is not None:
+            def keep(r):
+                v = r.get(metric)
+                if v is None:
+                    return False
+                v = float(v)
+                return {"gt": v > value, "lt": v < value,
+                        "gte": v >= value, "lte": v <= value}[op]
+            rows = [r for r in rows if keep(r)]
+        rows.sort(key=lambda r: (r.get(order_col) is not None, float(r.get(order_col) or 0)),
+                  reverse=bool(desc))
+        return {"ok": True, "period_type": pt, "count": len(rows[:limit]),
+                "rows": rows[:max(1, min(int(limit or 200), 500))]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/financials/{ticker}")
+def financials_ticker(ticker: str, request: Request, period_type: str = "all"):
+    """Per-company financial history (time series), newest period first."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_financials_table()
+    try:
+        rows = _fin_rows_for_ticker(ticker, period_type)
+        return {"ok": True, "ticker": ticker.upper(),
+                "entity_name": (rows[0].get("entity_name") if rows else None),
+                "rows": rows}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
 # Separate dict for script-generation jobs so they don't collide with audio
 # generation (which uses _podcast_jobs). Schema is the same:
 #   {stage, current, total, label, status, started_at, [result], [error]}

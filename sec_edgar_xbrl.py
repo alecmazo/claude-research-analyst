@@ -87,6 +87,14 @@ TAG_PRIORITIES: dict[str, list[str]] = {
         "ProfitLoss",
         "NetIncomeLossAvailableToCommonStockholdersBasic",
     ],
+    "ComprehensiveIncome": [
+        "ComprehensiveIncomeNetOfTax",
+        "ComprehensiveIncomeNetOfTaxIncludingPortionAttributableToNoncontrollingInterest",
+    ],
+    "OtherComprehensiveIncome": [
+        "OtherComprehensiveIncomeLossNetOfTax",
+        "OtherComprehensiveIncomeLossNetOfTaxPortionAttributableToParent",
+    ],
     "DilutedEPS": [
         "EarningsPerShareDiluted",
         "IncomeLossFromContinuingOperationsPerDilutedShare",
@@ -694,9 +702,14 @@ def _build_quarter_row(facts: dict, fy: int, fp: str, *, is_ytd: bool) -> dict[s
         "GrossProfit",
         "OperatingIncome",
         "NetIncome",
+        "ComprehensiveIncome",
+        "OtherComprehensiveIncome",
         "OperatingCashFlow",
         "CapEx",
         "DepreciationAmortization",
+        "RnD",
+        "Dividends",
+        "BuybacksCash",
     ):
         hit, tag = _first_hit(facts, TAG_PRIORITIES[metric], picker)
         if hit:
@@ -742,6 +755,252 @@ def _build_quarter_row(facts: dict, fy: int, fp: str, *, is_ytd: bool) -> dict[s
         if rev:
             row["EBITDAMargin"] = row["EBITDA"] / rev
     return row
+
+
+# ---------------------------------------------------------------------------
+# Multi-year history extraction (for the persistent financials store)
+# ---------------------------------------------------------------------------
+# Income-statement / comprehensive-income items: in 10-Qs these are reported as
+# DISCRETE 3-month figures, so we read them straight from the 3-month duration
+# fact. Q4 (no standalone 10-Q) is derived as FY − (Q1+Q2+Q3).
+_INCOME_FLOW_METRICS = (
+    "Revenue", "CostOfRevenue", "GrossProfit", "OperatingIncome", "NetIncome",
+    "ComprehensiveIncome", "OtherComprehensiveIncome", "RnD",
+)
+# Cash-flow-statement items: in 10-Qs these are reported YEAR-TO-DATE
+# (cumulative), so a discrete quarter = YTD(this quarter) − YTD(prior quarter).
+# This differencing also yields Q4 directly (FY − 9-month YTD).
+_CASHFLOW_METRICS = (
+    "OperatingCashFlow", "CapEx", "Dividends", "BuybacksCash",
+    "DepreciationAmortization",
+)
+# Balance-sheet instants carried over from the fiscal-year-end snapshot.
+_INSTANT_METRICS = (
+    "Cash", "ShortTermInvestments", "TotalAssets", "TotalLiabilities",
+    "StockholdersEquity", "LongTermDebt", "ShortTermDebt", "TotalDebt",
+)
+
+
+def _derive_margins(row: dict) -> None:
+    """Fill GrossMargin/OperatingMargin/NetMargin/EBITDA(+margin) in place."""
+    rev = row.get("Revenue")
+    if "GrossProfit" not in row and row.get("Revenue") and row.get("CostOfRevenue"):
+        row["GrossProfit"] = row["Revenue"] - row["CostOfRevenue"]
+    if "FreeCashFlow" not in row and "OperatingCashFlow" in row and "CapEx" in row:
+        row["FreeCashFlow"] = row["OperatingCashFlow"] - row["CapEx"]
+    if "TotalDebt" not in row and (row.get("LongTermDebt") or row.get("ShortTermDebt")):
+        row["TotalDebt"] = (row.get("LongTermDebt", 0) or 0) + (row.get("ShortTermDebt", 0) or 0)
+    if rev and row.get("GrossProfit") is not None:
+        row["GrossMargin"] = row["GrossProfit"] / rev
+    if rev and row.get("OperatingIncome") is not None:
+        row["OperatingMargin"] = row["OperatingIncome"] / rev
+    if rev and row.get("NetIncome") is not None:
+        row["NetMargin"] = row["NetIncome"] / rev
+    if row.get("OperatingIncome") is not None and row.get("DepreciationAmortization"):
+        row["EBITDA"] = row["OperatingIncome"] + row["DepreciationAmortization"]
+        if rev:
+            row["EBITDAMargin"] = row["EBITDA"] / rev
+
+
+def _cal_quarter(end: str) -> str:
+    """Calendar quarter label from a period-end date (e.g. 2025-03-29 -> 'Q1')."""
+    mo = int(end[5:7])
+    return f"Q{(mo - 1) // 3 + 1}"
+
+
+def _pick_duration_by_end(facts: list[dict], end: str, lo: int, hi: int) -> dict | None:
+    """Latest-filed duration fact whose period END matches `end` and whose span
+    is within [lo, hi] days. Keying on END (not the XBRL fy/fp, which reflect the
+    FILING context and mislabel comparatives) is what makes the history accurate."""
+    best: dict | None = None
+    for r in facts:
+        if r.get("end") != end:
+            continue
+        d = _days(r.get("start", ""), r.get("end", ""))
+        if lo <= d <= hi and (best is None or r.get("filed", "") > best.get("filed", "")):
+            best = r
+    return best
+
+
+def _metric_by_end(facts: dict, metric: str, end: str, lo: int, hi: int,
+                   unit_pref: Iterable[str] = ("USD",)) -> tuple:
+    """First metric tag yielding a duration fact ending on `end`. (val, tag)."""
+    for tag in TAG_PRIORITIES[metric]:
+        hit = _pick_duration_by_end(_iter_facts(facts, tag, unit_pref), end, lo, hi)
+        if hit is not None:
+            return hit["val"], tag
+    return None, None
+
+
+def _build_period_by_end(facts: dict, end: str, start: str, *, annual: bool,
+                         filed: str = "", accession: str = "") -> dict[str, Any]:
+    """Build one period row keyed by its END date — income statement + balance
+    sheet + comprehensive income (NOT cash flow, which is filled separately via
+    YTD differencing). Flow items use the matching duration (annual ~365d,
+    quarter ~90d); balance-sheet items use the instant nearest the period end.
+    Labels are CALENDAR-derived from the end date."""
+    lo, hi = (340, 380) if annual else (80, 100)
+    row: dict[str, Any] = {
+        "period_type": "annual" if annual else "quarter",
+        "fy": int(end[:4]), "fp": "FY" if annual else _cal_quarter(end),
+        "end": end, "start": start, "filed": filed, "accession": accession,
+        "derived": False,
+    }
+    for metric in _INCOME_FLOW_METRICS:
+        val, tag = _metric_by_end(facts, metric, end, lo, hi)
+        if val is not None:
+            row[metric] = val
+            row.setdefault("_tags", {})[metric] = tag
+    eps_val, eps_tag = _metric_by_end(facts, "DilutedEPS", end, lo, hi, unit_pref=("USD/shares",))
+    if eps_val is not None:
+        row["DilutedEPS"] = eps_val
+    ds_val, _ = _metric_by_end(facts, "DilutedShares", end, lo, hi, unit_pref=("shares",))
+    if ds_val is not None:
+        row["DilutedShares"] = ds_val
+    for metric in _INSTANT_METRICS:
+        hit, _tag = _first_hit(facts, TAG_PRIORITIES[metric],
+                               lambda f: _pick_instant_near(f, end))
+        if hit:
+            row[metric] = hit["val"]
+    _derive_margins(row)
+    return row
+
+
+def _discrete_cashflow_by_end(facts: dict, metric: str) -> dict[str, dict]:
+    """For a cash-flow-statement metric (reported YTD in 10-Qs), return
+    {end: {"ytd": full-period value, "q": discrete-quarter value}}.
+
+    Discrete quarter = YTD(this end) − YTD(prior end in the SAME fiscal year),
+    where "same fiscal year" means the two YTD facts share a start date. The
+    first quarter of a year has no same-start predecessor, so its discrete value
+    equals its YTD. This also yields Q4 at the fiscal-year-end (FY − 9-mo YTD)."""
+    # Keep the longest-duration (i.e. YTD, not 3-month) fact per end date.
+    ytd: dict[str, tuple] = {}   # end -> (start, days, val, filed)
+    for tag in TAG_PRIORITIES[metric]:
+        for r in _iter_facts(facts, tag, ("USD",)):
+            e, s = r.get("end", ""), r.get("start", "")
+            d = _days(s, e)
+            if not e or d <= 0:
+                continue
+            cur = ytd.get(e)
+            if cur is None or d > cur[1] or (d == cur[1] and r.get("filed", "") > cur[3]):
+                ytd[e] = (s, d, r["val"], r.get("filed", ""))
+    ends = sorted(ytd)
+    out: dict[str, dict] = {}
+    for e in ends:
+        s, d, v, _f = ytd[e]
+        prev = None
+        for p in ends:                       # latest earlier end sharing this start
+            if p < e and ytd[p][0] == s:
+                prev = p
+        out[e] = {"ytd": v, "q": (v - ytd[prev][2]) if prev is not None else v}
+    return out
+
+
+def _duration_ends(facts: dict, metrics: tuple, lo: int, hi: int) -> dict[str, str]:
+    """Map period-END -> START for every duration fact (across the given metric
+    tags) whose span is within [lo, hi] days. Union across metrics so a period
+    is captured even if one tag is missing."""
+    ends: dict[str, str] = {}
+    for metric in metrics:
+        for tag in TAG_PRIORITIES[metric]:
+            for r in _iter_facts(facts, tag, ("USD",)):
+                e, s = r.get("end", ""), r.get("start", "")
+                if e and lo <= _days(s, e) <= hi:
+                    ends.setdefault(e, s)
+    return ends
+
+
+def extract_financials_history(
+    ticker: str,
+    years_back: int = 5,
+    user_agent: str | None = None,
+) -> dict[str, Any]:
+    """Pull a multi-year history of financials from SEC XBRL, keyed by period
+    END date (robust to the XBRL fy/fp filing-context quirk) and CALENDAR
+    labeled.
+
+    Returns {ticker, cik, entity_name, rows:[...], errors:[...]}. Each row is a
+    flat dict: period_type ('annual'|'quarter'), fy, fp ('FY'|'Q1'..'Q4'),
+    end, start, filed, accession, derived(bool), plus metric values (Revenue,
+    NetIncome, ComprehensiveIncome, OtherComprehensiveIncome, … margins).
+    Q1-Q3 come straight from 10-Qs; Q4 is derived as FY − (Q1+Q2+Q3)."""
+    cik = resolve_cik(ticker, user_agent=user_agent)
+    facts = fetch_company_facts(cik, user_agent=user_agent)
+    if not isinstance(facts, dict):
+        raise ValueError(f"SEC companyfacts API returned {type(facts).__name__} for {ticker}")
+    entity_name = facts.get("entityName") or ticker.upper()
+
+    from datetime import datetime as _dt
+    cutoff = _dt.utcnow().year - max(1, int(years_back or 5))
+    errors: list[str] = []
+
+    rev_ni = ("Revenue", "NetIncome")
+    annual_ends = {e: s for e, s in _duration_ends(facts, rev_ni, 340, 380).items()
+                   if int(e[:4]) >= cutoff}
+    quarter_ends = {e: s for e, s in _duration_ends(facts, rev_ni, 80, 100).items()
+                    if int(e[:4]) >= cutoff and e not in annual_ends}
+
+    # Pre-compute discrete cash-flow per end date (YTD differencing).
+    cf = {m: _discrete_cashflow_by_end(facts, m) for m in _CASHFLOW_METRICS}
+
+    rows: list[dict[str, Any]] = []
+    annuals: list[dict] = []
+    for end in sorted(annual_ends, reverse=True):
+        ar = _build_period_by_end(facts, end, annual_ends[end], annual=True)
+        for m in _CASHFLOW_METRICS:            # annual = full-year YTD value
+            if end in cf[m]:
+                ar[m] = cf[m][end]["ytd"]
+        _derive_margins(ar)
+        if ar.get("Revenue") is not None or ar.get("NetIncome") is not None:
+            annuals.append(ar)
+            rows.append(ar)
+    for end in sorted(quarter_ends, reverse=True):
+        qr = _build_period_by_end(facts, end, quarter_ends[end], annual=False)
+        for m in _CASHFLOW_METRICS:            # discrete quarter = YTD differencing
+            if end in cf[m]:
+                qr[m] = cf[m][end]["q"]
+        _derive_margins(qr)
+        if qr.get("Revenue") is not None or qr.get("NetIncome") is not None:
+            rows.append(qr)
+
+    # Derive Q4 at each fiscal-year end: income = FY − (Q1+Q2+Q3 discrete);
+    # cash flow = the differenced value at the FY end; balance sheet = FY-end
+    # instant (already on the annual row).
+    quarter_rows = [r for r in rows if r["period_type"] == "quarter"]
+    for ar in annuals:
+        e_fy, s_fy = ar.get("end", ""), ar.get("start", "")
+        if not (e_fy and s_fy):
+            continue
+        interim = [q for q in quarter_rows if s_fy < q.get("end", "") < e_fy]
+        if len(interim) < 3:
+            continue   # incomplete year — can't derive a clean Q4
+        q4: dict[str, Any] = {
+            "period_type": "quarter", "fy": int(e_fy[:4]), "fp": _cal_quarter(e_fy),
+            "end": e_fy, "start": (sorted(q.get("end", "") for q in interim)[-1]),
+            "filed": ar.get("filed", ""), "accession": ar.get("accession", ""),
+            "derived": True,
+        }
+        for metric in _INCOME_FLOW_METRICS:    # income Q4 = FY − interim
+            fyv = ar.get(metric)
+            parts = [q.get(metric) for q in interim if q.get(metric) is not None]
+            if fyv is not None and len(parts) == len(interim):
+                q4[metric] = fyv - sum(parts)
+        for metric in _CASHFLOW_METRICS:       # cash-flow Q4 = differenced at FY end
+            if e_fy in cf[metric]:
+                q4[metric] = cf[metric][e_fy]["q"]
+        if q4.get("Revenue") is None and q4.get("NetIncome") is None:
+            continue
+        for metric in _INSTANT_METRICS:        # Q4 instant = fiscal-year-end
+            if ar.get(metric) is not None:
+                q4[metric] = ar[metric]
+        _derive_margins(q4)
+        rows.append(q4)
+
+    if not rows:
+        errors.append(f"No XBRL periods found for {ticker} within {years_back}y window.")
+    return {"ticker": ticker.upper(), "cik": cik, "entity_name": entity_name,
+            "rows": rows, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
