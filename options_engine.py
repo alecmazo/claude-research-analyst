@@ -29,6 +29,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+import market_data as _market   # Tradier primary + yfinance fallback (normalized rows)
+
 # ── Tunable defaults ─────────────────────────────────────────────────────────
 DEFAULT_RISK_FREE = 0.043       # ~13-week T-bill; override per call if desired
 DEFAULT_DELTA_MAX = 0.30        # assignment-probability cap (per-scan overridable)
@@ -116,6 +118,31 @@ def _sell_premium(row) -> float | None:
     return bid if bid > 0 else None
 
 
+# ── Row accessors (work on normalized market_data rows AND raw yfinance rows) ──
+def _row_iv(row):
+    v = row.get("iv")
+    if v is None:
+        v = row.get("impliedVolatility")
+    try:
+        return float(v) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_oi(row) -> int:
+    return int(row.get("open_interest") or row.get("openInterest") or 0)
+
+
+def _row_delta(row):
+    """Real delta straight from the feed (Tradier provides greeks), or None so
+    the caller can fall back to a Black-Scholes estimate."""
+    d = row.get("delta")
+    try:
+        return float(d) if d is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Per-contract evaluation ──────────────────────────────────────────────────
 def _eval_call(row, spot, dte, r):
     """Covered call (sell an OTM call against 100 owned shares)."""
@@ -125,9 +152,11 @@ def _eval_call(row, spot, dte, r):
     prem = _sell_premium(row)
     if not prem:
         return None
-    iv = float(row.get("impliedVolatility") or 0) or None
+    iv = _row_iv(row)
     T = dte / 365.0
-    delta = bs_delta(spot, K, T, iv, r, "call") if iv else None
+    delta = _row_delta(row)                                # prefer the feed's real delta
+    if delta is None and iv:
+        delta = bs_delta(spot, K, T, iv, r, "call")
     static = prem / spot                                   # kept if not called
     if_called = (prem + (K - spot)) / spot                 # premium + cap gain
     ann = lambda x: x * (365.0 / dte)
@@ -144,7 +173,7 @@ def _eval_call(row, spot, dte, r):
         "breakeven": round(spot - prem, 2),
         "downside_cushion": round(prem / spot, 4),         # static loss buffer
         "pct_otm": round((K - spot) / spot, 4),            # room before assigned
-        "open_interest": int(row.get("openInterest") or 0),
+        "open_interest": _row_oi(row),
     }
 
 
@@ -156,9 +185,11 @@ def _eval_put(row, spot, dte, r):
     prem = _sell_premium(row)
     if not prem:
         return None
-    iv = float(row.get("impliedVolatility") or 0) or None
+    iv = _row_iv(row)
     T = dte / 365.0
-    delta = bs_delta(spot, K, T, iv, r, "put") if iv else None
+    delta = _row_delta(row)                                # prefer the feed's real delta
+    if delta is None and iv:
+        delta = bs_delta(spot, K, T, iv, r, "put")
     yield_on_cash = prem / K                                # return on secured cash
     ann = lambda x: x * (365.0 / dte)
     eff_buy = K - prem                                     # net cost if assigned
@@ -173,7 +204,7 @@ def _eval_put(row, spot, dte, r):
         "effective_buy_price": round(eff_buy, 2),
         "discount_to_spot": round((spot - eff_buy) / spot, 4),
         "pct_otm": round((spot - K) / spot, 4),
-        "open_interest": int(row.get("openInterest") or 0),
+        "open_interest": _row_oi(row),
     }
 
 
@@ -189,94 +220,128 @@ def _bucket_expiries(exps_dte: list) -> dict:
     return chosen
 
 
+def _best_in(rows, evalfn, yield_field, spot, dte, exp, delta_max, risk_free, min_oi):
+    """Best (highest annualized yield) sellable strike in a list of rows, within
+    [MIN_DELTA, delta_max] and the OTM band."""
+    best = None
+    for row in rows:
+        if _row_oi(row) < min_oi:
+            continue
+        c = evalfn(row, spot, dte, risk_free)
+        if (c and c["assignment_prob"] is not None
+                and MIN_DELTA <= c["assignment_prob"] <= delta_max
+                and c["pct_otm"] <= MAX_PCT_OTM
+                and (best is None or c[yield_field] > best[yield_field])):
+            c["expiration"], c["dte"] = exp, dte
+            best = c
+    return best
+
+
+def _atm_iv(call_rows, spot):
+    """IV of the call nearest the money — the vol-richness numerator."""
+    best, best_d = None, None
+    for row in call_rows:
+        try:
+            d = abs(float(row["strike"]) - spot)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if best_d is None or d < best_d:
+            best_d, best = d, _row_iv(row)
+    return best
+
+
+def _eval_bucket_chains(ticker, spot, hv, bucket_chains, delta_max=DEFAULT_DELTA_MAX,
+                        side="both", risk_free=DEFAULT_RISK_FREE,
+                        min_oi=MIN_OPEN_INTEREST) -> dict:
+    """Source-agnostic core. Evaluate pre-bucketed, pre-fetched chains.
+    bucket_chains = {bucket: (exp, dte, [normalized_rows])}."""
+    want_calls = side in ("both", "calls")
+    want_puts = side in ("both", "puts")
+    cc, csp, atm_iv = {}, {}, None
+    nearest_exp = (min(bucket_chains.values(), key=lambda v: v[1])[0]
+                   if bucket_chains else None)
+    for bucket, (exp, dte, rows) in bucket_chains.items():
+        calls = [r for r in rows if (r.get("option_type") or "").lower() == "call"]
+        puts = [r for r in rows if (r.get("option_type") or "").lower() == "put"]
+        if want_calls:
+            cc[bucket] = _best_in(calls, _eval_call, "static_return_annualized",
+                                  spot, dte, exp, delta_max, risk_free, min_oi)
+        if want_puts:
+            csp[bucket] = _best_in(puts, _eval_put, "yield_on_cash_annualized",
+                                   spot, dte, exp, delta_max, risk_free, min_oi)
+        if exp == nearest_exp and atm_iv is None:
+            atm_iv = _atm_iv(calls, spot)
+    iv_hv = round(atm_iv / hv, 3) if (atm_iv and hv) else None
+    out = {"ticker": ticker.strip().upper(), "ok": True,
+           "spot": round(spot, 2),
+           "realized_vol": round(hv, 4) if hv else None,
+           "atm_iv": round(atm_iv, 4) if atm_iv else None,
+           "iv_hv_ratio": iv_hv,
+           "expirations_scanned": {b: {"expiration": e, "dte": d}
+                                   for b, (e, d, _) in bucket_chains.items()}}
+    if want_calls:
+        out["covered_calls"] = cc
+    if want_puts:
+        out["cash_secured_puts"] = csp
+    return out
+
+
+def _spot_and_hv(ticker):
+    """Spot + trailing realized vol. yfinance history (one light call) gives hv;
+    fall back to a market_data quote for spot if history is unavailable."""
+    try:
+        import yfinance as yf
+        closes = yf.Ticker(ticker).history(period="3mo", auto_adjust=True)["Close"].dropna()
+        if len(closes):
+            return float(closes.iloc[-1]), realized_vol(closes)
+    except Exception:
+        pass
+    q = (_market.get_quotes([ticker]) or {}).get(ticker.upper()) or {}
+    if q.get("price") is None:
+        raise ValueError(f"{ticker}: no price")
+    return float(q["price"]), None
+
+
 def scan_ticker(ticker: str,
                 delta_max: float = DEFAULT_DELTA_MAX,
                 side: str = "both",
                 risk_free: float = DEFAULT_RISK_FREE,
                 min_oi: int = MIN_OPEN_INTEREST) -> dict:
-    """Scan one ticker. For EACH tenor bucket (weekly/monthly/quarterly) and
-    each requested side, returns the single best strike (highest annualized
-    yield) whose assignment probability sits within [MIN_DELTA, delta_max]."""
+    """Scan one ticker LIVE (Tradier chains → yfinance fallback). For EACH tenor
+    bucket returns the best sellable strike within [MIN_DELTA, delta_max]."""
     ticker = ticker.strip().upper()
-    out: dict = {"ticker": ticker, "ok": False}
+    out = {"ticker": ticker, "ok": False}
     try:
-        tk, spot, hv, exps = _fetch(ticker)
+        spot, hv = _spot_and_hv(ticker)
+        exps = _market.get_expirations(ticker)
     except Exception as e:
         out["error"] = str(e)
         return out
-
     now = datetime.now(timezone.utc)
     exps_dte = [(e, _dte(e, now)) for e in exps]
     exps_dte = [(e, d) for (e, d) in exps_dte if MIN_DTE <= d <= MAX_DTE]
     chosen = _bucket_expiries(exps_dte)
-    out.update(spot=round(spot, 2),
-               realized_vol=round(hv, 4) if hv else None,
-               expirations_scanned={b: {"expiration": e, "dte": d}
-                                    for b, (e, d) in chosen.items()})
     if not chosen:
+        out.update(spot=round(spot, 2), realized_vol=round(hv, 4) if hv else None)
         out["error"] = "no expirations in DTE window"
         return out
-
-    want_calls = side in ("both", "calls")
-    want_puts = side in ("both", "puts")
-    cc: dict = {}
-    csp: dict = {}
-    atm_iv = None
-    nearest_exp = min(chosen.values(), key=lambda x: x[1])[0]
-
+    bucket_chains = {}
     for bucket, (exp, dte) in chosen.items():
-        try:
-            chain = tk.option_chain(exp)
-        except Exception:
-            continue
-        if want_calls and chain.calls is not None:
-            best = None
-            for _, row in chain.calls.iterrows():
-                if int(row.get("openInterest") or 0) < min_oi:
-                    continue
-                c = _eval_call(row, spot, dte, risk_free)
-                if c and c["assignment_prob"] is not None and \
-                        MIN_DELTA <= c["assignment_prob"] <= delta_max and \
-                        c["pct_otm"] <= MAX_PCT_OTM and \
-                        (best is None or c["static_return_annualized"] >
-                         best["static_return_annualized"]):
-                    c["expiration"], c["dte"] = exp, dte
-                    best = c
-            cc[bucket] = best
-        if want_puts and chain.puts is not None:
-            best = None
-            for _, row in chain.puts.iterrows():
-                if int(row.get("openInterest") or 0) < min_oi:
-                    continue
-                p = _eval_put(row, spot, dte, risk_free)
-                if p and p["assignment_prob"] is not None and \
-                        MIN_DELTA <= p["assignment_prob"] <= delta_max and \
-                        p["pct_otm"] <= MAX_PCT_OTM and \
-                        (best is None or p["yield_on_cash_annualized"] >
-                         best["yield_on_cash_annualized"]):
-                    p["expiration"], p["dte"] = exp, dte
-                    best = p
-            csp[bucket] = best
-        # ATM implied vol from the nearest expiry → the vol-richness signal.
-        if exp == nearest_exp and atm_iv is None and \
-                chain.calls is not None and not chain.calls.empty:
-            try:
-                calls = chain.calls.copy()
-                calls["_d"] = (calls["strike"] - spot).abs()
-                atm_iv = float(calls.sort_values("_d").iloc[0]["impliedVolatility"])
-            except Exception:
-                pass
+        bucket_chains[bucket] = (exp, dte, _market.get_chain(ticker, exp) or [])
+    return _eval_bucket_chains(ticker, spot, hv, bucket_chains,
+                               delta_max, side, risk_free, min_oi)
 
-    # Vol richness: ATM IV vs trailing realized vol (the day-one IV-rank proxy).
-    iv_hv_ratio = round(atm_iv / hv, 3) if (atm_iv and hv) else None
-    out.update(atm_iv=round(atm_iv, 4) if atm_iv else None,
-               iv_hv_ratio=iv_hv_ratio)
-    if want_calls:
-        out["covered_calls"] = cc          # {weekly/monthly/quarterly: best|None}
-    if want_puts:
-        out["cash_secured_puts"] = csp
-    out["ok"] = True
-    return out
+
+def scan_ticker_chains(ticker, spot, hv, bucket_chains,
+                       delta_max=DEFAULT_DELTA_MAX, side="both",
+                       risk_free=DEFAULT_RISK_FREE, min_oi=MIN_OPEN_INTEREST):
+    """Scan from PRE-FETCHED chains (e.g. read from the persisted DB store), so
+    the server makes zero live data calls. bucket_chains = {bucket: (exp, dte, rows)}."""
+    try:
+        return _eval_bucket_chains(ticker, float(spot), hv, bucket_chains,
+                                   delta_max, side, risk_free, min_oi)
+    except Exception as e:
+        return {"ticker": str(ticker).upper(), "ok": False, "error": str(e)}
 
 
 # ── Portfolio sweep ──────────────────────────────────────────────────────────
