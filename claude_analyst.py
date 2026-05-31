@@ -4479,6 +4479,25 @@ def compute_unified_ytd(
             twrr_return_pct if twrr_return_pct is not None else md_return_pct
         )
 
+    # Sanity guard: a money-weighted (MWRR) return that contradicts the
+    # time-weighted return by an impossible margin for an UNLEVERED long account
+    # signals Modified-Dietz instability — a small Jan-1 base relative to large
+    # mid-year flows makes the (BMV + weighted_flows) denominator unreliable. Do
+    # not display a misleading figure (e.g. -77% beside a +16.65% TWRR over the
+    # same period); blank it with a reason instead. The log line below records
+    # the exact inputs so the real flow/baseline issue can be diagnosed.
+    xirr_note = None
+    if (xirr_return_pct is not None and twrr_return_pct is not None
+            and abs(xirr_return_pct - twrr_return_pct) > 50.0):
+        print(f"⚠️  Personal Return (MWRR={xirr_return_pct}%) contradicts TWRR "
+              f"({twrr_return_pct}%) — unstable. begin={begin_value} end={end_value} "
+              f"net_flow={net_flow}. Blanking Personal Return.", flush=True)
+        xirr_note = (
+            "Money-weighted return is unreliable for this account — it was funded "
+            "mid-year from a small starting base, so cash-flow timing dominates the "
+            "calculation. Use the time-weighted Portfolio Return as the headline.")
+        xirr_return_pct = None
+
     # ── Persist the MD/TWRR result + attribution + a snapshot for history ─────
     # `account_history` always holds the most-recent run (used by the YTD
     # detail view).  `ytd_snapshots` is an append-only list (cap 50) so the
@@ -4500,6 +4519,7 @@ def compute_unified_ytd(
         "md_return_pct":       float(md_return_pct),
         "twrr_return_pct":     float(twrr_return_pct)   if twrr_return_pct   is not None else None,
         "xirr_return_pct":     float(xirr_return_pct)   if xirr_return_pct   is not None else None,
+        "xirr_note":           xirr_note,
         "attribution":         attr.get("attribution", []),
         "monthly_chart":       monthly_chart,
         "monthly_chart_error": monthly_chart_error,
@@ -4582,6 +4602,7 @@ def compute_unified_ytd(
         "md_return_pct":     md_return_pct,
         "twrr_return_pct":   twrr_return_pct,
         "xirr_return_pct":   xirr_return_pct,
+        "xirr_note":         xirr_note,
         "begin_value":       round(float(begin_value), 2),
         "ytd_beg_balance":   round(float(begin_value), 2),   # alias used by fund overview + frontend
         "end_value":         round(end_value, 2),

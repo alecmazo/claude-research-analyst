@@ -13124,7 +13124,15 @@
     const mdPct   = twrrPct != null ? twrrPct
                   : (data.md_return_pct != null ? data.md_return_pct
                   : (cachedYtdPct != null ? cachedYtdPct : null));
-    const xirrPct = data.xirr_return_pct != null ? data.xirr_return_pct : null;
+    // Display-time guard (also catches CACHED runs from before the server guard):
+    // a money-weighted return contradicting TWRR by an impossible margin for an
+    // unlevered long account is a Modified-Dietz artifact — blank it.
+    let xirrPct = data.xirr_return_pct != null ? data.xirr_return_pct : null;
+    if (xirrPct != null && twrrPct != null && Math.abs(xirrPct - twrrPct) > 50) {
+      data = Object.assign({}, data, { xirr_note: data.xirr_note ||
+        'Money-weighted return is unreliable for this account — funded mid-year from a small base, so cash-flow timing dominates. Use the time-weighted Portfolio Return.' });
+      xirrPct = null;
+    }
     const spyPts = spy && spy.points ? spy.points : [];
     const spyPct = spyPts.length ? spyPts[spyPts.length - 1].ytd_pct : null;
     const fmtP   = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
@@ -13198,7 +13206,15 @@
         }
       } else {
         xirrEl.textContent = '—';
-        xirrEl.title = 'Personal Return requires cash flow history (activity CSV)';
+        xirrEl.style.color = 'var(--mid)';
+        // data.xirr_note is set when the money-weighted figure was blanked as
+        // unreliable (mid-year funding from a low base → unstable Modified Dietz).
+        xirrEl.title = data.xirr_note || 'Personal Return requires cash flow history (activity CSV)';
+        if (xirrLabel) {
+          xirrLabel.textContent = data.xirr_note
+            ? 'Unreliable for this account — use Portfolio Return'
+            : 'Money-weighted · same period as Portfolio Return';
+        }
       }
     }
 

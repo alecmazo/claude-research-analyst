@@ -6425,16 +6425,14 @@ def _builder_fetch_candidates() -> list[dict]:
     print(f"[builder] candidate pool: {len(own_tickers)} report subjects + "
           f"{len(comp_universe)} comp tickers (validated)")
 
-    # ── 3. Quotes + meta for the whole universe: PERSISTED STORE FIRST
-    #     (instant, no live call); live only for names not yet synced. db_meta
-    #     supplies sector / name / analyst-target so this loop makes no live
-    #     yfinance calls when the store is populated (the durable hang fix).
+    # ── 3. Quotes + meta for the whole universe: PURELY from the persisted store.
+    #     NO live calls in this request path — a live batch_quotes for 100+
+    #     un-synced tickers (18s) blew past the endpoint's 12s cap and left the
+    #     pool EMPTY. Report subjects always appear regardless (their targets
+    #     come from analyst_reports); sectors/prices fill in from the store, which
+    #     the market autosync keeps fresh.
     all_tickers = list(own_tickers) + list(comp_universe.keys())
-    quotes = dict(_db_quotes(all_tickers))
-    missing_q = [t for t in all_tickers if t not in quotes]
-    if missing_q and time.time() < deadline:
-        quotes.update(_builder_call_timeout(
-            lambda: batch_quotes(",".join(missing_q)), 18.0, {}) or {})
+    quotes = _db_quotes(all_tickers)
     db_meta = _db_meta(all_tickers)
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
@@ -6446,10 +6444,8 @@ def _builder_fetch_candidates() -> list[dict]:
         dm = db_meta.get(tk)
         if dm and dm.get("sector"):
             sector_raw, name = dm["sector"], (dm.get("name") or tk)
-        elif time.time() < deadline:
-            meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
-            sector_raw = meta.get("sector") or "Unknown"
-            name = meta.get("name") or tk
+        elif dm and dm.get("name"):
+            name = dm["name"]
         sector = _builder_classify_sector(sector_raw)
         q = quotes.get(tk) or {}
         # Conservative (less-aggressive) target/upside when both LLMs ran.
@@ -6488,10 +6484,8 @@ def _builder_fetch_candidates() -> list[dict]:
         dm = db_meta.get(tk)
         if dm and dm.get("sector"):
             sector_raw, name = dm["sector"], (dm.get("name") or tk)
-        elif time.time() < deadline:
-            meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
-            sector_raw = meta.get("sector") or "Unknown"
-            name = meta.get("name") or tk
+        elif dm and dm.get("name"):
+            name = dm["name"]
         sector = _builder_classify_sector(sector_raw)
 
         q = quotes.get(tk) or {}
@@ -6501,14 +6495,6 @@ def _builder_fetch_candidates() -> list[dict]:
         dm_target = (dm or {}).get("analyst_target")
         if dm_target:
             target = float(dm_target)
-        elif time.time() < deadline and _YFINANCE_OK:
-            info = _builder_call_timeout(lambda: (yf.Ticker(tk).info or {}), 4.0, {}) or {}
-            t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
-            try:
-                if t and float(t) > 0:
-                    target = float(t)
-            except Exception:
-                pass
 
         upside = None
         if target is not None and cur_price and cur_price > 0:
