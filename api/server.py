@@ -6464,94 +6464,106 @@ def _builder_fetch_candidates() -> list[dict]:
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
     for r in rows:
-        tk = (r["ticker"] or "").strip().upper()
-        if not tk: continue
-        sector_raw, name = "Unknown", tk
-        dm = db_meta.get(tk)
-        if dm and dm.get("sector"):
-            sector_raw, name = dm["sector"], (dm.get("name") or tk)
-        elif dm and dm.get("name"):
-            name = dm["name"]
-        sector = _builder_classify_sector(sector_raw)
-        q = quotes.get(tk) or {}
-        # Conservative (less-aggressive) target/upside when both LLMs ran.
-        pt_g = float(r["price_target"])         if r["price_target"]         is not None else None
-        pt_c = float(r["claude_price_target"])  if r["claude_price_target"]  is not None else None
-        up_g = float(r["upside_pct"])           if r["upside_pct"]           is not None else None
-        up_c = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
-        eff_pt = min(pt_g, pt_c) if (pt_g is not None and pt_c is not None) else (pt_g if pt_g is not None else pt_c)
-        eff_up = min(up_g, up_c) if (up_g is not None and up_c is not None) else (up_g if up_g is not None else up_c)
-        # If upside wasn't stored, derive it from the target + current price.
-        if eff_up is None and eff_pt and q.get("price"):
-            try:
-                _px = float(q["price"])
-                if _px > 0:
-                    eff_up = round((eff_pt - _px) / _px * 100, 2)
-            except Exception:
-                pass
-        providers = []
-        if pt_g is not None: providers.append("grok")
-        if pt_c is not None: providers.append("claude")
-        out.append({
-            "ticker":        tk,
-            "name":          name,
-            "sector":        sector,
-            "sector_raw":    sector_raw,
-            "rating":        r["rating"] or r.get("claude_rating"),
-            "price_target":  eff_pt,
-            "upside_pct":    eff_up,
-            "current_price": float(q.get("price")) if q.get("price") is not None else None,
-            "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
-            "generated_at":  r["generated_at"].isoformat() if r["generated_at"] else None,
-            "source":        "report",
-            "from_report":   None,
-            "providers":     providers,
-            "grok_target":   pt_g, "claude_target": pt_c,
-        })
+        try:
+            tk = (r["ticker"] or "").strip().upper()
+            if not tk:
+                continue
+            sector_raw, name = "Unknown", tk
+            dm = db_meta.get(tk)
+            if dm and dm.get("sector"):
+                sector_raw, name = dm["sector"], (dm.get("name") or tk)
+            elif dm and dm.get("name"):
+                name = dm["name"]
+            sector = _builder_classify_sector(sector_raw)
+            q = quotes.get(tk) or {}
+            # Conservative (less-aggressive) target/upside when both LLMs ran.
+            pt_g = float(r["price_target"])         if r["price_target"]         is not None else None
+            pt_c = float(r["claude_price_target"])  if r["claude_price_target"]  is not None else None
+            up_g = float(r["upside_pct"])           if r["upside_pct"]           is not None else None
+            up_c = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
+            eff_pt = min(pt_g, pt_c) if (pt_g is not None and pt_c is not None) else (pt_g if pt_g is not None else pt_c)
+            eff_up = min(up_g, up_c) if (up_g is not None and up_c is not None) else (up_g if up_g is not None else up_c)
+            # If upside wasn't stored, derive it from the target + current price.
+            if eff_up is None and eff_pt and q.get("price"):
+                try:
+                    _px = float(q["price"])
+                    if _px > 0:
+                        eff_up = round((eff_pt - _px) / _px * 100, 2)
+                except Exception:
+                    pass
+            providers = []
+            if pt_g is not None: providers.append("grok")
+            if pt_c is not None: providers.append("claude")
+            _gen = r["generated_at"]
+            out.append({
+                "ticker":        tk,
+                "name":          name,
+                "sector":        sector,
+                "sector_raw":    sector_raw,
+                "rating":        r["rating"] or r.get("claude_rating"),
+                "price_target":  eff_pt,
+                "upside_pct":    eff_up,
+                "current_price": float(q.get("price")) if q.get("price") is not None else None,
+                "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
+                "generated_at":  _gen.isoformat() if hasattr(_gen, "isoformat") else (str(_gen) if _gen else None),
+                "source":        "report",
+                "from_report":   None,
+                "providers":     providers,
+                "grok_target":   pt_g, "claude_target": pt_c,
+            })
+        except Exception as _e:
+            _BUILDER_CANDIDATES_DIAG.setdefault("row_errors", []).append(
+                f"{(r.get('ticker') or '?')}: {type(_e).__name__}: {_e!s:.80}")
+            continue
 
     # ── 5. Build candidate dicts for comp tickers ────────────────────────
     # For comps, derive upside_pct from yfinance analyst targetMeanPrice
     # when available. If neither current price nor target is known, skip
     # the comp (no signal for the EV-weighted allocator).
     for tk, source_report in list(comp_universe.items())[:60]:
-        sector_raw, name = "Unknown", tk
-        dm = db_meta.get(tk)
-        if dm and dm.get("sector"):
-            sector_raw, name = dm["sector"], (dm.get("name") or tk)
-        elif dm and dm.get("name"):
-            name = dm["name"]
-        sector = _builder_classify_sector(sector_raw)
+        try:
+            sector_raw, name = "Unknown", tk
+            dm = db_meta.get(tk)
+            if dm and dm.get("sector"):
+                sector_raw, name = dm["sector"], (dm.get("name") or tk)
+            elif dm and dm.get("name"):
+                name = dm["name"]
+            sector = _builder_classify_sector(sector_raw)
 
-        q = quotes.get(tk) or {}
-        cur_price = float(q.get("price")) if q.get("price") is not None else None
+            q = quotes.get(tk) or {}
+            cur_price = float(q.get("price")) if q.get("price") is not None else None
 
-        target = None
-        dm_target = (dm or {}).get("analyst_target")
-        if dm_target:
-            target = float(dm_target)
+            target = None
+            dm_target = (dm or {}).get("analyst_target")
+            if dm_target:
+                target = float(dm_target)
 
-        upside = None
-        if target is not None and cur_price and cur_price > 0:
-            upside = round((target - cur_price) / cur_price * 100, 2)
+            upside = None
+            if target is not None and cur_price and cur_price > 0:
+                upside = round((target - cur_price) / cur_price * 100, 2)
 
-        # Skip comps with no usable signal (no target AND no upside)
-        if upside is None:
+            # Skip comps with no usable signal (no target AND no upside)
+            if upside is None:
+                continue
+
+            out.append({
+                "ticker":        tk,
+                "name":          name,
+                "sector":        sector,
+                "sector_raw":    sector_raw,
+                "rating":        None,
+                "price_target":  target,
+                "upside_pct":    upside,
+                "current_price": cur_price,
+                "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
+                "generated_at":  None,
+                "source":        "comp",
+                "from_report":   source_report,
+            })
+        except Exception as _e:
+            _BUILDER_CANDIDATES_DIAG.setdefault("row_errors", []).append(
+                f"comp {tk}: {type(_e).__name__}: {_e!s:.80}")
             continue
-
-        out.append({
-            "ticker":        tk,
-            "name":          name,
-            "sector":        sector,
-            "sector_raw":    sector_raw,
-            "rating":        None,
-            "price_target":  target,
-            "upside_pct":    upside,
-            "current_price": cur_price,
-            "day_pct":       float(q.get("pct_change")) if q.get("pct_change") is not None else None,
-            "generated_at":  None,
-            "source":        "comp",
-            "from_report":   source_report,
-        })
 
     _BUILDER_CANDIDATES_DIAG.update(returned=len(out),
                                     unknown_sector=sum(1 for c in out if c.get("sector") == "Unknown"))
