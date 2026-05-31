@@ -6243,28 +6243,89 @@ def _builder_classify_sector(raw_sector: str) -> str:
 # Process-global sector cache so a ticker is resolved at most once per process.
 # "" = negative cache (resolved to nothing — don't retry this process).
 _BUILDER_SECTOR_CACHE: dict = {}
-_BUILDER_SECTOR_RESOLVE_CAP = 10   # max LIVE sector resolves per candidates request
-                                   # (kept under the 20s endpoint cap; the rest
-                                   # warm via repeat Refresh + the 30-min autosync,
-                                   # and every resolved sector is persisted)
+_BUILDER_SECTOR_RESOLVE_CAP = 30   # max SIC resolves/request (~0.3s each via EDGAR,
+                                   # well under the 20s cap; persisted so it's a
+                                   # one-time cost — a couple Refresh clicks warm all)
+_BUILDER_EDGAR_ID = [False]        # whether edgar set_identity has been called
+
+
+def _sic_to_sector(s: int):
+    """Map an SEC SIC code to a canonical Builder sector. Coarse but real —
+    enough to bucket a candidate correctly for sector-weighted allocation."""
+    if   100  <= s <= 999:  return "Consumer Defensive"      # agriculture
+    elif 1000 <= s <= 1299: return "Basic Materials"         # metal mining
+    elif 1300 <= s <= 1399: return "Energy"                  # oil & gas extraction
+    elif 1400 <= s <= 1499: return "Basic Materials"         # nonmetallic mining
+    elif 1500 <= s <= 1799: return "Industrials"             # construction
+    elif 2000 <= s <= 2199: return "Consumer Defensive"      # food & beverage
+    elif 2200 <= s <= 2399: return "Consumer Cyclical"       # textiles/apparel
+    elif 2400 <= s <= 2599: return "Consumer Cyclical"       # lumber/furniture
+    elif 2600 <= s <= 2699: return "Basic Materials"         # paper
+    elif 2700 <= s <= 2799: return "Communication Services"  # publishing
+    elif 2800 <= s <= 2829: return "Basic Materials"         # industrial chemicals
+    elif 2830 <= s <= 2836: return "Healthcare"              # drugs/biotech
+    elif 2840 <= s <= 2899: return "Basic Materials"         # chemicals
+    elif 2900 <= s <= 2999: return "Energy"                  # petroleum refining
+    elif 3000 <= s <= 3299: return "Consumer Cyclical"       # rubber/plastics/glass
+    elif 3300 <= s <= 3399: return "Basic Materials"         # primary metals
+    elif 3400 <= s <= 3569: return "Industrials"             # metal products/machinery
+    elif 3570 <= s <= 3579: return "Technology"              # computers
+    elif 3580 <= s <= 3669: return "Industrials"             # industrial/electrical
+    elif 3670 <= s <= 3699: return "Technology"              # electronics/semiconductors
+    elif 3700 <= s <= 3799: return "Consumer Cyclical"       # motor vehicles/aerospace
+    elif 3800 <= s <= 3879: return "Healthcare"              # medical/measuring instruments
+    elif 3880 <= s <= 3999: return "Industrials"
+    elif 4000 <= s <= 4799: return "Industrials"             # transportation
+    elif 4800 <= s <= 4899: return "Communication Services"  # telecom
+    elif 4900 <= s <= 4999: return "Utilities"
+    elif 5000 <= s <= 5199: return "Industrials"             # wholesale
+    elif 5200 <= s <= 5999: return "Consumer Cyclical"       # retail
+    elif 6000 <= s <= 6199: return "Financials"              # banks
+    elif 6200 <= s <= 6299: return "Financials"              # securities/brokers
+    elif 6300 <= s <= 6499: return "Financials"              # insurance
+    elif 6500 <= s <= 6599: return "Real Estate"
+    elif s == 6798:         return "Real Estate"             # REITs
+    elif 6700 <= s <= 6799: return "Financials"              # holding/investment
+    elif 7000 <= s <= 7299: return "Consumer Cyclical"       # hotels/personal services
+    elif 7300 <= s <= 7369: return "Industrials"             # business services
+    elif 7370 <= s <= 7379: return "Technology"              # software/data processing
+    elif 7380 <= s <= 7399: return "Industrials"
+    elif 7400 <= s <= 7999: return "Consumer Cyclical"       # services/entertainment
+    elif 8000 <= s <= 8099: return "Healthcare"              # health services
+    elif 8100 <= s <= 8999: return "Industrials"             # professional services
+    return None
 
 
 def _builder_resolve_sector_live(tk: str):
-    """Resolve (sector, industry) for a ticker WITHOUT a market sync, via
-    analyst.fetch_sector_and_industry — which has an un-throttled SEC-SIC
-    fallback (works even when Yahoo blocks the cloud IP). Sets the process
-    cache. Returns (sector, industry) or (None, None). The caller checks the
-    cache + budget first and hard-times this with _builder_call_timeout."""
+    """Resolve a canonical sector for a ticker via the SEC SIC code (EDGAR) —
+    FAST (~0.3s) and un-throttled (NOT Yahoo, which hangs on the cloud IP and
+    used to time this out and empty the whole pool). Sets the process cache.
+    Returns (sector, None) or (None, None). Caller checks cache + budget first
+    and hard-times this with _builder_call_timeout."""
+    if not _BUILDER_EDGAR_ID[0]:
+        try:
+            ua = analyst.get_sec_user_agent()
+            if not ua:
+                _BUILDER_SECTOR_CACHE[tk] = ""
+                return None, None
+            from edgar import set_identity
+            set_identity(ua)
+            _BUILDER_EDGAR_ID[0] = True
+        except Exception as e:
+            print(f"[builder] edgar set_identity failed: {e!s:.100}", flush=True)
+            _BUILDER_SECTOR_CACHE[tk] = ""
+            return None, None
     try:
-        sec, ind = analyst.fetch_sector_and_industry(tk)   # -> tuple(str, str)
+        from edgar import Company
+        sic = Company(tk).sic
+        sec = _sic_to_sector(int(sic)) if sic is not None else None
     except Exception as e:
-        print(f"[builder] resolve_sector failed {tk}: {e!s:.120}", flush=True)
+        print(f"[builder] resolve_sector(SIC) failed {tk}: {e!s:.100}", flush=True)
         _BUILDER_SECTOR_CACHE[tk] = ""
         return None, None
-    sec = (sec or "").strip() or None
-    if sec and sec.lower() != "unknown":
+    if sec:
         _BUILDER_SECTOR_CACHE[tk] = sec
-        return sec, ((ind or "").strip() or None)
+        return sec, None
     _BUILDER_SECTOR_CACHE[tk] = ""
     return None, None
 
