@@ -104,18 +104,21 @@ def _dte(exp: str, now: datetime) -> int:
 
 
 def _sell_premium(row) -> float | None:
-    """Premium a SELLER realistically receives = the BID (Fidelity's 'Sell at X').
+    """Premium a SELLER realistically receives.
 
-    We SELL options in the wheel, so the bid is what actually fills. The bid/ask
-    MIDPOINT is a theoretical fair value you rarely capture when selling — using
-    it overstates every premium (and yield) by roughly half the spread. That was
-    the #1 source of prices reading higher than a real broker chain.
+    During MARKET HOURS this is the BID (Fidelity's 'Sell at X') — what actually
+    fills. The bid/ask MIDPOINT overstates it by ~half the spread, so we avoid it.
 
-    Returns None when there's no bid: you can't sell into no buyer, and such
-    illiquid strikes otherwise fall back to a stale lastPrice that is 'nowhere
-    near' a real fill (the IBRX-type discrepancy)."""
+    When the market is CLOSED (weekends / after-hours) the bid is 0 for the whole
+    chain; falling back to the last traded price keeps the scan working (a stale
+    estimate, not a live fill) instead of dropping every strike and showing an
+    empty wheel. Mark of the estimate: bid==0. Returns None only when there's no
+    bid AND no last trade (a truly dead strike)."""
     bid = float(row.get("bid") or 0)
-    return bid if bid > 0 else None
+    if bid > 0:
+        return bid
+    last = float(row.get("last") or row.get("lastPrice") or 0)
+    return last if last > 0 else None
 
 
 # ── Row accessors (work on normalized market_data rows AND raw yfinance rows) ──

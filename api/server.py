@@ -20155,13 +20155,13 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
         rows = []
         for i, tk in enumerate(universe):
             _set(label=f"⚙ {tk} ({i+1}/{total})…", done=i)
-            # Prefer the persisted store (instant, no live call); fall back to a
-            # live scan (per-name timeout) for any name not yet synced.
-            r = _db_scan_ticker(tk, delta_max, side="both")
-            if r is None:
-                r = _builder_call_timeout(
-                    lambda: _opt.scan_ticker(tk, delta_max=delta_max, side="both"),
-                    20.0, {"ticker": tk, "ok": False, "error": "timed out"})
+            # ALWAYS scan LIVE (Tradier → yfinance) for fresh, COMPLETE chains
+            # (incl. weekly expiries) across every name. The persisted store is
+            # sparse/stale for options, so reading it first produced a degraded
+            # pool (a few held names, no weeklies). Live is what worked.
+            r = _builder_call_timeout(
+                lambda: _opt.scan_ticker(tk, delta_max=delta_max, side="both"),
+                25.0, {"ticker": tk, "ok": False, "error": "timed out"})
             if not isinstance(r, dict):
                 r = {"ticker": tk, "ok": False, "error": "no result"}
             r["held"] = tk in held

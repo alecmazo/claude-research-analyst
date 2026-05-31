@@ -70,9 +70,20 @@ def _as_list(x):
 
 def _f(v):
     try:
-        return float(v)
+        v = float(v)
+        return v if v == v else None      # NaN (v != v) → None
     except (TypeError, ValueError):
         return None
+
+
+def _i(v):
+    """Safe int: handles NaN/None (e.g. weekend volume/OI). int(NaN or 0) RAISES
+    because NaN is truthy — that one error used to wipe an entire chain."""
+    try:
+        v = float(v)
+        return int(v) if v == v else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 # ── Tradier: quotes ──────────────────────────────────────────────────────────
@@ -115,8 +126,8 @@ def _norm_tradier_option(o: dict) -> dict:
         "last": _f(o.get("last")),
         "iv": _f(g.get("mid_iv")) or _f(g.get("smv_vol")),
         "delta": _f(g.get("delta")),
-        "open_interest": int(o.get("open_interest") or 0),
-        "volume": int(o.get("volume") or 0),
+        "open_interest": _i(o.get("open_interest")),
+        "volume": _i(o.get("volume")),
         "source": "tradier",
     }
 
@@ -165,8 +176,8 @@ def _norm_yf_option(row, opt_type: str) -> dict:
         "last": _f(g("lastPrice")),
         "iv": _f(g("impliedVolatility")),
         "delta": None,                                 # yfinance has no greeks
-        "open_interest": int(g("openInterest") or 0),
-        "volume": int(g("volume") or 0),
+        "open_interest": _i(g("openInterest")),
+        "volume": _i(g("volume")),
         "source": "yfinance",
     }
 
