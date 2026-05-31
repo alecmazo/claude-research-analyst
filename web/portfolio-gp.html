@@ -4311,13 +4311,16 @@
     </div>
     <div id="opt-status" style="margin-top:10px;font-size:12px;color:var(--dim);">Set your max assignment Δ and run a scan. Holdings are scanned for covered calls; your watchlist for cash-secured puts.</div>
     <section class="panel" style="margin-top:14px;">
-      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📈 Covered calls <span style="font-weight:500;color:var(--mid);">— on names you hold</span></h3>
-      <div id="opt-cc"></div>
+      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📈 Covered calls <span style="font-weight:500;color:var(--mid);">— holdings first, then your universe</span></h3>
+      <div id="opt-cc" style="overflow:auto;max-height:60vh;"></div>
     </section>
-    <section class="panel" style="margin-top:14px;">
-      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📉 Cash-secured puts <span style="font-weight:500;color:var(--mid);">— across watchlist + saved reports</span></h3>
-      <div id="opt-csp"></div>
-    </section>
+    <details class="panel" id="opt-csp-details" style="margin-top:14px;padding:0;">
+      <summary style="cursor:pointer;list-style:none;padding:14px 16px;font-size:13px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+        <span id="opt-csp-caret" style="font-size:11px;color:var(--mid);">▸</span>
+        📉 Cash-secured puts <span style="font-weight:500;color:var(--mid);">— across watchlist + saved reports (click to expand)</span>
+      </summary>
+      <div id="opt-csp" style="overflow:auto;max-height:60vh;padding:0 16px 14px;"></div>
+    </details>
     <div style="margin-top:10px;font-size:11px;color:var(--dim);line-height:1.5;">
       Each tenor (weekly / monthly / quarterly) shows the best strike to <b>sell</b>: highest annualized premium yield with assignment probability ≤ your Δ cap.
       Rows are <b>ranked by the weekly annualized yield</b> (names with only a monthly/quarterly setup trail below). Covered calls are limited to names you <b>HOLD</b> (you must own the shares); cash-secured puts span your whole universe — watchlist + saved reports.
@@ -5012,6 +5015,14 @@
     if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', _optRunScan); }
     const sbtn = document.getElementById('opt-sync-btn');
     if (sbtn && !sbtn._wired) { sbtn._wired = true; sbtn.addEventListener('click', _optRunSync); }
+    const det = document.getElementById('opt-csp-details');
+    if (det && !det._wired) {
+      det._wired = true;
+      det.addEventListener('toggle', () => {
+        const c = document.getElementById('opt-csp-caret');
+        if (c) c.textContent = det.open ? '▾' : '▸';
+      });
+    }
   }
   let _optSyncPoll = null;
   async function _optRunSync() {

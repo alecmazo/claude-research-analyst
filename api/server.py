@@ -19965,10 +19965,14 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
         def _has(r, k):
             m = r.get(k) or {}
             return any(m.get(b) for b in ("weekly", "monthly", "quarterly"))
-        cc_rows = [r for r in rows if r.get("held") and _has(r, "covered_calls")]
+        # Covered calls span the WHOLE universe (not just holdings) so the table
+        # isn't sparse — names you HOLD are badged + ranked first (actionable
+        # now), the rest are forward-looking (a call you'd sell once you own it).
+        cc_rows = [r for r in rows if _has(r, "covered_calls")]
         csp_rows = [r for r in rows if _has(r, "cash_secured_puts")]
-        cc_rows.sort(key=lambda r: _wheel_rank_key(r, "covered_calls",
-                                                   "static_return_annualized"), reverse=True)
+        cc_rows.sort(key=lambda r: (1 if r.get("held") else 0,
+                                    _wheel_rank_key(r, "covered_calls",
+                                                    "static_return_annualized")), reverse=True)
         csp_rows.sort(key=lambda r: _wheel_rank_key(r, "cash_secured_puts",
                                                     "yield_on_cash_annualized"), reverse=True)
         ok_n = sum(1 for r in rows if r.get("ok"))
