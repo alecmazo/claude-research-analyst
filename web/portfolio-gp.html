@@ -1355,6 +1355,9 @@
     padding: 12px 14px; font-size: 12px; line-height: 1.65;
     color: var(--text-secondary); max-height: 600px; overflow-y: auto;
   }
+  /* Daily Brief: #brief-content is already a 420px scroller, so drop the inner
+     .md-body cap/scroll + its redundant padding → ONE scrollbar, not two. */
+  #brief-content .md-body { max-height: none; overflow: visible; padding: 0; }
   /* Inside the resizable dialog the body itself scrolls — remove the inner cap */
   /* Outer dialog body (has both classes): keep its own scroll, just remove the 600px cap */
   .dga-dialog-body.md-body {
