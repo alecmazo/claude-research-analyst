@@ -6336,6 +6336,22 @@ def _builder_extract_comps_for_report(ticker: str, report_md: str) -> list[str]:
     return validated
 
 
+def _builder_call_timeout(fn, timeout: float, default=None):
+    """Run fn() in a worker thread, returning `default` if it errors or exceeds
+    `timeout` seconds. Keeps slow/blocking yfinance scrapes (which can hang from
+    a rate-limited cloud IP) from stalling the whole Builder request. Uses
+    shutdown(wait=False) so a still-hung call never blocks us on exit."""
+    import concurrent.futures as _cf
+    ex = _cf.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        return fut.result(timeout=timeout)
+    except Exception:
+        return default
+    finally:
+        ex.shutdown(wait=False)
+
+
 def _builder_fetch_candidates() -> list[dict]:
     """Return list of Builder candidates: saved-report subjects PLUS comp
     tickers extracted from those reports' markdown.
@@ -6354,6 +6370,11 @@ def _builder_fetch_candidates() -> list[dict]:
     if (_BUILDER_CANDIDATES_CACHE["data"] is not None
             and (now - _BUILDER_CANDIDATES_CACHE["ts"]) < _BUILDER_CANDIDATES_TTL):
         return _BUILDER_CANDIDATES_CACHE["data"]
+
+    # Overall wall-clock budget for live (yfinance) enrichment. Past this point
+    # we stop making slow Yahoo calls and return what we have (degraded), rather
+    # than hanging — the report subjects always come back from the DB regardless.
+    deadline = now + 25.0
 
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return []
@@ -6406,10 +6427,8 @@ def _builder_fetch_candidates() -> list[dict]:
 
     # ── 3. Batch live quotes for the whole universe ──────────────────────
     all_tickers = list(own_tickers) + list(comp_universe.keys())
-    try:
-        quotes = batch_quotes(",".join(all_tickers)) if all_tickers else {}
-    except Exception:
-        quotes = {}
+    quotes = _builder_call_timeout(
+        lambda: batch_quotes(",".join(all_tickers)), 18.0, {}) if all_tickers else {}
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
@@ -6417,12 +6436,10 @@ def _builder_fetch_candidates() -> list[dict]:
         tk = (r["ticker"] or "").strip().upper()
         if not tk: continue
         sector_raw, name = "Unknown", tk
-        try:
-            meta = get_ticker_meta(tk)
-            sector_raw = (meta.get("sector") or "Unknown")
+        if time.time() < deadline:
+            meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
+            sector_raw = meta.get("sector") or "Unknown"
             name = meta.get("name") or tk
-        except Exception:
-            pass
         sector = _builder_classify_sector(sector_raw)
         q = quotes.get(tk) or {}
         # Conservative (less-aggressive) target/upside when both LLMs ran.
@@ -6456,28 +6473,26 @@ def _builder_fetch_candidates() -> list[dict]:
     # For comps, derive upside_pct from yfinance analyst targetMeanPrice
     # when available. If neither current price nor target is known, skip
     # the comp (no signal for the EV-weighted allocator).
-    for tk, source_report in comp_universe.items():
+    for tk, source_report in list(comp_universe.items())[:60]:
         sector_raw, name = "Unknown", tk
-        try:
-            meta = get_ticker_meta(tk)
-            sector_raw = (meta.get("sector") or "Unknown")
+        if time.time() < deadline:
+            meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
+            sector_raw = meta.get("sector") or "Unknown"
             name = meta.get("name") or tk
-        except Exception:
-            pass
         sector = _builder_classify_sector(sector_raw)
 
         q = quotes.get(tk) or {}
         cur_price = float(q.get("price")) if q.get("price") is not None else None
 
         target = None
-        try:
-            if _YFINANCE_OK:
-                info = yf.Ticker(tk).info or {}
-                t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+        if time.time() < deadline and _YFINANCE_OK:
+            info = _builder_call_timeout(lambda: (yf.Ticker(tk).info or {}), 4.0, {}) or {}
+            t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+            try:
                 if t and float(t) > 0:
                     target = float(t)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         upside = None
         if target is not None and cur_price and cur_price > 0:
@@ -6502,8 +6517,14 @@ def _builder_fetch_candidates() -> list[dict]:
             "from_report":   source_report,
         })
 
+    # If we bailed on enrichment due to the time budget, cache only briefly so
+    # the pool self-heals once Yahoo is responsive (or the meta cache warms).
+    degraded = time.time() >= deadline
     _BUILDER_CANDIDATES_CACHE["data"] = out
-    _BUILDER_CANDIDATES_CACHE["ts"]   = now
+    _BUILDER_CANDIDATES_CACHE["ts"]   = now if not degraded else (now - _BUILDER_CANDIDATES_TTL + 90)
+    if degraded:
+        print(f"[builder] enrichment hit time budget — returning {len(out)} names "
+              f"(some sectors/targets degraded); caching briefly.", flush=True)
     return out
 
 
