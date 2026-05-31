@@ -6212,6 +6212,7 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12
 
 _BUILDER_CANDIDATES_CACHE: dict = {"data": None, "ts": 0}
 _BUILDER_CANDIDATES_TTL   = 600   # 10 min
+_BUILDER_CANDIDATES_DIAG: dict = {}   # last-run diagnostics, surfaced in the API
 
 
 def _builder_classify_sector(raw_sector: str) -> str:
@@ -6369,38 +6370,63 @@ def _builder_fetch_candidates() -> list[dict]:
     now = time.time()
     if (_BUILDER_CANDIDATES_CACHE["data"] is not None
             and (now - _BUILDER_CANDIDATES_CACHE["ts"]) < _BUILDER_CANDIDATES_TTL):
+        _BUILDER_CANDIDATES_DIAG.update(cache_hit=True, returned=len(_BUILDER_CANDIDATES_CACHE["data"]))
         return _BUILDER_CANDIDATES_CACHE["data"]
 
-    # Overall wall-clock budget for live (yfinance) enrichment. Past this point
-    # we stop making slow Yahoo calls and return what we have (degraded), rather
-    # than hanging — the report subjects always come back from the DB regardless.
-    deadline = now + 9.0   # stay under the endpoint's 12s hard cap (degrade, don't hang)
+    _BUILDER_CANDIDATES_DIAG.clear()
+    _BUILDER_CANDIDATES_DIAG.update(cache_hit=False, db_url_set=bool(os.environ.get("DATABASE_URL")))
+
+    deadline = now + 9.0   # (no live calls remain; kept for the degraded-cache note)
 
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        _BUILDER_CANDIDATES_DIAG.update(error="DB unavailable (no DATABASE_URL / psycopg2)")
         return []
 
-    # ── 1. Pull report subjects (explicit price_target + upside_pct) ─────
-    # Surface ANY ticker that has at least one provider's price_target.
-    # The effective (conservative) target — min(grok, claude) when both
-    # exist — is computed below for the EV-weighted allocator.
+    # ── 1. Pull report subjects. STRICT: explicit target + upside. If that
+    #     matches nothing, RELAX to target-only (upside is computed from the
+    #     live/stored price below) so the pool isn't empty just because a report
+    #     stored a price target but no upside_pct.
+    strict_sql = """
+        SELECT ticker, rating, price_target, upside_pct, generated_at, report_md,
+               claude_price_target, claude_upside_pct, claude_rating
+          FROM analyst_reports
+         WHERE archived IS NOT TRUE
+           AND (price_target IS NOT NULL OR claude_price_target IS NOT NULL)
+           AND (upside_pct   IS NOT NULL OR claude_upside_pct   IS NOT NULL)
+         ORDER BY COALESCE(LEAST(upside_pct, claude_upside_pct),
+                           upside_pct, claude_upside_pct) DESC NULLS LAST
+    """
+    relaxed_sql = """
+        SELECT ticker, rating, price_target, upside_pct, generated_at, report_md,
+               claude_price_target, claude_upside_pct, claude_rating
+          FROM analyst_reports
+         WHERE archived IS NOT TRUE
+           AND (price_target IS NOT NULL OR claude_price_target IS NOT NULL)
+         ORDER BY generated_at DESC NULLS LAST
+    """
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("""
-                SELECT ticker, rating, price_target, upside_pct, generated_at, report_md,
-                       claude_price_target, claude_upside_pct, claude_rating
-                  FROM analyst_reports
-                 WHERE archived IS NOT TRUE
-                   AND (price_target IS NOT NULL OR claude_price_target IS NOT NULL)
-                   AND (upside_pct   IS NOT NULL OR claude_upside_pct   IS NOT NULL)
-                 ORDER BY COALESCE(LEAST(upside_pct, claude_upside_pct),
-                                   upside_pct, claude_upside_pct) DESC NULLS LAST
-            """)
-            rows = cur.fetchall()
+            cur.execute("SELECT COUNT(*) AS n FROM analyst_reports WHERE archived IS NOT TRUE")
+            total_reports = (cur.fetchone() or {}).get("n", 0)
+            cur.execute(strict_sql)
+            rows = cur.fetchall() or []
+            strict_n = len(rows)
+            if not rows:
+                cur.execute(relaxed_sql)
+                rows = cur.fetchall() or []
+            _BUILDER_CANDIDATES_DIAG.update(total_unarchived=total_reports,
+                                            strict_rows=strict_n, used_rows=len(rows),
+                                            relaxed=(strict_n == 0 and len(rows) > 0))
     except Exception as e:
-        print(f"[builder] candidates query failed: {e}")
+        print(f"[builder] candidates query failed: {e!s:.200}", flush=True)
+        _BUILDER_CANDIDATES_DIAG.update(error=f"query failed: {e!s:.150}")
         return []
 
+    print(f"[builder] reports unarchived={_BUILDER_CANDIDATES_DIAG.get('total_unarchived')} "
+          f"strict={_BUILDER_CANDIDATES_DIAG.get('strict_rows')} "
+          f"used={_BUILDER_CANDIDATES_DIAG.get('used_rows')}", flush=True)
     if not rows:
+        _BUILDER_CANDIDATES_DIAG.update(error="no non-archived reports with a price target")
         return []
 
     # ── 2. Walk each report and extract comp tickers from the markdown ───
@@ -6455,6 +6481,14 @@ def _builder_fetch_candidates() -> list[dict]:
         up_c = float(r["claude_upside_pct"])    if r["claude_upside_pct"]    is not None else None
         eff_pt = min(pt_g, pt_c) if (pt_g is not None and pt_c is not None) else (pt_g if pt_g is not None else pt_c)
         eff_up = min(up_g, up_c) if (up_g is not None and up_c is not None) else (up_g if up_g is not None else up_c)
+        # If upside wasn't stored, derive it from the target + current price.
+        if eff_up is None and eff_pt and q.get("price"):
+            try:
+                _px = float(q["price"])
+                if _px > 0:
+                    eff_up = round((eff_pt - _px) / _px * 100, 2)
+            except Exception:
+                pass
         providers = []
         if pt_g is not None: providers.append("grok")
         if pt_c is not None: providers.append("claude")
@@ -6519,14 +6553,15 @@ def _builder_fetch_candidates() -> list[dict]:
             "from_report":   source_report,
         })
 
-    # If we bailed on enrichment due to the time budget, cache only briefly so
-    # the pool self-heals once Yahoo is responsive (or the meta cache warms).
-    degraded = time.time() >= deadline
-    _BUILDER_CANDIDATES_CACHE["data"] = out
-    _BUILDER_CANDIDATES_CACHE["ts"]   = now if not degraded else (now - _BUILDER_CANDIDATES_TTL + 90)
-    if degraded:
-        print(f"[builder] enrichment hit time budget — returning {len(out)} names "
-              f"(some sectors/targets degraded); caching briefly.", flush=True)
+    _BUILDER_CANDIDATES_DIAG.update(returned=len(out),
+                                    unknown_sector=sum(1 for c in out if c.get("sector") == "Unknown"))
+    # NEVER cache an empty result — always retry next call so a transient miss
+    # can't get stuck for the 10-min TTL.
+    if out:
+        _BUILDER_CANDIDATES_CACHE["data"] = out
+        _BUILDER_CANDIDATES_CACHE["ts"]   = now
+    print(f"[builder] returning {len(out)} candidates "
+          f"({_BUILDER_CANDIDATES_DIAG.get('unknown_sector')} Unknown sector)", flush=True)
     return out
 
 
@@ -6568,6 +6603,7 @@ def builder_candidates(request: Request):
         "by_sector":  by_sector,
         "sectors":    sectors,
         "total":      len(cands),
+        "diagnostics": dict(_BUILDER_CANDIDATES_DIAG),
     }
 
 

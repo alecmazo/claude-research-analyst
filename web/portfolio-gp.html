@@ -7511,7 +7511,17 @@
       if (meta) meta.textContent = data.total + ' candidates · ' + (data.sectors || []).length + ' sectors';
       if (sumEl) {
         if (!data.sectors || !data.sectors.length) {
-          sumEl.innerHTML = '<div style="font-size:11.5px;color:#94a3b8;font-style:italic;">No saved reports yet. Run analyses with price targets to populate the pool.</div>';
+          const dg = data.diagnostics || {};
+          const why = dg.error
+            ? dg.error
+            : (dg.total_unarchived === 0
+                ? 'No non-archived saved reports found in the database.'
+                : (dg.used_rows === 0
+                    ? (dg.total_unarchived + ' reports exist, but none have a price target.')
+                    : 'Reports loaded but none mapped to a sector yet — hit "↻ Refresh data" on the Options tab to sync sectors.'));
+          sumEl.innerHTML = '<div style="font-size:11.5px;color:#94a3b8;font-style:italic;">No candidates. ' +
+            _builderEsc(why) + '</div>' +
+            '<div style="font-size:10px;color:#cbd5e1;margin-top:4px;">diag: ' + _builderEsc(JSON.stringify(dg)) + '</div>';
         } else {
           sumEl.innerHTML = data.sectors.map(function(s) {
             const med = s.median_upside_pct;
