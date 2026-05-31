@@ -6425,10 +6425,17 @@ def _builder_fetch_candidates() -> list[dict]:
     print(f"[builder] candidate pool: {len(own_tickers)} report subjects + "
           f"{len(comp_universe)} comp tickers (validated)")
 
-    # ── 3. Batch live quotes for the whole universe ──────────────────────
+    # ── 3. Quotes + meta for the whole universe: PERSISTED STORE FIRST
+    #     (instant, no live call); live only for names not yet synced. db_meta
+    #     supplies sector / name / analyst-target so this loop makes no live
+    #     yfinance calls when the store is populated (the durable hang fix).
     all_tickers = list(own_tickers) + list(comp_universe.keys())
-    quotes = _builder_call_timeout(
-        lambda: batch_quotes(",".join(all_tickers)), 18.0, {}) if all_tickers else {}
+    quotes = dict(_db_quotes(all_tickers))
+    missing_q = [t for t in all_tickers if t not in quotes]
+    if missing_q and time.time() < deadline:
+        quotes.update(_builder_call_timeout(
+            lambda: batch_quotes(",".join(missing_q)), 18.0, {}) or {})
+    db_meta = _db_meta(all_tickers)
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
@@ -6436,7 +6443,10 @@ def _builder_fetch_candidates() -> list[dict]:
         tk = (r["ticker"] or "").strip().upper()
         if not tk: continue
         sector_raw, name = "Unknown", tk
-        if time.time() < deadline:
+        dm = db_meta.get(tk)
+        if dm and dm.get("sector"):
+            sector_raw, name = dm["sector"], (dm.get("name") or tk)
+        elif time.time() < deadline:
             meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
             sector_raw = meta.get("sector") or "Unknown"
             name = meta.get("name") or tk
@@ -6475,7 +6485,10 @@ def _builder_fetch_candidates() -> list[dict]:
     # the comp (no signal for the EV-weighted allocator).
     for tk, source_report in list(comp_universe.items())[:60]:
         sector_raw, name = "Unknown", tk
-        if time.time() < deadline:
+        dm = db_meta.get(tk)
+        if dm and dm.get("sector"):
+            sector_raw, name = dm["sector"], (dm.get("name") or tk)
+        elif time.time() < deadline:
             meta = _builder_call_timeout(lambda: get_ticker_meta(tk), 5.0, {}) or {}
             sector_raw = meta.get("sector") or "Unknown"
             name = meta.get("name") or tk
@@ -6485,7 +6498,10 @@ def _builder_fetch_candidates() -> list[dict]:
         cur_price = float(q.get("price")) if q.get("price") is not None else None
 
         target = None
-        if time.time() < deadline and _YFINANCE_OK:
+        dm_target = (dm or {}).get("analyst_target")
+        if dm_target:
+            target = float(dm_target)
+        elif time.time() < deadline and _YFINANCE_OK:
             info = _builder_call_timeout(lambda: (yf.Ticker(tk).info or {}), 4.0, {}) or {}
             t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
             try:
@@ -8605,6 +8621,24 @@ def batch_quotes(tickers: str = ""):
 
     if not misses:
         return result
+
+    # ── Persisted store (freshness-gated) for cache-MISS tickers ──────────────
+    # If the market-data store was refreshed very recently, serve those quotes
+    # from the DB instead of a live call. Window kept tight (5 min) so the
+    # watchlist never shows stale prices; anything older falls through to live.
+    db_fresh = _db_quotes(misses, max_age_s=300)
+    if db_fresh:
+        still_missing = []
+        for sym in misses:
+            dq = db_fresh.get(sym)
+            if dq and dq.get("price") is not None:
+                result[sym] = {"price": dq["price"], "pct_change": dq.get("pct_change")}
+                _QUOTE_CACHE[sym] = {**result[sym], "_ts": now}
+            else:
+                still_missing.append(sym)
+        misses = still_missing
+        if not misses:
+            return result
 
     if not _YFINANCE_OK:
         for s in misses:
@@ -20113,6 +20147,47 @@ def _store_option_rows(cur, sym, expiration, rows):
     return n
 
 
+def _db_quotes(symbols, max_age_s=None) -> dict:
+    """{SYM: {price, pct_change}} from market_quotes. If max_age_s is given, only
+    rows refreshed within that window are returned (freshness gate for the
+    watchlist, which must never show stale prices)."""
+    syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
+    if not syms or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {}
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            if max_age_s is not None:
+                cur.execute("""SELECT symbol, price, pct_change FROM market_quotes
+                                WHERE symbol = ANY(%s)
+                                  AND updated_at > now() - (%s || ' seconds')::interval""",
+                            (syms, str(int(max_age_s))))
+            else:
+                cur.execute("SELECT symbol, price, pct_change FROM market_quotes "
+                            "WHERE symbol = ANY(%s)", (syms,))
+            return {r["symbol"]: {"price": r["price"], "pct_change": r["pct_change"]}
+                    for r in (cur.fetchall() or []) if r.get("price") is not None}
+    except Exception as e:
+        print(f"[market] db_quotes failed: {e!s:.120}", flush=True)
+        return {}
+
+
+def _db_meta(symbols) -> dict:
+    """{SYM: {sector, industry, name, analyst_target}} from security_meta."""
+    syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
+    if not syms or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {}
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT symbol, sector, industry, name, analyst_target
+                             FROM security_meta WHERE symbol = ANY(%s)""", (syms,))
+            return {r["symbol"]: {"sector": r.get("sector"), "industry": r.get("industry"),
+                                  "name": r.get("name"), "analyst_target": r.get("analyst_target")}
+                    for r in (cur.fetchall() or [])}
+    except Exception as e:
+        print(f"[market] db_meta failed: {e!s:.120}", flush=True)
+        return {}
+
+
 def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
     """Background worker: refresh quotes + meta (+ option chains) for the universe
     into the persistent store. Slow/live calls live HERE, not in user requests."""
@@ -20140,6 +20215,17 @@ def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
             rv = _builder_call_timeout(lambda: _opt._spot_and_hv(sym), 12.0, (None, None))
             realized = rv[1] if isinstance(rv, (list, tuple)) and len(rv) == 2 else None
             meta = _builder_call_timeout(lambda: get_ticker_meta(sym), 6.0, {}) or {}
+            # Analyst target (yfinance .info) — the slow call the Builder used to
+            # make per-request; now done here, off the request path.
+            target = None
+            if _YFINANCE_OK:
+                info = _builder_call_timeout(lambda: (yf.Ticker(sym).info or {}), 6.0, {}) or {}
+                t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+                try:
+                    if t and float(t) > 0:
+                        target = float(t)
+                except Exception:
+                    pass
             with _fund_conn() as conn, conn.cursor() as cur:
                 if realized is not None:
                     cur.execute("UPDATE market_quotes SET realized_vol=%s, updated_at=now() "
@@ -20147,6 +20233,7 @@ def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
                 _store_meta(cur, sym, {"sector": meta.get("sector"),
                                        "industry": meta.get("industry"),
                                        "name": meta.get("name"),
+                                       "analyst_target": target,
                                        "source": "yfinance"})
                 conn.commit()
             if sync_chains:
