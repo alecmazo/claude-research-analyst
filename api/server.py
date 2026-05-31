@@ -20317,18 +20317,9 @@ async def market_sync(req: Request, background_tasks: BackgroundTasks):
     explicit = [str(t).upper().strip() for t in (body.get("tickers") or [])
                 if t and str(t).strip()]
     if explicit:
-        universe = _filter_scan_tickers(explicit)
+        universe = _filter_scan_tickers(explicit)[:_OPTIONS_SCAN_CAP]
     else:
-        held = _filter_scan_tickers(_held_tickers())
-        watch = _filter_scan_tickers(analyst.load_watchlist())
-        reports = _filter_scan_tickers(_saved_report_tickers())
-        seen, universe = set(), []
-        for src in (held, watch, reports):
-            for t in src:
-                if t not in seen:
-                    seen.add(t)
-                    universe.append(t)
-    universe = universe[:_OPTIONS_SCAN_CAP]
+        universe = _market_universe()
     if not universe:
         return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
     import uuid as _uuid
@@ -20368,9 +20359,101 @@ def market_coverage(request: Request):
                 row = cur.fetchone() or {}
                 out[tbl] = {"rows": row.get("n") or 0,
                             "latest": row["latest"].isoformat() if row.get("latest") else None}
-        return {"ok": True, **out}
+        return {"ok": True, "autosync": _market_autosync_state, **out}
     except Exception as e:
         return {"ok": False, "error": f"{e!s:.150}"}
+
+
+# ──────────────────── Automatic market-data refresh (free) ────────────────────
+# Runs inside this web process (a daemon thread) — no extra container/cost. Keeps
+# the persisted store fresh so the watchlist/Builder/wheel read current data
+# without anyone clicking "Refresh data". Quotes+meta every 5 min, option chains
+# every 30 min, during US market hours. Toggle off with MARKET_AUTOSYNC=0.
+_market_autosync_state = {"last_quotes": 0.0, "last_chains": 0.0,
+                          "last_run": None, "runs": 0, "source": None}
+_MARKET_QUOTES_EVERY = 300      # 5 min
+_MARKET_CHAINS_EVERY = 1800     # 30 min
+
+
+def _market_universe() -> list:
+    """Default sync/scan universe: holdings + watchlist + saved reports (held
+    first so they're never pushed out of the cap), deduped and capped."""
+    held = _filter_scan_tickers(_held_tickers())
+    watch = _filter_scan_tickers(analyst.load_watchlist())
+    reports = _filter_scan_tickers(_saved_report_tickers())
+    seen, uni = set(), []
+    for src in (held, watch, reports):
+        for t in src:
+            if t not in seen:
+                seen.add(t)
+                uni.append(t)
+    return uni[:_OPTIONS_SCAN_CAP]
+
+
+def _is_market_hours() -> bool:
+    """Roughly US equity regular hours: Mon–Fri 09:30–16:00 America/New_York.
+    Ignores market holidays (an extra free sync on a holiday is harmless)."""
+    try:
+        from zoneinfo import ZoneInfo
+        et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        return True   # if tz data is unavailable, don't block the refresh
+    if et.weekday() >= 5:
+        return False
+    mins = et.hour * 60 + et.minute
+    return (9 * 60 + 30) <= mins <= (16 * 60)
+
+
+def _autosync_run(now: float, do_chains: bool):
+    import market_data as _md
+    universe = _market_universe()
+    if not universe:
+        return
+    import uuid as _uuid
+    job_id = "AUTOSYNC_" + _uuid.uuid4().hex[:8]
+    _run_market_sync(job_id, universe, do_chains)
+    st = _market_autosync_state
+    st["last_quotes"] = now
+    if do_chains:
+        st["last_chains"] = now
+    st["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    st["runs"] += 1
+    st["source"] = _md.source_label()
+
+
+def _market_autosync_loop():
+    """Daemon loop. Bootstraps once on startup so the store is populated, then
+    refreshes on its intervals during market hours."""
+    bootstrapped = False
+    while True:
+        try:
+            time.sleep(60)
+            if os.environ.get("MARKET_AUTOSYNC", "1") == "0":
+                continue
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                continue
+            now = time.time()
+            if not bootstrapped:
+                bootstrapped = True
+                _autosync_run(now, do_chains=True)   # populate immediately
+                continue
+            if not _is_market_hours():
+                continue
+            st = _market_autosync_state
+            do_chains = (now - st["last_chains"]) >= _MARKET_CHAINS_EVERY
+            if do_chains or (now - st["last_quotes"]) >= _MARKET_QUOTES_EVERY:
+                _autosync_run(now, do_chains)
+        except Exception as e:
+            print(f"[market autosync] loop error: {e!s:.150}", flush=True)
+
+
+if os.environ.get("MARKET_AUTOSYNC", "1") != "0":
+    try:
+        threading.Thread(target=_market_autosync_loop, daemon=True,
+                         name="market-autosync").start()
+        print("⚙ [market autosync] background refresher started", flush=True)
+    except Exception as _e:
+        print(f"[market autosync] failed to start: {_e!s:.150}", flush=True)
 
 
 @app.get("/api/financials/coverage")
