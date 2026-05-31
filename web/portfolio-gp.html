@@ -6103,9 +6103,17 @@
       if (sm) {
         try {
           const obj = JSON.parse(sm[1].trim());
+          // Structured {weights, basket_size, account} OR legacy flat sector→%.
+          const w = (obj.weights && typeof obj.weights === 'object') ? obj.weights : obj;
           const clean = {}; let sum = 0;
-          for (const k in obj) { const v = Number(obj[k]); if (v > 0) { clean[k] = v; sum += v; } }
-          if (sum > 0 && Object.keys(clean).length) sleeve = clean;
+          for (const k in w) { const v = Number(w[k]); if (v > 0) { clean[k] = v; sum += v; } }
+          if (sum > 0 && Object.keys(clean).length) {
+            sleeve = {
+              weights: clean,
+              basket_size: Number(obj.basket_size) > 0 ? Number(obj.basket_size) : null,
+              account: obj.account || null,
+            };
+          }
         } catch (e) { /* malformed sleeve — ignore */ }
         rawAnswer = rawAnswer.replace(sm[0], '').trim();
       }
@@ -6138,7 +6146,11 @@
       'financial services': 'Financials', 'financial': 'Financials', 'health care': 'Healthcare',
       'telecom': 'Communication Services', 'telecommunications': 'Communication Services',
     };
-    function _applySleeveToBuilder(weights) {
+    function _applySleeveToBuilder(sleeve) {
+      // Accept structured {weights, basket_size, account} or a legacy flat map.
+      const weights = (sleeve && sleeve.weights) ? sleeve.weights : (sleeve || {});
+      const basketSize = (sleeve && Number(sleeve.basket_size) > 0) ? Number(sleeve.basket_size) : null;
+      const account = (sleeve && sleeve.account) ? sleeve.account : null;
       const norm = {}; let total = 0;
       for (const k in weights) {
         const canon = _SLEEVE_SECTOR_ALIASES[k.toLowerCase().trim()] ||
@@ -6146,8 +6158,12 @@
         norm[canon] = (norm[canon] || 0) + Number(weights[k]); total += Number(weights[k]);
       }
       const rows = Object.keys(norm).map(k => `${k}: ${Math.round(norm[k] / total * 100)}%`).join('\n');
-      if (!confirm('Send this target sleeve to the Builder?\n\n' + rows +
-                   '\n\n(It will replace the current Builder sector weights.)')) return;
+      const sizeLine = basketSize
+        ? `\n\nBasket size: $${Math.round(basketSize).toLocaleString()}${account ? ' (' + account + ' — true rebalance at the account\'s actual size)' : ''}`
+        : '';
+      if (!confirm('Send this target sleeve to the Builder?\n\n' + rows + sizeLine +
+                   '\n\n(Replaces the current Builder sector weights' +
+                   (basketSize ? ' and basket size' : '') + '.)')) return;
       const out2 = {};
       Object.keys(norm).forEach(k => { out2[k] = Math.round(norm[k] / total * 100); });
       _builderSectorWeights = out2;
@@ -6155,6 +6171,11 @@
       if (typeof _initBuilderTab === 'function' && !_builderInitialized) _initBuilderTab();
       _renderBuilderSectors();
       _refreshBuilderAddDropdown();
+      // Size the basket to the account's actual market value → a true rebalance.
+      if (basketSize) {
+        const bs = document.getElementById('builder-basket-size');
+        if (bs) bs.value = Math.round(basketSize);
+      }
       setTimeout(() => {
         const rb = document.getElementById('builder-run-btn');
         if (rb) {

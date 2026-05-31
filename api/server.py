@@ -18044,16 +18044,22 @@ _AGENTIC_SYSTEM_DEFAULT = (
     "tool. Cite the specific numbers you pulled and their source.\n\n"
     "TARGET SLEEVE: When you propose a TARGET SECTOR ALLOCATION (optimizing or "
     "rebalancing a portfolio), END your answer with a fenced code block tagged "
-    "`sleeve` containing ONLY a JSON object of sector→target weight % summing to "
-    "~100, using EXACTLY these sector names: Technology, Financials, Healthcare, "
-    "Energy, Industrials, Consumer Cyclical, Consumer Defensive, Utilities, Real "
-    "Estate, Communication Services, Basic Materials. Example:\n"
+    "`sleeve` containing a JSON object with `weights` (sector→target weight % "
+    "summing to ~100) and, when rebalancing a SPECIFIC account, `basket_size` "
+    "set to THAT account's total market value (the total_market_value from "
+    "get_portfolio_holdings) and `account` its name — so the Builder produces a "
+    "TRUE rebalance at the real account size, not a generic $1M. Use EXACTLY "
+    "these sector names: Technology, Financials, Healthcare, Energy, Industrials, "
+    "Consumer Cyclical, Consumer Defensive, Utilities, Real Estate, "
+    "Communication Services, Basic Materials. Example:\n"
     "```sleeve\n"
-    '{"Technology": 30, "Healthcare": 20, "Financials": 15, "Industrials": 15, '
-    '"Consumer Defensive": 12, "Utilities": 8}\n'
+    '{"account": "ANAT IRA", "basket_size": 2750000, "weights": {"Technology": '
+    '30, "Healthcare": 20, "Financials": 15, "Industrials": 15, "Consumer '
+    'Defensive": 12, "Utilities": 8}}\n'
     "```\n"
-    "The app turns that block into a one-click 'Build in Builder' button, so "
-    "always include it when recommending an allocation.\n\n"
+    "The app turns that block into a one-click 'Build in Builder' button "
+    "(pre-filled with the account's size), so always include it when "
+    "recommending an allocation.\n\n"
     "Be concise and decisive: lead with the answer, then the evidence. This "
     "is internal analysis, not investment advice."
 )
