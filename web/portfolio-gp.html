@@ -13008,32 +13008,26 @@
   function _updatePositionsReturnTile() {
     const el = document.getElementById('acd-pos-ret-val');
     if (!el || !_acctChartData) return;
-    const { begBalance, totalDeps, totalWdrs, benchYtd } = _acctChartData;
-    const mv = _acctPositionsMV;
-    let posRet = null;
-    console.group('[DGA] _updatePositionsReturnTile');
-    console.log('  begBalance  :', begBalance?.toLocaleString() ?? 'null');
-    console.log('  totalDeps   :', totalDeps?.toLocaleString() ?? 'null');
-    console.log('  totalWdrs   :', totalWdrs?.toLocaleString() ?? 'null');
-    console.log('  positions MV:', mv?.toLocaleString() ?? 'null (positions not loaded yet)');
-    if (mv != null && begBalance > 0) {
-      // Investment return: (MV + withdrawals − deposits − beginning balance) / beginning balance
-      posRet = (mv + totalWdrs - totalDeps - begBalance) / begBalance * 100;
-      console.log('  posRet      :', posRet.toFixed(4) + '%');
-      console.log('  formula     : (' + [mv, '+', totalWdrs, '-', totalDeps, '-', begBalance].join(' ') + ') /', begBalance, '× 100');
-      el.textContent = (posRet >= 0 ? '+' : '') + posRet.toFixed(2) + '%';
-      el.style.color = posRet >= 0 ? 'var(--green)' : 'var(--red)';
-    } else {
-      console.warn('  ⚠ Cannot compute: mv=', mv, ' begBalance=', begBalance);
-    }
-    console.groupEnd();
-    // Alpha uses investment return vs benchmark
-    if (posRet != null && benchYtd != null) {
-      const alpha = posRet - benchYtd;
-      const av = document.getElementById('acd-alpha-val');
-      if (av) {
+    // Headline YTD RETURN = the benchmark-comparable TIME-WEIGHTED return (the
+    // same figure shown as "Portfolio Return"). The old positions-based formula
+    // (MV − deposits + withdrawals − begin) / begin divided by the Jan-1 balance
+    // ALONE, which blows up for an account funded mid-year (small begin → values
+    // like −200%) and isn't comparable to a benchmark. TWRR is the correct
+    // headline and the only sound basis for alpha vs the index. (mdPct already
+    // resolves to TWRR when available, falling back to Modified Dietz.)
+    const ret = _acctChartData.mdPct;
+    const benchYtd = _acctChartData.benchYtd;
+    if (ret == null) { el.textContent = '—'; el.style.color = 'var(--mid)'; return; }
+    el.textContent = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%';
+    el.style.color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+    const av = document.getElementById('acd-alpha-val');
+    if (av) {
+      if (benchYtd != null) {
+        const alpha = ret - benchYtd;
         av.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
-        av.style.color  = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+        av.style.color = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+      } else {
+        av.textContent = '—'; av.style.color = 'var(--mid)';
       }
     }
   }

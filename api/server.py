@@ -13226,8 +13226,13 @@ async def fund_account_ytd_run(
             raise HTTPException(422, f"Could not read monthly performance file: {exc}")
 
     # ── Auto-fill begin_value from stored baseline when not supplied ───────────
+    # IMPORTANT: only fall back to the saved baseline when NO monthly-performance
+    # CSV was uploaded. The Balance & Income Detail CSV carries Fidelity's exact
+    # Jan-1 balance (months[0].start), which is authoritative; a stale/incorrect
+    # saved baseline must NOT override it (that produced impossible Modified-Dietz
+    # returns like -200% while TWRR, chained from the same CSV, stayed correct).
     baseline_used = False
-    if begin_value is None:
+    if begin_value is None and not (mp_text and mp_text.strip()):
         import json as _json_bv
         _bv_conn = _fund_conn()
         try:
