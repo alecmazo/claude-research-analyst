@@ -3390,7 +3390,12 @@
 
       <!-- ── RIGHT: candidate pool summary ────────────────────────── -->
       <section class="builder-card">
-        <header class="builder-card-head">Candidate Pool</header>
+        <header class="builder-card-head" style="display:flex;align-items:center;">
+          <span>Candidate Pool</span>
+          <button id="builder-pool-refresh-btn" class="builder-btn-sec"
+                  title="Re-pull tickers + targets from your saved reports and resolve sectors. Stays on this tab."
+                  style="margin-left:auto;padding:3px 10px;font-size:11px;white-space:nowrap;">↻ Refresh</button>
+        </header>
         <div class="builder-card-body">
           <div id="builder-sectors-summary" style="font-size:11.5px;color:#475569;">
             <div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>
@@ -4307,7 +4312,6 @@
                title="Cap on assignment probability (option delta). Lower = safer / more likely to keep the stock; higher = richer premium but likelier to be assigned."
                style="width:72px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;background:#fff;color:#1e293b;">
       </label>
-      <button class="tab-btn" id="opt-sync-btn" type="button" title="Refresh the persisted market-data store (quotes + option chains) from Tradier/yfinance. Run this, then Scan reads instantly from the DB.">↻ Refresh data</button>
       <button class="tab-btn" id="opt-scan-btn" type="button">⚡ Scan portfolio</button>
     </div>
     <div id="opt-status" style="margin-top:10px;font-size:12px;color:var(--dim);">Set your max assignment Δ and run a scan. Holdings are scanned for covered calls; your watchlist for cash-secured puts.</div>
@@ -5014,8 +5018,6 @@
   function loadOptionsTab() {
     const btn = document.getElementById('opt-scan-btn');
     if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', _optRunScan); }
-    const sbtn = document.getElementById('opt-sync-btn');
-    if (sbtn && !sbtn._wired) { sbtn._wired = true; sbtn.addEventListener('click', _optRunSync); }
     const det = document.getElementById('opt-csp-details');
     if (det && !det._wired) {
       det._wired = true;
@@ -5023,39 +5025,6 @@
         const c = document.getElementById('opt-csp-caret');
         if (c) c.textContent = det.open ? '▾' : '▸';
       });
-    }
-  }
-  let _optSyncPoll = null;
-  async function _optRunSync() {
-    const btn = document.getElementById('opt-sync-btn');
-    const status = document.getElementById('opt-status');
-    if (_optSyncPoll) { clearInterval(_optSyncPoll); _optSyncPoll = null; }
-    btn.disabled = true;
-    status.textContent = 'Refreshing market-data store…';
-    try {
-      const r = await window.dgaFetch('/api/market/sync', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chains: true }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      status.textContent = `Syncing ${j.universe.length} names from ${j.source}…`;
-      _optSyncPoll = setInterval(async () => {
-        try {
-          const pr = await window.dgaFetch('/api/market/sync/' + j.job_id);
-          const pj = await pr.json();
-          if (pj.label) status.textContent = pj.label;
-          if (pj.status === 'done') {
-            clearInterval(_optSyncPoll); _optSyncPoll = null; btn.disabled = false;
-            status.textContent = (pj.label || 'Done') + ' — now hit Scan portfolio.';
-          } else if (pj.status === 'error') {
-            clearInterval(_optSyncPoll); _optSyncPoll = null; btn.disabled = false;
-            status.textContent = '❌ ' + (pj.error || pj.label || 'sync failed');
-          }
-        } catch (e) { /* transient */ }
-      }, 1500);
-    } catch (e) {
-      status.textContent = '❌ ' + e.message; btn.disabled = false;
     }
   }
   async function _optRunScan() {
@@ -6129,6 +6098,7 @@
           (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
           '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
             sleeveBtn +
+            '<button id="agentic-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">🖨 Print</button>' +
             '<button id="agentic-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>' +
             `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
           '</div>' +
@@ -6137,6 +6107,27 @@
       if (memoBtn) memoBtn.addEventListener('click', () => _draftMemoFromAnalysis());
       const slBtn = document.getElementById('agentic-sleeve-btn');
       if (slBtn && sleeve) slBtn.addEventListener('click', () => _applySleeveToBuilder(sleeve));
+      const printBtn = document.getElementById('agentic-print-btn');
+      if (printBtn) printBtn.addEventListener('click', () => {
+        const ansNode = out.querySelector('.md-rendered');
+        const answerHTML = ansNode ? ansNode.innerHTML : '';
+        const q = esc(_lastQuestion || '');
+        const w = window.open('', '_blank', 'width=820,height=1000');
+        if (!w) { alert('Pop-up blocked — allow pop-ups to print.'); return; }
+        w.document.write(
+          '<!doctype html><html><head><meta charset="utf-8"><title>DGA Capital — AI Analyst</title>' +
+          '<style>@page{size:Letter;margin:0.75in}' +
+          'body{font-family:Georgia,"Times New Roman",serif;font-size:11pt;line-height:1.55;color:#000;max-width:7in;margin:0 auto}' +
+          '.lh{text-align:center;font-size:9pt;letter-spacing:2px;color:#5BB8D4;border-bottom:2pt solid #0A1628;padding-bottom:8pt;margin-bottom:18pt}' +
+          '.q{font-weight:700;font-size:13pt;margin-bottom:14pt;padding-bottom:10pt;border-bottom:1px solid #ccc}' +
+          'table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6pt}th{background:#f0f0f0}' +
+          'a{color:#000}</style></head><body onload="window.print()">' +
+          '<div class="lh">DGA CAPITAL · CONFIDENTIAL</div>' +
+          (q ? '<div class="q">' + q + '</div>' : '') +
+          '<div class="answer">' + answerHTML + '</div>' +
+          '</body></html>');
+        w.document.close();
+      });
     }
 
     // Sector-name aliases → the Builder's canonical names (the LLM may vary).
@@ -7499,12 +7490,25 @@
     });
   }
 
-  async function loadBuilderCandidates() {
+  // Refresh the Candidate Pool in place — re-pulls saved-report tickers/targets
+  // and re-resolves sectors via the cache-busting endpoint. No market sync, no
+  // leaving the Builder tab.
+  async function _builderRefreshPool() {
+    const btn  = document.getElementById('builder-pool-refresh-btn');
+    const meta = document.getElementById('builder-pool-meta');
+    if (btn) btn.disabled = true;
+    if (meta) meta.textContent = 'Refreshing…';
+    try { await loadBuilderCandidates({ fresh: true }); }
+    finally { if (btn) btn.disabled = false; }
+  }
+
+  async function loadBuilderCandidates(opts) {
     const meta   = document.getElementById('builder-pool-meta');
     const sumEl  = document.getElementById('builder-sectors-summary');
     if (sumEl) sumEl.innerHTML = '<div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>';
     try {
-      const r = await window.dgaFetch('/api/v2/builder/candidates');
+      const _q = (opts && opts.fresh) ? '?fresh=1' : '';
+      const r = await window.dgaFetch('/api/v2/builder/candidates' + _q);
       if (!r.ok) throw new Error('candidates ' + r.status);
       const data = await r.json();
       _builderCandidatesCache = data;
@@ -7518,7 +7522,7 @@
                 ? 'No non-archived saved reports found in the database.'
                 : (dg.used_rows === 0
                     ? (dg.total_unarchived + ' reports exist, but none have a price target.')
-                    : 'Reports loaded but none mapped to a sector yet — hit "↻ Refresh data" on the Options tab to sync sectors.'));
+                    : 'Reports loaded but none mapped to a sector yet — hit ↻ Refresh above to resolve sectors.'));
           sumEl.innerHTML = '<div style="font-size:11.5px;color:#94a3b8;font-style:italic;">No candidates. ' +
             _builderEsc(why) + '</div>' +
             '<div style="font-size:10px;color:#cbd5e1;margin-top:4px;">diag: ' + _builderEsc(JSON.stringify(dg)) + '</div>';
@@ -7923,6 +7927,12 @@
     const wlBtn   = document.getElementById('builder-watchlist-btn');
     if (saveBtn) saveBtn.addEventListener('click', _builderSaveScenario);
     if (wlBtn)   wlBtn.addEventListener('click',   _builderBasketToWatchlist);
+    // Wire the Candidate Pool refresh button (in-tab, no market sync)
+    const poolRefreshBtn = document.getElementById('builder-pool-refresh-btn');
+    if (poolRefreshBtn && !poolRefreshBtn._wired) {
+      poolRefreshBtn._wired = true;
+      poolRefreshBtn.addEventListener('click', _builderRefreshPool);
+    }
     // Load candidates pool + previously saved scenarios
     loadBuilderCandidates();
     loadBuilderScenarios();

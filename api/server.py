@@ -6240,6 +6240,35 @@ def _builder_classify_sector(raw_sector: str) -> str:
     return SYN.get(s, s)
 
 
+# Process-global sector cache so a ticker is resolved at most once per process.
+# "" = negative cache (resolved to nothing — don't retry this process).
+_BUILDER_SECTOR_CACHE: dict = {}
+_BUILDER_SECTOR_RESOLVE_CAP = 10   # max LIVE sector resolves per candidates request
+                                   # (kept under the 20s endpoint cap; the rest
+                                   # warm via repeat Refresh + the 30-min autosync,
+                                   # and every resolved sector is persisted)
+
+
+def _builder_resolve_sector_live(tk: str):
+    """Resolve (sector, industry) for a ticker WITHOUT a market sync, via
+    analyst.fetch_sector_and_industry — which has an un-throttled SEC-SIC
+    fallback (works even when Yahoo blocks the cloud IP). Sets the process
+    cache. Returns (sector, industry) or (None, None). The caller checks the
+    cache + budget first and hard-times this with _builder_call_timeout."""
+    try:
+        sec, ind = analyst.fetch_sector_and_industry(tk)   # -> tuple(str, str)
+    except Exception as e:
+        print(f"[builder] resolve_sector failed {tk}: {e!s:.120}", flush=True)
+        _BUILDER_SECTOR_CACHE[tk] = ""
+        return None, None
+    sec = (sec or "").strip() or None
+    if sec and sec.lower() != "unknown":
+        _BUILDER_SECTOR_CACHE[tk] = sec
+        return sec, ((ind or "").strip() or None)
+    _BUILDER_SECTOR_CACHE[tk] = ""
+    return None, None
+
+
 # Words that match the ticker-shaped regex but are clearly financial jargon,
 # not actual stock symbols. Filter applied during comp extraction to keep noise
 # out of the Builder candidate pool.
@@ -6463,6 +6492,8 @@ def _builder_fetch_candidates() -> list[dict]:
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
+    _resolve_budget = [_BUILDER_SECTOR_RESOLVE_CAP]   # 1-elem list → mutable in loop
+    _to_persist: list = []                            # (tk, sector, industry) batch
     for r in rows:
         try:
             tk = (r["ticker"] or "").strip().upper()
@@ -6474,6 +6505,21 @@ def _builder_fetch_candidates() -> list[dict]:
                 sector_raw, name = dm["sector"], (dm.get("name") or tk)
             elif dm and dm.get("name"):
                 name = dm["name"]
+            # Self-heal: if the store had no sector, resolve it now — bounded,
+            # via the un-throttled SEC-SIC fallback (NO market sync, no cross-tab
+            # dependency). Process-cached + persisted to the store for next time.
+            if sector_raw == "Unknown":
+                if tk in _BUILDER_SECTOR_CACHE:
+                    if _BUILDER_SECTOR_CACHE[tk]:
+                        sector_raw = _BUILDER_SECTOR_CACHE[tk]
+                elif _resolve_budget[0] > 0:
+                    _resolve_budget[0] -= 1
+                    _sec, _ind = _builder_call_timeout(
+                        lambda: _builder_resolve_sector_live(tk), 4.0, (None, None))
+                    if _sec:
+                        sector_raw = _sec
+                        _to_persist.append((tk, _sec, _ind))
+                        _BUILDER_CANDIDATES_DIAG.setdefault("sector_resolved", []).append(tk)
             sector = _builder_classify_sector(sector_raw)
             q = quotes.get(tk) or {}
             # Conservative (less-aggressive) target/upside when both LLMs ran.
@@ -6515,6 +6561,17 @@ def _builder_fetch_candidates() -> list[dict]:
             _BUILDER_CANDIDATES_DIAG.setdefault("row_errors", []).append(
                 f"{(r.get('ticker') or '?')}: {type(_e).__name__}: {_e!s:.80}")
             continue
+
+    # Persist freshly-resolved sectors back to the store in ONE connection, so the
+    # next cold load reads them instantly (a one-time cost per ticker).
+    if _to_persist and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as _c, _c.cursor() as _cur:
+                for _tk, _sec, _ind in _to_persist:
+                    _store_meta(_cur, _tk, {"sector": _sec, "industry": _ind, "name": None})
+                _c.commit()
+        except Exception as _pe:
+            print(f"[builder] sector persist failed: {_pe!s:.120}", flush=True)
 
     # ── 5. Build candidate dicts for comp tickers ────────────────────────
     # For comps, derive upside_pct from yfinance analyst targetMeanPrice
@@ -6578,7 +6635,7 @@ def _builder_fetch_candidates() -> list[dict]:
 
 
 @app.get("/api/v2/builder/candidates")
-def builder_candidates(request: Request):
+def builder_candidates(request: Request, fresh: int = 0):
     """Return all eligible Builder candidates with sector + EV.
 
     Response: {
@@ -6586,14 +6643,20 @@ def builder_candidates(request: Request):
       by_sector:  {sector: [tickers...]},
       sectors:    [{name, count, median_upside_pct}, ...]
     }
+    `fresh=1` (the pool's Refresh button) busts the 10-min cache so sectors
+    re-resolve against the store + SEC-SIC fallback on this call.
     """
     _claims_or_401(request)
+    if fresh:
+        _BUILDER_CANDIDATES_CACHE["data"] = None
+        _BUILDER_CANDIDATES_CACHE["ts"] = 0
     # Hard cap so the endpoint can NEVER hang — covers not just slow yfinance
     # calls (already per-call timed-out inside) but a stalled DB connection
     # (_fund_conn over the SSH tunnel), which the inner timeouts don't catch.
     # On timeout, serve whatever's cached (else an empty pool) so the UI resolves
-    # instead of spinning on "Loading saved reports…" forever.
-    cands = _builder_call_timeout(_builder_fetch_candidates, 12.0,
+    # instead of spinning on "Loading saved reports…" forever. Raised to 20s
+    # because the first cold load may resolve up to ~14 sectors live (SEC-SIC).
+    cands = _builder_call_timeout(_builder_fetch_candidates, 20.0,
                                   _BUILDER_CANDIDATES_CACHE.get("data") or [])
     by_sector: dict[str, list[str]] = {}
     upside_by_sec: dict[str, list[float]] = {}
@@ -20329,7 +20392,9 @@ def _store_meta(cur, sym, m):
                      (symbol, sector, industry, name, analyst_target, source, updated_at)
                    VALUES (%s,%s,%s,%s,%s,%s, now())
                    ON CONFLICT (symbol) DO UPDATE SET
-                     sector=EXCLUDED.sector, industry=EXCLUDED.industry, name=EXCLUDED.name,
+                     sector=COALESCE(EXCLUDED.sector, security_meta.sector),
+                     industry=COALESCE(EXCLUDED.industry, security_meta.industry),
+                     name=COALESCE(EXCLUDED.name, security_meta.name),
                      analyst_target=COALESCE(EXCLUDED.analyst_target, security_meta.analyst_target),
                      source=EXCLUDED.source, updated_at=now()""",
                 (sym, m.get("sector"), m.get("industry"), m.get("name"),
