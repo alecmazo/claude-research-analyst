@@ -6,13 +6,18 @@
  * AsyncStorage and we tell the parent (App.js) to re-evaluate the
  * navigator (which branches GP vs LP).
  */
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
   Image, ScrollView,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { loginV2 } from '../api/client';
+import {
+  isBiometricAvailable, isBiometricEnabled, getBiometricLabel,
+  enableBiometric, authenticate, getBiometricCredentials, updateBiometricCredentials,
+} from '../api/biometric';
 import { colors, haptics } from '../design';
 
 export default function LoginScreen({ onLoggedIn }) {
@@ -20,7 +25,45 @@ export default function LoginScreen({ onLoggedIn }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState('');
+  // Biometrics: `bioEnabled` → already enrolled (show the Face ID button);
+  // `bioLabel` drives copy ('Face ID' / 'Touch ID').
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [bioLabel, setBioLabel]     = useState('Face ID');
   const pwRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      setBioEnabled(await isBiometricEnabled());
+      setBioLabel(await getBiometricLabel());
+    })();
+  }, []);
+
+  // After a successful password login, offer to enable the biometric lock
+  // (once), then proceed into the app either way.
+  const finishLogin = useCallback(async (user, e, p) => {
+    try {
+      if (await isBiometricEnabled()) {
+        // Already enrolled — silently keep the stored creds fresh so a future
+        // token expiry can re-login (covers a Settings token-only enable).
+        await updateBiometricCredentials(e, p);
+      } else if (await isBiometricAvailable()) {
+        const label = await getBiometricLabel();
+        await new Promise((resolve) => {
+          Alert.alert(
+            `Enable ${label}?`,
+            `Unlock DGA Capital with ${label} next time instead of typing your password.`,
+            [
+              { text: 'Not now', style: 'cancel', onPress: resolve },
+              { text: `Enable ${label}`, onPress: async () => { await enableBiometric(e, p); resolve(); } },
+            ],
+            { cancelable: false },
+          );
+        });
+      }
+    } catch {}
+    haptics.onSuccess?.();
+    onLoggedIn?.(user);
+  }, [onLoggedIn]);
 
   const handleSubmit = useCallback(async () => {
     const e = email.trim();
@@ -33,15 +76,38 @@ export default function LoginScreen({ onLoggedIn }) {
     setError('');
     try {
       const user = await loginV2(e, p);
-      haptics.onSuccess?.();
-      onLoggedIn?.(user);
+      await finishLogin(user, e, p);
     } catch (err) {
       haptics.onError?.();
       setError(err?.isAuthError ? 'Invalid email or password.' : (err?.message || 'Login failed.'));
     } finally {
       setBusy(false);
     }
-  }, [email, password, onLoggedIn]);
+  }, [email, password, finishLogin]);
+
+  // Face ID button: authenticate, then re-login with the Keychain-stored creds.
+  const handleBiometric = useCallback(async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const ok = await authenticate(`Unlock with ${bioLabel}`);
+      if (!ok) { setBusy(false); return; }
+      const creds = await getBiometricCredentials();
+      if (!creds?.email || !creds?.password) {
+        setError(`${bioLabel} sign-in unavailable — please log in with your password.`);
+        setBusy(false);
+        return;
+      }
+      const user = await loginV2(creds.email, creds.password);
+      haptics.onSuccess?.();
+      onLoggedIn?.(user);
+    } catch (err) {
+      haptics.onError?.();
+      setError(err?.isAuthError ? `Saved ${bioLabel} login is no longer valid — use your password.` : (err?.message || 'Login failed.'));
+    } finally {
+      setBusy(false);
+    }
+  }, [bioLabel, onLoggedIn]);
 
   return (
     <KeyboardAvoidingView
@@ -102,6 +168,22 @@ export default function LoginScreen({ onLoggedIn }) {
             <Text style={styles.btnText}>CONTINUE</Text>
           )}
         </TouchableOpacity>
+
+        {bioEnabled && (
+          <TouchableOpacity
+            style={styles.bioBtn}
+            onPress={handleBiometric}
+            disabled={busy}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={bioLabel === 'Touch ID' ? 'finger-print' : 'scan-circle-outline'}
+              size={20}
+              color={colors.gold}
+            />
+            <Text style={styles.bioBtnText}>Sign in with {bioLabel}</Text>
+          </TouchableOpacity>
+        )}
 
         {!!error && <Text style={styles.error}>{error}</Text>}
 
@@ -174,6 +256,17 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.5 },
   btnInner: { flexDirection: 'row', alignItems: 'center' },
+  bioBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    width: '100%', height: 50, borderRadius: 11,
+    borderWidth: 1.5, borderColor: 'rgba(212,175,55,0.4)',
+    backgroundColor: 'rgba(212,175,55,0.07)',
+    marginBottom: 16,
+  },
+  bioBtnText: {
+    color: colors.gold, fontSize: 13, fontWeight: '700',
+    letterSpacing: 0.6, marginLeft: 8,
+  },
   btnText: {
     color: colors.navy,
     fontSize: 13,

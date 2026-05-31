@@ -16,11 +16,13 @@ import PodcastScreen          from './src/screens/PodcastScreen';
 import SettingsScreen         from './src/screens/SettingsScreen';
 import FundScreen             from './src/screens/FundScreen';
 import LoginScreen            from './src/screens/LoginScreen';
+import LockScreen             from './src/screens/LockScreen';
 import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
 import WatchlistScreen        from './src/screens/WatchlistScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
 import { whoamiV2, getV2User, logoutV2 } from './src/api/client';
+import { isBiometricEnabled, disableBiometric } from './src/api/biometric';
 import { colors } from './src/design';
 
 const Stack = createNativeStackNavigator();
@@ -106,7 +108,8 @@ async function checkForOtaUpdate() {
 }
 
 export default function App() {
-  // null = checking, 'login' = show login, otherwise the v2 user object
+  // null = checking, 'locked' = biometric gate, 'login' = show login,
+  // otherwise the v2 user object
   const [authState, setAuthState] = useState(null);
   // Demo admin can toggle between GP admin view and LP investor view
   const [lpMode, setLpMode] = useState(false);
@@ -122,17 +125,35 @@ export default function App() {
     setAuthState(verified || 'login');
   }, []);
 
+  // Launch gate: if the user enabled the biometric lock, show it BEFORE any
+  // data — the v2 session persists, so without this the app would open straight
+  // into the portfolio. Otherwise fall through to the normal cached-then-verify.
+  const bootstrap = useCallback(async () => {
+    if (await isBiometricEnabled()) {
+      setAuthState('locked');
+    } else {
+      await refreshAuth();
+    }
+  }, [refreshAuth]);
+
   useEffect(() => {
     checkForOtaUpdate();
-    refreshAuth();
-  }, [refreshAuth]);
+    bootstrap();
+  }, [bootstrap]);
 
   const handleLoggedIn = useCallback((user) => {
     setLpMode(false);   // always start in admin view after fresh login
     setAuthState(user);
   }, []);
+
+  // LockScreen resolved a session (or 'login' if the stored session was stale).
+  const handleUnlocked = useCallback((user) => {
+    setLpMode(false);
+    setAuthState(user || 'login');
+  }, []);
   const handleLogout = useCallback(async () => {
     await logoutV2();          // clear v2 token + cached user from AsyncStorage
+    await disableBiometric();  // full sign-out also clears the biometric lock + stored creds
     setLpMode(false);
     setAuthState('login');
   }, []);
@@ -144,6 +165,19 @@ export default function App() {
         <StatusBar style="light" />
         <ActivityIndicator color={colors.gold} size="large" />
       </View>
+    );
+  }
+
+  // ── Biometric lock → require Face ID / Touch ID before revealing data ─────
+  if (authState === 'locked') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <LockScreen
+          onUnlocked={handleUnlocked}
+          onUsePassword={() => setAuthState('login')}
+        />
+      </>
     );
   }
 

@@ -7,8 +7,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
 import {
   api, getBaseUrl, setBaseUrl, resetBaseUrlToProd,
-  getStoredPassword, login, logoutV2,
+  getStoredPassword, login, logoutV2, getV2User,
 } from '../api/client';
+import {
+  isBiometricAvailable, isBiometricEnabled, getBiometricLabel,
+  enableBiometric, disableBiometric,
+} from '../api/biometric';
 import { colors } from '../components/theme';
 import AppHeader from '../components/AppHeader';
 
@@ -86,6 +90,12 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
   const [testingConn, setTestingConn]   = useState(false);
   const [savingPw, setSavingPw]         = useState(false);
 
+  // Biometric lock (Face ID / Touch ID)
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioEnabled, setBioEnabled]     = useState(false);
+  const [bioLabel, setBioLabel]         = useState('Face ID');
+  const [bioBusy, setBioBusy]           = useState(false);
+
   // OTA
   const [serverBuild, setServerBuild]       = useState(null);
   const [updateState, setUpdateState]       = useState('idle');
@@ -109,7 +119,41 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
     getStoredPassword().then(pw => setPassword(pw || ''));
     api.getBuild().then(j => setServerBuild(j?.build || 'unknown')).catch(() => setServerBuild('offline'));
     loadAutomationSettings();
+    (async () => {
+      setBioAvailable(await isBiometricAvailable());
+      setBioEnabled(await isBiometricEnabled());
+      setBioLabel(await getBiometricLabel());
+    })();
   }, []);
+
+  // Toggle the biometric lock. We don't have the user's v2 password here
+  // (loginV2 never stores it), so a Settings-enable gates the *current* session
+  // token. If that token later expires, the unlock flow drops to the password
+  // screen, where enabling again captures full credentials for silent re-login.
+  const handleToggleBiometric = async (next) => {
+    setBioBusy(true);
+    try {
+      if (next) {
+        const user = await getV2User();
+        const email = user?.email || '';
+        const ok = await enableBiometric(email, '');   // token-gated; password captured at next login
+        setBioEnabled(ok);
+        if (ok) {
+          Alert.alert(
+            `${bioLabel} enabled`,
+            `You'll unlock DGA Capital with ${bioLabel} on next open.`,
+          );
+        }
+      } else {
+        await disableBiometric();
+        setBioEnabled(false);
+      }
+    } catch {
+      Alert.alert('Error', `Could not update ${bioLabel}.`);
+    } finally {
+      setBioBusy(false);
+    }
+  };
 
   const loadAutomationSettings = async () => {
     setAutoLoading(true);
@@ -345,6 +389,31 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
           )}
         </View>
 
+        {/* ── Security / Biometric lock ── */}
+        {bioAvailable && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>SECURITY</Text>
+            <View style={styles.bioRow}>
+              <View style={{ flexShrink: 1, paddingRight: 12 }}>
+                <Text style={styles.bioRowTitle}>{bioLabel} lock</Text>
+                <Text style={styles.sectionHint}>
+                  Require {bioLabel} every time you open the app.
+                </Text>
+              </View>
+              {bioBusy ? (
+                <ActivityIndicator color={colors.primary} style={{ marginTop: 4 }} />
+              ) : (
+                <Switch
+                  value={bioEnabled}
+                  onValueChange={handleToggleBiometric}
+                  trackColor={{ false: colors.lightGray, true: colors.primary }}
+                  thumbColor={colors.white}
+                />
+              )}
+            </View>
+          </View>
+        )}
+
         {/* ── Automation Schedule ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>AUTOMATION SCHEDULE</Text>
@@ -513,6 +582,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 8 },
   sectionHint:  { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 10 },
+  bioRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bioRowTitle: { fontSize: 15, fontWeight: '600', color: colors.darkGray, marginBottom: 2 },
   hint_default: { fontSize: 12, color: colors.midGray },
   hint_code:    { fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '700' },
   input: {
