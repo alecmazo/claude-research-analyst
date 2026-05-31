@@ -17381,6 +17381,35 @@ _AGENTIC_TOOLS = [
         },
     },
     {
+        "name": "list_portfolios",
+        "description": "List the managed-account portfolios (individual client "
+                       "accounts — e.g. a client's IRA vs. taxable account) by their "
+                       "EXACT names, with holding count and market value. Call this "
+                       "FIRST whenever asked to analyze, compare, or optimize specific "
+                       "named accounts (e.g. 'anat-ira', 'anat-def') so you learn the "
+                       "real account names and can map the user's loose label to the "
+                       "actual account before pulling holdings.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_portfolio_holdings",
+        "description": "Get the full current holdings of ONE managed account, matched "
+                       "loosely by name (e.g. 'ANAT IRA', 'Anatoly IRA', 'ira'). "
+                       "Returns each position with symbol, shares, cost basis, LIVE "
+                       "price, market value, portfolio WEIGHT %, unrealized gain %, and "
+                       "sector — plus total value and a sector allocation breakdown. "
+                       "THE source for what a specific account holds and its allocation/"
+                       "concentration/risk mix. Combine with read_saved_report (our "
+                       "thesis + price targets per name), get_ytd_attribution (realized "
+                       "return), and get_financials to reason about optimizing it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"portfolio": {"type": "string",
+                            "description": "Account name or fragment, e.g. 'ANAT IRA'."}},
+            "required": ["portfolio"],
+        },
+    },
+    {
         "name": "web_search",
         "description": "Search the live web + X (Twitter) for current information past "
                        "the model's training cutoff — breaking news, recent analyst "
@@ -17503,6 +17532,115 @@ def _agentic_exec_tool(name: str, args: dict) -> str:
                 side = "both"
             res = _opt.scan_wheel(tks, delta_max=dmax, side=side)
             return json.dumps(res, default=str)
+
+        if name == "list_portfolios":
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT f.id, f.name, f.short_name, f.fund_type,
+                           s.symbol, SUM(tl.quantity) AS qty,
+                           SUM(tl.quantity * tl.cost_basis_per_unit) AS cost
+                      FROM funds f
+                      JOIN tax_lots tl ON tl.fund_id = f.id AND tl.closed_at IS NULL
+                      JOIN securities s ON s.id = tl.security_id
+                     WHERE f.fund_type = 'managed_account'
+                       AND COALESCE(f.status, '') <> 'closed'
+                     GROUP BY f.id, f.name, f.short_name, f.fund_type, s.symbol
+                     HAVING SUM(tl.quantity) <> 0
+                """)
+                rows = cur.fetchall() or []
+            allsyms = sorted({r["symbol"] for r in rows if r.get("symbol")})
+            quotes = batch_quotes(",".join(allsyms)) if allsyms else {}
+            funds: dict = {}
+            for r in rows:
+                f = funds.setdefault(str(r["id"]),
+                                     {"name": r["name"], "short_name": r["short_name"],
+                                      "type": r["fund_type"], "holdings": 0,
+                                      "market_value": 0.0, "cost_basis": 0.0})
+                f["holdings"] += 1
+                f["cost_basis"] += float(r["cost"] or 0)
+                px = (quotes.get(r["symbol"]) or {}).get("price")
+                if px and r.get("qty"):
+                    f["market_value"] += float(r["qty"]) * float(px)
+            out = sorted(funds.values(), key=lambda x: -x["market_value"])
+            for f in out:
+                f["market_value"] = round(f["market_value"], 2)
+                f["cost_basis"] = round(f["cost_basis"], 2)
+            return json.dumps({"portfolios": out, "count": len(out)}, default=str)
+
+        if name == "get_portfolio_holdings":
+            qname = (args.get("portfolio") or "").strip()
+            if not qname:
+                return "portfolio name is required."
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                return "DB unavailable."
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""SELECT id, name, short_name FROM funds
+                                WHERE fund_type = 'managed_account'
+                                  AND COALESCE(status, '') <> 'closed'
+                                  AND (short_name ILIKE %s OR name ILIKE %s)
+                                ORDER BY short_name LIMIT 1""",
+                            (f"%{qname}%", f"%{qname}%"))
+                fund = cur.fetchone()
+                if not fund:
+                    return json.dumps({"error": f"No managed account matches '{qname}'. "
+                                       "Call list_portfolios for the exact account names."})
+                cur.execute("""SELECT s.symbol, s.name AS sec_name, s.asset_class,
+                                      SUM(tl.quantity) AS qty,
+                                      SUM(tl.quantity * tl.cost_basis_per_unit)
+                                          / NULLIF(SUM(tl.quantity), 0) AS avg_cost
+                                 FROM tax_lots tl
+                                 JOIN securities s ON s.id = tl.security_id
+                                WHERE tl.fund_id = %s AND tl.closed_at IS NULL
+                                GROUP BY s.id, s.symbol, s.name, s.asset_class
+                                HAVING SUM(tl.quantity) <> 0""", (fund["id"],))
+                rows = cur.fetchall() or []
+            syms = [r["symbol"] for r in rows if r.get("symbol")]
+            quotes = batch_quotes(",".join(syms)) if syms else {}
+            metas = _db_meta(syms)
+            holdings, total_mv = [], 0.0
+            for r in rows:
+                sym = r["symbol"]
+                qty = float(r["qty"] or 0)
+                px = (quotes.get(sym) or {}).get("price")
+                avg = float(r["avg_cost"]) if r.get("avg_cost") is not None else None
+                mv = qty * px if px else None
+                if mv:
+                    total_mv += mv
+                sector = (metas.get(sym) or {}).get("sector")
+                if not sector:
+                    try:
+                        sector = (get_ticker_meta(sym) or {}).get("sector")
+                    except Exception:
+                        sector = None
+                holdings.append({
+                    "symbol": sym, "name": r.get("sec_name"),
+                    "asset_class": r.get("asset_class"),
+                    "shares": round(qty, 4),
+                    "avg_cost": round(avg, 2) if avg else None,
+                    "price": round(px, 2) if px else None,
+                    "market_value": round(mv, 2) if mv else None,
+                    "unrealized_gain_pct": (round((px - avg) / avg * 100, 2)
+                                            if (px and avg) else None),
+                    "sector": sector or "Unknown"})
+            sector_alloc: dict = {}
+            for h in holdings:
+                if h["market_value"] and total_mv:
+                    h["weight_pct"] = round(h["market_value"] / total_mv * 100, 2)
+                    sector_alloc[h["sector"]] = round(
+                        sector_alloc.get(h["sector"], 0) + h["weight_pct"], 2)
+                else:
+                    h["weight_pct"] = None
+            holdings.sort(key=lambda h: -(h["market_value"] or 0))
+            return json.dumps({
+                "portfolio": fund["short_name"] or fund["name"],
+                "account_full_name": fund["name"],
+                "total_market_value": round(total_mv, 2),
+                "positions": len(holdings),
+                "sector_allocation_pct": dict(sorted(sector_alloc.items(),
+                                                     key=lambda x: -x[1])),
+                "holdings": holdings}, default=str)[:9000]
 
         if name == "read_saved_report":
             tk = (args.get("ticker") or "").upper().strip()
