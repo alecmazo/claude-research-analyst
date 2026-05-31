@@ -6243,10 +6243,16 @@ def _builder_classify_sector(raw_sector: str) -> str:
 # Process-global sector cache so a ticker is resolved at most once per process.
 # "" = negative cache (resolved to nothing — don't retry this process).
 _BUILDER_SECTOR_CACHE: dict = {}
-_BUILDER_SECTOR_RESOLVE_CAP = 30   # max SIC resolves/request (~0.3s each via EDGAR,
-                                   # well under the 20s cap; persisted so it's a
-                                   # one-time cost — a couple Refresh clicks warm all)
+_BUILDER_SECTOR_RESOLVE_CAP = 40   # max SIC resolves per BACKGROUND run (off the
+                                   # request path); persisted so it's a one-time
+                                   # cost — a couple Refresh clicks warm the universe
 _BUILDER_EDGAR_ID = [False]        # whether edgar set_identity has been called
+
+# Tickers the last pool build couldn't sector from the store, awaiting the
+# BACKGROUND resolver (kicked by ?fresh=1). The request path NEVER resolves
+# inline — that timed the whole pool out on the cloud IP.
+_BUILDER_UNRESOLVED: set = set()
+_BUILDER_BG_RESOLVING = [False]    # re-entrancy guard for the background resolver
 
 
 def _sic_to_sector(s: int):
@@ -6328,6 +6334,49 @@ def _builder_resolve_sector_live(tk: str):
         return sec, None
     _BUILDER_SECTOR_CACHE[tk] = ""
     return None, None
+
+
+def _builder_resolve_universe_sectors():
+    """BACKGROUND task: drain `_BUILDER_UNRESOLVED`, resolving each ticker's
+    sector via EDGAR SIC and persisting to security_meta. Runs OFF the request
+    path (FastAPI BackgroundTasks), so even if every resolve is slow it never
+    touches the pool's response time. The next pool build reads the freshly
+    persisted sectors from the store. Re-entrancy-guarded so overlapping
+    Refresh clicks don't double-resolve."""
+    if _BUILDER_BG_RESOLVING[0]:
+        return
+    _BUILDER_BG_RESOLVING[0] = True
+    try:
+        # Snapshot up to the cap; leave the rest queued for the next Refresh.
+        pending = sorted(_BUILDER_UNRESOLVED)[:_BUILDER_SECTOR_RESOLVE_CAP]
+        _BUILDER_UNRESOLVED.difference_update(pending)
+        if not pending:
+            return
+        resolved: list[tuple] = []
+        for tk in pending:
+            # Skip if another path already resolved it this process.
+            cached = _BUILDER_SECTOR_CACHE.get(tk)
+            if cached:
+                resolved.append((tk, cached, None))
+                continue
+            if tk in _BUILDER_SECTOR_CACHE:   # negative-cached ("") — don't retry
+                continue
+            sec, ind = _builder_resolve_sector_live(tk)
+            if sec:
+                resolved.append((tk, sec, ind))
+        if resolved and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            try:
+                with _fund_conn() as _c, _c.cursor() as _cur:
+                    for _tk, _sec, _ind in resolved:
+                        _store_meta(_cur, _tk, {"sector": _sec, "industry": _ind, "name": None})
+                    _c.commit()
+                print(f"[builder] bg-resolved {len(resolved)} sectors → store", flush=True)
+            except Exception as _pe:
+                print(f"[builder] bg sector persist failed: {_pe!s:.120}", flush=True)
+    except Exception as e:
+        print(f"[builder] bg resolve error: {e!s:.120}", flush=True)
+    finally:
+        _BUILDER_BG_RESOLVING[0] = False
 
 
 # Words that match the ticker-shaped regex but are clearly financial jargon,
@@ -6553,8 +6602,6 @@ def _builder_fetch_candidates() -> list[dict]:
 
     # ── 4. Build candidate dicts for report subjects ─────────────────────
     out: list[dict] = []
-    _resolve_budget = [_BUILDER_SECTOR_RESOLVE_CAP]   # 1-elem list → mutable in loop
-    _to_persist: list = []                            # (tk, sector, industry) batch
     for r in rows:
         try:
             tk = (r["ticker"] or "").strip().upper()
@@ -6566,21 +6613,14 @@ def _builder_fetch_candidates() -> list[dict]:
                 sector_raw, name = dm["sector"], (dm.get("name") or tk)
             elif dm and dm.get("name"):
                 name = dm["name"]
-            # Self-heal: if the store had no sector, resolve it now — bounded,
-            # via the un-throttled SEC-SIC fallback (NO market sync, no cross-tab
-            # dependency). Process-cached + persisted to the store for next time.
-            if sector_raw == "Unknown":
-                if tk in _BUILDER_SECTOR_CACHE:
-                    if _BUILDER_SECTOR_CACHE[tk]:
-                        sector_raw = _BUILDER_SECTOR_CACHE[tk]
-                elif _resolve_budget[0] > 0:
-                    _resolve_budget[0] -= 1
-                    _sec, _ind = _builder_call_timeout(
-                        lambda: _builder_resolve_sector_live(tk), 4.0, (None, None))
-                    if _sec:
-                        sector_raw = _sec
-                        _to_persist.append((tk, _sec, _ind))
-                        _BUILDER_CANDIDATES_DIAG.setdefault("sector_resolved", []).append(tk)
+            # PURE-DB request path — ZERO live network calls (any sync resolve, even
+            # EDGAR, can blow the time cap on the cloud IP and empty the whole pool).
+            # Use the in-process sector cache if present; the STORE is filled by the
+            # background resolver (kicked by Refresh) + the 10-min autosync.
+            if sector_raw == "Unknown" and _BUILDER_SECTOR_CACHE.get(tk):
+                sector_raw = _BUILDER_SECTOR_CACHE[tk]
+            if sector_raw == "Unknown" and tk not in _BUILDER_SECTOR_CACHE:
+                _BUILDER_UNRESOLVED.add(tk)   # queue for the background resolver
             sector = _builder_classify_sector(sector_raw)
             q = quotes.get(tk) or {}
             # Conservative (less-aggressive) target/upside when both LLMs ran.
@@ -6623,17 +6663,6 @@ def _builder_fetch_candidates() -> list[dict]:
                 f"{(r.get('ticker') or '?')}: {type(_e).__name__}: {_e!s:.80}")
             continue
 
-    # Persist freshly-resolved sectors back to the store in ONE connection, so the
-    # next cold load reads them instantly (a one-time cost per ticker).
-    if _to_persist and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
-        try:
-            with _fund_conn() as _c, _c.cursor() as _cur:
-                for _tk, _sec, _ind in _to_persist:
-                    _store_meta(_cur, _tk, {"sector": _sec, "industry": _ind, "name": None})
-                _c.commit()
-        except Exception as _pe:
-            print(f"[builder] sector persist failed: {_pe!s:.120}", flush=True)
-
     # ── 5. Build candidate dicts for comp tickers ────────────────────────
     # For comps, derive upside_pct from yfinance analyst targetMeanPrice
     # when available. If neither current price nor target is known, skip
@@ -6646,6 +6675,10 @@ def _builder_fetch_candidates() -> list[dict]:
                 sector_raw, name = dm["sector"], (dm.get("name") or tk)
             elif dm and dm.get("name"):
                 name = dm["name"]
+            if sector_raw == "Unknown" and _BUILDER_SECTOR_CACHE.get(tk):
+                sector_raw = _BUILDER_SECTOR_CACHE[tk]
+            if sector_raw == "Unknown" and tk not in _BUILDER_SECTOR_CACHE:
+                _BUILDER_UNRESOLVED.add(tk)   # queue for the background resolver
             sector = _builder_classify_sector(sector_raw)
 
             q = quotes.get(tk) or {}
@@ -6684,7 +6717,9 @@ def _builder_fetch_candidates() -> list[dict]:
             continue
 
     _BUILDER_CANDIDATES_DIAG.update(returned=len(out),
-                                    unknown_sector=sum(1 for c in out if c.get("sector") == "Unknown"))
+                                    unknown_sector=sum(1 for c in out if c.get("sector") == "Unknown"),
+                                    other_sector=sum(1 for c in out if c.get("sector") == "Other"),
+                                    bg_queue=len(_BUILDER_UNRESOLVED))
     # NEVER cache an empty result — always retry next call so a transient miss
     # can't get stuck for the 10-min TTL.
     if out:
@@ -6696,7 +6731,7 @@ def _builder_fetch_candidates() -> list[dict]:
 
 
 @app.get("/api/v2/builder/candidates")
-def builder_candidates(request: Request, fresh: int = 0):
+def builder_candidates(request: Request, background_tasks: BackgroundTasks, fresh: int = 0):
     """Return all eligible Builder candidates with sector + EV.
 
     Response: {
@@ -6704,21 +6739,25 @@ def builder_candidates(request: Request, fresh: int = 0):
       by_sector:  {sector: [tickers...]},
       sectors:    [{name, count, median_upside_pct}, ...]
     }
-    `fresh=1` (the pool's Refresh button) busts the 10-min cache so sectors
-    re-resolve against the store + SEC-SIC fallback on this call.
+    `fresh=1` (the pool's Refresh button) busts the 10-min cache AND kicks the
+    background sector resolver — the request itself stays PURE-DB (zero network),
+    so it returns instantly; real sectors land in the store for the next build.
     """
     _claims_or_401(request)
     if fresh:
         _BUILDER_CANDIDATES_CACHE["data"] = None
         _BUILDER_CANDIDATES_CACHE["ts"] = 0
-    # Hard cap so the endpoint can NEVER hang — covers not just slow yfinance
-    # calls (already per-call timed-out inside) but a stalled DB connection
-    # (_fund_conn over the SSH tunnel), which the inner timeouts don't catch.
-    # On timeout, serve whatever's cached (else an empty pool) so the UI resolves
-    # instead of spinning on "Loading saved reports…" forever. Raised to 20s
-    # because the first cold load may resolve up to ~14 sectors live (SEC-SIC).
-    cands = _builder_call_timeout(_builder_fetch_candidates, 20.0,
+    # Hard cap so the endpoint can NEVER hang — the fetch is now PURE-DB (no live
+    # network calls; sector resolution moved to the background task below), so 12s
+    # is comfortable. Covers a stalled DB connection (_fund_conn over the SSH
+    # tunnel). On timeout, serve whatever's cached (else empty) so the UI resolves
+    # instead of spinning on "Loading saved reports…" forever.
+    cands = _builder_call_timeout(_builder_fetch_candidates, 12.0,
                                   _BUILDER_CANDIDATES_CACHE.get("data") or [])
+    # Kick the background sector resolver for any tickers the store couldn't
+    # sector (only on an explicit Refresh, so a normal poll doesn't spawn work).
+    if fresh and _BUILDER_UNRESOLVED:
+        background_tasks.add_task(_builder_resolve_universe_sectors)
     by_sector: dict[str, list[str]] = {}
     upside_by_sec: dict[str, list[float]] = {}
     for c in cands:
