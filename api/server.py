@@ -19865,39 +19865,81 @@ def _held_tickers() -> list:
         return []
 
 
-def _run_options_scan(job_id: str, calls_tickers: list, puts_tickers: list,
+def _saved_report_tickers() -> list:
+    """Tickers with a saved (non-archived) analyst report — the research
+    coverage universe shown on the Research page (the 'Saved Reports' list)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT ticker FROM analyst_reports "
+                        "WHERE archived IS NOT TRUE ORDER BY ticker")
+            return [(r.get("ticker") or "").strip().upper()
+                    for r in (cur.fetchall() or []) if r.get("ticker")]
+    except Exception as e:
+        print(f"[options scan] saved-report tickers query failed: {e!s:.150}", flush=True)
+        return []
+
+
+# Cloud-IP yfinance is rate-limited, so each name costs ~3 option-chain fetches;
+# cap the sweep so a scan finishes in a reasonable time. Truncation is reported.
+_OPTIONS_SCAN_CAP = 60
+
+
+def _wheel_rank_key(row: dict, side_key: str, yield_field: str):
+    """Sort key implementing 'rank by the WEEKLY annualized yield; monthly and
+    quarterly trail behind.' A name with a weekly setup always ranks above one
+    with only a longer tenor; within a tenor, higher annualized yield wins."""
+    m = row.get(side_key) or {}
+    for tier, bucket in ((2, "weekly"), (1, "monthly"), (0, "quarterly")):
+        c = m.get(bucket)
+        if c:
+            return (tier, c.get(yield_field) or 0)
+    return (-1, 0)
+
+
+def _run_options_scan(job_id: str, universe: list, held_set: list,
                       delta_max: float) -> None:
-    """Background worker: scan covered calls over holdings, cash-secured puts
-    over the watchlist, ranking each list by IV-vs-realized vol richness."""
+    """Background worker. Scans each name for BOTH covered calls and cash-secured
+    puts. Covered-call rows are limited to names you HOLD (you must own the
+    shares); cash-secured-put rows span the whole universe (watchlist + saved
+    reports + holdings). Both tables are ranked by weekly annualized yield."""
     import options_engine as _opt
+    held = set(held_set)
 
     def _set(**kw):
         _options_scan_jobs[job_id] = {**(_options_scan_jobs.get(job_id) or {}), **kw,
                                       "updated_at": time.time()}
-    total = len(calls_tickers) + len(puts_tickers)
+    total = len(universe)
     _set(stage="scanning", status="running", label="Starting…", total=total, done=0)
     try:
-        cc_rows, csp_rows, done = [], [], 0
-        for tk in calls_tickers:
-            _set(label=f"⚙ {tk} calls ({done+1}/{total})…", done=done)
-            try:
-                cc_rows.append(_opt.scan_ticker(tk, delta_max=delta_max, side="calls"))
-            except Exception as e:
-                cc_rows.append({"ticker": tk, "ok": False, "error": f"{e!s:.150}"})
-            done += 1
-        for tk in puts_tickers:
-            _set(label=f"⚙ {tk} puts ({done+1}/{total})…", done=done)
-            try:
-                csp_rows.append(_opt.scan_ticker(tk, delta_max=delta_max, side="puts"))
-            except Exception as e:
-                csp_rows.append({"ticker": tk, "ok": False, "error": f"{e!s:.150}"})
-            done += 1
-        cc_rows.sort(key=lambda r: (r.get("iv_hv_ratio") or 0), reverse=True)
-        csp_rows.sort(key=lambda r: (r.get("iv_hv_ratio") or 0), reverse=True)
-        ok_n = sum(1 for r in cc_rows + csp_rows if r.get("ok"))
+        rows = []
+        for i, tk in enumerate(universe):
+            _set(label=f"⚙ {tk} ({i+1}/{total})…", done=i)
+            # Per-name timeout: one slow/blocked name can't stall the whole sweep.
+            r = _builder_call_timeout(
+                lambda: _opt.scan_ticker(tk, delta_max=delta_max, side="both"),
+                20.0, {"ticker": tk, "ok": False, "error": "timed out"})
+            if not isinstance(r, dict):
+                r = {"ticker": tk, "ok": False, "error": "no result"}
+            r["held"] = tk in held
+            rows.append(r)
+
+        def _has(r, k):
+            m = r.get(k) or {}
+            return any(m.get(b) for b in ("weekly", "monthly", "quarterly"))
+        cc_rows = [r for r in rows if r.get("held") and _has(r, "covered_calls")]
+        csp_rows = [r for r in rows if _has(r, "cash_secured_puts")]
+        cc_rows.sort(key=lambda r: _wheel_rank_key(r, "covered_calls",
+                                                   "static_return_annualized"), reverse=True)
+        csp_rows.sort(key=lambda r: _wheel_rank_key(r, "cash_secured_puts",
+                                                    "yield_on_cash_annualized"), reverse=True)
+        ok_n = sum(1 for r in rows if r.get("ok"))
         _set(stage="done", status="done", done=total,
-             label=f"✓ Scanned {ok_n}/{total} names",
+             label=f"✓ Scanned {ok_n}/{total} names · {len(cc_rows)} call / {len(csp_rows)} put setups",
              result={"delta_max": delta_max,
+                     "universe_size": total,
+                     "held_count": len(held),
                      "covered_calls": cc_rows,
                      "cash_secured_puts": csp_rows,
                      "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
@@ -19908,8 +19950,9 @@ def _run_options_scan(job_id: str, calls_tickers: list, puts_tickers: list,
 
 @app.post("/api/options/scan")
 async def options_scan(req: Request, background_tasks: BackgroundTasks):
-    """Queue a wheel scan. Body: {delta_max?, side?, tickers?}. With no tickers,
-    sweeps held names for covered calls and the watchlist for cash-secured puts."""
+    """Queue a wheel scan. Body: {delta_max?, tickers?}. With no tickers, sweeps
+    the union of holdings + watchlist + saved-report names. Covered calls are
+    limited to held names; cash-secured puts span the whole universe."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -19923,33 +19966,40 @@ async def options_scan(req: Request, background_tasks: BackgroundTasks):
     except Exception:
         delta_max = 0.30
     delta_max = max(0.05, min(delta_max, 0.95))
-    side = (body.get("side") or "both").lower()
-    if side not in ("both", "calls", "puts"):
-        side = "both"
+    held = _filter_scan_tickers(_held_tickers())
     explicit = [str(t).upper().strip() for t in (body.get("tickers") or [])
                 if t and str(t).strip()]
     if explicit:
-        calls_tickers = explicit if side in ("both", "calls") else []
-        puts_tickers = explicit if side in ("both", "puts") else []
+        universe = _filter_scan_tickers(explicit)
     else:
-        held = _filter_scan_tickers(_held_tickers())
+        # Union: holdings, then watchlist, then saved-report coverage. Held names
+        # go first so they're never pushed out of the cap.
         watch = _filter_scan_tickers(analyst.load_watchlist())
-        calls_tickers = held[:60] if side in ("both", "calls") else []
-        puts_tickers = watch[:60] if side in ("both", "puts") else []
-    if not calls_tickers and not puts_tickers:
+        reports = _filter_scan_tickers(_saved_report_tickers())
+        seen, universe = set(), []
+        for src in (held, watch, reports):
+            for t in src:
+                if t not in seen:
+                    seen.add(t)
+                    universe.append(t)
+    truncated = len(universe) > _OPTIONS_SCAN_CAP
+    universe = universe[:_OPTIONS_SCAN_CAP]
+    uset = set(universe)
+    held_set = [t for t in held if t in uset]
+    if not universe:
         return JSONResponse({"ok": False,
-                             "error": "No tickers to scan (no holdings or watchlist found)."},
+                             "error": "No tickers to scan (no holdings, watchlist, or saved reports found)."},
                             status_code=400)
     import uuid as _uuid
     job_id = "OPTSCAN_" + _uuid.uuid4().hex[:12]
     _options_scan_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                   "started_at": time.time(), "updated_at": time.time(),
-                                  "total": len(calls_tickers) + len(puts_tickers), "done": 0}
-    background_tasks.add_task(_run_options_scan, job_id, calls_tickers, puts_tickers, delta_max)
-    print(f"⚙ [options scan] queued {job_id}  CC={len(calls_tickers)} "
-          f"CSP={len(puts_tickers)} dmax={delta_max}", flush=True)
-    return {"ok": True, "job_id": job_id, "calls_tickers": calls_tickers,
-            "puts_tickers": puts_tickers, "delta_max": delta_max}
+                                  "total": len(universe), "done": 0}
+    background_tasks.add_task(_run_options_scan, job_id, universe, held_set, delta_max)
+    print(f"⚙ [options scan] queued {job_id}  universe={len(universe)} "
+          f"held={len(held_set)} trunc={truncated} dmax={delta_max}", flush=True)
+    return {"ok": True, "job_id": job_id, "universe": universe, "held": held_set,
+            "truncated": truncated, "delta_max": delta_max}
 
 
 @app.get("/api/options/scan/{job_id}")

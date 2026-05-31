@@ -4298,7 +4298,7 @@
 <div id="tab-options" class="tab-panel">
   <div class="wide-shell">
     <div class="tab-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <h2>🎯 Options Wheel <span style="font-size:11px;font-weight:500;color:var(--mid);">— covered calls on holdings · cash-secured puts on watchlist</span></h2>
+      <h2>🎯 Options Wheel <span style="font-size:11px;font-weight:500;color:var(--mid);">— covered calls on holdings · cash-secured puts across watchlist + saved reports</span></h2>
       <span style="flex:1;"></span>
       <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">
         Max assignment Δ
@@ -4314,12 +4314,13 @@
       <div id="opt-cc"></div>
     </section>
     <section class="panel" style="margin-top:14px;">
-      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📉 Cash-secured puts <span style="font-weight:500;color:var(--mid);">— on watchlist names you'd enter</span></h3>
+      <h3 style="margin:0 0 8px;font-size:13px;color:var(--text-primary);">📉 Cash-secured puts <span style="font-weight:500;color:var(--mid);">— across watchlist + saved reports</span></h3>
       <div id="opt-csp"></div>
     </section>
     <div style="margin-top:10px;font-size:11px;color:var(--dim);line-height:1.5;">
       Each tenor (weekly / monthly / quarterly) shows the best strike to <b>sell</b>: highest annualized premium yield with assignment probability ≤ your Δ cap.
-      <b>IV/HV</b> &gt; 1 (green) = implied vol above the stock's own realized vol → premium is relatively rich. Δ ≈ chance of assignment. Informational only — not investment advice.
+      Rows are <b>ranked by the weekly annualized yield</b> (names with only a monthly/quarterly setup trail below). Covered calls are limited to names you <b>HOLD</b> (you must own the shares); cash-secured puts span your whole universe — watchlist + saved reports.
+      <b>IV/HV</b> &gt; 1 (green) = implied vol above the stock's own realized vol → premium is relatively rich. <b>Cushion</b> = how far the stock can fall before the call trade is underwater. Δ ≈ chance of assignment. Informational only — not investment advice.
     </div>
   </div>
 </div><!-- #tab-options -->
@@ -5027,7 +5028,7 @@
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      status.textContent = `Scanning ${j.calls_tickers.length} holdings + ${j.puts_tickers.length} watchlist names…`;
+      status.textContent = `Scanning ${j.universe.length} names (holdings + watchlist + saved reports)${j.truncated ? ' — capped at 60' : ''}…`;
       _optPoll = setInterval(async () => {
         try {
           const pr = await window.dgaFetch('/api/options/scan/' + j.job_id);
@@ -5068,7 +5069,7 @@
       const m = r[key];
       const rich = (r.iv_hv_ratio != null && r.iv_hv_ratio >= 1) ? '#16a34a' : '#64748b';
       html += `<tr>
-        <td class="tk">${r.ticker}</td>
+        <td class="tk">${r.ticker}${r.held ? ' <span title="You hold this — covered call is actionable" style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#16a34a;border:1px solid #16a34a;border-radius:4px;padding:1px 4px;vertical-align:middle;">HELD</span>' : ''}</td>
         <td style="font-variant-numeric:tabular-nums;">$${r.spot}</td>
         <td style="color:${rich};font-weight:700;">${r.iv_hv_ratio != null ? r.iv_hv_ratio : '—'}</td>
         ${_optBucketCell(m.weekly, kind)}
@@ -5083,7 +5084,7 @@
     document.getElementById('opt-cc').innerHTML = _optTable(res.covered_calls, 'cc');
     document.getElementById('opt-csp').innerHTML = _optTable(res.cash_secured_puts, 'csp');
     document.getElementById('opt-status').textContent =
-      `Δ ≤ ${res.delta_max} · scanned ${res.scanned_at} · ranked by premium richness (implied vs. realized vol)`;
+      `Δ ≤ ${res.delta_max} · ${res.universe_size} names scanned · ${res.scanned_at} · ranked by weekly annualized yield`;
   }
 
   // ── Quick Actions (panel removed — kept for any remaining data-action buttons) ──
