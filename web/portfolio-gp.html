@@ -6095,20 +6095,75 @@
         const ic = TOOL_ICON[tc.tool] || '🔧';
         return `<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">${ic} ${esc(tc.tool)}</span>`;
       }).join('');
-      const answer = _dgaMarkdown(r.answer || '(no answer)');
+      // Detect an optional ```sleeve {json} block (proposed target allocation):
+      // strip it from the displayed prose and offer a one-click push to Builder.
+      let rawAnswer = r.answer || '(no answer)';
+      let sleeve = null;
+      const sm = rawAnswer.match(/```sleeve\s*([\s\S]*?)```/i);
+      if (sm) {
+        try {
+          const obj = JSON.parse(sm[1].trim());
+          const clean = {}; let sum = 0;
+          for (const k in obj) { const v = Number(obj[k]); if (v > 0) { clean[k] = v; sum += v; } }
+          if (sum > 0 && Object.keys(clean).length) sleeve = clean;
+        } catch (e) { /* malformed sleeve — ignore */ }
+        rawAnswer = rawAnswer.replace(sm[0], '').trim();
+      }
+      const answer = _dgaMarkdown(rawAnswer);
       const cost = r.cost_usd != null ? `💸 $${Number(r.cost_usd).toFixed(3)}` : '';
+      const sleeveBtn = sleeve
+        ? '<button id="agentic-sleeve-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;background:var(--brand-50);border-color:var(--brand-400);color:var(--brand-700);font-weight:700;">📊 Build this sleeve in the Builder →</button>'
+        : '';
       out.innerHTML =
         '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">' +
           `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
           renderVerification(r.verification) +
           (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
           '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            sleeveBtn +
             '<button id="agentic-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>' +
             `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
           '</div>' +
         '</div>';
       const memoBtn = document.getElementById('agentic-memo-btn');
       if (memoBtn) memoBtn.addEventListener('click', () => _draftMemoFromAnalysis());
+      const slBtn = document.getElementById('agentic-sleeve-btn');
+      if (slBtn && sleeve) slBtn.addEventListener('click', () => _applySleeveToBuilder(sleeve));
+    }
+
+    // Sector-name aliases → the Builder's canonical names (the LLM may vary).
+    const _SLEEVE_SECTOR_ALIASES = {
+      'consumer discretionary': 'Consumer Cyclical', 'consumer staples': 'Consumer Defensive',
+      'materials': 'Basic Materials', 'information technology': 'Technology', 'tech': 'Technology',
+      'financial services': 'Financials', 'financial': 'Financials', 'health care': 'Healthcare',
+      'telecom': 'Communication Services', 'telecommunications': 'Communication Services',
+    };
+    function _applySleeveToBuilder(weights) {
+      const norm = {}; let total = 0;
+      for (const k in weights) {
+        const canon = _SLEEVE_SECTOR_ALIASES[k.toLowerCase().trim()] ||
+          (BUILDER_SECTOR_OPTIONS.find(o => o.toLowerCase() === k.toLowerCase().trim()) || k);
+        norm[canon] = (norm[canon] || 0) + Number(weights[k]); total += Number(weights[k]);
+      }
+      const rows = Object.keys(norm).map(k => `${k}: ${Math.round(norm[k] / total * 100)}%`).join('\n');
+      if (!confirm('Send this target sleeve to the Builder?\n\n' + rows +
+                   '\n\n(It will replace the current Builder sector weights.)')) return;
+      const out2 = {};
+      Object.keys(norm).forEach(k => { out2[k] = Math.round(norm[k] / total * 100); });
+      _builderSectorWeights = out2;
+      showTab('builder');
+      if (typeof _initBuilderTab === 'function' && !_builderInitialized) _initBuilderTab();
+      _renderBuilderSectors();
+      _refreshBuilderAddDropdown();
+      setTimeout(() => {
+        const rb = document.getElementById('builder-run-btn');
+        if (rb) {
+          rb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          rb.style.transition = 'box-shadow .3s';
+          rb.style.boxShadow = '0 0 0 3px var(--brand-400)';
+          setTimeout(() => { rb.style.boxShadow = ''; }, 1600);
+        }
+      }, 250);
     }
 
     async function _draftMemoFromAnalysis() {
@@ -7809,7 +7864,11 @@
     }
     _builderInitialized = true;
     // Default sector weights (popular starting point)
-    _builderSectorWeights = { "Technology": 60, "Financials": 20, "Healthcare": 20 };
+    // Default: ALL sectors present with flexible (even) weights, so a sleeve
+    // pushed from the AI Analyst can populate any sector and you just hit Build.
+    _builderSectorWeights = {};
+    BUILDER_SECTOR_OPTIONS.filter(s => s !== 'Other')
+      .forEach((s, i) => { _builderSectorWeights[s] = (i === 0 ? 10 : 9); });  // sums to 100
     _refreshBuilderAddDropdown();
     _renderBuilderSectors();
     // Wire add-sector button

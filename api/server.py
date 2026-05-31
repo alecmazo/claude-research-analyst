@@ -6374,7 +6374,7 @@ def _builder_fetch_candidates() -> list[dict]:
     # Overall wall-clock budget for live (yfinance) enrichment. Past this point
     # we stop making slow Yahoo calls and return what we have (degraded), rather
     # than hanging — the report subjects always come back from the DB regardless.
-    deadline = now + 25.0
+    deadline = now + 9.0   # stay under the endpoint's 12s hard cap (degrade, don't hang)
 
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return []
@@ -6555,7 +6555,13 @@ def builder_candidates(request: Request):
     }
     """
     _claims_or_401(request)
-    cands = _builder_fetch_candidates()
+    # Hard cap so the endpoint can NEVER hang — covers not just slow yfinance
+    # calls (already per-call timed-out inside) but a stalled DB connection
+    # (_fund_conn over the SSH tunnel), which the inner timeouts don't catch.
+    # On timeout, serve whatever's cached (else an empty pool) so the UI resolves
+    # instead of spinning on "Loading saved reports…" forever.
+    cands = _builder_call_timeout(_builder_fetch_candidates, 12.0,
+                                  _BUILDER_CANDIDATES_CACHE.get("data") or [])
     by_sector: dict[str, list[str]] = {}
     upside_by_sec: dict[str, list[float]] = {}
     for c in cands:
@@ -18030,8 +18036,24 @@ _AGENTIC_SYSTEM_DEFAULT = (
     "list_transcripts / read_transcript / search_transcripts for ingested "
     "interviews & keynotes (e.g. a CEO naming suppliers or trends). When a "
     "question is about what someone SAID, check these before the open web.\n"
+    "• Specific named accounts/portfolios (e.g. a client's IRA vs. taxable): "
+    "call list_portfolios FIRST for the exact account names, then "
+    "get_portfolio_holdings for each — positions, weights, sectors, unrealized "
+    "P&L. Use these to diagnose allocation, concentration, and risk/return.\n"
     "• NEVER invent a price, multiple, rating, sector, or return — call the "
     "tool. Cite the specific numbers you pulled and their source.\n\n"
+    "TARGET SLEEVE: When you propose a TARGET SECTOR ALLOCATION (optimizing or "
+    "rebalancing a portfolio), END your answer with a fenced code block tagged "
+    "`sleeve` containing ONLY a JSON object of sector→target weight % summing to "
+    "~100, using EXACTLY these sector names: Technology, Financials, Healthcare, "
+    "Energy, Industrials, Consumer Cyclical, Consumer Defensive, Utilities, Real "
+    "Estate, Communication Services, Basic Materials. Example:\n"
+    "```sleeve\n"
+    '{"Technology": 30, "Healthcare": 20, "Financials": 15, "Industrials": 15, '
+    '"Consumer Defensive": 12, "Utilities": 8}\n'
+    "```\n"
+    "The app turns that block into a one-click 'Build in Builder' button, so "
+    "always include it when recommending an allocation.\n\n"
     "Be concise and decisive: lead with the answer, then the evidence. This "
     "is internal analysis, not investment advice."
 )
