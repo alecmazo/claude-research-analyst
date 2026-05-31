@@ -4306,6 +4306,7 @@
                title="Cap on assignment probability (option delta). Lower = safer / more likely to keep the stock; higher = richer premium but likelier to be assigned."
                style="width:72px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;background:#fff;color:#1e293b;">
       </label>
+      <button class="tab-btn" id="opt-sync-btn" type="button" title="Refresh the persisted market-data store (quotes + option chains) from Tradier/yfinance. Run this, then Scan reads instantly from the DB.">↻ Refresh data</button>
       <button class="tab-btn" id="opt-scan-btn" type="button">⚡ Scan portfolio</button>
     </div>
     <div id="opt-status" style="margin-top:10px;font-size:12px;color:var(--dim);">Set your max assignment Δ and run a scan. Holdings are scanned for covered calls; your watchlist for cash-secured puts.</div>
@@ -5009,6 +5010,41 @@
   function loadOptionsTab() {
     const btn = document.getElementById('opt-scan-btn');
     if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', _optRunScan); }
+    const sbtn = document.getElementById('opt-sync-btn');
+    if (sbtn && !sbtn._wired) { sbtn._wired = true; sbtn.addEventListener('click', _optRunSync); }
+  }
+  let _optSyncPoll = null;
+  async function _optRunSync() {
+    const btn = document.getElementById('opt-sync-btn');
+    const status = document.getElementById('opt-status');
+    if (_optSyncPoll) { clearInterval(_optSyncPoll); _optSyncPoll = null; }
+    btn.disabled = true;
+    status.textContent = 'Refreshing market-data store…';
+    try {
+      const r = await window.dgaFetch('/api/market/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chains: true }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      status.textContent = `Syncing ${j.universe.length} names from ${j.source}…`;
+      _optSyncPoll = setInterval(async () => {
+        try {
+          const pr = await window.dgaFetch('/api/market/sync/' + j.job_id);
+          const pj = await pr.json();
+          if (pj.label) status.textContent = pj.label;
+          if (pj.status === 'done') {
+            clearInterval(_optSyncPoll); _optSyncPoll = null; btn.disabled = false;
+            status.textContent = (pj.label || 'Done') + ' — now hit Scan portfolio.';
+          } else if (pj.status === 'error') {
+            clearInterval(_optSyncPoll); _optSyncPoll = null; btn.disabled = false;
+            status.textContent = '❌ ' + (pj.error || pj.label || 'sync failed');
+          }
+        } catch (e) { /* transient */ }
+      }, 1500);
+    } catch (e) {
+      status.textContent = '❌ ' + e.message; btn.disabled = false;
+    }
   }
   async function _optRunScan() {
     const btn = document.getElementById('opt-scan-btn');

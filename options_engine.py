@@ -302,6 +302,16 @@ def _spot_and_hv(ticker):
     return float(q["price"]), None
 
 
+def choose_bucket_expiries(expirations) -> dict:
+    """Public: given 'YYYY-MM-DD' expirations, return the chosen
+    {bucket: (exp, dte)} within the DTE window — the SAME selection the scanner
+    uses, so the persistence sync stores exactly the expiries the scan reads."""
+    now = datetime.now(timezone.utc)
+    exps_dte = [(e, _dte(e, now)) for e in expirations]
+    exps_dte = [(e, d) for (e, d) in exps_dte if MIN_DTE <= d <= MAX_DTE]
+    return _bucket_expiries(exps_dte)
+
+
 def scan_ticker(ticker: str,
                 delta_max: float = DEFAULT_DELTA_MAX,
                 side: str = "both",
