@@ -101,14 +101,19 @@ def _dte(exp: str, now: datetime) -> int:
     return (d - now).days
 
 
-def _mid(row) -> float | None:
-    """Premium = bid/ask midpoint, falling back to lastPrice."""
+def _sell_premium(row) -> float | None:
+    """Premium a SELLER realistically receives = the BID (Fidelity's 'Sell at X').
+
+    We SELL options in the wheel, so the bid is what actually fills. The bid/ask
+    MIDPOINT is a theoretical fair value you rarely capture when selling — using
+    it overstates every premium (and yield) by roughly half the spread. That was
+    the #1 source of prices reading higher than a real broker chain.
+
+    Returns None when there's no bid: you can't sell into no buyer, and such
+    illiquid strikes otherwise fall back to a stale lastPrice that is 'nowhere
+    near' a real fill (the IBRX-type discrepancy)."""
     bid = float(row.get("bid") or 0)
-    ask = float(row.get("ask") or 0)
-    if bid > 0 and ask > 0:
-        return (bid + ask) / 2.0
-    last = float(row.get("lastPrice") or 0)
-    return last if last > 0 else None
+    return bid if bid > 0 else None
 
 
 # ── Per-contract evaluation ──────────────────────────────────────────────────
@@ -117,7 +122,7 @@ def _eval_call(row, spot, dte, r):
     K = float(row["strike"])
     if K <= spot:                       # only OTM calls (room to run before assigned)
         return None
-    prem = _mid(row)
+    prem = _sell_premium(row)
     if not prem:
         return None
     iv = float(row.get("impliedVolatility") or 0) or None
@@ -148,7 +153,7 @@ def _eval_put(row, spot, dte, r):
     K = float(row["strike"])
     if K >= spot:                       # only OTM puts (buy below today)
         return None
-    prem = _mid(row)
+    prem = _sell_premium(row)
     if not prem:
         return None
     iv = float(row.get("impliedVolatility") or 0) or None
