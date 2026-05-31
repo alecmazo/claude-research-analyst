@@ -20462,26 +20462,6 @@ def _store_meta(cur, sym, m):
                  m.get("analyst_target"), m.get("source")))
 
 
-def _store_option_rows(cur, sym, expiration, rows):
-    n = 0
-    for r in rows:
-        if r.get("strike") is None or not r.get("option_type"):
-            continue
-        cur.execute("""INSERT INTO option_quotes
-                         (symbol, expiration, strike, opt_type, bid, ask, last, iv, delta,
-                          open_interest, volume, source, updated_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
-                       ON CONFLICT (symbol, expiration, strike, opt_type) DO UPDATE SET
-                         bid=EXCLUDED.bid, ask=EXCLUDED.ask, last=EXCLUDED.last, iv=EXCLUDED.iv,
-                         delta=EXCLUDED.delta, open_interest=EXCLUDED.open_interest,
-                         volume=EXCLUDED.volume, source=EXCLUDED.source, updated_at=now()""",
-                    (sym, expiration, r["strike"], r["option_type"], r.get("bid"), r.get("ask"),
-                     r.get("last"), r.get("iv"), r.get("delta"), r.get("open_interest"),
-                     r.get("volume"), r.get("source")))
-        n += 1
-    return n
-
-
 def _db_quotes(symbols, max_age_s=None) -> dict:
     """{SYM: {price, pct_change}} from market_quotes. If max_age_s is given, only
     rows refreshed within that window are returned (freshness gate for the
@@ -20523,11 +20503,12 @@ def _db_meta(symbols) -> dict:
         return {}
 
 
-def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
-    """Background worker: refresh quotes + meta (+ option chains) for the universe
-    into the persistent store. Slow/live calls live HERE, not in user requests."""
+def _run_market_sync(job_id: str, universe: list) -> None:
+    """Background worker: refresh QUOTES + SECTORS (+ analyst targets) into the
+    persistent store. Sectors come from the SEC SIC code (EDGAR — un-throttled,
+    works when Yahoo blocks the cloud IP); quotes from Tradier→yfinance. Option
+    chains and realized-vol are NOT synced — the Options wheel scans those live."""
     import market_data as _md
-    import options_engine as _opt
 
     def _set(**kw):
         _market_sync_jobs[job_id] = {**(_market_sync_jobs.get(job_id) or {}), **kw,
@@ -20542,16 +20523,12 @@ def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
             for sym, q in quotes.items():
                 _store_quote(cur, sym, q)
             conn.commit()
-        # 2. Per-name: realized vol, sector meta, and (optionally) option chains.
-        opt_rows = 0
+        # 2. Per-name: sector (EDGAR SIC, reliable) + analyst target (best-effort).
+        sectors_n = 0
         for i, sym in enumerate(universe):
             _set(label=f"⚙ {sym} ({i+1}/{total})…", done=i)
-            # realized vol (yfinance history; backgrounded + timed out)
-            rv = _builder_call_timeout(lambda: _opt._spot_and_hv(sym), 12.0, (None, None))
-            realized = rv[1] if isinstance(rv, (list, tuple)) and len(rv) == 2 else None
-            meta = _builder_call_timeout(lambda: get_ticker_meta(sym), 6.0, {}) or {}
-            # Analyst target (yfinance .info) — the slow call the Builder used to
-            # make per-request; now done here, off the request path.
+            sec, ind = _builder_call_timeout(
+                lambda: _builder_resolve_sector_live(sym), 5.0, (None, None))
             target = None
             if _YFINANCE_OK:
                 info = _builder_call_timeout(lambda: (yf.Ticker(sym).info or {}), 6.0, {}) or {}
@@ -20561,29 +20538,16 @@ def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
                         target = float(t)
                 except Exception:
                     pass
-            with _fund_conn() as conn, conn.cursor() as cur:
-                if realized is not None:
-                    cur.execute("UPDATE market_quotes SET realized_vol=%s, updated_at=now() "
-                                "WHERE symbol=%s", (realized, sym))
-                _store_meta(cur, sym, {"sector": meta.get("sector"),
-                                       "industry": meta.get("industry"),
-                                       "name": meta.get("name"),
-                                       "analyst_target": target,
-                                       "source": "yfinance"})
-                conn.commit()
-            if sync_chains:
-                exps = _builder_call_timeout(lambda: _md.get_expirations(sym), 12.0, []) or []
-                chosen = _opt.choose_bucket_expiries(exps)
-                for _b, (exp, _dte) in chosen.items():
-                    rows = _builder_call_timeout(lambda: _md.get_chain(sym, exp), 12.0, []) or []
-                    if rows:
-                        with _fund_conn() as conn, conn.cursor() as cur:
-                            opt_rows += _store_option_rows(cur, sym, exp, rows)
-                            conn.commit()
+            if sec or target:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    _store_meta(cur, sym, {"sector": sec, "industry": ind, "name": None,
+                                           "analyst_target": target, "source": "edgar+yf"})
+                    conn.commit()
+                if sec:
+                    sectors_n += 1
         _set(stage="done", status="done", done=total,
-             label=f"✓ Synced {len(quotes)} quotes · {total} names"
-                   + (f" · {opt_rows} option rows" if sync_chains else ""),
-             result={"quotes": len(quotes), "names": total, "option_rows": opt_rows,
+             label=f"✓ Synced {len(quotes)} quotes · {sectors_n}/{total} sectors",
+             result={"quotes": len(quotes), "names": total, "sectors": sectors_n,
                      "source": _md.source_label(),
                      "synced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     except Exception as e:
@@ -20591,51 +20555,11 @@ def _run_market_sync(job_id: str, universe: list, sync_chains: bool) -> None:
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
 
 
-def _db_scan_ticker(tk: str, delta_max: float, side: str = "both"):
-    """Scan a ticker from the PERSISTED store (no live calls). Returns a scan
-    result dict, or None if the symbol isn't synced (caller falls back to live)."""
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        return None
-    try:
-        import options_engine as _opt
-        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("SELECT price, realized_vol FROM market_quotes WHERE symbol=%s", (tk,))
-            mq = cur.fetchone()
-            if not mq or mq.get("price") is None:
-                return None
-            cur.execute("""SELECT expiration, strike, opt_type, bid, ask, last, iv, delta,
-                                  open_interest, volume
-                             FROM option_quotes WHERE symbol=%s""", (tk,))
-            rows = cur.fetchall() or []
-        if not rows:
-            return None
-        by_exp: dict = {}
-        for r in rows:
-            exp = r["expiration"]
-            exp = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)
-            by_exp.setdefault(exp, []).append({
-                "strike": r["strike"], "option_type": r["opt_type"],
-                "bid": r.get("bid") or 0.0, "ask": r.get("ask") or 0.0,
-                "last": r.get("last"), "iv": r.get("iv"), "delta": r.get("delta"),
-                "open_interest": r.get("open_interest") or 0})
-        chosen = _opt.choose_bucket_expiries(list(by_exp.keys()))
-        if not chosen:
-            return None
-        bucket_chains = {b: (e, d, by_exp.get(e, [])) for b, (e, d) in chosen.items()}
-        res = _opt.scan_ticker_chains(tk, float(mq["price"]), mq.get("realized_vol"),
-                                      bucket_chains, delta_max=delta_max, side=side)
-        if res.get("ok"):
-            res["from_db"] = True
-        return res
-    except Exception as e:
-        print(f"[options scan] db read {tk} failed: {e!s:.120}", flush=True)
-        return None
-
-
 @app.post("/api/market/sync")
 async def market_sync(req: Request, background_tasks: BackgroundTasks):
-    """Refresh the persistent market-data store. Body: {tickers?, chains?}. With
-    no tickers, syncs holdings + watchlist + saved reports (capped)."""
+    """Refresh the persistent market-data store (quotes + sectors + targets).
+    Body: {tickers?}. With no tickers, syncs holdings + watchlist + saved
+    reports (capped)."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -20644,7 +20568,6 @@ async def market_sync(req: Request, background_tasks: BackgroundTasks):
     except Exception:
         body = {}
     body = body or {}
-    sync_chains = bool(body.get("chains", True))
     explicit = [str(t).upper().strip() for t in (body.get("tickers") or [])
                 if t and str(t).strip()]
     if explicit:
@@ -20658,12 +20581,11 @@ async def market_sync(req: Request, background_tasks: BackgroundTasks):
     _market_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                  "started_at": time.time(), "updated_at": time.time(),
                                  "total": len(universe), "done": 0}
-    background_tasks.add_task(_run_market_sync, job_id, universe, sync_chains)
+    background_tasks.add_task(_run_market_sync, job_id, universe)
     import market_data as _md
-    print(f"⚙ [market sync] queued {job_id} universe={len(universe)} chains={sync_chains} "
+    print(f"⚙ [market sync] queued {job_id} universe={len(universe)} "
           f"src={_md.source_label()}", flush=True)
-    return {"ok": True, "job_id": job_id, "universe": universe,
-            "chains": sync_chains, "source": _md.source_label()}
+    return {"ok": True, "job_id": job_id, "universe": universe, "source": _md.source_label()}
 
 
 @app.get("/api/market/sync/{job_id}")
@@ -20697,13 +20619,12 @@ def market_coverage(request: Request):
 
 # ──────────────────── Automatic market-data refresh (free) ────────────────────
 # Runs inside this web process (a daemon thread) — no extra container/cost. Keeps
-# the persisted store fresh so the watchlist/Builder/wheel read current data
-# without anyone clicking "Refresh data". Quotes+meta every 5 min, option chains
-# every 30 min, during US market hours. Toggle off with MARKET_AUTOSYNC=0.
-_market_autosync_state = {"last_quotes": 0.0, "last_chains": 0.0,
-                          "last_run": None, "runs": 0, "source": None}
-_MARKET_QUOTES_EVERY = 300      # 5 min
-_MARKET_CHAINS_EVERY = 1800     # 30 min
+# the persisted store fresh (quotes + sectors + targets) so the watchlist + the
+# Builder candidate pool read current data without anyone clicking Refresh.
+# Bootstraps on startup, then every 10 min during US market hours. Toggle off with
+# MARKET_AUTOSYNC=0.
+_market_autosync_state = {"last_sync": 0.0, "last_run": None, "runs": 0, "source": None}
+_MARKET_SYNC_EVERY = 600        # 10 min
 
 
 def _market_universe() -> list:
@@ -20735,18 +20656,16 @@ def _is_market_hours() -> bool:
     return (9 * 60 + 30) <= mins <= (16 * 60)
 
 
-def _autosync_run(now: float, do_chains: bool):
+def _autosync_run(now: float):
     import market_data as _md
     universe = _market_universe()
     if not universe:
         return
     import uuid as _uuid
     job_id = "AUTOSYNC_" + _uuid.uuid4().hex[:8]
-    _run_market_sync(job_id, universe, do_chains)
+    _run_market_sync(job_id, universe)
     st = _market_autosync_state
-    st["last_quotes"] = now
-    if do_chains:
-        st["last_chains"] = now
+    st["last_sync"] = now
     st["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     st["runs"] += 1
     st["source"] = _md.source_label()
@@ -20754,7 +20673,7 @@ def _autosync_run(now: float, do_chains: bool):
 
 def _market_autosync_loop():
     """Daemon loop. Bootstraps once on startup so the store is populated, then
-    refreshes on its intervals during market hours."""
+    refreshes every _MARKET_SYNC_EVERY during market hours."""
     bootstrapped = False
     while True:
         try:
@@ -20766,14 +20685,12 @@ def _market_autosync_loop():
             now = time.time()
             if not bootstrapped:
                 bootstrapped = True
-                _autosync_run(now, do_chains=True)   # populate immediately
+                _autosync_run(now)   # populate immediately
                 continue
             if not _is_market_hours():
                 continue
-            st = _market_autosync_state
-            do_chains = (now - st["last_chains"]) >= _MARKET_CHAINS_EVERY
-            if do_chains or (now - st["last_quotes"]) >= _MARKET_QUOTES_EVERY:
-                _autosync_run(now, do_chains)
+            if (now - _market_autosync_state["last_sync"]) >= _MARKET_SYNC_EVERY:
+                _autosync_run(now)
         except Exception as e:
             print(f"[market autosync] loop error: {e!s:.150}", flush=True)
 
