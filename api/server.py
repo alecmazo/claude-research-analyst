@@ -20463,9 +20463,12 @@ def _saved_report_tickers() -> list:
         return []
 
 
-# Cloud-IP yfinance is rate-limited, so each name costs ~3 option-chain fetches;
-# cap the sweep so a scan finishes in a reasonable time. Truncation is reported.
-_OPTIONS_SCAN_CAP = 60
+# Each name costs option-chain fetches (Tradier primary = fast; yfinance fallback
+# is slower on the cloud IP), so cap the sweep. Raised 60 → 120 so the WHOLE
+# saved-report universe is scanned — at 60, alphabetically-late names (e.g. TSLA,
+# the 66th-ish report) were silently truncated. Per-name calls are 25s-timeout-
+# guarded and the job runs in the background, so the larger cap is safe.
+_OPTIONS_SCAN_CAP = 120
 
 
 def _wheel_rank_key(row: dict, side_key: str, yield_field: str):
@@ -20588,7 +20591,7 @@ async def options_scan(req: Request, background_tasks: BackgroundTasks):
     print(f"⚙ [options scan] queued {job_id}  universe={len(universe)} "
           f"held={len(held_set)} trunc={truncated} dmax={delta_max}", flush=True)
     return {"ok": True, "job_id": job_id, "universe": universe, "held": held_set,
-            "truncated": truncated, "delta_max": delta_max}
+            "truncated": truncated, "cap": _OPTIONS_SCAN_CAP, "delta_max": delta_max}
 
 
 @app.get("/api/options/scan/{job_id}")

@@ -5073,7 +5073,7 @@ End with the sleeve block at this account's real market value so I can push it t
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      status.textContent = `Scanning ${j.universe.length} names (holdings + watchlist + saved reports)${j.truncated ? ' — capped at 60' : ''}…`;
+      status.textContent = `Scanning ${j.universe.length} names (holdings + watchlist + saved reports)${j.truncated ? ' — capped at ' + (j.cap || j.universe.length) : ''}…`;
       _optPoll = setInterval(async () => {
         try {
           const pr = await window.dgaFetch('/api/options/scan/' + j.job_id);
