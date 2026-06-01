@@ -10495,6 +10495,10 @@ async def _on_startup_run_migrations() -> None:
         _ensure_strategist_reviews_table()
     except Exception as _e:
         print(f"[startup] strategist_reviews table init skipped: {_e}")
+    try:
+        _ensure_analyst_reviews_table()
+    except Exception as _e:
+        print(f"[startup] analyst_reviews table init skipped: {_e}")
     # Wire DB-backed overlay into auth_v2 so LP assignments persist
     # in PostgreSQL rather than relying on the overlay file alone.
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -18344,6 +18348,56 @@ def _persist_strategist_review(job_id: str, job: dict, answer: str,
         print(f"⚠️ [strategist persist insert] {e!s:.150}", flush=True)
 
 
+def _ensure_analyst_reviews_table() -> None:
+    """Persist completed AI Analyst answers so they survive Railway redeploys
+    (the in-memory _agentic_jobs dict is wiped on restart) and can be re-opened
+    or printed to PDF later — same idea as strategist_reviews."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS analyst_reviews (
+                    id           TEXT PRIMARY KEY,
+                    source       TEXT NOT NULL DEFAULT 'analyst',
+                    question     TEXT,
+                    answer       TEXT,
+                    verification JSONB,
+                    tool_calls   JSONB,
+                    cost_usd     NUMERIC,
+                    model        TEXT,
+                    generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS analyst_reviews_gen_idx ON analyst_reviews(generated_at DESC)")
+            conn.commit()
+    except Exception as e:
+        print(f"❌ _ensure_analyst_reviews_table: {e!s:.200}", flush=True)
+
+
+def _persist_analyst_review(job_id: str, source: str, question: str, answer: str,
+                             verification: dict, tool_calls: list,
+                             cost_usd: float, model: str) -> None:
+    """Insert one completed AI Analyst answer. Best-effort, never raises."""
+    if not (answer or "").strip():
+        return
+    _ensure_analyst_reviews_table()
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO analyst_reviews
+                    (id, source, question, answer, verification, tool_calls, cost_usd, model)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (id) DO NOTHING
+            """, (job_id, (source or "analyst")[:40], (question or "")[:4000],
+                  answer or "", json.dumps(verification or {}),
+                  json.dumps(tool_calls or []), cost_usd, model))
+            conn.commit()
+        print(f"🗂 [analyst] persisted review {job_id}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [analyst persist insert] {e!s:.150}", flush=True)
+
+
 def _render_strategist_review_pdf(review: dict) -> bytes:
     """Render the FULL committee review (verbatim, not the concise LP memo) as a
     branded PDF using the memo renderer in research-memo mode."""
@@ -18415,15 +18469,19 @@ def _run_agentic_analysis(job_id: str, question: str,
                      result={"answer": final, "tool_calls": tool_log[:],
                              "cost_usd": round(total_cost, 4), "model": model,
                              "verification": verification})
-                # Persist Portfolio Strategist reviews so the full committee
-                # dossier survives dyno restarts (in-memory jobs do not).
+                # Persist the completed review so it survives dyno restarts
+                # (in-memory jobs do not) and can be re-opened / PDF'd later.
                 try:
                     jr = _agentic_jobs.get(job_id) or {}
                     if jr.get("mode") == "strategist":
                         _persist_strategist_review(job_id, jr, final, verification,
                                                    round(total_cost, 4), model)
+                    else:
+                        _persist_analyst_review(job_id, jr.get("source") or "analyst",
+                                                question, final, verification,
+                                                tool_log[:], round(total_cost, 4), model)
                 except Exception as _pe:
-                    print(f"⚠️ [strategist persist] {_pe!s:.150}", flush=True)
+                    print(f"⚠️ [review persist] {_pe!s:.150}", flush=True)
                 return
 
             # Execute every tool the model requested this turn
@@ -18466,11 +18524,15 @@ async def research_agentic_start(req: Request, background_tasks: BackgroundTasks
         return JSONResponse({"ok": False, "error": "Ask a real question."}, status_code=400)
     if len(question) > 2000:
         question = question[:2000]
+    # source tags where the run came from ('analyst' = main Research card,
+    # 'transcript' = transcript-scoped) so each list shows only its own.
+    source = ((body or {}).get("source") or "analyst").strip()[:40] or "analyst"
     import uuid as _uuid
     job_id = "AGENTIC_" + _uuid.uuid4().hex[:12]
     _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
                               "label": "Queued…", "started_at": time.time(),
                               "updated_at": time.time(), "question": question,
+                              "source": source,
                               "steps": 0, "tool_calls": [], "cost_usd": 0.0}
     background_tasks.add_task(_run_agentic_analysis, job_id, question)
     print(f"🤖 [agentic] queued {job_id}: {question[:80]!r}  model={_AGENTIC_MODEL}", flush=True)
@@ -18927,6 +18989,78 @@ def strategist_review_pdf(review_id: str, request: Request):
     from fastapi.responses import Response as _Response
     return _Response(content=pdf, media_type="application/pdf",
                      headers={"Content-Disposition": _content_disposition("inline", fname)})
+
+
+@app.get("/api/research/analyst/reviews")
+def analyst_reviews_list(request: Request, source: str = "analyst"):
+    """List saved AI Analyst answers (newest first). source='all' for every kind."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_analyst_reviews_table()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            if source and source != "all":
+                cur.execute("""SELECT id, source, question, cost_usd, model, generated_at,
+                                      length(answer) AS answer_len
+                                 FROM analyst_reviews WHERE source = %s
+                                ORDER BY generated_at DESC LIMIT 100""", (source,))
+            else:
+                cur.execute("""SELECT id, source, question, cost_usd, model, generated_at,
+                                      length(answer) AS answer_len
+                                 FROM analyst_reviews
+                                ORDER BY generated_at DESC LIMIT 100""")
+            rows = cur.fetchall() or []
+        return {"ok": True, "reviews": [{
+            "id": r["id"], "source": r.get("source"), "question": r.get("question"),
+            "cost_usd": float(r["cost_usd"]) if r.get("cost_usd") is not None else None,
+            "model": r.get("model"), "answer_len": int(r.get("answer_len") or 0),
+            "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+        } for r in rows]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/research/analyst/reviews/{review_id}")
+def analyst_review_get(review_id: str, request: Request):
+    """Full saved AI Analyst answer (markdown + verification + tool calls) — used
+    to re-open or print the review to PDF."""
+    _claims_or_401(request)
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT id, source, question, answer, verification, tool_calls,
+                                  cost_usd, model, generated_at
+                             FROM analyst_reviews WHERE id = %s""", (review_id,))
+            r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Review not found")
+        return {"ok": True, "review": {
+            "id": r["id"], "source": r.get("source"), "question": r.get("question"),
+            "answer": r.get("answer"), "verification": r.get("verification"),
+            "tool_calls": r.get("tool_calls"),
+            "cost_usd": float(r["cost_usd"]) if r.get("cost_usd") is not None else None,
+            "model": r.get("model"),
+            "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+        }}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.delete("/api/research/analyst/reviews/{review_id}")
+def analyst_review_delete(review_id: str, request: Request):
+    """Delete one saved AI Analyst answer."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM analyst_reviews WHERE id = %s", (review_id,))
+            conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════
