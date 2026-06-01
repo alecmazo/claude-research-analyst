@@ -6407,13 +6407,6 @@ _TICKER_BLACKLIST = {
     "STRONG","CONVICTION","PICK","OVERWEIGHT","UNDERWEIGHT","NEUTRAL",
 }
 
-# Per-report-content cache of validated comp tickers, keyed by report ticker.
-# Cleared whenever a report row's generated_at advances (i.e. the report was
-# re-run), so freshly-extracted comps appear after a refresh.
-_BUILDER_COMP_CACHE: dict[str, tuple[float, list[str]]] = {}   # report_ticker -> (cached_ts, [tickers])
-_BUILDER_COMP_TTL    = 1800   # 30 min
-
-
 def _extract_ticker_candidates_from_md(md: str) -> list[str]:
     """Regex-extract things that LOOK like tickers from a DGA report.
 
@@ -6440,40 +6433,13 @@ def _extract_ticker_candidates_from_md(md: str) -> list[str]:
     return out
 
 
-def _is_real_ticker(tk: str) -> bool:
-    """Lazy yfinance validation — does this symbol have a real market_cap?
-
-    Cached implicitly by yfinance fast_info path. Returns False on any error
-    so we never include garbage in the Builder pool.
-    """
-    if not _YFINANCE_OK:
-        return False
-    try:
-        fi = yf.Ticker(tk).fast_info
-        mcap = getattr(fi, "market_cap", None)
-        return bool(mcap and float(mcap) > 0)
-    except Exception:
-        return False
-
-
-def _builder_extract_comps_for_report(ticker: str, report_md: str) -> list[str]:
-    """Return the list of validated comp tickers mentioned in `report_md`,
-    excluding the report's subject and previously-seen blacklist words.
-    Cached 30 min per report ticker.
-    """
-    now = time.time()
-    cached = _BUILDER_COMP_CACHE.get(ticker)
-    if cached and (now - cached[0]) < _BUILDER_COMP_TTL:
-        return cached[1]
-    cands = _extract_ticker_candidates_from_md(report_md or "")
-    target = ticker.upper()
-    cands = [c for c in cands if c != target]
-    # Limit raw candidates per report so a runaway parse doesn't 100x yfinance calls.
-    # Pick the first 25 occurrences (mostly clustered in comp tables anyway).
-    cands = cands[:25]
-    validated = [c for c in cands if _is_real_ticker(c)]
-    _BUILDER_COMP_CACHE[ticker] = (now, validated)
-    return validated
+# NOTE: comp validation used to live here (_is_real_ticker → yf.Ticker().fast_info
+# + _builder_extract_comps_for_report). REMOVED — those live yfinance calls in the
+# request path were the recurring "empty candidate pool" bug: on a cold process
+# they fired hundreds of fast_info calls that stalled on the cloud IP and blew the
+# endpoint's time cap. Comp extraction is now regex-only (in _builder_fetch_
+# candidates), and comps are validated by store membership (a real analyst_target),
+# not by a live call. See [[cloud-ip-yfinance-fragility]].
 
 
 def _builder_call_timeout(fn, timeout: float, default=None):
@@ -6569,8 +6535,17 @@ def _builder_fetch_candidates() -> list[dict]:
         return []
 
     # ── 2. Walk each report and extract comp tickers from the markdown ───
+    #     REGEX-ONLY → ZERO network. We do NOT yfinance-validate comps here:
+    #     _builder_extract_comps_for_report() called _is_real_ticker() →
+    #     yf.Ticker().fast_info, firing HUNDREDS of live calls on a cold process
+    #     (66 reports × ≤25 tickers). On the rate-limited cloud IP those stall
+    #     and blow the endpoint's 12s cap → the function is killed before it
+    #     returns → EMPTY pool. Garbage symbols are filtered downstream instead:
+    #     a comp only survives the build loop if the STORE has an analyst_target
+    #     for it (real, synced tickers), so no live validation is needed.
     comp_universe: dict[str, str] = {}   # ticker → first-report-ticker that mentioned it
     own_tickers: set[str] = set()
+    _COMP_CAP = 150                       # bound the store lookup IN-list
     for r in rows:
         tk = (r["ticker"] or "").strip().upper()
         if not tk: continue
@@ -6578,12 +6553,15 @@ def _builder_fetch_candidates() -> list[dict]:
         md = r.get("report_md") or ""
         if not md: continue
         try:
-            comps = _builder_extract_comps_for_report(tk, md)
-            for c in comps:
+            for c in _extract_ticker_candidates_from_md(md)[:25]:
                 if c not in comp_universe and c not in own_tickers:
                     comp_universe[c] = tk
+                    if len(comp_universe) >= _COMP_CAP:
+                        break
         except Exception as _e:
             print(f"[builder] comp extract failed for {tk}: {_e!s:.120}")
+        if len(comp_universe) >= _COMP_CAP:
+            break
     # Comps that are ALSO report subjects: drop from the comp universe
     for tk in own_tickers:
         comp_universe.pop(tk, None)
