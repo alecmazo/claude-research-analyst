@@ -3837,6 +3837,15 @@ End with the sleeve block at this account's real market value so I can push it t
           <button class="tr-agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Summarize what NVDA management said about demand on recent calls.</button>
         </div>
         <div id="tr-agentic-out" style="display:none;margin-top:14px;"></div>
+        <!-- Saved Q&A log: persisted transcript answers, re-openable + memo/PDF -->
+        <div id="tr-log" style="margin-top:16px;border-top:1px solid var(--border-subtle);padding-top:12px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-secondary);">🗂 Saved Q&amp;A</span>
+            <span style="font-size:10px;color:var(--text-tertiary);">re-open · draft memo · print to PDF</span>
+            <button id="tr-log-refresh" type="button" class="btn-secondary" style="margin-left:auto;font-size:10px;padding:2px 8px;">↻</button>
+          </div>
+          <div id="tr-log-list"></div>
+        </div>
       </div>
     </section>
 
@@ -5498,6 +5507,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!_trWired) { _wireTranscripts(); _trWired = true; }
     _loadTranscriptList();
     _loadCallCoverage();
+    loadTranscriptLog();   // refresh the saved Q&A log on each tab visit
   }
 
   function _wireTranscripts() {
@@ -5517,6 +5527,8 @@ End with the sleeve block at this account's real market value so I can push it t
     });
     const aBtn = document.getElementById('tr-agentic-run-btn');
     if (aBtn) aBtn.addEventListener('click', _runTranscriptAgentic);
+    const logRefresh = document.getElementById('tr-log-refresh');
+    if (logRefresh) logRefresh.addEventListener('click', () => loadTranscriptLog());
   }
 
   // ── Ingest a YouTube transcript ──
@@ -5995,14 +6007,9 @@ End with the sleeve block at this account's real market value so I can push it t
       out.innerHTML = '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span><span style="font-size:12px;font-weight:700;color:var(--text-primary);">'+_trEsc(d.label||'Working…')+'</span><span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+(d.steps||0)+' steps'+cost+'</span></div>'+(tools?'<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">'+tools+'</div>':'')+'</div>';
     };
     const renderResult = r => {
-      const tools = (r.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">'+ic+' '+_trEsc(tc.tool)+'</span>'; }).join('');
-      const answer = _dgaMarkdown(r.answer||'(no answer)');
-      const cost = r.cost_usd!=null?'💸 $'+Number(r.cost_usd).toFixed(3):'';
-      let vf = '';
-      const v = r.verification;
-      if (v && v.verdict==='clean') vf = '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
-      else if (v && v.verdict==='flags' && (v.flags||[]).length) vf = '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ '+(v.flags||[]).length+' claim(s) flagged — review before sharing.</strong></div>';
-      out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);"><div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">'+answer+'</div>'+vf+(tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')+'<div style="margin-top:10px;text-align:right;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</div></div>';
+      _trRenderResultInto(out, q, r);
+      // The answer was just persisted (source=transcript) — refresh the log.
+      setTimeout(loadTranscriptLog, 2000);
     };
     try {
       const r = await window.dgaFetch('/api/research/agentic', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q, source: 'transcript' }) });
@@ -6024,6 +6031,124 @@ End with the sleeve block at this account's real market value so I can push it t
       btn.disabled=false; btn.textContent='🤖 Analyze';
     }
   }
+
+  // ── Transcript Q&A: rich render (with Memo + PDF buttons), memo drafting, and
+  //    a persisted log. Answers are saved server-side (analyst_reviews,
+  //    source=transcript); the same machinery as the AI Analyst & Strategist. ──
+  let _trLastResult = null, _trLastQuestion = '';
+  function _trRenderResultInto(out, question, r) {
+    _trLastResult = r; _trLastQuestion = question;
+    const tools = (r.tool_calls||[]).map(tc => { const ic=_TR_TOOL_ICON[tc.tool]||'🔧'; return '<span style="font-size:10px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;display:inline-block;">'+ic+' '+_trEsc(tc.tool)+'</span>'; }).join('');
+    const answer = _dgaMarkdown(r.answer||'(no answer)');
+    const cost = r.cost_usd!=null?'💸 $'+Number(r.cost_usd).toFixed(3):'';
+    let vf = '';
+    const v = r.verification;
+    if (v && v.verdict==='clean') vf = '<div style="margin-top:12px;padding:8px 12px;background:var(--success-50);border:1px solid #bbf7d0;border-radius:6px;font-size:11.5px;color:var(--success-700);">✓ Verification: every numeric claim is backed by a tool call.</div>';
+    else if (v && v.verdict==='flags' && (v.flags||[]).length) vf = '<div style="margin-top:12px;padding:10px 12px;background:var(--warn-50);border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:var(--warn-700);"><strong>⚠ '+(v.flags||[]).length+' claim(s) flagged — review before sharing.</strong></div>';
+    out.style.display = 'block';
+    out.innerHTML = '<div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:16px 18px;box-shadow:var(--shadow-sm);">'
+      + '<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">'+answer+'</div>'+vf
+      + (tools?'<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">'+tools+'</div>':'')
+      + '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +   '<button id="tr-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>'
+      +   '<button id="tr-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">🖨 PDF</button>'
+      +   '<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;">'+cost+' · '+_trEsc(r.model||'')+'</span>'
+      + '</div></div>';
+    const mb = document.getElementById('tr-memo-btn');
+    if (mb) mb.addEventListener('click', () => _trDraftMemo(question, r.answer, r.verification, mb));
+    const pb = document.getElementById('tr-print-btn');
+    if (pb) pb.addEventListener('click', () => {
+      const n = out.querySelector('.md-rendered');
+      if (window._openAnalystPrint) window._openAnalystPrint(question, n ? n.innerHTML : '');
+    });
+  }
+
+  async function _trDraftMemo(question, answer, verification, btn) {
+    if (!answer) return;
+    const v = verification;
+    if (v && v.verdict === 'flags' && (v.flags||[]).length) {
+      if (!confirm('⚠ Verification flagged '+v.flags.length+' claim(s). Memos can be emailed to LPs — draft one anyway?')) return;
+    }
+    const title = prompt('Memo title:', (question || 'Transcript Insight').slice(0, 70));
+    if (title === null) return;
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Drafting LP memo… (~20s)'; }
+    try {
+      const r = await window.dgaFetch('/api/memos/from-analysis', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ question: question, answer: answer, title: (title||'').trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.detail || j.error || 'Failed');
+      window.toast('✓ Memo saved — find it under the 📄 Memos tab to assign & email.', { type:'success', ttl:5000 });
+    } catch (e) {
+      window.toast('Memo draft failed: ' + e.message, { type:'error' });
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = orig || '📄 Draft memo from this'; }
+    }
+  }
+
+  async function _trFetchSaved(id) {
+    const r = await window.dgaFetch('/api/research/analyst/reviews/' + encodeURIComponent(id));
+    const d = await r.json();
+    if (!d || !d.ok || !d.review) throw new Error('not found');
+    return d.review;
+  }
+  async function _trViewSaved(id) {
+    try {
+      const rv = await _trFetchSaved(id);
+      const out = document.getElementById('tr-agentic-out');
+      _trRenderResultInto(out, rv.question || '', { answer: rv.answer||'', verification: rv.verification, tool_calls: rv.tool_calls||[], cost_usd: rv.cost_usd, model: rv.model });
+      out.scrollIntoView({ behavior:'smooth', block:'start' });
+    } catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+  async function _trMemoSaved(id, btn) {
+    try { const rv = await _trFetchSaved(id); _trDraftMemo(rv.question||'', rv.answer||'', rv.verification, btn); }
+    catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+  async function _trPdfSaved(id) {
+    try {
+      const rv = await _trFetchSaved(id);
+      let when=''; try { when = new Date(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){}
+      if (window._openAnalystPrint) window._openAnalystPrint(rv.question||'', window._dgaMarkdown(rv.answer||''), when);
+    } catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
+  }
+
+  async function loadTranscriptLog() {
+    const box = document.getElementById('tr-log-list');
+    if (!box) return;
+    try {
+      const r = await window.dgaFetch('/api/research/analyst/reviews?source=transcript');
+      const d = await r.json();
+      const rows = (d && d.reviews) || [];
+      if (!rows.length) { box.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);font-style:italic;padding:4px 0;">No saved Q&amp;A yet — ask a question above and it’ll be logged here.</div>'; return; }
+      box.innerHTML = rows.map(function(rv) {
+        var when=''; try { when = new Date(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){ when=(rv.generated_at||'').slice(0,16); }
+        var qs = (rv.question||'(no question)').replace(/\s+/g,' ').trim(); if (qs.length>90) qs = qs.slice(0,90)+'…';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-subtle);">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:12px;color:var(--text-primary);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_trEsc(qs)+'</div>' +
+            '<div style="font-size:10px;color:var(--text-tertiary);margin-top:1px;">'+_trEsc(when)+(rv.model?' · '+_trEsc(rv.model):'')+'</div>' +
+          '</div>' +
+          '<button class="tr-log-view btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">View</button>' +
+          '<button class="tr-log-memo btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">📄 Memo</button>' +
+          '<button class="tr-log-pdf btn-secondary" data-id="'+_trEsc(rv.id)+'" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
+          '<button class="tr-log-del btn-secondary" data-id="'+_trEsc(rv.id)+'" title="Delete" style="font-size:10.5px;padding:3px 8px;color:#dc2626;">✕</button>' +
+        '</div>';
+      }).join('');
+      box.querySelectorAll('.tr-log-view').forEach(function(b){ b.addEventListener('click', function(){ _trViewSaved(b.dataset.id); }); });
+      box.querySelectorAll('.tr-log-memo').forEach(function(b){ b.addEventListener('click', function(){ _trMemoSaved(b.dataset.id, b); }); });
+      box.querySelectorAll('.tr-log-pdf').forEach(function(b){ b.addEventListener('click', function(){ _trPdfSaved(b.dataset.id); }); });
+      box.querySelectorAll('.tr-log-del').forEach(function(b){ b.addEventListener('click', async function(){
+        if (!confirm('Delete this saved Q&A?')) return;
+        try { await window.dgaFetch('/api/research/analyst/reviews/'+encodeURIComponent(b.dataset.id), {method:'DELETE'}); } catch(e){}
+        loadTranscriptLog();
+      }); });
+    } catch (e) {
+      box.innerHTML = '<div style="font-size:11px;color:#dc2626;">Could not load saved Q&amp;A.</div>';
+    }
+  }
+  window._loadTranscriptLog = loadTranscriptLog;
 
   // ── 🤖 AI Analyst (agentic) — kick off a run + poll live progress ──
   (function wireAgentic() {
@@ -6221,6 +6346,9 @@ End with the sleeve block at this account's real market value so I can push it t
         '</body></html>');
       w.document.close();
     }
+    // Expose so the Transcripts "Ask the transcripts" card reuses the identical
+    // rich print/PDF format for its saved Q&A.
+    window._openAnalystPrint = _openAnalystPrint;
 
     // ── Saved analyses: list past AI Analyst answers, re-open or PDF them ──
     async function loadAnalystReviews() {
