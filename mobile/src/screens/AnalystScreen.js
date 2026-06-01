@@ -12,8 +12,9 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
-import { colors, spacing, radius, fontSize, Card, haptics } from '../design';
+import { colors, spacing, radius, fontSize, Card, haptics, mdStyles } from '../design';
 
 const ANALYST_BUILD = 'an-v1-20260528';
 
@@ -30,23 +31,13 @@ const EXAMPLES = [
   'Any fresh catalysts across my coverage this week?',
 ];
 
-// Tiny markdown: **bold** + paragraph breaks. RN has no innerHTML, so we
-// render bold spans inline by splitting on **.
-function renderRich(text) {
-  const blocks = (text || '').split(/\n\n+/);
-  return blocks.map((para, pi) => {
-    const parts = para.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
-    return (
-      <Text key={pi} style={styles.answerPara}>
-        {parts.map((seg, si) => {
-          if (seg.startsWith('**') && seg.endsWith('**')) {
-            return <Text key={si} style={styles.answerBold}>{seg.slice(2, -2)}</Text>;
-          }
-          return <Text key={si}>{seg.replace(/\n/g, ' ')}</Text>;
-        })}
-      </Text>
-    );
-  });
+// Strip the agentic ```sleeve {...}``` block from the displayed answer — it's a
+// machine-readable allocation hint, not prose. Everything else (headings,
+// tables, lists, code, blockquotes) is rendered by the shared rich Markdown
+// renderer + mdStyles, identical to how Reports render — replacing the old
+// bold-only renderer that flattened tables and lists to plain text.
+function cleanAnswer(text) {
+  return (text || '').replace(/```sleeve[\s\S]*?```/g, '').trim();
 }
 
 export default function AnalystScreen() {
@@ -187,7 +178,7 @@ export default function AnalystScreen() {
 
           {result ? (
             <Card style={styles.resultCard}>
-              <View>{renderRich(result.answer)}</View>
+              <Markdown style={mdStyles}>{cleanAnswer(result.answer)}</Markdown>
               {renderVerification(result.verification)}
               {(result.tool_calls || []).length ? (
                 <View style={styles.toolChips}>
@@ -245,8 +236,6 @@ const styles = StyleSheet.create({
   toolLine: { fontSize: fontSize.caption, color: colors.midGray, marginTop: 4 },
 
   resultCard: { marginTop: spacing.lg, padding: spacing.lg },
-  answerPara: { fontSize: fontSize.body, lineHeight: 22, color: colors.navy, marginBottom: 8 },
-  answerBold: { fontWeight: '800' },
 
   verifyBox: { marginTop: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
   verifyClean: { backgroundColor: '#ecfdf5', borderColor: '#bbf7d0' },
