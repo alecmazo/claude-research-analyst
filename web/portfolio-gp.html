@@ -3041,6 +3041,22 @@
             style="flex:1;border:1px solid var(--border-default);border-radius:6px;padding:9px 11px;font-size:13px;font-family:inherit;line-height:1.5;color:var(--text-primary);background:var(--bg-elevated);resize:vertical;"></textarea>
           <button id="agentic-run-btn" class="btn-primary" style="white-space:nowrap;align-self:stretch;padding:0 18px;">🤖 Analyze</button>
         </div>
+        <!-- One-tap preset: retiree portfolio build (diagnose → target sleeve → Builder) -->
+        <div style="margin-top:10px;">
+          <button id="agentic-preset-retiree" type="button"
+            data-account="ANAT IRA"
+            data-preset="Analyze the [ANAT IRA] account for Anatoly, a 69-year-old retiree living off this portfolio. Call list_portfolios then get_portfolio_holdings to pull the actual positions, weights, sectors, and unrealized P&L — don't guess.
+
+Diagnose it for a retiree in the withdrawal phase, with numbers: (1) concentration risk — any oversized position or sector and the drawdown that mix could take; (2) how much sits in high-volatility names; (3) current dividend income, plus where covered calls / cash-secured puts could add income (use scan_wheel on the larger liquid holdings); (4) cross-check the biggest holdings against my saved research price targets and flag anything well above target to trim.
+
+Then propose a target sector sleeve suited to a 69-year-old whose priorities are, in order: capital preservation and limiting max drawdown, durable income to fund ~4%/yr withdrawals, then beating the S&P 500 on a risk-adjusted basis. Favor quality dividend-payers and defensives, cap any single sector, and keep liquidity for withdrawals. This is an IRA, so rebalancing taxes don't matter, but RMDs begin at age 73.
+
+End with the sleeve block at this account's real market value so I can push it to the Builder."
+            style="font-size:11.5px;font-weight:600;background:var(--gold-soft,#fdf6e3);border:1px solid var(--gold,#c9a84c);color:var(--gold-dark,#a88a3a);padding:6px 12px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+            📊 Build a retiree portfolio
+          </button>
+          <span style="font-size:10px;color:var(--text-tertiary);margin-left:8px;">fills the box — edit the account name, then Analyze</span>
+        </div>
         <!-- Example chips -->
         <div id="agentic-examples" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
           <button class="agentic-ex" type="button" style="font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);color:var(--text-secondary);padding:3px 9px;border-radius:12px;cursor:pointer;">Which of my covered names moved most today and why?</button>
@@ -6010,6 +6026,23 @@
       chip.addEventListener('click', () => { qEl.value = chip.textContent.trim(); qEl.focus(); });
     });
 
+    // One-tap preset: fill the box with the full retiree-portfolio prompt, then
+    // select the [ACCOUNT] placeholder so the user can type the account name
+    // (e.g. ANAT IRA / ANAT TOD) immediately. Does NOT auto-run.
+    const presetBtn = document.getElementById('agentic-preset-retiree');
+    if (presetBtn) {
+      presetBtn.addEventListener('click', () => {
+        const txt = presetBtn.dataset.preset || '';
+        qEl.value = txt;
+        qEl.focus();
+        const acct = presetBtn.dataset.account || 'ANAT IRA';
+        const token = '[' + acct + ']';
+        const i = txt.indexOf(token);
+        if (i >= 0) { try { qEl.setSelectionRange(i, i + token.length); } catch (e) {} }
+        qEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+
     const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
     const TOOL_ICON = { get_quote:'💹', get_sector:'🏷', read_saved_report:'📄',
                         get_recent_news:'📰', list_saved_reports:'📚',
@@ -6020,21 +6053,30 @@
     let pollTimer = null;
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
-    function renderProgress(d) {
+    function renderProgress(d, elapsedMs) {
       const tools = (d.tool_calls || []).map(tc => {
         const ic = TOOL_ICON[tc.tool] || '🔧';
         const arg = tc.input ? esc(JSON.stringify(tc.input).slice(0, 50)) : '';
         return `<div style="font-size:11px;color:var(--text-secondary);padding:2px 0;">${ic} <strong>${esc(tc.tool)}</strong> <span style="color:var(--text-tertiary);font-family:'SF Mono',monospace;">${arg}</span></div>`;
       }).join('');
       const cost = d.cost_usd != null ? ` · 💸 $${Number(d.cost_usd).toFixed(3)}` : '';
+      const secs = elapsedMs != null ? Math.round(elapsedMs / 1000) : null;
+      const elapTxt = secs != null ? ` · ⏱ ${secs}s` : '';
+      // Past 3 min, reassure the user that a heavy multi-step run is still going
+      // (the backend has no wall-clock cap; it runs to a real answer or its
+      // 12-step limit). Avoids the old "looks dead" feeling before the result.
+      const slowNote = (secs != null && secs > 180)
+        ? '<div style="margin-top:8px;font-size:10.5px;color:var(--text-tertiary);font-style:italic;">Heavy multi-step analysis (e.g. multiple portfolios + live option scans) — still working, hang tight…</div>'
+        : '';
       out.innerHTML =
         '<div style="background:var(--bg-subtle);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">' +
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
             '<span style="width:8px;height:8px;border-radius:50%;background:#9333ea;animation:spin 1.4s linear infinite;display:inline-block;"></span>' +
             `<span style="font-size:12px;font-weight:700;color:var(--text-primary);">${esc(d.label || 'Working…')}</span>` +
-            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}</span>` +
+            `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${(d.steps||0)} steps${cost}${elapTxt}</span>` +
           '</div>' +
           (tools ? `<div style="border-top:1px dashed var(--border-subtle);padding-top:8px;">${tools}</div>` : '') +
+          slowNote +
         '</div>';
     }
 
@@ -6229,9 +6271,24 @@
         const d0 = await r0.json();
         if (!d0.ok) throw new Error(d0.error || 'Failed to start');
         const jobId = d0.job_id;
+        // 10-min safety cap (was 3 min). Heavy runs — two portfolios + live
+        // option scans — legitimately exceed 3 min, and the backend has NO
+        // wall-clock cap (it runs to a real answer or its 12-step limit), so a
+        // short client cap just hid finished work. We poll until the job reaches
+        // a terminal state; the cap only guards against a dead backend, and even
+        // then we do a FINAL status check so a just-finished result isn't lost.
         pollTimer = setInterval(async () => {
-          if (Date.now() - t0 > 180000) {   // 3-min hard cap
-            stopPoll(); out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Timed out after 3 min.</div>';
+          if (Date.now() - t0 > 600000) {   // 10-min safety cap
+            try {
+              const rf = await window.dgaFetch('/api/research/agentic/' + encodeURIComponent(jobId));
+              const df = await rf.json();
+              if (df.status === 'done' && df.result) {
+                stopPoll(); renderResult(df.result);
+                btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
+              }
+            } catch (_) { /* fall through to the timeout notice */ }
+            stopPoll();
+            out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ Still running after 10 min — this is an unusually heavy request. It may finish in the background; re-open the analyst shortly, or split it into smaller questions.</div>';
             btn.disabled = false; btn.textContent = '🤖 Analyze'; return;
           }
           try {
@@ -6245,10 +6302,10 @@
               out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(d.label || d.error || 'failed') + '</div>';
               btn.disabled = false; btn.textContent = '🤖 Analyze';
             } else {
-              renderProgress(d);
+              renderProgress(d, Date.now() - t0);
             }
           } catch (_) { /* transient */ }
-        }, 1200);
+        }, 1500);
       } catch (e) {
         out.innerHTML = '<div style="color:#dc2626;font-size:12px;">❌ ' + esc(e.message) + '</div>';
         btn.disabled = false; btn.textContent = '🤖 Analyze';
