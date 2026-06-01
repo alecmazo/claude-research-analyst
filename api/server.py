@@ -1923,7 +1923,7 @@ def get_ticker_news(tickers: str = "", limit: int = 1):
     for raw in (tickers or "").split(","):
         tk = raw.strip().upper()
         if not tk: continue
-        out[tk] = _fetch_news_for_ticker(tk, limit=max(1, min(int(limit or 1), 3)))
+        out[tk] = _fetch_news_for_ticker(tk, limit=max(1, min(int(limit or 1), 8)))
     return {"ok": True, "tickers": list(out.keys()),
              "news": out, "ttl_seconds": _NEWS_TTL}
 
@@ -5857,6 +5857,11 @@ def get_ticker_meta(ticker: str):
 # Caches per-(user, threshold) for 5 min so repeated tab visits don't refetch.
 _IDEA_FEED_CACHE: dict[tuple, dict] = {}   # (lp_id, threshold, limit) → {data, ts}
 _IDEA_FEED_TTL    = 300                    # 5 minutes
+# Show ALL movers, but only EAGERLY enrich (sector + news) the top N by magnitude
+# so a big-move day can't fire dozens of slow per-ticker news fetches in the
+# request path (the cloud-IP hang trap). Movers beyond the cap still appear;
+# their news loads lazily on row-expand via /api/news.
+_IDEA_ENRICH_CAP  = 25
 
 _SECTOR_ETF_MAP = {
     "Technology":             "XLK",
@@ -6007,7 +6012,7 @@ def research_prioritize(request: Request, top_n: int = 5):
 
 
 @app.get("/api/v2/research/idea-feed")
-def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12, force: bool = False):
+def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60, force: bool = False):
     """Return today's notable movers from the user's universe.
 
     Universe = watchlist ∪ open positions (tax_lots) ∪ saved-report subjects.
@@ -6152,7 +6157,18 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 12
         etf_quotes = {}
 
     # ── 5. Per-mover enrichment: sector + news + reason classification ────────
+    # Defaults for EVERY mover so the full list renders. We only eagerly enrich
+    # the top _IDEA_ENRICH_CAP by magnitude (bounds request-path network); the
+    # rest keep these defaults and lazy-load news on expand.
     for m in movers:
+        m.setdefault("sector", "Unknown")
+        m.setdefault("industry", "")
+        m.setdefault("news", [])
+        m.setdefault("sector_etf", None)
+        m.setdefault("sector_pct_change", None)
+        m.setdefault("reason_class", "unknown")
+        m.setdefault("reason_text", "")
+    for m in movers[:_IDEA_ENRICH_CAP]:
         try:
             meta = get_ticker_meta(m["ticker"])   # cached 15 min via _ticker_meta_cache
         except Exception:

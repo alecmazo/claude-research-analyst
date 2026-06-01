@@ -3119,27 +3119,6 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- ── Idea Generator (movers ≥ ±4% from your universe) ─────────── -->
-    <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" style="margin-bottom:12px;">
-      <header class="panel-head" id="idea-gen-head" style="cursor:pointer;user-select:none;">
-        <span class="panel-title">🔔 Idea Generator</span>
-        <span class="panel-badge" id="idea-gen-count" style="background:#fde68a;color:#92400e;">—</span>
-        <span id="idea-gen-asof" style="margin-left:auto;font-size:9px;color:var(--dim);font-weight:400;letter-spacing:0;">—</span>
-        <button id="idea-gen-refresh" type="button"
-                title="Refresh idea feed now (bypass 5-min cache)"
-                style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
-        <button id="idea-gen-prioritize" type="button"
-                title="Cheap Sonnet 4.6 pre-screen — rank top tickers worth a full Opus analysis (~$0.02)"
-                style="margin-left:4px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">🎯 Prioritize</button>
-        <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
-      </header>
-      <div class="panel-body" id="idea-gen-body" style="padding:0;display:none;border-top:1px solid var(--panel-edge);">
-        <div id="idea-gen-prioritize-result" style="display:none;padding:10px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#78350f;"></div>
-        <div id="idea-gen-note" style="display:none;padding:10px 14px;font-size:11px;color:#94a3b8;background:#fafbfc;border-bottom:1px solid var(--panel-edge);"></div>
-        <div id="idea-gen-list"></div>
-      </div>
-    </section>
-
     <!-- Saved Reports -->
     <section class="panel" data-wid="saved-reports" data-expanded="1">
       <header class="panel-head">
@@ -3270,6 +3249,28 @@ End with the sleeve block at this account's real market value so I can push it t
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
   <aside class="col-right">
 
+    <!-- ── Idea Generator (movers ≥ ±4% from your universe) — next to the graph,
+         open by default so the day's movers are visible at a glance ─────────── -->
+    <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" data-open="1" style="margin-bottom:12px;">
+      <header class="panel-head" id="idea-gen-head" style="cursor:pointer;user-select:none;">
+        <span class="panel-title">🔔 Idea Generator</span>
+        <span class="panel-badge" id="idea-gen-count" style="background:#fde68a;color:#92400e;">—</span>
+        <span id="idea-gen-asof" style="margin-left:auto;font-size:9px;color:var(--dim);font-weight:400;letter-spacing:0;">—</span>
+        <button id="idea-gen-refresh" type="button"
+                title="Refresh idea feed now (bypass 5-min cache)"
+                style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
+        <button id="idea-gen-prioritize" type="button"
+                title="Cheap Sonnet 4.6 pre-screen — rank top tickers worth a full Opus analysis (~$0.02)"
+                style="margin-left:4px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">🎯 Prioritize</button>
+        <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
+      </header>
+      <div class="panel-body" id="idea-gen-body" style="padding:0;display:block;border-top:1px solid var(--panel-edge);">
+        <div id="idea-gen-prioritize-result" style="display:none;padding:10px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#78350f;"></div>
+        <div id="idea-gen-note" style="display:none;padding:10px 14px;font-size:11px;color:#94a3b8;background:#fafbfc;border-bottom:1px solid var(--panel-edge);"></div>
+        <div id="idea-gen-list"><div class="idea-gen-empty" style="padding:12px 14px;font-size:11px;color:#94a3b8;">Loading today’s movers…</div></div>
+      </div>
+    </section>
+
     <!-- Hero analyze card — moved to top of right column -->
     <div class="hero-card">
       <div class="hero-label">Analyze Ticker</div>
@@ -3346,6 +3347,8 @@ End with the sleeve block at this account's real market value so I can push it t
             style="width:28px;height:28px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:16px;cursor:pointer;line-height:1;">+</button>
         </div>
         <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
+        <!-- Scan results render here (expands automatically when a scan finishes) -->
+        <div id="mini-scan-results" style="display:none;margin-top:8px;border-top:1px solid var(--panel-edge);padding-top:6px;"></div>
       </div>
     </section>
 
@@ -7324,7 +7327,7 @@ End with the sleeve block at this account's real market value so I can push it t
   var _ideaFeedLastFetch = 0;
   var _ideaFeedThreshold = 4.0;   // default; future: make user-settable
   var _ideaFeedExpanded = {};     // { ticker: bool } — which rows are showing news detail
-  var _ideaFeedPanelOpen = false; // is the whole card expanded
+  var _ideaFeedPanelOpen = true;  // open by default (HTML renders the body open)
 
   function _ideaFmtPct(p) {
     if (p == null || isNaN(p)) return '—';
@@ -7424,13 +7427,32 @@ End with the sleeve block at this account's real market value so I can push it t
     }
     list.innerHTML = movers.map(_renderIdeaFeedRow).join('');
 
-    // Row click → toggle detail expand
+    // Row click → toggle detail expand. If the mover has no news yet (it was
+    // beyond the server's eager-enrich cap, or its headlines came back empty),
+    // lazily fetch them on expand via /api/news (free 3-tier RSS, non-LLM).
     list.querySelectorAll('.idea-gen-row').forEach(function(row) {
-      row.addEventListener('click', function() {
+      row.addEventListener('click', async function() {
         const tk = row.dataset.ticker;
-        _ideaFeedExpanded[tk] = !_ideaFeedExpanded[tk];
-        // Re-render the list (state preserved in _ideaFeedExpanded)
+        const willExpand = !_ideaFeedExpanded[tk];
+        _ideaFeedExpanded[tk] = willExpand;
         _renderIdeaFeed(data);
+        if (willExpand) {
+          const m = (data.movers || []).find(function(x) { return x.ticker === tk; });
+          if (m && (!m.news || !m.news.length) && !m._newsTried) {
+            m._newsTried = true;
+            try {
+              const rn = await window.dgaFetch('/api/news?tickers=' + encodeURIComponent(tk) + '&limit=6');
+              if (rn.ok) {
+                const dn = await rn.json();
+                const items = (dn.news && dn.news[tk]) || [];
+                if (items.length) {
+                  m.news = items;
+                  if (_ideaFeedExpanded[tk]) _renderIdeaFeed(data);
+                }
+              }
+            } catch (e) { /* leave the "no headlines" note */ }
+          }
+        }
       });
     });
     // Deep-dive button → trigger analyze flow
@@ -7459,7 +7481,7 @@ End with the sleeve block at this account's real market value so I can push it t
     }
     try {
       const url = '/api/v2/research/idea-feed?threshold=' + encodeURIComponent(_ideaFeedThreshold)
-        + (force ? '&force=true' : '');
+        + '&limit=60' + (force ? '&force=true' : '');
       const r = await window.dgaFetch(url);
       if (!r.ok) throw new Error('idea-feed ' + r.status);
       const data = await r.json();
@@ -10238,15 +10260,23 @@ End with the sleeve block at this account's real market value so I can push it t
     const btn = document.getElementById('run-brief-btn');
     if (!btn || btn.disabled) return;
     btn.disabled = true; btn.textContent = '⏳ Running…';
+    // Surface progress in the content area so the user can SEE it working.
+    const el = document.getElementById('brief-content');
+    if (el) el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Generating today’s brief (live search · ~30–60s)…</div>';
     try {
       const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       const job = await r.json();
-      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run Daily Brief',
-        () => loadBrief());
-    } catch { btn.disabled=false; btn.textContent='📰 Run Daily Brief'; }
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', () => loadBrief());
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '📰 Run';
+      if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
+    }
   }
-  // run-brief-btn uses inline onclick (stopPropagation needed with <details> parent)
+  // The Run button uses inline onclick, which runs in GLOBAL scope — so
+  // triggerBrief must be on window or the click silently throws "not defined"
+  // and nothing happens. Expose it (matches the file's window.* convention).
+  window.triggerBrief = triggerBrief;
 
   async function loadIntel() {
     const el   = document.getElementById('intel-content');
@@ -15657,6 +15687,49 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (e) { console.warn('[mini-scan-chips]', e); }
   }
 
+  // Render the latest scan results INSIDE the Market Scan card (the old Market
+  // Pulse panel was removed, so scans had nowhere to show → "nothing happens").
+  // Auto-expands when there are results. show=true forces it open after a scan.
+  async function loadMiniScanResults(show) {
+    const el = document.getElementById('mini-scan-results');
+    if (!el) return;
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d.exists || !d.results || !Object.keys(d.results).length) {
+        if (!show) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.innerHTML = '<div style="font-size:10.5px;color:var(--dim);padding:4px 0;">No scan results yet.</div>';
+        return;
+      }
+      el.style.display = 'block';
+      el.innerHTML = Object.entries(d.results).map(function(pair) {
+        const tk = pair[0], res = pair[1] || {};
+        const sent = (res.sentiment || 'NEUTRAL').toUpperCase();
+        const color = sent === 'BULLISH' ? '#16a34a' : sent === 'BEARISH' ? '#dc2626' : '#64748b';
+        const summary = (res.markdown || '')
+          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ').trim().slice(0, 120);
+        const px = (res.price != null)
+          ? '<span style="margin-left:auto;font-size:10px;color:var(--mid);">$' + fmtPx(res.price) + ' <span class="' + cssClass(res.pct_change) + '">' + fmtPct(res.pct_change) + '</span></span>'
+          : '';
+        return '<div class="mini-scan-res-row" data-tk="' + tk + '" style="padding:6px 0;border-bottom:1px solid var(--panel-edge);cursor:pointer;">'
+          + '<div style="display:flex;align-items:center;gap:6px;">'
+          +   '<strong style="color:var(--text-primary);font-size:11px;letter-spacing:0.5px;">' + tk + '</strong>'
+          +   '<span style="color:' + color + ';font-weight:800;font-size:9px;">' + sent + '</span>' + px
+          + '</div>'
+          + '<div style="font-size:10.5px;color:var(--mid);margin-top:2px;line-height:1.4;">' + (summary || 'Analysis available.') + '</div>'
+          + '</div>';
+      }).join('');
+      el.querySelectorAll('.mini-scan-res-row').forEach(function(row) {
+        row.addEventListener('click', function() {
+          const tk = row.dataset.tk, res = (d.results || {})[tk] || {};
+          if (typeof _openPulseDetail === 'function') _openPulseDetail(tk, res);
+        });
+      });
+    } catch (e) { /* ignore */ }
+  }
+
   const $miniInput  = document.getElementById('mini-scan-input');
   const $miniAddBtn = document.getElementById('mini-scan-add-btn');
   const $miniBtn    = document.getElementById('mini-scan-btn');
@@ -15710,18 +15783,20 @@ End with the sleeve block at this account's real market value so I can push it t
           const jp = await rp.json();
           const done = (jp.tickers_done || []).length;
           if (badge) badge.textContent = done + '/' + total;
-          // Reload Market Pulse whenever a new ticker result arrives
+          // Stream results into the card as each ticker finishes.
           if (done > _lastDoneCount) {
             _lastDoneCount = done;
-            loadGPMarketPulse();
+            loadMiniScanResults(true);
           }
           if (jp.status === 'done' || jp.status === 'failed') {
             clearInterval(iv);
             $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
             if (jp.status === 'done') {
-              if (status) status.textContent = done + ' tickers scanned — pulse updated';
-              loadGPMarketPulse();
+              if (status) status.textContent = done + ' tickers scanned — see results below';
+              loadMiniScanResults(true);   // expand the results so the user sees them
               loadMiniScanChips();
+              const resEl = document.getElementById('mini-scan-results');
+              if (resEl && resEl.scrollIntoView) resEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             } else {
               if (status) status.textContent = '❌ ' + (jp.error || 'Scan failed');
             }
@@ -17053,10 +17128,10 @@ End with the sleeve block at this account's real market value so I can push it t
   loadWatchlist();
   loadReports();
   loadTrendingTickers();
-  // loadGPMarketPulse + loadMiniScanChips disabled — Market Pulse panel
-  // removed in favor of inline news headlines on each saved-report row.
-  // The scan endpoint still works for the legacy "⚡ Scan Active" button
-  // in the Saved Reports header.
+  // Market Scan card: load its ticker chips + any prior scan results on startup
+  // (the old Market Pulse panel was removed, so results now render in-card).
+  loadMiniScanChips();
+  loadMiniScanResults(false);
   // Research is the default landing tab (positions is lazy-loaded on first click)
   initLiveMarkets();
   showTab('research');
