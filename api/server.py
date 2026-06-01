@@ -6270,7 +6270,8 @@ def _sic_to_sector(s: int):
     elif 2700 <= s <= 2799: return "Communication Services"  # publishing
     elif 2800 <= s <= 2829: return "Basic Materials"         # industrial chemicals
     elif 2830 <= s <= 2836: return "Healthcare"              # drugs/biotech
-    elif 2840 <= s <= 2899: return "Basic Materials"         # chemicals
+    elif 2840 <= s <= 2844: return "Consumer Defensive"      # soap/detergent/cosmetics (PG, CL, EL)
+    elif 2845 <= s <= 2899: return "Basic Materials"         # other chemicals
     elif 2900 <= s <= 2999: return "Energy"                  # petroleum refining
     elif 3000 <= s <= 3299: return "Consumer Cyclical"       # rubber/plastics/glass
     elif 3300 <= s <= 3399: return "Basic Materials"         # primary metals
@@ -6285,10 +6286,16 @@ def _sic_to_sector(s: int):
     elif 4800 <= s <= 4899: return "Communication Services"  # telecom
     elif 4900 <= s <= 4999: return "Utilities"
     elif 5000 <= s <= 5199: return "Industrials"             # wholesale
-    elif 5200 <= s <= 5999: return "Consumer Cyclical"       # retail
+    elif 5200 <= s <= 5299: return "Consumer Cyclical"       # building materials/hardware retail
+    elif 5300 <= s <= 5399: return "Consumer Defensive"      # variety/general merch (WMT, TGT, DG)
+    elif 5400 <= s <= 5499: return "Consumer Defensive"      # food stores (grocery)
+    elif 5500 <= s <= 5899: return "Consumer Cyclical"       # auto/apparel/furniture/dining retail
+    elif s == 5912:         return "Consumer Defensive"      # drug stores / pharmacies
+    elif 5900 <= s <= 5999: return "Consumer Cyclical"       # other retail
     elif 6000 <= s <= 6199: return "Financials"              # banks
     elif 6200 <= s <= 6299: return "Financials"              # securities/brokers
-    elif 6300 <= s <= 6499: return "Financials"              # insurance
+    elif 6320 <= s <= 6329: return "Healthcare"              # health insurers (UNH, health plans)
+    elif 6300 <= s <= 6499: return "Financials"              # insurance (life/P&C/etc.)
     elif 6500 <= s <= 6599: return "Real Estate"
     elif s == 6798:         return "Real Estate"             # REITs
     elif 6700 <= s <= 6799: return "Financials"              # holding/investment
@@ -6336,47 +6343,67 @@ def _builder_resolve_sector_live(tk: str):
     return None, None
 
 
-def _builder_resolve_universe_sectors():
-    """BACKGROUND task: drain `_BUILDER_UNRESOLVED`, resolving each ticker's
-    sector via EDGAR SIC and persisting to security_meta. Runs OFF the request
-    path (FastAPI BackgroundTasks), so even if every resolve is slow it never
-    touches the pool's response time. The next pool build reads the freshly
-    persisted sectors from the store. Re-entrancy-guarded so overlapping
-    Refresh clicks don't double-resolve."""
-    if _BUILDER_BG_RESOLVING[0]:
-        return
-    _BUILDER_BG_RESOLVING[0] = True
+# ── Sector-resolve JOB ────────────────────────────────────────────────────
+# A status-tracked background job that resolves EVERY unresolved candidate's
+# sector via EDGAR SIC and persists it to security_meta — runs to COMPLETION
+# (no per-run cap) in a daemon thread, persisting + committing one ticker at a
+# time so progress is durable and visible. The pool's Refresh button starts it
+# and polls the status, then reloads candidates. This replaces the old capped,
+# fire-and-forget resolver that left most names stuck in "Other".
+_BUILDER_RESOLVE_JOB = {
+    "running": False, "total": 0, "done": 0, "resolved": 0, "failed": 0,
+    "started_at": 0.0, "finished_at": 0.0,
+}
+_BUILDER_RESOLVE_LOCK = threading.Lock()
+
+
+def _builder_unresolved_tickers() -> list[str]:
+    """Candidate tickers that currently land in 'Other'/'Unknown' — i.e. have no
+    real sector in the store yet. Pure-DB (uses the fast _builder_fetch_candidates)."""
     try:
-        # Snapshot up to the cap; leave the rest queued for the next Refresh.
-        pending = sorted(_BUILDER_UNRESOLVED)[:_BUILDER_SECTOR_RESOLVE_CAP]
-        _BUILDER_UNRESOLVED.difference_update(pending)
-        if not pending:
-            return
-        resolved: list[tuple] = []
-        for tk in pending:
-            # Skip if another path already resolved it this process.
-            cached = _BUILDER_SECTOR_CACHE.get(tk)
-            if cached:
-                resolved.append((tk, cached, None))
-                continue
-            if tk in _BUILDER_SECTOR_CACHE:   # negative-cached ("") — don't retry
-                continue
-            sec, ind = _builder_resolve_sector_live(tk)
-            if sec:
-                resolved.append((tk, sec, ind))
-        if resolved and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        cands = _builder_fetch_candidates()
+    except Exception:
+        cands = []
+    return sorted({c["ticker"] for c in cands
+                   if (c.get("sector") or "Other") in ("Other", "Unknown")})
+
+
+def _builder_resolve_sectors_worker(tickers: list[str]):
+    """Resolve + persist each ticker's sector via EDGAR SIC. One commit per
+    ticker so a mid-job Refresh sees partial progress. Never raises."""
+    conn = None
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
             try:
-                with _fund_conn() as _c, _c.cursor() as _cur:
-                    for _tk, _sec, _ind in resolved:
-                        _store_meta(_cur, _tk, {"sector": _sec, "industry": _ind, "name": None})
-                    _c.commit()
-                print(f"[builder] bg-resolved {len(resolved)} sectors → store", flush=True)
-            except Exception as _pe:
-                print(f"[builder] bg sector persist failed: {_pe!s:.120}", flush=True)
-    except Exception as e:
-        print(f"[builder] bg resolve error: {e!s:.120}", flush=True)
+                conn = _fund_conn()
+            except Exception as e:
+                print(f"[builder] resolve-job: no DB conn: {e!s:.120}", flush=True)
+        for tk in tickers:
+            try:
+                sec, ind = _builder_resolve_sector_live(tk)   # always hits EDGAR (no neg-cache skip)
+                if sec and conn is not None:
+                    with conn.cursor() as cur:
+                        _store_meta(cur, tk, {"sector": sec, "industry": ind, "name": None})
+                    conn.commit()
+                    _BUILDER_RESOLVE_JOB["resolved"] += 1
+                elif not sec:
+                    _BUILDER_RESOLVE_JOB["failed"] += 1
+            except Exception as e:
+                print(f"[builder] resolve-job {tk} failed: {e!s:.120}", flush=True)
+                _BUILDER_RESOLVE_JOB["failed"] += 1
+            finally:
+                _BUILDER_RESOLVE_JOB["done"] += 1
     finally:
-        _BUILDER_BG_RESOLVING[0] = False
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+        _BUILDER_RESOLVE_JOB["running"] = False
+        _BUILDER_RESOLVE_JOB["finished_at"] = time.time()
+        # Bust the candidates cache so the next load reflects the new sectors.
+        _BUILDER_CANDIDATES_CACHE["data"] = None
+        _BUILDER_CANDIDATES_CACHE["ts"] = 0
+        print(f"[builder] resolve-job done: {_BUILDER_RESOLVE_JOB['resolved']} resolved, "
+              f"{_BUILDER_RESOLVE_JOB['failed']} failed", flush=True)
 
 
 # Words that match the ticker-shaped regex but are clearly financial jargon,
@@ -6709,7 +6736,7 @@ def _builder_fetch_candidates() -> list[dict]:
 
 
 @app.get("/api/v2/builder/candidates")
-def builder_candidates(request: Request, background_tasks: BackgroundTasks, fresh: int = 0):
+def builder_candidates(request: Request, fresh: int = 0):
     """Return all eligible Builder candidates with sector + EV.
 
     Response: {
@@ -6717,25 +6744,20 @@ def builder_candidates(request: Request, background_tasks: BackgroundTasks, fres
       by_sector:  {sector: [tickers...]},
       sectors:    [{name, count, median_upside_pct}, ...]
     }
-    `fresh=1` (the pool's Refresh button) busts the 10-min cache AND kicks the
-    background sector resolver — the request itself stays PURE-DB (zero network),
-    so it returns instantly; real sectors land in the store for the next build.
+    `fresh=1` (the pool's Refresh button) busts the 10-min cache. Sector
+    resolution is a SEPARATE job (POST /api/v2/builder/resolve-sectors) the UI
+    drives explicitly; this endpoint stays PURE-DB (zero network) and instant.
     """
     _claims_or_401(request)
     if fresh:
         _BUILDER_CANDIDATES_CACHE["data"] = None
         _BUILDER_CANDIDATES_CACHE["ts"] = 0
-    # Hard cap so the endpoint can NEVER hang — the fetch is now PURE-DB (no live
-    # network calls; sector resolution moved to the background task below), so 12s
-    # is comfortable. Covers a stalled DB connection (_fund_conn over the SSH
-    # tunnel). On timeout, serve whatever's cached (else empty) so the UI resolves
-    # instead of spinning on "Loading saved reports…" forever.
+    # Hard cap so the endpoint can NEVER hang — the fetch is PURE-DB (no live
+    # network calls), so 12s is comfortable. Covers a stalled DB connection
+    # (_fund_conn over the SSH tunnel). On timeout, serve whatever's cached (else
+    # empty) so the UI resolves instead of spinning forever.
     cands = _builder_call_timeout(_builder_fetch_candidates, 12.0,
                                   _BUILDER_CANDIDATES_CACHE.get("data") or [])
-    # Kick the background sector resolver for any tickers the store couldn't
-    # sector (only on an explicit Refresh, so a normal poll doesn't spawn work).
-    if fresh and _BUILDER_UNRESOLVED:
-        background_tasks.add_task(_builder_resolve_universe_sectors)
     by_sector: dict[str, list[str]] = {}
     upside_by_sec: dict[str, list[float]] = {}
     for c in cands:
@@ -6758,6 +6780,37 @@ def builder_candidates(request: Request, background_tasks: BackgroundTasks, fres
         "total":      len(cands),
         "diagnostics": dict(_BUILDER_CANDIDATES_DIAG),
     }
+
+
+@app.post("/api/v2/builder/resolve-sectors")
+def builder_resolve_sectors(request: Request):
+    """Start the sector-resolve job: EDGAR-SIC-resolve EVERY candidate currently
+    in 'Other'/'Unknown' and persist to the store, so they become eligible for
+    sector-weighted allocation. Runs to completion in a daemon thread (off the
+    request path); the UI polls GET for progress, then reloads candidates.
+    Returns the job status immediately."""
+    _claims_or_401(request)
+    with _BUILDER_RESOLVE_LOCK:
+        if _BUILDER_RESOLVE_JOB["running"]:
+            return {**_BUILDER_RESOLVE_JOB, "already_running": True}
+        tickers = _builder_unresolved_tickers()
+        _BUILDER_RESOLVE_JOB.update(running=bool(tickers), total=len(tickers),
+                                    done=0, resolved=0, failed=0,
+                                    started_at=time.time(), finished_at=0.0)
+        if not tickers:
+            _BUILDER_RESOLVE_JOB["finished_at"] = time.time()
+            return dict(_BUILDER_RESOLVE_JOB)
+        threading.Thread(target=_builder_resolve_sectors_worker,
+                         args=(tickers,), daemon=True).start()
+    print(f"[builder] resolve-job started for {len(tickers)} tickers", flush=True)
+    return dict(_BUILDER_RESOLVE_JOB)
+
+
+@app.get("/api/v2/builder/resolve-sectors")
+def builder_resolve_sectors_status(request: Request):
+    """Poll the sector-resolve job status."""
+    _claims_or_401(request)
+    return dict(_BUILDER_RESOLVE_JOB)
 
 
 class BuilderAllocateRequest(BaseModel):

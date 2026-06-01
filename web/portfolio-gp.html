@@ -7500,9 +7500,32 @@
     const btn  = document.getElementById('builder-pool-refresh-btn');
     const meta = document.getElementById('builder-pool-meta');
     if (btn) btn.disabled = true;
-    if (meta) meta.textContent = 'Refreshing…';
-    try { await loadBuilderCandidates({ fresh: true }); }
-    finally { if (btn) btn.disabled = false; }
+    try {
+      // 1. Load the pool immediately (pure-DB, instant) so names are visible.
+      if (meta) meta.textContent = 'Refreshing…';
+      await loadBuilderCandidates({ fresh: true });
+      // 2. Kick the sector-resolve job: EDGAR-SIC-resolve every name still in
+      //    'Other' and persist it, so they become eligible for allocation.
+      const startR = await window.dgaFetch('/api/v2/builder/resolve-sectors', { method: 'POST' });
+      if (startR.ok) {
+        let job = await startR.json();
+        if (job && job.total > 0) {
+          // 3. Poll until the job finishes, showing live progress.
+          for (let i = 0; i < 120 && (job.running || job.done < job.total); i++) {
+            if (meta) meta.textContent = 'Resolving sectors… ' + (job.done || 0) + '/' + job.total;
+            await new Promise(r => setTimeout(r, 1500));
+            const sR = await window.dgaFetch('/api/v2/builder/resolve-sectors');
+            if (!sR.ok) break;
+            job = await sR.json();
+            if (!job.running && job.done >= job.total) break;
+          }
+          // 4. Reload the pool so the freshly-resolved sectors show.
+          await loadBuilderCandidates({ fresh: true });
+        }
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function loadBuilderCandidates(opts) {
