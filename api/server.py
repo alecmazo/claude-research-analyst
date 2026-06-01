@@ -19063,6 +19063,21 @@ def analyst_review_delete(review_id: str, request: Request):
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
+@app.delete("/api/research/strategist/reviews/{review_id}")
+def strategist_review_delete(review_id: str, request: Request):
+    """Delete one saved Portfolio Strategist committee review."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM strategist_reviews WHERE id = %s", (review_id,))
+            conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # TRANSCRIPT INTELLIGENCE — Part A (YouTube/interview transcripts) and
 # Part B (earnings-call RAG index). Both feed the same agentic AI Analyst
