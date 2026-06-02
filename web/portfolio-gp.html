@@ -4927,8 +4927,24 @@ End with the sleeve block at this account's real market value so I can push it t
   const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
   // All timestamps displayed in Pacific Time (US West Coast).
   const _PT = { timeZone: 'America/Los_Angeles' };
-  const fmtDate  = (iso) => iso ? new Date(iso).toLocaleString('en-US',
-    { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+  // Server timestamps are UTC but are often emitted WITHOUT a 'Z' (naive). new
+  // Date() then parses them as LOCAL time, so the UTC wall-clock was shown as-is
+  // (e.g. 7:19 PM instead of 12:19 PM Pacific). Treat a bare
+  // 'YYYY-MM-DD[ T]HH:MM[:SS][.ffffff]' as UTC; anything already carrying a zone
+  // (Z or ±HH:MM) is parsed as-is.
+  function _parseServerDate(iso) {
+    if (iso == null) return null;
+    if (typeof iso !== 'string') return new Date(iso);
+    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/.exec(iso.trim());
+    return m ? new Date(m[1] + 'T' + m[2] + 'Z') : new Date(iso);
+  }
+  window._parseServerDate = _parseServerDate;
+  const fmtDate  = (iso) => {
+    if (!iso) return '—';
+    const d = _parseServerDate(iso);
+    return (d && !isNaN(d)) ? d.toLocaleString('en-US',
+      { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+  };
 
   // ── Simple markdown → HTML ───────────────────────────────────
   function renderMd(el, md) {
@@ -5185,7 +5201,7 @@ End with the sleeve block at this account's real market value so I can push it t
     document.getElementById('opt-cc').innerHTML = totBanner + _optTable(res.covered_calls, 'cc');
     document.getElementById('opt-csp').innerHTML = _optTable(res.cash_secured_puts, 'csp');
     document.getElementById('opt-status').textContent =
-      `Δ ≤ ${res.delta_max} · ${res.universe_size} names scanned · ${res.scanned_at} · ranked by weekly annualized yield`;
+      `Δ ≤ ${res.delta_max} · ${res.universe_size} names scanned · ${fmtDate(res.scanned_at)} · ranked by weekly annualized yield`;
   }
 
   // ── Quick Actions (panel removed — kept for any remaining data-action buttons) ──
@@ -6153,7 +6169,7 @@ End with the sleeve block at this account's real market value so I can push it t
   async function _trPdfSaved(id) {
     try {
       const rv = await _trFetchSaved(id);
-      let when=''; try { when = new Date(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){}
+      let when=''; try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){}
       if (window._openAnalystPrint) window._openAnalystPrint(rv.question||'', window._dgaMarkdown(rv.answer||''), when);
     } catch (e) { window.toast('Could not open that Q&A.', {type:'error'}); }
   }
@@ -6167,7 +6183,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const rows = (d && d.reviews) || [];
       if (!rows.length) { box.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary);font-style:italic;padding:4px 0;">No saved Q&amp;A yet — ask a question above and it’ll be logged here.</div>'; return; }
       box.innerHTML = rows.map(function(rv) {
-        var when=''; try { when = new Date(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){ when=(rv.generated_at||'').slice(0,16); }
+        var when=''; try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'}); } catch(e){ when=(rv.generated_at||'').slice(0,16); }
         var qs = (rv.question||'(no question)').replace(/\s+/g,' ').trim(); if (qs.length>90) qs = qs.slice(0,90)+'…';
         return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-subtle);">' +
           '<div style="flex:1;min-width:0;">' +
@@ -6408,7 +6424,7 @@ End with the sleeve block at this account's real market value so I can push it t
         }
         box.innerHTML = rows.map(function (rv) {
           var when = '';
-          try { when = new Date(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { when = (rv.generated_at || '').slice(0, 16); }
+          try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { when = (rv.generated_at || '').slice(0, 16); }
           var qsnip = (rv.question || '(no question)').replace(/\s+/g, ' ').trim();
           if (qsnip.length > 90) qsnip = qsnip.slice(0, 90) + '…';
           return '<div class="agentic-rev-row" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-subtle);">' +
@@ -6450,7 +6466,7 @@ End with the sleeve block at this account's real market value so I can push it t
       try {
         const rv = await _fetchSavedReview(id);
         var when = '';
-        try { when = new Date(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) {}
+        try { when = _parseServerDate(rv.generated_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) {}
         _openAnalystPrint(rv.question || '', window._dgaMarkdown(rv.answer || ''), when);
       } catch (e) { alert('Could not open that saved analysis.'); }
     }
@@ -6704,7 +6720,7 @@ End with the sleeve block at this account's real market value so I can push it t
           '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:11.5px;">' +
             '<span style="font-weight:700;color:var(--text-primary);">' + esc(rv.fund_name || 'Portfolio') + '</span>' +
             '<span style="color:var(--text-tertiary);">' + esc((rv.tickers||'').split(',').slice(0,6).join(', ')) + ((rv.tickers||'').split(',').length>6?'…':'') + '</span>' +
-            '<span style="margin-left:auto;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;font-size:10px;">' + (rv.generated_at ? new Date(rv.generated_at).toLocaleString() : '') + '</span>' +
+            '<span style="margin-left:auto;color:var(--text-tertiary);font-family:\'SF Mono\',monospace;font-size:10px;">' + (rv.generated_at ? _parseServerDate(rv.generated_at).toLocaleString() : '') + '</span>' +
             '<button class="strat-arch-view btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">View</button>' +
             '<button class="strat-arch-pdf btn-secondary" data-id="' + esc(rv.id) + '" style="font-size:10.5px;padding:3px 9px;">🖨 PDF</button>' +
             '<button class="strat-arch-del btn-secondary" data-id="' + esc(rv.id) + '" title="Delete" style="font-size:10.5px;padding:3px 8px;color:#dc2626;">✕</button>' +
