@@ -5104,16 +5104,38 @@ End with the sleeve block at this account's real market value so I can push it t
       status.textContent = '❌ ' + e.message; btn.disabled = false;
     }
   }
-  function _optBucketCell(c, kind) {
+  function _optExpDate(iso) {
+    // 'YYYY-MM-DD' → 'Jun 11'. Parse at local midnight to avoid a UTC day-shift.
+    if (!iso) return '';
+    try {
+      const d = new Date(iso + 'T00:00:00');
+      if (isNaN(d)) return iso;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch (e) { return iso; }
+  }
+  function _optMoney(n) {
+    return (n == null || isNaN(n)) ? '' : '$' + Math.round(n).toLocaleString();
+  }
+  function _optBucketCell(c, kind, sharesHeld) {
     if (!c) return '<td style="color:#cbd5e1;text-align:center;">—</td>';
     const yld = kind === 'cc' ? c.static_return_annualized : c.yield_on_cash_annualized;
     const extra = kind === 'cc'
       ? `cushion ${(c.downside_cushion * 100).toFixed(1)}%`
       : `buy $${c.effective_buy_price}`;
+    const dateLbl = _optExpDate(c.expiration) || (c.dte + 'd');
+    // Covered-call premium $ you'd actually collect against the shares you hold:
+    // contracts = floor(shares / 100), income = contracts × premium × 100.
+    let incomeLine = '';
+    if (kind === 'cc' && sharesHeld && sharesHeld >= 100 && c.premium) {
+      const contracts = Math.floor(sharesHeld / 100);
+      const income = contracts * c.premium * 100;
+      incomeLine = `<div style="font-size:10.5px;color:#16a34a;font-weight:800;margin-top:3px;" title="${contracts} contracts (${(contracts*100).toLocaleString()} shares) × $${c.premium} premium">💰 ${_optMoney(income)} · ${contracts} contract${contracts !== 1 ? 's' : ''}</div>`;
+    }
     return `<td style="font-variant-numeric:tabular-nums;">
-      <div style="font-weight:700;">$${c.strike} · ${c.dte}d</div>
+      <div style="font-weight:700;">$${c.strike} · ${dateLbl}<span style="font-weight:400;color:#94a3b8;font-size:10px;"> (${c.dte}d)</span></div>
       <div style="font-size:11px;color:#64748b;">$${c.premium} · ${(yld * 100).toFixed(0)}% ann · Δ${c.assignment_prob}</div>
       <div style="font-size:10px;color:#94a3b8;">${extra}</div>
+      ${incomeLine}
     </td>`;
   }
   function _optTable(rows, kind) {
@@ -5129,16 +5151,38 @@ End with the sleeve block at this account's real market value so I can push it t
         <td class="tk">${r.ticker}${r.held ? ' <span title="You hold this — covered call is actionable" style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#16a34a;border:1px solid #16a34a;border-radius:4px;padding:1px 4px;vertical-align:middle;">HELD</span>' : ''}</td>
         <td style="font-variant-numeric:tabular-nums;">$${r.spot}</td>
         <td style="color:${rich};font-weight:700;">${r.iv_hv_ratio != null ? r.iv_hv_ratio : '—'}</td>
-        ${_optBucketCell(m.weekly, kind)}
-        ${_optBucketCell(m.monthly, kind)}
-        ${_optBucketCell(m.quarterly, kind)}
+        ${_optBucketCell(m.weekly, kind, r.shares_held)}
+        ${_optBucketCell(m.monthly, kind, r.shares_held)}
+        ${_optBucketCell(m.quarterly, kind, r.shares_held)}
       </tr>`;
     }
     return html + '</tbody></table>';
   }
+  // Sum the covered-call premium $ across every HELD name (max contracts =
+  // shares//100) per tenor — the portfolio-wide income if you wrote them all.
+  function _optHeldPremiumTotals(rows) {
+    const tot = { weekly: 0, monthly: 0, quarterly: 0 };
+    (rows || []).forEach(function(r) {
+      if (!r.ok || !r.held || !r.shares_held || r.shares_held < 100) return;
+      const cc = r.covered_calls || {};
+      ['weekly', 'monthly', 'quarterly'].forEach(function(b) {
+        const c = cc[b];
+        if (c && c.premium) tot[b] += Math.floor(r.shares_held / 100) * c.premium * 100;
+      });
+    });
+    return tot;
+  }
   function _optRenderResult(res) {
     if (!res) return;
-    document.getElementById('opt-cc').innerHTML = _optTable(res.covered_calls, 'cc');
+    const tot = _optHeldPremiumTotals(res.covered_calls);
+    const totBanner = (tot.weekly || tot.monthly || tot.quarterly)
+      ? '<div style="padding:9px 13px;margin-bottom:10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;color:#166534;">'
+        + '💰 <strong>Premium on your full holdings</strong> if you write every covered call below — '
+        + 'weekly <strong>' + _optMoney(tot.weekly) + '</strong> · monthly <strong>' + _optMoney(tot.monthly) + '</strong> · quarterly <strong>' + _optMoney(tot.quarterly) + '</strong>'
+        + '<span style="color:#15803d;opacity:0.7;"> (max contracts = shares ÷ 100, across all accounts)</span>'
+        + '</div>'
+      : '';
+    document.getElementById('opt-cc').innerHTML = totBanner + _optTable(res.covered_calls, 'cc');
     document.getElementById('opt-csp').innerHTML = _optTable(res.cash_secured_puts, 'csp');
     document.getElementById('opt-status').textContent =
       `Δ ≤ ${res.delta_max} · ${res.universe_size} names scanned · ${res.scanned_at} · ranked by weekly annualized yield`;

@@ -20463,6 +20463,36 @@ def _held_tickers() -> list:
         return []
 
 
+def _held_share_counts() -> dict:
+    """Total shares held PER symbol across ALL open tax-lots (managed accounts +
+    LP funds) — the actual position size used to size covered calls. Contracts =
+    shares // 100, so premium $ = contracts * premium * 100."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {}
+    out: dict = {}
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""
+                SELECT s.symbol AS symbol, SUM(tl.quantity) AS qty
+                  FROM tax_lots tl
+                  JOIN securities s ON s.id = tl.security_id
+                 WHERE tl.closed_at IS NULL AND tl.quantity > 0
+                   AND s.asset_class != 'cash'
+                 GROUP BY s.symbol
+            """)
+            for r in (cur.fetchall() or []):
+                sym = (r.get("symbol") or "").strip().upper()
+                if not sym:
+                    continue
+                try:
+                    out[sym] = float(r.get("qty") or 0)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[options scan] held-share-counts query failed: {e!s:.150}", flush=True)
+    return out
+
+
 def _saved_report_tickers() -> list:
     """Tickers with a saved (non-archived) analyst report — the research
     coverage universe shown on the Research page (the 'Saved Reports' list)."""
@@ -20507,6 +20537,7 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
     reports + holdings). Both tables are ranked by weekly annualized yield."""
     import options_engine as _opt
     held = set(held_set)
+    share_counts = _held_share_counts()   # {symbol: total shares} for premium $ sizing
 
     def _set(**kw):
         _options_scan_jobs[job_id] = {**(_options_scan_jobs.get(job_id) or {}), **kw,
@@ -20527,6 +20558,7 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
             if not isinstance(r, dict):
                 r = {"ticker": tk, "ok": False, "error": "no result"}
             r["held"] = tk in held
+            r["shares_held"] = share_counts.get(tk) or 0
             rows.append(r)
 
         def _has(r, k):
