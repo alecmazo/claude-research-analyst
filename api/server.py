@@ -17458,14 +17458,14 @@ _podcast_jobs_lock = threading.Lock()
 # answer open-ended research questions. Multi-step + autonomous: the model
 # decides which tools to call and when it has enough to answer.
 #
-# Model: env AGENTIC_MODEL, defaults to the same Opus the rest of the app
-# uses (claude-opus-4-1) so it works TODAY with no 400s. Override to
-# claude-opus-4-7 / claude-opus-4-8 once you've confirmed the ID via
-# client.models.list(). Newer Opus needs adaptive thinking + effort instead
-# of budget_tokens — see _agentic_thinking_kwargs() which adapts by model.
+# Model: env AGENTIC_MODEL, defaults to the same Opus the rest of the app uses
+# (claude-opus-4-8 — current flagship, stable alias). Newer Opus uses adaptive
+# thinking + effort instead of budget_tokens — _agentic_thinking_kwargs() already
+# emits {"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}} for
+# opus-4-6/4-7/4-8, so the loop is 400-free on 4.8.
 # ═══════════════════════════════════════════════════════════════════════
 _AGENTIC_MODEL = os.environ.get("AGENTIC_MODEL", "").strip() or getattr(
-    analyst, "CLAUDE_MODEL", "claude-opus-4-1-20250805")
+    analyst, "CLAUDE_MODEL", "claude-opus-4-8")
 _AGENTIC_MAX_STEPS = 12          # hard cap on tool-call rounds (cost guard)
 _agentic_jobs: dict[str, dict] = {}
 

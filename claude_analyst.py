@@ -5972,11 +5972,16 @@ def call_grok(system_prompt: str, user_content: str,
 # but live news that broke since training cutoff will appear in Grok but
 # not in Claude. The UI discloses this in the comparison modal.
 
-CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-1-20250805")
-# ↑ Default to Opus 4.1 — Anthropic's flagship reasoning model, the fair
-# matchup against Grok-4-reasoning. To save money on routine runs, override:
-#   Railway env var → CLAUDE_MODEL=claude-sonnet-4-5-20250929    (~5× cheaper)
-# Check the latest aliases at https://docs.anthropic.com/en/docs/about-claude/models
+CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-8")
+# ↑ Default to Opus 4.8 — Anthropic's current flagship reasoning model (the
+# "Claude" engine on Analyze Ticker), the fair matchup against Grok-4-reasoning.
+# `claude-opus-4-8` is a STABLE ALIAS — no date suffix. It's also CHEAPER than
+# the old Opus 4.1 ($5/$25 vs $15/$75 per Mtok) and far stronger on long-horizon
+# reasoning. The analyst call streams with no temperature/budget_tokens/prefill,
+# so it's 400-free on 4.8 (those params were removed on Opus 4.7+).
+# NOTE: if CLAUDE_MODEL is set as a Railway env var to the old ID, update it
+# there too — the env var overrides this default. To save money on routine runs:
+#   Railway env var → CLAUDE_MODEL=claude-sonnet-4-6    (~1.7× cheaper)
 
 # Cheap screening tier — used for "which of these N tickers actually
 # deserves an Opus-quality full report this week?" Sonnet sits at the
@@ -6094,9 +6099,12 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
 # pricing if a model isn't listed (conservative — Sonnet is cheap).
 CLAUDE_PRICING_PER_MTOK = {
     # model_id                         : (input $/Mtok, output $/Mtok)
+    "claude-opus-4-8":                     (5.0, 25.0),    # current flagship (stable alias)
+    "claude-opus-4-7":                     (5.0, 25.0),
+    "claude-opus-4-6":                     (5.0, 25.0),
     "claude-opus-4-1-20250805":           (15.0, 75.0),
+    "claude-sonnet-4-6":                   (3.0, 15.0),
     "claude-sonnet-4-5-20250929":          (3.0, 15.0),
-    "claude-sonnet-4-6-20260214":          (3.0, 15.0),   # speculative; same pricing if it ships
 }
 
 
