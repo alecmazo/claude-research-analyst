@@ -342,6 +342,15 @@ export const api = {
     request(`/api/reports/reanalyze-all/${bulkId}/cancel`, { method: 'POST' }),
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
   getSpyYtd:    ()       => request('/api/market/spy-ytd'),
+  // ---------- Markets dashboard (mobile home tab) ----------
+  // Live index ribbon (S&P, Nasdaq, Dow, VIX, …)
+  getMarketIndices: () => request('/api/market/indices'),
+  // Idea Generator — today's movers ≥ threshold% from the user's universe
+  getIdeaFeed: (threshold = 4, limit = 60) =>
+    request(`/api/v2/research/idea-feed?threshold=${threshold}&limit=${limit}`),
+  // Free per-ticker news (Yahoo → RSS → Google News, non-LLM) for mover expand
+  getNews: (tickers, limit = 6) =>
+    request(`/api/news?tickers=${encodeURIComponent(tickers)}&limit=${limit}`),
   getTickerMeta: (ticker) => request(`/api/market/ticker-meta/${encodeURIComponent(ticker)}`),
   deleteReport: (ticker) => request(`/api/report/${ticker}`, { method: 'DELETE' }),
 

@@ -6,6 +6,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import * as Updates from 'expo-updates';
 
+import MarketsScreen          from './src/screens/MarketsScreen';
 import HomeScreen             from './src/screens/HomeScreen';
 import AnalystScreen          from './src/screens/AnalystScreen';
 import AnalysisScreen         from './src/screens/AnalysisScreen';
@@ -63,10 +64,11 @@ function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
+      <Tab.Screen name="Markets"   component={MarketsScreen} />
       <Tab.Screen name="Research"  component={HomeStack} />
-      <Tab.Screen name="Podcast"   component={PodcastScreen} />
       <Tab.Screen name="Fund"      component={FundStack} />
       <Tab.Screen name="Positions" component={WatchlistScreen} />
+      <Tab.Screen name="Podcast"   component={PodcastScreen} />
       <Tab.Screen name="Settings">
         {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
       </Tab.Screen>
