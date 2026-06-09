@@ -4338,11 +4338,17 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             _jobs[job_id]["error"] = f"Both providers failed: {provs}"
         _jobs[job_id]["progress"] = {"step": "done", "pct": 1.0,
                                       "label": "Both reports complete"}
+        _g_cost = result_g.get("cost_usd") or 0.0
+        _c_cost = result_c.get("cost_usd") or 0.0
         _jobs[job_id]["result"] = {
             "ok": any_ok,
             "providers": provs,
             "has_grok_report":   provs.get("grok") == "done",
             "has_claude_report": provs.get("claude") == "done",
+            # Combined actual spend across both providers.
+            "cost_usd":    round(_g_cost + _c_cost, 4) if (_g_cost or _c_cost) else None,
+            "cost_grok":   result_g.get("cost_usd"),
+            "cost_claude": result_c.get("cost_usd"),
         }
 
 

@@ -7457,8 +7457,11 @@ End with the sleeve block at this account's real market value so I can push it t
           setTimeout(() => _heroProgShow(false), 650);
           loadReports();
           const tgt = j.result?.price_target ? ` · Target $${j.result.price_target}` : '';
+          // Actual LLM spend for this run (token usage × live pricing).
+          const c = j.result?.cost_usd;
+          const costTxt = (c != null && !isNaN(c)) ? ` · cost $${Number(c).toFixed(2)}` : '';
           $heroHint.style.color = 'var(--green)';
-          $heroHint.textContent = `✅ ${ticker} analysis complete${tgt} — see Saved Reports below`;
+          $heroHint.textContent = `✅ ${ticker} analysis complete${costTxt}${tgt} — see Saved Reports below`;
         },
         () => {
           _heroProgShow(false);

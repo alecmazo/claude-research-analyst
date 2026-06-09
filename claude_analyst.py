@@ -6240,7 +6240,7 @@ def call_claude(system_prompt: str, user_content: str,
 
 
 def call_llm(provider: str, system_prompt: str, user_content: str,
-             *, live_search: bool = False, on_delta=None) -> str:
+             *, live_search: bool = False, on_delta=None, usage_capture=None) -> str:
     """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude'}.
 
     ``on_delta`` is forwarded to providers that support streaming (Claude).
@@ -6253,10 +6253,12 @@ def call_llm(provider: str, system_prompt: str, user_content: str,
     """
     p = (provider or "grok").lower().strip()
     if p == "claude":
-        return call_claude(system_prompt, user_content, on_delta=on_delta)
+        return call_claude(system_prompt, user_content, on_delta=on_delta,
+                           usage_capture=usage_capture)
     if p == "grok":
         # call_grok is non-streaming; on_delta is ignored.
-        return call_grok(system_prompt, user_content, live_search=live_search)
+        return call_grok(system_prompt, user_content, live_search=live_search,
+                        usage_capture=usage_capture)
     raise ValueError(f"Unknown LLM provider: {provider!r}")
 
 
@@ -7113,10 +7115,12 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     _emit_progress(on_progress, "grok", 0.40,
                    f"{llm_provider.title()} ({_model_label}) — analyzing"
                    + (" + live X/news search" if llm_provider == "grok" else ""))
+    _usage: dict = {}   # filled by call_grok/call_claude → {model, input/output_tokens, cost_usd}
     try:
         report_text = call_llm(llm_provider, system_prompt, user_msg,
                                live_search=(llm_provider == "grok"),
-                               on_delta=on_delta)
+                               on_delta=on_delta,
+                               usage_capture=lambda u: _usage.update(u or {}))
     except Exception as exc:  # noqa: BLE001
         print(f"   ❌ {llm_provider.upper()} API error: {exc}")
         result["error"] = f"{llm_provider.title()}: {exc}"
@@ -7209,6 +7213,11 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         "gamma_error": gamma_error,
         "summary": summary,
         "gdrive": gdrive_status,
+        # Actual LLM spend for this run (from the provider's token usage).
+        "cost_usd":      _usage.get("cost_usd"),
+        "cost_model":    _usage.get("model"),
+        "input_tokens":  _usage.get("input_tokens"),
+        "output_tokens": _usage.get("output_tokens"),
     })
     return result
 
