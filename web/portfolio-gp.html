@@ -675,6 +675,40 @@
   }
   .hero-btn:hover { filter: brightness(1.08); }
   .hero-btn:active { transform: translateY(1px); }
+  .hero-btn { white-space: nowrap; }                 /* never wrap — progress is its own bar */
+  .hero-btn:disabled { cursor: default; opacity: 0.8; filter: none; transform: none; }
+  .hero-btn .spin { display: inline-block; animation: heroSpin .9s linear infinite; }
+  @keyframes heroSpin { to { transform: rotate(360deg); } }
+
+  /* ── Polished Analyze-Ticker progress bar ──────────────────────── */
+  .hero-progress { display: none; margin-top: 11px; }
+  .hero-progress.show { display: block; animation: heroFade .2s ease; }
+  @keyframes heroFade { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+  .hero-prog-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .hero-prog-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--blue); flex: none;
+    box-shadow: 0 0 0 3px rgba(91,184,212,0.18); animation: heroPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes heroPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .hero-prog-label {
+    /* hero-card is always a light surface — use an explicit dark color, not the
+       theme's --text-primary (which is near-white in dark mode). */
+    font-size: 11.5px; color: #1e293b; font-weight: 600; flex: 1; line-height: 1.35;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .hero-prog-pct { font-size: 11px; color: var(--blue-dark); font-weight: 800; font-variant-numeric: tabular-nums; flex: none; }
+  .hero-prog-track { height: 6px; border-radius: 99px; background: rgba(91,184,212,0.14); overflow: hidden; }
+  .hero-prog-fill {
+    height: 100%; width: 0; border-radius: 99px; position: relative;
+    background: linear-gradient(90deg, var(--blue-light), var(--blue));
+    transition: width .5s cubic-bezier(.4,0,.2,1);
+  }
+  .hero-prog-fill::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+    transform: translateX(-100%); animation: heroSheen 1.5s ease-in-out infinite;
+  }
+  @keyframes heroSheen { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
   .hero-hint {
     font-size: 10px; color: var(--dim); margin-top: 6px;
   }
@@ -3278,6 +3312,14 @@ End with the sleeve block at this account's real market value so I can push it t
         <input id="hero-ticker" class="hero-input" placeholder="e.g. AAPL" autocapitalize="characters" autocomplete="off">
         <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
       </div>
+      <div id="hero-progress" class="hero-progress">
+        <div class="hero-prog-head">
+          <span class="hero-prog-dot"></span>
+          <span class="hero-prog-label" id="hero-prog-label">Queued…</span>
+          <span class="hero-prog-pct" id="hero-prog-pct">0%</span>
+        </div>
+        <div class="hero-prog-track"><div class="hero-prog-fill" id="hero-prog-fill"></div></div>
+      </div>
       <div id="hero-hint"></div>
       <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
@@ -5018,7 +5060,7 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   // ── Generic job poller ────────────────────────────────────────
-  function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail) {
+  function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail, onProgress) {
     async function tick() {
       try {
         const r = await window.dgaFetch(pollPath + jobId);
@@ -5027,7 +5069,12 @@ End with the sleeve block at this account's real market value so I can push it t
         const lbl = job.progress?.label || '';
         if (pct != null) {
           const pctInt = Math.round(pct * 100);
-          btn.textContent = pctInt + '% — ' + (lbl || '…');
+          // If a progress renderer is supplied, use it (keeps the button clean).
+          // Otherwise fall back to writing into the button text.
+          if (typeof onProgress === 'function') onProgress(pctInt, lbl);
+          else btn.textContent = pctInt + '% — ' + (lbl || '…');
+        } else if (typeof onProgress === 'function') {
+          onProgress(null, lbl);
         }
         if (job.status === 'done')   { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; onDone(job); }
         if (job.status === 'failed') { clearInterval(iv); btn.disabled=false; btn.textContent='❌ Failed'; setTimeout(()=>btn.textContent=idleLabel,3000); if(onFail) onFail(job); }
@@ -7367,13 +7414,28 @@ End with the sleeve block at this account's real market value so I can push it t
   const $heroTicker = document.getElementById('hero-ticker');
   const $heroBtn    = document.getElementById('hero-run-btn');
   const $heroHint   = document.getElementById('hero-hint');
+  const $heroProg     = document.getElementById('hero-progress');
+  const $heroProgLbl  = document.getElementById('hero-prog-label');
+  const $heroProgPct  = document.getElementById('hero-prog-pct');
+  const $heroProgFill = document.getElementById('hero-prog-fill');
+
+  function _heroProgShow(on) { if ($heroProg) $heroProg.classList.toggle('show', !!on); }
+  function _heroProgSet(pctInt, lbl) {
+    // null pct = indeterminate (queued / between updates) — keep a small sliver.
+    const w = pctInt == null ? 6 : Math.max(4, Math.min(100, pctInt));
+    if ($heroProgFill) $heroProgFill.style.width = w + '%';
+    if ($heroProgPct)  $heroProgPct.textContent = (pctInt == null ? '' : pctInt + '%');
+    if ($heroProgLbl && lbl) $heroProgLbl.textContent = lbl;
+  }
 
   async function runAnalysis() {
     const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
     if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
     $heroBtn.disabled = true;
-    $heroBtn.textContent = '⏳ Queued…';
+    $heroBtn.innerHTML = '<span class="spin">⟳</span> Analyzing';
     $heroHint.textContent = '';
+    _heroProgSet(null, 'Queued…');
+    _heroProgShow(true);
     try {
       const r = await window.dgaFetch('/api/analyze', {
         method: 'POST',
@@ -7388,16 +7450,23 @@ End with the sleeve block at this account's real market value so I can push it t
       const job = await r.json();
       pollJob(job.job_id, '/api/jobs/', $heroBtn, '⚡ RUN',
         (j) => {
+          _heroProgSet(100, 'Complete');
+          setTimeout(() => _heroProgShow(false), 650);
           loadReports();
           const tgt = j.result?.price_target ? ` · Target $${j.result.price_target}` : '';
           $heroHint.style.color = 'var(--green)';
           $heroHint.textContent = `✅ ${ticker} analysis complete${tgt} — see Saved Reports below`;
         },
-        () => { $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.'; }
+        () => {
+          _heroProgShow(false);
+          $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.';
+        },
+        (pctInt, lbl) => _heroProgSet(pctInt, lbl)   // polished progress renderer
       );
     } catch (e) {
       $heroBtn.disabled = false;
       $heroBtn.textContent = '⚡ RUN';
+      _heroProgShow(false);
       $heroHint.style.color = 'var(--red)';
       $heroHint.textContent = 'Error: ' + (e.message || 'unknown');
     }
