@@ -3330,6 +3330,9 @@ End with the sleeve block at this account's real market value so I can push it t
             <option value="both">Both (sequential ~5 min)</option>
           </select>
         </label>
+        <span id="hero-cost-est"
+              title="Estimated LLM cost for one report run (input/output tokens + live-search). Actual varies with report length and how much the model searches."
+              style="font-size:10px;font-weight:700;color:var(--blue-dark,#3E9AB8);background:rgba(91,184,212,0.10);border:1px solid rgba(91,184,212,0.30);border-radius:5px;padding:2px 7px;white-space:nowrap;">≈ $0.30–0.60 / report</span>
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
           <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
           <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
@@ -7473,6 +7476,26 @@ End with the sleeve block at this account's real market value so I can push it t
   }
   $heroBtn.addEventListener('click', runAnalysis);
   $heroTicker.addEventListener('keydown', e => { if (e.key === 'Enter') runAnalysis(); });
+
+  // ── Per-run cost estimate (mirrors the LLM Lab's inline price tags) ──
+  // Ranges derived from real pricing: a full single-ticker DGA report is
+  // ~25-45K input + a long output. Grok-4.20 = $5/$15 per Mtok + ~$0.025/live
+  // search (it searches the live web/X); Claude Opus 4.8 = $5/$25 per Mtok and
+  // thinks more (adaptive). "Both" runs the two sequentially.
+  const $heroLlm   = document.getElementById('hero-llm');
+  const $heroGamma2 = document.getElementById('hero-gamma');
+  const $heroCost  = document.getElementById('hero-cost-est');
+  const _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', both: '$0.80–1.60' };
+  function _updateHeroCost() {
+    if (!$heroCost) return;
+    const eng = ($heroLlm && $heroLlm.value) || 'grok';
+    let s = '≈ ' + (_HERO_COST_EST[eng] || _HERO_COST_EST.grok) + ' / report';
+    if ($heroGamma2 && $heroGamma2.checked) s += ' + deck';
+    $heroCost.textContent = s;
+  }
+  if ($heroLlm)    $heroLlm.addEventListener('change', _updateHeroCost);
+  if ($heroGamma2) $heroGamma2.addEventListener('change', _updateHeroCost);
+  _updateHeroCost();
 
   // ── Last Portfolio Run ───────────────────────────────────────────
   async function loadLastPortfolio() {
