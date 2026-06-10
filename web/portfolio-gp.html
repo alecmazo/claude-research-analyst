@@ -3918,6 +3918,33 @@ End with the sleeve block at this account's real market value so I can push it t
       de-cumulated to discrete quarters; Q4 is derived (FY − Q1–Q3). $ in millions unless noted.
     </div>
 
+    <!-- ── Company dashboard (GuruFocus-style, zero LLM tokens) ── -->
+    <section class="panel" style="margin-bottom:14px;">
+      <header class="panel-head">
+        <span class="panel-title">📊 Company Dashboard</span>
+        <span class="panel-badge" style="background:#dcfce7;color:#166534;" title="Renders entirely from the SEC XBRL store + saved report targets — no LLM tokens spent">FREE · NO TOKENS</span>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="fin-dash-ticker" list="fin-dash-list" placeholder="Ticker…" maxlength="8"
+            style="width:110px;border:1px solid var(--border-default);border-radius:6px;padding:6px 10px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;background:var(--bg-elevated);color:var(--text-primary);">
+          <datalist id="fin-dash-list"></datalist>
+          <div id="fin-dash-period" style="display:inline-flex;border:1px solid var(--border-default);border-radius:6px;overflow:hidden;">
+            <button data-p="annual"  class="fin-dash-seg" style="border:none;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--blue);color:#fff;">Annual</button>
+            <button data-p="quarter" class="fin-dash-seg" style="border:none;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--bg-elevated);color:var(--text-secondary);">Quarterly</button>
+          </div>
+          <button id="fin-dash-load" class="btn-primary" style="padding:0 16px;height:30px;font-size:12px;">View ▶</button>
+        </div>
+      </header>
+      <div class="panel-body" style="padding:14px 16px;">
+        <div id="fin-dash-empty" style="font-size:12px;color:var(--text-tertiary);">
+          Pick a covered ticker and hit View — six chart panels, a <strong>DGA Score</strong> and a
+          <strong>DGA Value</strong> (mean of your saved Grok + Claude price targets), all computed from
+          the persisted SEC XBRL store. Zero LLM cost per view.
+        </div>
+        <div id="fin-dash-head" style="display:none;"></div>
+        <div id="fin-dash-grid" style="display:none;margin-top:12px;display:none;"></div>
+      </div>
+    </section>
+
     <!-- ── Sync / build ── -->
     <section class="panel">
       <header class="panel-head">
@@ -5837,9 +5864,249 @@ End with the sleeve block at this account's real market value so I can push it t
       if (ct) ct.addEventListener('keydown', e => { if (e.key === 'Enter') _viewFinCompany(); });
       const rb = document.getElementById('fin-scr-btn');
       if (rb) rb.addEventListener('click', _runFinScreen);
+      // ── Company dashboard wiring ──
+      const dl = document.getElementById('fin-dash-load');
+      if (dl) dl.addEventListener('click', () => _finDashLoad());
+      const dt = document.getElementById('fin-dash-ticker');
+      if (dt) {
+        dt.addEventListener('keydown', e => { if (e.key === 'Enter') _finDashLoad(); });
+        dt.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+      }
+      document.querySelectorAll('.fin-dash-seg').forEach(b => {
+        b.addEventListener('click', () => {
+          _finDashPeriod = b.dataset.p;
+          document.querySelectorAll('.fin-dash-seg').forEach(x => {
+            const on = x.dataset.p === _finDashPeriod;
+            x.style.background = on ? 'var(--blue)' : 'var(--bg-elevated)';
+            x.style.color = on ? '#fff' : 'var(--text-secondary)';
+          });
+          if (_finDashLast) _finDashLoad(_finDashLast);
+        });
+      });
       _finWired = true;
     }
     _loadFinCoverage();
+    // Fill the dashboard's ticker datalist from store coverage (cheap DB call).
+    window.dgaFetch('/api/financials/coverage').then(r => r.json()).then(d => {
+      const list = document.getElementById('fin-dash-list');
+      if (list && d && d.coverage) {
+        list.innerHTML = d.coverage.map(c =>
+          '<option value="' + c.ticker + '">' + (c.entity_name || '') + '</option>').join('');
+      }
+    }).catch(() => {});
+  }
+
+  // ══ Company Dashboard (GuruFocus-style — SVG, no chart lib, no LLM) ══
+  let _finDashPeriod = 'annual';
+  let _finDashLast = null;
+
+  const _GF = { blue:'#3b82f6', green:'#16a34a', orange:'#f59e0b', red:'#dc2626',
+                purple:'#8b5cf6', pink:'#ec4899', slate:'#64748b', gold:'#eab308' };
+  const _gfEsc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const _gfMoney = v => {
+    const n = v / 1e6, a = Math.abs(n);
+    return (n < 0 ? '-' : '') + (a >= 1000
+      ? (a/1000).toLocaleString('en-US', {maximumFractionDigits:1}) + 'B'
+      : a.toLocaleString('en-US', {maximumFractionDigits:0}) + 'M');
+  };
+  const _gfCount = v => {
+    const a = Math.abs(v);
+    return (v < 0 ? '-' : '') + (a >= 1e9 ? (a/1e9).toFixed(1)+'B'
+      : a >= 1e6 ? (a/1e6).toFixed(0)+'M' : a.toLocaleString('en-US'));
+  };
+  const _gfPctF = v => v.toFixed(Math.abs(v) < 3 ? 1 : 0) + '%';
+
+  // Generic grouped-bar (+optional line, dual-axis) SVG chart panel.
+  // cfg = { title?, labels:[], series:[{name,color,colorNeg?,values,axis:'L'|'R',type:'bar'|'line'}], fmtL, fmtR }
+  function _gfChart(cfg) {
+    const W = 560, H = 230, padL = 56, padR = (cfg.series.some(s => s.axis === 'R') ? 52 : 12),
+          padT = 10, padB = 30, n = cfg.labels.length;
+    if (!n) return '<div style="padding:20px;font-size:11px;color:var(--text-tertiary);">No data.</div>';
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const rng = axis => {
+      let lo = 0, hi = 0;
+      cfg.series.filter(s => (s.axis || 'L') === axis).forEach(s =>
+        s.values.forEach(v => { if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+      if (hi === lo) hi = lo + 1;
+      hi *= 1.06; if (lo < 0) lo *= 1.06;
+      return { lo, hi };
+    };
+    const L = rng('L'), R = rng('R');
+    const yOf = (v, a) => { const r = a === 'R' ? R : L;
+      return padT + plotH * (1 - (v - r.lo) / (r.hi - r.lo)); };
+    const slotW = plotW / n;
+    const barSeries = cfg.series.filter(s => (s.type || 'bar') === 'bar');
+    const bw = Math.max(2, Math.min(14, (slotW * 0.72) / Math.max(1, barSeries.length)));
+    let svg = '';
+    // gridlines + left ticks
+    const fmtL = cfg.fmtL || _gfMoney, fmtR = cfg.fmtR || _gfPctF;
+    for (let i = 0; i <= 4; i++) {
+      const v = L.lo + (L.hi - L.lo) * i / 4, y = yOf(v, 'L');
+      svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1"/>`
+           + `<text x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(fmtL(v))}</text>`;
+    }
+    if (padR > 20) for (let i = 0; i <= 4; i++) {
+      const v = R.lo + (R.hi - R.lo) * i / 4, y = yOf(v, 'R');
+      svg += `<text x="${W - padR + 6}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(fmtR(v))}</text>`;
+    }
+    // zero line
+    if (L.lo < 0) svg += `<line x1="${padL}" y1="${yOf(0,'L').toFixed(1)}" x2="${W - padR}" y2="${yOf(0,'L').toFixed(1)}" stroke="var(--text-tertiary,#94a3b8)" stroke-width="1"/>`;
+    // bars
+    barSeries.forEach((s, si) => {
+      const a = s.axis || 'L', y0 = yOf(0, a);
+      s.values.forEach((v, i) => {
+        if (v == null || !isFinite(v)) return;
+        const x = padL + slotW * i + slotW / 2 - (barSeries.length * bw) / 2 + si * bw;
+        const y = yOf(v, a);
+        const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
+        svg += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(1, Math.abs(y0 - y)).toFixed(1)}" fill="${col}" rx="1"><title>${_gfEsc(cfg.labels[i])} · ${_gfEsc(s.name)}: ${_gfEsc((a==='R'?fmtR:fmtL)(v))}</title></rect>`;
+      });
+    });
+    // lines
+    cfg.series.filter(s => s.type === 'line').forEach(s => {
+      const a = s.axis || 'L';
+      let d = '', started = false;
+      s.values.forEach((v, i) => {
+        if (v == null || !isFinite(v)) { return; }
+        const x = padL + slotW * i + slotW / 2, y = yOf(v, a);
+        d += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+        started = true;
+      });
+      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    });
+    // x labels (thin out when crowded)
+    const step = Math.ceil(n / 8);
+    cfg.labels.forEach((lb, i) => {
+      if (i % step) return;
+      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(lb)}</text>`;
+    });
+    const legend = cfg.series.map(s =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--text-secondary);margin-right:10px;">` +
+      (s.type === 'line'
+        ? `<span style="width:14px;height:2px;background:${s.color};display:inline-block;"></span>`
+        : `<span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block;"></span>`) +
+      `${_gfEsc(s.name)}</span>`).join('');
+    return `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;background:var(--bg-elevated);">`
+      + `<div style="margin-bottom:4px;">${legend}</div>`
+      + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;">${svg}</svg></div>`;
+  }
+
+  async function _finDashLoad(tkOverride) {
+    const inp = document.getElementById('fin-dash-ticker');
+    const tk = (tkOverride || (inp && inp.value) || '').trim().toUpperCase();
+    if (!tk) return;
+    _finDashLast = tk;
+    const head = document.getElementById('fin-dash-head');
+    const grid = document.getElementById('fin-dash-grid');
+    const empty = document.getElementById('fin-dash-empty');
+    if (empty) empty.style.display = 'none';
+    if (head) { head.style.display = 'block'; head.innerHTML =
+      '<div style="font-size:12px;color:var(--text-tertiary);"><span class="spin" style="display:inline-block;">⟳</span> Loading ' + _gfEsc(tk) + ' from the store…</div>'; }
+    if (grid) grid.style.display = 'none';
+    try {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/dashboard?period_type=' + _finDashPeriod);
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      _finDashRender(d);
+    } catch (e) {
+      if (head) head.innerHTML = '<div style="font-size:12px;color:var(--red,#dc2626);">' + _gfEsc(e.message) + '</div>';
+    }
+  }
+
+  function _finDashRender(d) {
+    const head = document.getElementById('fin-dash-head');
+    const grid = document.getElementById('fin-dash-grid');
+    const S = d.series || [], labels = S.map(x => x.label);
+    const col = k => S.map(x => x[k]);
+
+    // ── Header: identity · DGA Score · DGA Value + valuation anchors ──
+    const sc = (d.dga_score || {}), comps = sc.components || {};
+    const grade = v => v == null ? 'var(--text-tertiary)'
+      : v >= 80 ? _GF.green : v >= 60 ? '#65a30d' : v >= 40 ? _GF.orange : _GF.red;
+    const compRow = (name, v) =>
+      `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;">` +
+      `<span style="font-size:10px;color:var(--text-secondary);width:92px;">${name}</span>` +
+      `<div style="flex:1;height:5px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
+      `<div style="height:100%;width:${v==null?0:v}%;background:${grade(v)};border-radius:99px;"></div></div>` +
+      `<span style="font-size:10px;font-weight:700;color:${grade(v)};width:24px;text-align:right;">${v==null?'—':v}</span></div>`;
+
+    const verdictCol = { 'Significantly Undervalued': _GF.green, 'Undervalued': '#65a30d',
+      'Fairly Valued': _GF.orange, 'Overvalued': '#ea580c', 'Significantly Overvalued': _GF.red };
+    const tg = d.targets || {};
+    const anchors = (d.valuation || []);
+    const maxAbs = Math.max(d.price || 0, ...anchors.map(a => Math.abs(a.value)), 1);
+    const aColor = k => k === 'dga' ? _GF.gold : k === 'target' ? _GF.blue : _GF.slate;
+    const anchorRows = anchors.map(a => {
+      const w = Math.min(100, Math.abs(a.value) / maxAbs * 100);
+      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">` +
+        `<span style="font-size:9.5px;color:var(--text-secondary);width:148px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_gfEsc(a.label)}</span>` +
+        `<div style="flex:1;position:relative;height:11px;background:var(--gray-100,#f1f5f9);border-radius:3px;">` +
+        `<div style="position:absolute;left:0;top:0;height:100%;width:${w}%;background:${a.value < 0 ? _GF.red : aColor(a.kind)};border-radius:3px;opacity:0.85;"></div>` +
+        (d.price ? `<div style="position:absolute;left:${Math.min(100, d.price / maxAbs * 100)}%;top:-2px;height:15px;border-left:2px dashed var(--text-primary);"></div>` : '') +
+        `</div><span style="font-size:9.5px;font-weight:700;color:var(--text-primary);width:58px;font-variant-numeric:tabular-nums;">$${a.value.toLocaleString('en-US',{maximumFractionDigits:2})}</span></div>`;
+    }).join('');
+
+    head.innerHTML =
+      `<div style="display:grid;grid-template-columns:1.1fr 1fr 1.4fr;gap:14px;align-items:stretch;">` +
+      // identity
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(d.entity_name)} <span style="color:var(--text-tertiary);font-weight:600;">· ${_gfEsc(d.ticker)}</span></div>` +
+        `<div style="font-size:22px;font-weight:800;color:var(--text-primary);margin-top:4px;font-variant-numeric:tabular-nums;">${d.price ? '$' + d.price.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}` +
+        (d.rating ? ` <span style="font-size:10px;font-weight:800;letter-spacing:0.5px;color:${_GF.green};border:1px solid ${_GF.green};border-radius:4px;padding:1px 6px;vertical-align:middle;">${_gfEsc(d.rating).toUpperCase()}</span>` : '') + `</div>` +
+        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
+        `<div style="font-size:9px;color:var(--text-tertiary);margin-top:8px;">SEC XBRL store · ${_gfEsc(d.period_type)} · zero LLM tokens</div>` +
+      `</div>` +
+      // DGA score
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-secondary);">DGA SCORE™</div>` +
+        `<div style="font-size:30px;font-weight:800;color:${grade(sc.total)};line-height:1.1;">${sc.total == null ? '—' : sc.total}<span style="font-size:13px;color:var(--text-tertiary);font-weight:600;"> /100</span></div>` +
+        compRow('Profitability', comps.profitability) + compRow('Growth', comps.growth) +
+        compRow('Fin. Strength', comps.financial_strength) + compRow('Predictability', comps.predictability) +
+        compRow('Value', comps.value) +
+      `</div>` +
+      // DGA value + anchors
+      `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+        `<div style="display:flex;align-items:baseline;gap:10px;">` +
+          `<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-secondary);">DGA VALUE™</span>` +
+          `<span style="font-size:20px;font-weight:800;color:var(--text-primary);">${d.dga_value ? '$' + d.dga_value.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</span>` +
+          (d.verdict ? `<span style="font-size:10px;font-weight:800;color:#7c5e00;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;color:${verdictCol[d.verdict]||'#7c5e00'};">${_gfEsc(d.verdict)}</span>` : '') +
+        `</div>` +
+        `<div style="margin-top:8px;">${anchorRows || '<span style="font-size:11px;color:var(--text-tertiary);">No valuation anchors (need a saved report + financials).</span>'}</div>` +
+        (d.price ? `<div style="font-size:9px;color:var(--text-tertiary);margin-top:4px;">┆ dashed line = current price ($${d.price.toLocaleString('en-US',{maximumFractionDigits:2})})</div>` : '') +
+      `</div></div>`;
+    head.style.display = 'block';
+
+    // ── Six chart panels ──
+    grid.innerHTML = [
+      _gfChart({ labels, series: [
+        { name:'Revenue', color:_GF.blue,  values: col('revenue') },
+        { name:'Net Income', color:_GF.green, values: col('net_income') },
+        { name:'EBITDA', color:_GF.orange, values: col('ebitda') }] }),
+      _gfChart({ labels, series: [
+        { name:'Cash', color:_GF.green, values: col('cash') },
+        { name:'Debt', color:_GF.red,   values: col('debt') }] }),
+      _gfChart({ labels, series: [
+        { name:'Operating CF', color:_GF.orange, values: col('ocf') },
+        { name:'Free CF', color:_GF.blue, values: col('fcf') },
+        { name:'Net Income', color:_GF.green, values: col('net_income') },
+        { name:'Dividends', color:_GF.purple, values: col('dividends') },
+        { name:'Buybacks', color:_GF.pink, values: col('buybacks') }] }),
+      _gfChart({ labels, fmtL:_gfPctF, series: [
+        { name:'ROIC %', color:_GF.green, values: col('roic_pct') },
+        { name:'WACC % (est.)', color:_GF.red, values: col('wacc_pct') },
+        { name:'ROIC − WACC', color:'var(--text-primary)', type:'line', values:
+          S.map(x => (x.roic_pct != null && x.wacc_pct != null) ? x.roic_pct - x.wacc_pct : null) }] }),
+      _gfChart({ labels, fmtL:_gfCount, fmtR:_gfPctF, series: [
+        { name:'Shares Outstanding', color:_GF.blue, values: col('shares') },
+        { name:'Buyback Ratio %', color:_GF.green, colorNeg:_GF.red, axis:'R', values: col('buyback_ratio_pct') }] }),
+      _gfChart({ labels, series: [
+        { name:'Stockholders Equity', color:_GF.green, values: col('equity') },
+        { name:'Total Assets', color:_GF.blue, values: col('assets') }] }),
+    ].join('');
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
+    grid.style.gap = '12px';
   }
 
   // millions, with commas; handles negatives and nulls

@@ -21064,6 +21064,280 @@ def financials_ticker(ticker: str, request: Request, period_type: str = "all"):
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
+# ── Company dashboard (GuruFocus-style) — 100% persisted data, ZERO LLM ───────
+# Everything below is arithmetic over company_financials (SEC XBRL), the
+# market_quotes store (price), and analyst_reports (saved Grok/Claude targets).
+# Rendering this page never spends a token; targets only change when the user
+# re-runs a report through the normal Analyze flow.
+
+_DASH_COE      = 0.09    # est. cost of equity (rf ~4.3% + ~4.7% ERP, no beta)
+_DASH_COD_AT   = 0.043   # est. after-tax cost of debt (~5.5% × (1 − 21%))
+_DASH_TAX      = 0.21    # corporate tax for NOPAT
+_DASH_DISCOUNT = 0.10    # DCF discount rate
+_DASH_TERM_G   = 0.03    # DCF terminal growth
+
+
+def _dash_f(v):
+    """NUMERIC/None → float/None."""
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def _dash_cagr(first, last, years):
+    if not first or not last or first <= 0 or last <= 0 or years <= 0:
+        return None
+    try:
+        return (last / first) ** (1.0 / years) - 1.0
+    except Exception:
+        return None
+
+
+def _dash_clamp(x, lo=0.0, hi=100.0):
+    return max(lo, min(hi, x))
+
+
+def _dash_lin(v, zero_at, full_at):
+    """Linear 0→100 score: v ≤ zero_at → 0, v ≥ full_at → 100."""
+    if v is None:
+        return None
+    if full_at == zero_at:
+        return None
+    return _dash_clamp((v - zero_at) / (full_at - zero_at) * 100.0)
+
+
+@app.get("/api/financials/{ticker}/dashboard")
+def financials_dashboard(ticker: str, request: Request, period_type: str = "annual"):
+    """Chart-ready company dashboard: series for the six GuruFocus-style charts,
+    per-period ROIC/WACC estimates, buyback ratio, the DGA Score composite, the
+    DGA Value (mean of saved Grok + Claude price targets), and valuation anchors.
+    Pure DB — no LLM, no live network."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    _ensure_financials_table()
+    tk = ticker.upper().strip()
+    pt = period_type if period_type in ("annual", "quarter") else "annual"
+
+    rows = [r for r in _fin_rows_for_ticker(tk, pt)]
+    rows.reverse()                                   # chronological, oldest first
+    rows = rows[-(12 if pt == "annual" else 16):]    # last 12 FYs / 16 quarters
+    annuals = ([r for r in rows] if pt == "annual"
+               else [r for r in _fin_rows_for_ticker(tk, "annual")][::-1][-12:])
+    if not rows:
+        return {"ok": False, "error": f"No financials stored for {tk} — run "
+                                      f"'Sync from SEC' on the Financials tab first."}
+
+    # ── Price (store) + saved targets ─────────────────────────────────
+    price = None
+    q = _db_quotes([tk])
+    if q.get(tk):
+        price = _dash_f(q[tk].get("price"))
+    pt_grok = pt_claude = None
+    targets_asof = None
+    rating = None
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("""SELECT price_target, claude_price_target, rating,
+                                  claude_rating, generated_at
+                             FROM analyst_reports
+                            WHERE ticker=%s AND archived IS NOT TRUE
+                            LIMIT 1""", (tk,))
+            r = cur.fetchone()
+            if r:
+                pt_grok   = _dash_f(r.get("price_target"))
+                pt_claude = _dash_f(r.get("claude_price_target"))
+                rating    = r.get("rating") or r.get("claude_rating")
+                targets_asof = (r["generated_at"].isoformat()
+                                if r.get("generated_at") else None)
+    except Exception as _e:
+        print(f"[fin-dash] targets lookup failed {tk}: {_e!s:.120}", flush=True)
+    _tgts = [t for t in (pt_grok, pt_claude) if t and t > 0]
+    dga_value = round(sum(_tgts) / len(_tgts), 2) if _tgts else None
+
+    # ── Per-period series with computed ROIC / WACC / buyback ratio ───
+    series = []
+    prev_shares = None
+    for r in rows:
+        fy, fp = r.get("fy"), (r.get("fp") or "")
+        label = (f"FY{fy}" if pt == "annual" else f"{fp}'{str(fy)[-2:]}")
+        rev   = _dash_f(r.get("revenue"));            ni   = _dash_f(r.get("net_income"))
+        ebitda = _dash_f(r.get("ebitda"));            opin = _dash_f(r.get("operating_income"))
+        cash  = (_dash_f(r.get("cash")) or 0) + (_dash_f(r.get("short_term_investments")) or 0)
+        debt  = _dash_f(r.get("total_debt"))
+        if debt is None:
+            debt = (_dash_f(r.get("long_term_debt")) or 0) + (_dash_f(r.get("short_term_debt")) or 0)
+        ocf = _dash_f(r.get("operating_cash_flow")); fcf = _dash_f(r.get("free_cash_flow"))
+        div = _dash_f(r.get("dividends"));           bb  = _dash_f(r.get("buybacks"))
+        sbc = None   # not extracted in the store (yet) — chart omits the series
+        shares = _dash_f(r.get("shares_outstanding")) or _dash_f(r.get("diluted_shares"))
+        eq  = _dash_f(r.get("stockholders_equity")); ta = _dash_f(r.get("total_assets"))
+
+        # ROIC: NOPAT / (debt + equity − cash). Quarterly NOPAT annualized ×4.
+        roic = None
+        if opin is not None and eq is not None:
+            invested = (debt or 0) + eq - cash
+            if invested and invested > 0:
+                nopat = opin * (1 - _DASH_TAX) * (4.0 if pt == "quarter" else 1.0)
+                roic = nopat / invested * 100.0
+        # WACC est. — book-equity-weighted blend of est. CoE and after-tax CoD.
+        wacc = None
+        if eq is not None and eq > 0:
+            d = max(debt or 0, 0.0)
+            wacc = (eq * _DASH_COE + d * _DASH_COD_AT) / (eq + d) * 100.0
+        # Buyback ratio: YoY share-count shrink (+) / dilution (−), %.
+        bb_ratio = None
+        if shares and prev_shares and prev_shares > 0:
+            bb_ratio = (prev_shares - shares) / prev_shares * 100.0
+        prev_shares = shares if shares else prev_shares
+
+        series.append({
+            "label": label, "period_end": (r["period_end"].isoformat()
+                                           if r.get("period_end") else None),
+            "revenue": rev, "net_income": ni, "ebitda": ebitda,
+            "cash": cash or None, "debt": debt,
+            "ocf": ocf, "fcf": fcf, "dividends": div, "buybacks": bb, "sbc": sbc,
+            "shares": shares, "buyback_ratio_pct": (round(bb_ratio, 3)
+                                                    if bb_ratio is not None else None),
+            "equity": eq, "assets": ta,
+            "roic_pct": round(roic, 2) if roic is not None else None,
+            "wacc_pct": round(wacc, 2) if wacc is not None else None,
+        })
+
+    # ── DGA Score (0-100) from ANNUAL history ──────────────────────────
+    def _col(rs, k):
+        return [_dash_f(x.get(k)) for x in rs]
+    a_rev = _col(annuals, "revenue"); a_ni = _col(annuals, "net_income")
+    a_fcf = _col(annuals, "free_cash_flow")
+    last = annuals[-1] if annuals else {}
+    l_nm   = _dash_f(last.get("net_margin"))
+    l_eq   = _dash_f(last.get("stockholders_equity"))
+    l_ni   = _dash_f(last.get("net_income"))
+    l_opin = _dash_f(last.get("operating_income"))
+    l_cash = (_dash_f(last.get("cash")) or 0) + (_dash_f(last.get("short_term_investments")) or 0)
+    l_debt = _dash_f(last.get("total_debt")) or 0
+    l_fcf  = _dash_f(last.get("free_cash_flow"))
+
+    # Profitability: net margin + ROIC + ROE
+    l_roic = None
+    if l_opin is not None and l_eq and (l_debt + l_eq - l_cash) > 0:
+        l_roic = l_opin * (1 - _DASH_TAX) / (l_debt + l_eq - l_cash) * 100
+    l_roe = (l_ni / l_eq * 100) if (l_ni is not None and l_eq and l_eq > 0) else None
+    p_parts = [s for s in (_dash_lin(l_nm, 0, 0.20), _dash_lin(l_roic, 0, 18),
+                           _dash_lin(l_roe, 0, 22)) if s is not None]
+    profitability = round(sum(p_parts) / len(p_parts)) if p_parts else None
+
+    # Growth: 5y revenue + FCF (fallback NI) CAGRs
+    def _cagr5(vals):
+        vv = [v for v in vals if v is not None]
+        if len(vv) < 3:
+            return None
+        n = min(6, len(vv))            # up to 5 intervals
+        return _dash_cagr(vv[-n], vv[-1], n - 1)
+    g_rev = _cagr5(a_rev)
+    g_cf  = _cagr5(a_fcf) if any(v for v in a_fcf if v and v > 0) else _cagr5(a_ni)
+    g_parts = [s for s in (_dash_lin(g_rev, 0, 0.15), _dash_lin(g_cf, 0, 0.15))
+               if s is not None]
+    growth = round(sum(g_parts) / len(g_parts)) if g_parts else None
+
+    # Financial strength: cash/debt, debt/equity (inverted), FCF coverage
+    fs_parts = []
+    if l_debt == 0:
+        fs_parts.append(100.0)
+    else:
+        fs_parts.append(_dash_lin(l_cash / l_debt, 0, 1.0) or 0)
+        if l_eq and l_eq > 0:
+            fs_parts.append(_dash_lin(2.0 - (l_debt / l_eq), 0, 2.0) or 0)
+        if l_fcf is not None:
+            fs_parts.append(_dash_lin(l_fcf / l_debt, 0, 0.5) or 0)
+    financial_strength = round(sum(fs_parts) / len(fs_parts)) if fs_parts else None
+
+    # Predictability: positive-NI years + revenue-up years over last ≤10 FYs
+    ni_hist  = [v for v in a_ni if v is not None][-10:]
+    rev_hist = [v for v in a_rev if v is not None][-10:]
+    pred_parts = []
+    if len(ni_hist) >= 3:
+        pred_parts.append(sum(1 for v in ni_hist if v > 0) / len(ni_hist) * 100)
+    if len(rev_hist) >= 4:
+        ups = sum(1 for i in range(1, len(rev_hist)) if rev_hist[i] >= rev_hist[i - 1])
+        pred_parts.append(ups / (len(rev_hist) - 1) * 100)
+    predictability = round(sum(pred_parts) / len(pred_parts)) if pred_parts else None
+
+    # Value: upside of DGA Value vs store price (50 = fairly valued)
+    value_score = None
+    if dga_value and price and price > 0:
+        upside = dga_value / price - 1.0
+        value_score = round(_dash_clamp(50 + upside * 100, 0, 100))
+
+    comps = {"profitability": profitability, "growth": growth,
+             "financial_strength": financial_strength,
+             "predictability": predictability, "value": value_score}
+    weights = {"profitability": 0.30, "growth": 0.25, "financial_strength": 0.20,
+               "predictability": 0.15, "value": 0.10}
+    avail = {k: v for k, v in comps.items() if v is not None}
+    dga_score = (round(sum(v * weights[k] for k, v in avail.items())
+                       / sum(weights[k] for k in avail)) if avail else None)
+
+    # ── Valuation anchors (per share, latest FY) ───────────────────────
+    valuation = []
+    shares_l = (_dash_f(last.get("shares_outstanding"))
+                or _dash_f(last.get("diluted_shares")))
+    eps = _dash_f(last.get("diluted_eps"))
+    if eps is None and l_ni is not None and shares_l:
+        eps = l_ni / shares_l
+    bvps = (l_eq / shares_l) if (l_eq is not None and shares_l) else None
+
+    def _anchor(label, v, kind="model"):
+        if v is not None and not (v != v):     # NaN guard
+            valuation.append({"label": label, "value": round(v, 2), "kind": kind})
+    _anchor("DGA Value (mean of targets)", dga_value, "dga")
+    _anchor("Grok target", pt_grok, "target")
+    _anchor("Claude target", pt_claude, "target")
+    if eps and eps > 0 and bvps and bvps > 0:
+        _anchor("Graham Number", (22.5 * eps * bvps) ** 0.5)
+    if eps and eps > 0:
+        _anchor("Earnings Power Value", eps / _DASH_COE)
+        if g_rev is not None:
+            _anchor("Peter Lynch Value", eps * _dash_clamp((g_rev * 100), 5, 25))
+    _anchor("Book Value / share", bvps)
+    if shares_l:
+        _anchor("Net Cash / share", (l_cash - l_debt) / shares_l)
+    if l_fcf and l_fcf > 0 and shares_l:
+        # Simple 2-stage DCF on FCF/share: 5y at clamped hist growth, 3% terminal.
+        g = _dash_clamp(g_cf if g_cf is not None else 0.05, 0.0, 0.15)
+        f = l_fcf / shares_l
+        pv = 0.0
+        for yr in range(1, 6):
+            f *= (1 + g)
+            pv += f / ((1 + _DASH_DISCOUNT) ** yr)
+        term = f * (1 + _DASH_TERM_G) / (_DASH_DISCOUNT - _DASH_TERM_G)
+        pv += term / ((1 + _DASH_DISCOUNT) ** 5)
+        _anchor("DCF (FCF, 10% disc.)", pv)
+
+    # Verdict vs DGA Value
+    verdict = None
+    if dga_value and price and price > 0:
+        prem = price / dga_value - 1.0
+        verdict = ("Significantly Undervalued" if prem <= -0.30 else
+                   "Undervalued"               if prem <= -0.10 else
+                   "Fairly Valued"             if prem <  0.10  else
+                   "Overvalued"                if prem <  0.30  else
+                   "Significantly Overvalued")
+
+    return {"ok": True, "ticker": tk,
+            "entity_name": rows[-1].get("entity_name") or tk,
+            "period_type": pt, "series": series,
+            "price": price, "rating": rating,
+            "dga_value": dga_value, "verdict": verdict,
+            "targets": {"grok": pt_grok, "claude": pt_claude, "as_of": targets_asof},
+            "dga_score": {"total": dga_score, "components": comps},
+            "valuation": valuation,
+            "notes": {"wacc": "WACC est.: 9% cost of equity / 4.3% after-tax debt, "
+                              "book-equity weighted",
+                      "roic": "NOPAT(21% tax) / (debt + equity − cash)"}}
+
+
 # Separate dict for script-generation jobs so they don't collide with audio
 # generation (which uses _podcast_jobs). Schema is the same:
 #   {stage, current, total, label, status, started_at, [result], [error]}
