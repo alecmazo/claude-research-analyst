@@ -5939,6 +5939,21 @@ End with the sleeve block at this account's real market value so I can push it t
       return { lo, hi };
     };
     const L = rng('L', cfg.clampL), R = rng('R', cfg.clampR);
+    // Dual-axis zero ALIGNMENT (the GuruFocus look): both axes must put 0 at
+    // the same pixel, or a mostly-negative right series (dilution years) ends
+    // up hanging from the top of the plot. Pick a shared zero fraction z
+    // (≤0.38 from the bottom) and EXTEND each axis — never shrink data — so
+    // e.g. shares 0→4B becomes −2.3B→4B while ratio −26% gains +43% headroom.
+    if (padR > 20) {
+      const pref = r => { const neg = Math.max(0, -r.lo), pos = Math.max(0, r.hi);
+                          return (neg + pos) ? neg / (neg + pos) : 0; };
+      const z = Math.min(0.38, Math.max(pref(L), pref(R)));
+      if (z > 0.001) [L, R].forEach(r => {
+        const neg = Math.max(0, -r.lo), pos = Math.max(0, r.hi);
+        const T = Math.max(neg / z, pos / (1 - z));
+        r.lo = -z * T; r.hi = (1 - z) * T;
+      });
+    }
     const yOf = (v, a) => { const r = a === 'R' ? R : L;
       const vv = Math.max(r.lo, Math.min(r.hi, v));     // clip into axis range
       return padT + plotH * (1 - (vv - r.lo) / (r.hi - r.lo)); };
