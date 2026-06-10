@@ -5874,6 +5874,17 @@ End with the sleeve block at this account's real market value so I can push it t
           '<option value="' + c.ticker + '">' + (c.entity_name || '') + '</option>').join('');
       }
     }).catch(() => {});
+    // Restore the last viewed company so the dashboard isn't blank on every visit.
+    if (!_finDashLast) {
+      let _last = null;
+      try { _last = localStorage.getItem('dga_fin_dash_last'); } catch (e) {}
+      const head = document.getElementById('fin-dash-head');
+      if (_last && head && head.style.display === 'none') {
+        const inp = document.getElementById('fin-dash-ticker');
+        if (inp) inp.value = _last;
+        _finDashLoad(_last);
+      }
+    }
   }
 
   // ══ Company Dashboard (GuruFocus-style — SVG, no chart lib, no LLM) ══
@@ -5896,6 +5907,15 @@ End with the sleeve block at this account's real market value so I can push it t
       : a >= 1e6 ? (a/1e6).toFixed(0)+'M' : a.toLocaleString('en-US'));
   };
   const _gfPctF = v => v.toFixed(Math.abs(v) < 3 ? 1 : 0) + '%';
+  // Market-cap / EV formatter — trillions aware (e.g. $5.04T), for the header card.
+  const _gfCap = v => {
+    if (v == null) return '—';
+    const a = Math.abs(v), s = v < 0 ? '-' : '';
+    if (a >= 1e12) return s + '$' + (a/1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return s + '$' + (a/1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return s + '$' + (a/1e6).toFixed(0) + 'M';
+    return s + '$' + a.toLocaleString('en-US', {maximumFractionDigits:0});
+  };
 
   // Generic grouped-bar (+optional line, dual-axis) SVG chart panel.
   // cfg = { labels:[], series:[{name,nameNeg?,color,colorNeg?,values,axis:'L'|'R',type:'bar'|'line'}],
@@ -6021,6 +6041,8 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
       _finDashRender(d);
+      // Remember the last company so the dashboard isn't blank next visit.
+      try { localStorage.setItem('dga_fin_dash_last', tk); } catch (e) {}
     } catch (e) {
       if (head) head.innerHTML = '<div style="font-size:12px;color:var(--red,#dc2626);">' + _gfEsc(e.message) + '</div>';
     }
@@ -6046,6 +6068,19 @@ End with the sleeve block at this account's real market value so I can push it t
     const verdictCol = { 'Significantly Undervalued': _GF.green, 'Undervalued': '#65a30d',
       'Fairly Valued': _GF.orange, 'Overvalued': '#ea580c', 'Significantly Overvalued': _GF.red };
     const tg = d.targets || {};
+    // Key valuation ratios (GuruFocus-style) for the identity card — pure store data.
+    const km = d.key_metrics || {};
+    const _kmCell = (lbl, val) =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">` +
+      `<span style="font-size:11px;color:var(--text-tertiary);">${lbl}</span>` +
+      `<span style="font-size:12px;font-weight:700;color:var(--text-primary);font-variant-numeric:tabular-nums;">${val}</span></div>`;
+    const kmGrid =
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);">` +
+        _kmCell('P/E',          km.pe != null ? km.pe.toFixed(2) : '—') +
+        _kmCell('Market Cap',   _gfCap(km.market_cap)) +
+        _kmCell('P/B',          km.pb != null ? km.pb.toFixed(2) : '—') +
+        _kmCell('Enterprise V', _gfCap(km.enterprise_value)) +
+      `</div>`;
     const anchors = (d.valuation || []);
     const maxAbs = Math.max(d.price || 0, ...anchors.map(a => Math.abs(a.value)), 1);
     const aColor = k => k === 'dga' ? _GF.gold : k === 'target' ? _GF.blue : _GF.slate;
@@ -6066,7 +6101,8 @@ End with the sleeve block at this account's real market value so I can push it t
         `<div style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(d.entity_name)} <span style="color:var(--text-tertiary);font-weight:600;">· ${_gfEsc(d.ticker)}</span></div>` +
         `<div style="font-size:22px;font-weight:800;color:var(--text-primary);margin-top:4px;font-variant-numeric:tabular-nums;">${d.price ? '$' + d.price.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}` +
         (d.rating ? ` <span style="font-size:10px;font-weight:800;letter-spacing:0.5px;color:${_GF.green};border:1px solid ${_GF.green};border-radius:4px;padding:1px 6px;vertical-align:middle;">${_gfEsc(d.rating).toUpperCase()}</span>` : '') + `</div>` +
-        `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
+        kmGrid +
+        `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:8px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
         `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">SEC XBRL store · ${_gfEsc(d.period_type)} · zero LLM tokens</div>` +
       `</div>` +
       // DGA score

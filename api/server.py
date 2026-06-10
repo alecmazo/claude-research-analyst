@@ -21288,6 +21288,21 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
         eps = l_ni / shares_l
     bvps = (l_eq / shares_l) if (l_eq is not None and shares_l) else None
 
+    # ── Key valuation ratios (P/E, P/B, Market Cap, EV) — store price × latest FY ──
+    # All pure-DB: price from market_quotes, the rest from the SEC store. Mirrors the
+    # GuruFocus header card. EPS uses TTM diluted EPS where stored, else NI / shares.
+    mktcap = (price * shares_l) if (price and shares_l) else None
+    pe_ratio = (price / eps) if (price and eps and eps > 0) else None
+    pb_ratio = (price / bvps) if (price and bvps and bvps > 0) else None
+    ev = (mktcap + (l_debt or 0) - (l_cash or 0)) if mktcap is not None else None
+    key_metrics = {
+        "pe":               round(pe_ratio, 2) if pe_ratio is not None else None,
+        "pb":               round(pb_ratio, 2) if pb_ratio is not None else None,
+        "market_cap":       round(mktcap)      if mktcap   is not None else None,
+        "enterprise_value": round(ev)          if ev       is not None else None,
+        "eps":              round(eps, 2)      if eps      is not None else None,
+    }
+
     def _anchor(label, v, kind="model"):
         if v is not None and not (v != v):     # NaN guard
             valuation.append({"label": label, "value": round(v, 2), "kind": kind})
@@ -21331,6 +21346,7 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
             "price": price, "rating": rating,
             "dga_value": dga_value, "verdict": verdict,
             "targets": {"grok": pt_grok, "claude": pt_claude, "as_of": targets_asof},
+            "key_metrics": key_metrics,
             "dga_score": {"total": dga_score, "components": comps},
             "valuation": valuation,
             "notes": {"wacc": "WACC est.: 9% cost of equity / 4.3% after-tax debt, "
