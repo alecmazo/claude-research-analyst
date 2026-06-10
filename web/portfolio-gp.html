@@ -3372,30 +3372,10 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- Market Scan — moved to bottom of right column -->
-    <section class="panel" data-wid="market-scan">
-      <header class="panel-head">
-        <span class="panel-title">Market Scan</span>
-        <span class="panel-badge" id="mini-scan-badge">—</span>
-        <button id="mini-scan-btn"
-          style="background:none;border:none;cursor:pointer;padding:0;font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--blue);margin-left:auto;">⚡ SCAN NOW</button>
-      </header>
-      <div class="panel-body" style="padding:10px 14px 12px;">
-        <!-- Live ticker chips (mirror watchlist — click × to remove) -->
-        <div id="mini-scan-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:22px;margin-bottom:8px;"></div>
-        <!-- Add-ticker input -->
-        <div style="display:flex;gap:5px;">
-          <input id="mini-scan-input"
-            style="flex:1;height:28px;background:var(--navy-mid);border:1px solid var(--panel-edge);border-radius:5px;color:#1e293b;font-size:11px;padding:0 8px;outline:none;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;"
-            placeholder="Add ticker…" autocomplete="off">
-          <button id="mini-scan-add-btn"
-            style="width:28px;height:28px;background:var(--blue);color:var(--navy);border:none;border-radius:5px;font-weight:800;font-size:16px;cursor:pointer;line-height:1;">+</button>
-        </div>
-        <div id="mini-scan-status" style="margin-top:5px;font-size:10px;color:var(--dim);min-height:12px;"></div>
-        <!-- Scan results render here (expands automatically when a scan finishes) -->
-        <div id="mini-scan-results" style="display:none;margin-top:8px;border-top:1px solid var(--panel-edge);padding-top:6px;"></div>
-      </div>
-    </section>
+    <!-- Market Scan card REMOVED (ui250) — stale: the Idea Generator surfaces
+         the day's movers and Saved Reports rows carry per-ticker news feeds.
+         The /api/scan/* endpoints remain (used by Saved Reports "Scan Active"
+         + mobile). -->
 
   </aside>
 </main>
@@ -16213,184 +16193,7 @@ End with the sleeve block at this account's real market value so I can push it t
   // ══════════════════════════════════════════════════════════════
   // MINI SCAN CARD — mirrors watchlist, SCAN NOW → Scan tab
   // ══════════════════════════════════════════════════════════════
-  // ── Market Scan card — independent ticker list (kv-backed, not watchlist) ──
-  async function loadMiniScanChips() {
-    const el     = document.getElementById('mini-scan-chips');
-    const badge  = document.getElementById('mini-scan-badge');
-    const status = document.getElementById('mini-scan-status');
-    if (!el) return;
-    try {
-      const r = await window.dgaFetch('/api/scan/market-tickers');
-      if (!r.ok) return;
-      const data    = await r.json();
-      const tickers = data.tickers || [];
-      if (badge) badge.textContent = tickers.length ? tickers.length + ' tickers' : '—';
-
-      if (!tickers.length) {
-        el.innerHTML = '<span style="font-size:11px;color:var(--dimmer);">No tickers — add one below.</span>';
-      } else {
-        el.innerHTML = tickers.map(tk => `
-          <span style="display:inline-flex;align-items:center;gap:4px;background:var(--navy-mid);color:var(--blue);
-            padding:3px 8px;border-radius:4px;font-size:11px;font-weight:800;letter-spacing:0.8px;cursor:pointer;"
-            data-mini-chip="${tk}">
-            ${tk}
-            <span data-mini-remove="${tk}"
-              style="opacity:0.55;font-size:13px;line-height:1;padding:0 1px;cursor:pointer;" title="Remove">×</span>
-          </span>`).join('');
-
-        el.querySelectorAll('[data-mini-remove]').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const tk = btn.getAttribute('data-mini-remove');
-            await window.dgaFetch('/api/scan/market-tickers/' + encodeURIComponent(tk), { method: 'DELETE' });
-            loadMiniScanChips();
-          });
-        });
-        el.querySelectorAll('[data-mini-chip]').forEach(chip => {
-          chip.addEventListener('click', (e) => {
-            if (e.target.closest('[data-mini-remove]')) return;
-            openGuruFocus(chip.getAttribute('data-mini-chip'));
-          });
-        });
-      }
-
-      // Last scan timestamp from Market Pulse
-      try {
-        const rs = await window.dgaFetch('/api/scan/latest');
-        if (rs.ok) {
-          const ds = await rs.json();
-          if (ds.exists && ds.scanned_at && status) {
-            const age = Math.round((Date.now() - new Date(ds.scanned_at)) / 60000);
-            status.textContent = `Last scan: ${age < 2 ? 'just now' : age + 'm ago'} · ${Object.keys(ds.results || {}).length} tickers`;
-          } else if (status) {
-            status.textContent = 'No scan run yet.';
-          }
-        }
-      } catch {}
-    } catch (e) { console.warn('[mini-scan-chips]', e); }
-  }
-
-  // Render the latest scan results INSIDE the Market Scan card (the old Market
-  // Pulse panel was removed, so scans had nowhere to show → "nothing happens").
-  // Auto-expands when there are results. show=true forces it open after a scan.
-  async function loadMiniScanResults(show) {
-    const el = document.getElementById('mini-scan-results');
-    if (!el) return;
-    try {
-      const r = await window.dgaFetch('/api/scan/latest');
-      if (!r.ok) return;
-      const d = await r.json();
-      if (!d.exists || !d.results || !Object.keys(d.results).length) {
-        if (!show) { el.style.display = 'none'; return; }
-        el.style.display = 'block';
-        el.innerHTML = '<div style="font-size:10.5px;color:var(--dim);padding:4px 0;">No scan results yet.</div>';
-        return;
-      }
-      el.style.display = 'block';
-      el.innerHTML = Object.entries(d.results).map(function(pair) {
-        const tk = pair[0], res = pair[1] || {};
-        const sent = (res.sentiment || 'NEUTRAL').toUpperCase();
-        const color = sent === 'BULLISH' ? '#16a34a' : sent === 'BEARISH' ? '#dc2626' : '#64748b';
-        const summary = (res.markdown || '')
-          .replace(/#{1,3} .+\n?/g, '').replace(/\*\*?/g, '').replace(/\n/g, ' ').trim().slice(0, 120);
-        const px = (res.price != null)
-          ? '<span style="margin-left:auto;font-size:10px;color:var(--mid);">$' + fmtPx(res.price) + ' <span class="' + cssClass(res.pct_change) + '">' + fmtPct(res.pct_change) + '</span></span>'
-          : '';
-        return '<div class="mini-scan-res-row" data-tk="' + tk + '" style="padding:6px 0;border-bottom:1px solid var(--panel-edge);cursor:pointer;">'
-          + '<div style="display:flex;align-items:center;gap:6px;">'
-          +   '<strong style="color:var(--text-primary);font-size:11px;letter-spacing:0.5px;">' + tk + '</strong>'
-          +   '<span style="color:' + color + ';font-weight:800;font-size:9px;">' + sent + '</span>' + px
-          + '</div>'
-          + '<div style="font-size:10.5px;color:var(--mid);margin-top:2px;line-height:1.4;">' + (summary || 'Analysis available.') + '</div>'
-          + '</div>';
-      }).join('');
-      el.querySelectorAll('.mini-scan-res-row').forEach(function(row) {
-        row.addEventListener('click', function() {
-          const tk = row.dataset.tk, res = (d.results || {})[tk] || {};
-          if (typeof _openPulseDetail === 'function') _openPulseDetail(tk, res);
-        });
-      });
-    } catch (e) { /* ignore */ }
-  }
-
-  const $miniInput  = document.getElementById('mini-scan-input');
-  const $miniAddBtn = document.getElementById('mini-scan-add-btn');
-  const $miniBtn    = document.getElementById('mini-scan-btn');
-
-  async function addMiniTicker() {
-    const tk = ($miniInput?.value || '').trim().toUpperCase().replace(/[^A-Z.0-9]/g, '');
-    if (!tk) return;
-    if ($miniAddBtn) $miniAddBtn.disabled = true;
-    try {
-      await window.dgaFetch('/api/scan/market-tickers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: tk }),
-      });
-      if ($miniInput) $miniInput.value = '';
-      loadMiniScanChips();
-    } finally {
-      if ($miniAddBtn) $miniAddBtn.disabled = false;
-    }
-  }
-
-  $miniAddBtn?.addEventListener('click', addMiniTicker);
-  $miniInput?.addEventListener('keypress', (e) => { if (e.key === 'Enter') addMiniTicker(); });
-  $miniInput?.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
-
-  // SCAN NOW → scan Market Scan card's own tickers, MERGE into Market Pulse
-  $miniBtn?.addEventListener('click', async () => {
-    if ($miniBtn.disabled) return;
-    $miniBtn.disabled = true; $miniBtn.textContent = '⏳…';
-    const badge  = document.getElementById('mini-scan-badge');
-    const status = document.getElementById('mini-scan-status');
-    if (status) status.textContent = 'Starting scan…';
-    try {
-      const r = await window.dgaFetch('/api/scan/market', { method: 'POST' });
-      if (!r.ok) {
-        const e = await r.json();
-        if (status) status.textContent = '❌ ' + (e.detail || r.status);
-        $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
-        return;
-      }
-      const job = await r.json();
-      const total = (job.tickers || []).length;
-      if (badge) badge.textContent = '0/' + total;
-
-      // Poll until done — reload Market Pulse on each new ticker (streaming)
-      let _lastDoneCount = 0;
-      const iv = setInterval(async () => {
-        try {
-          const rp = await window.dgaFetch('/api/scan/' + job.job_id);
-          if (!rp.ok) return;
-          const jp = await rp.json();
-          const done = (jp.tickers_done || []).length;
-          if (badge) badge.textContent = done + '/' + total;
-          // Stream results into the card as each ticker finishes.
-          if (done > _lastDoneCount) {
-            _lastDoneCount = done;
-            loadMiniScanResults(true);
-          }
-          if (jp.status === 'done' || jp.status === 'failed') {
-            clearInterval(iv);
-            $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
-            if (jp.status === 'done') {
-              if (status) status.textContent = done + ' tickers scanned — see results below';
-              loadMiniScanResults(true);   // expand the results so the user sees them
-              loadMiniScanChips();
-              const resEl = document.getElementById('mini-scan-results');
-              if (resEl && resEl.scrollIntoView) resEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            } else {
-              if (status) status.textContent = '❌ ' + (jp.error || 'Scan failed');
-            }
-          }
-        } catch (e) { clearInterval(iv); $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW'; }
-      }, 3500);
-    } catch(e) {
-      $miniBtn.disabled = false; $miniBtn.textContent = '⚡ SCAN NOW';
-      if (status) status.textContent = '❌ ' + e.message;
-    }
-  });
+  // (Market Scan card JS removed in ui250 — card retired; Idea Generator + per-report news feeds cover it.)
 
   // ── Reports Scan — Active (movers only) + optional "scan all" ───────────
   (function() {
@@ -17711,10 +17514,6 @@ End with the sleeve block at this account's real market value so I can push it t
   loadWatchlist();
   loadReports();
   loadTrendingTickers();
-  // Market Scan card: load its ticker chips + any prior scan results on startup
-  // (the old Market Pulse panel was removed, so results now render in-card).
-  loadMiniScanChips();
-  loadMiniScanResults(false);
   // Research is the default landing tab (positions is lazy-loaded on first click)
   initLiveMarkets();
   showTab('research');
