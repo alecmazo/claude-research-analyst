@@ -5918,23 +5918,30 @@ End with the sleeve block at this account's real market value so I can push it t
   const _gfPctF = v => v.toFixed(Math.abs(v) < 3 ? 1 : 0) + '%';
 
   // Generic grouped-bar (+optional line, dual-axis) SVG chart panel.
-  // cfg = { title?, labels:[], series:[{name,color,colorNeg?,values,axis:'L'|'R',type:'bar'|'line'}], fmtL, fmtR }
+  // cfg = { labels:[], series:[{name,nameNeg?,color,colorNeg?,values,axis:'L'|'R',type:'bar'|'line'}],
+  //         fmtL, fmtR, clampL?:{lo,hi}, clampR?:{lo,hi} }
+  // clamp*: caps the AXIS range so one outlier period (e.g. a 400% dilution
+  // year) can't flatten every other bar — clipped bars draw to the edge, and
+  // the tooltip always shows the true value.
   function _gfChart(cfg) {
-    const W = 560, H = 230, padL = 56, padR = (cfg.series.some(s => s.axis === 'R') ? 52 : 12),
-          padT = 10, padB = 30, n = cfg.labels.length;
-    if (!n) return '<div style="padding:20px;font-size:11px;color:var(--text-tertiary);">No data.</div>';
+    const W = 560, H = 250, padL = 66, padR = (cfg.series.some(s => s.axis === 'R') ? 62 : 12),
+          padT = 10, padB = 36, n = cfg.labels.length;
+    if (!n) return '<div style="padding:20px;font-size:12px;color:var(--text-tertiary);">No data.</div>';
     const plotW = W - padL - padR, plotH = H - padT - padB;
-    const rng = axis => {
+    const FS = 12;   // chart text size (viewBox units)
+    const rng = (axis, clamp) => {
       let lo = 0, hi = 0;
       cfg.series.filter(s => (s.axis || 'L') === axis).forEach(s =>
         s.values.forEach(v => { if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+      if (clamp) { lo = Math.max(lo, clamp.lo); hi = Math.min(hi, clamp.hi); }
       if (hi === lo) hi = lo + 1;
       hi *= 1.06; if (lo < 0) lo *= 1.06;
       return { lo, hi };
     };
-    const L = rng('L'), R = rng('R');
+    const L = rng('L', cfg.clampL), R = rng('R', cfg.clampR);
     const yOf = (v, a) => { const r = a === 'R' ? R : L;
-      return padT + plotH * (1 - (v - r.lo) / (r.hi - r.lo)); };
+      const vv = Math.max(r.lo, Math.min(r.hi, v));     // clip into axis range
+      return padT + plotH * (1 - (vv - r.lo) / (r.hi - r.lo)); };
     const slotW = plotW / n;
     const barSeries = cfg.series.filter(s => (s.type || 'bar') === 'bar');
     const bw = Math.max(2, Math.min(14, (slotW * 0.72) / Math.max(1, barSeries.length)));
@@ -5944,11 +5951,11 @@ End with the sleeve block at this account's real market value so I can push it t
     for (let i = 0; i <= 4; i++) {
       const v = L.lo + (L.hi - L.lo) * i / 4, y = yOf(v, 'L');
       svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1"/>`
-           + `<text x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(fmtL(v))}</text>`;
+           + `<text x="${padL - 7}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtL(v))}</text>`;
     }
     if (padR > 20) for (let i = 0; i <= 4; i++) {
       const v = R.lo + (R.hi - R.lo) * i / 4, y = yOf(v, 'R');
-      svg += `<text x="${W - padR + 6}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(fmtR(v))}</text>`;
+      svg += `<text x="${W - padR + 7}" y="${(y + 4).toFixed(1)}" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtR(v))}</text>`;
     }
     // zero line
     if (L.lo < 0) svg += `<line x1="${padL}" y1="${yOf(0,'L').toFixed(1)}" x2="${W - padR}" y2="${yOf(0,'L').toFixed(1)}" stroke="var(--text-tertiary,#94a3b8)" stroke-width="1"/>`;
@@ -5960,7 +5967,8 @@ End with the sleeve block at this account's real market value so I can push it t
         const x = padL + slotW * i + slotW / 2 - (barSeries.length * bw) / 2 + si * bw;
         const y = yOf(v, a);
         const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
-        svg += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(1, Math.abs(y0 - y)).toFixed(1)}" fill="${col}" rx="1"><title>${_gfEsc(cfg.labels[i])} · ${_gfEsc(s.name)}: ${_gfEsc((a==='R'?fmtR:fmtL)(v))}</title></rect>`;
+        const nm = (v < 0 && s.nameNeg) ? s.nameNeg : s.name;
+        svg += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(1, Math.abs(y0 - y)).toFixed(1)}" fill="${col}" rx="1"><title>${_gfEsc(cfg.labels[i])} · ${_gfEsc(nm)}: ${_gfEsc((a==='R'?fmtR:fmtL)(v))}</title></rect>`;
       });
     });
     // lines
@@ -5973,22 +5981,28 @@ End with the sleeve block at this account's real market value so I can push it t
         d += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
         started = true;
       });
-      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5"/>`;
     });
     // x labels (thin out when crowded)
-    const step = Math.ceil(n / 8);
+    const step = Math.ceil(n / 7);
     cfg.labels.forEach((lb, i) => {
       if (i % step) return;
-      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--text-tertiary,#94a3b8)">${_gfEsc(lb)}</text>`;
+      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(lb)}</text>`;
     });
-    const legend = cfg.series.map(s =>
-      `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--text-secondary);margin-right:10px;">` +
-      (s.type === 'line'
-        ? `<span style="width:14px;height:2px;background:${s.color};display:inline-block;"></span>`
-        : `<span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block;"></span>`) +
-      `${_gfEsc(s.name)}</span>`).join('');
+    // legend — a sign-colored series (colorNeg) gets BOTH chips so the legend
+    // never lies about what a red bar means.
+    const legend = cfg.series.map(s => {
+      const chip = (name, color, line) =>
+        `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);margin-right:12px;">` +
+        (line ? `<span style="width:16px;height:2.5px;background:${color};display:inline-block;"></span>`
+              : `<span style="width:9px;height:9px;border-radius:50%;background:${color};display:inline-block;"></span>`) +
+        `${_gfEsc(name)}</span>`;
+      let h = chip(s.name, s.color, s.type === 'line');
+      if (s.colorNeg) h += chip(s.nameNeg || (s.name + ' (negative)'), s.colorNeg, false);
+      return h;
+    }).join('');
     return `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;background:var(--bg-elevated);">`
-      + `<div style="margin-bottom:4px;">${legend}</div>`
+      + `<div style="margin-bottom:5px;">${legend}</div>`
       + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;">${svg}</svg></div>`;
   }
 
@@ -6025,11 +6039,11 @@ End with the sleeve block at this account's real market value so I can push it t
     const grade = v => v == null ? 'var(--text-tertiary)'
       : v >= 80 ? _GF.green : v >= 60 ? '#65a30d' : v >= 40 ? _GF.orange : _GF.red;
     const compRow = (name, v) =>
-      `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;">` +
-      `<span style="font-size:10px;color:var(--text-secondary);width:92px;">${name}</span>` +
-      `<div style="flex:1;height:5px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
+      `<div style="display:flex;align-items:center;gap:6px;margin:4px 0;">` +
+      `<span style="font-size:11.5px;color:var(--text-secondary);width:104px;">${name}</span>` +
+      `<div style="flex:1;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
       `<div style="height:100%;width:${v==null?0:v}%;background:${grade(v)};border-radius:99px;"></div></div>` +
-      `<span style="font-size:10px;font-weight:700;color:${grade(v)};width:24px;text-align:right;">${v==null?'—':v}</span></div>`;
+      `<span style="font-size:11.5px;font-weight:700;color:${grade(v)};width:26px;text-align:right;">${v==null?'—':v}</span></div>`;
 
     const verdictCol = { 'Significantly Undervalued': _GF.green, 'Undervalued': '#65a30d',
       'Fairly Valued': _GF.orange, 'Overvalued': '#ea580c', 'Significantly Overvalued': _GF.red };
@@ -6039,12 +6053,12 @@ End with the sleeve block at this account's real market value so I can push it t
     const aColor = k => k === 'dga' ? _GF.gold : k === 'target' ? _GF.blue : _GF.slate;
     const anchorRows = anchors.map(a => {
       const w = Math.min(100, Math.abs(a.value) / maxAbs * 100);
-      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">` +
-        `<span style="font-size:9.5px;color:var(--text-secondary);width:148px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_gfEsc(a.label)}</span>` +
-        `<div style="flex:1;position:relative;height:11px;background:var(--gray-100,#f1f5f9);border-radius:3px;">` +
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;">` +
+        `<span style="font-size:11px;color:var(--text-secondary);width:168px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_gfEsc(a.label)}</span>` +
+        `<div style="flex:1;position:relative;height:12px;background:var(--gray-100,#f1f5f9);border-radius:3px;">` +
         `<div style="position:absolute;left:0;top:0;height:100%;width:${w}%;background:${a.value < 0 ? _GF.red : aColor(a.kind)};border-radius:3px;opacity:0.85;"></div>` +
-        (d.price ? `<div style="position:absolute;left:${Math.min(100, d.price / maxAbs * 100)}%;top:-2px;height:15px;border-left:2px dashed var(--text-primary);"></div>` : '') +
-        `</div><span style="font-size:9.5px;font-weight:700;color:var(--text-primary);width:58px;font-variant-numeric:tabular-nums;">$${a.value.toLocaleString('en-US',{maximumFractionDigits:2})}</span></div>`;
+        (d.price ? `<div style="position:absolute;left:${Math.min(100, d.price / maxAbs * 100)}%;top:-2px;height:16px;border-left:2px dashed var(--text-primary);"></div>` : '') +
+        `</div><span style="font-size:11px;font-weight:700;color:var(--text-primary);width:66px;font-variant-numeric:tabular-nums;">$${a.value.toLocaleString('en-US',{maximumFractionDigits:2})}</span></div>`;
     }).join('');
 
     head.innerHTML =
@@ -6054,8 +6068,8 @@ End with the sleeve block at this account's real market value so I can push it t
         `<div style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(d.entity_name)} <span style="color:var(--text-tertiary);font-weight:600;">· ${_gfEsc(d.ticker)}</span></div>` +
         `<div style="font-size:22px;font-weight:800;color:var(--text-primary);margin-top:4px;font-variant-numeric:tabular-nums;">${d.price ? '$' + d.price.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}` +
         (d.rating ? ` <span style="font-size:10px;font-weight:800;letter-spacing:0.5px;color:${_GF.green};border:1px solid ${_GF.green};border-radius:4px;padding:1px 6px;vertical-align:middle;">${_gfEsc(d.rating).toUpperCase()}</span>` : '') + `</div>` +
-        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
-        `<div style="font-size:9px;color:var(--text-tertiary);margin-top:8px;">SEC XBRL store · ${_gfEsc(d.period_type)} · zero LLM tokens</div>` +
+        `<div style="font-size:11.5px;color:var(--text-tertiary);margin-top:6px;">Targets — Grok: ${tg.grok ? '$'+tg.grok : '—'} · Claude: ${tg.claude ? '$'+tg.claude : '—'}${tg.as_of ? '<br>as of ' + _gfEsc(String(tg.as_of).slice(0,10)) : ''}</div>` +
+        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">SEC XBRL store · ${_gfEsc(d.period_type)} · zero LLM tokens</div>` +
       `</div>` +
       // DGA score
       `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
@@ -6073,7 +6087,7 @@ End with the sleeve block at this account's real market value so I can push it t
           (d.verdict ? `<span style="font-size:10px;font-weight:800;color:#7c5e00;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;color:${verdictCol[d.verdict]||'#7c5e00'};">${_gfEsc(d.verdict)}</span>` : '') +
         `</div>` +
         `<div style="margin-top:8px;">${anchorRows || '<span style="font-size:11px;color:var(--text-tertiary);">No valuation anchors (need a saved report + financials).</span>'}</div>` +
-        (d.price ? `<div style="font-size:9px;color:var(--text-tertiary);margin-top:4px;">┆ dashed line = current price ($${d.price.toLocaleString('en-US',{maximumFractionDigits:2})})</div>` : '') +
+        (d.price ? `<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:5px;">┆ dashed line = current price ($${d.price.toLocaleString('en-US',{maximumFractionDigits:2})})</div>` : '') +
       `</div></div>`;
     head.style.display = 'block';
 
@@ -6097,9 +6111,10 @@ End with the sleeve block at this account's real market value so I can push it t
         { name:'WACC % (est.)', color:_GF.red, values: col('wacc_pct') },
         { name:'ROIC − WACC', color:'var(--text-primary)', type:'line', values:
           S.map(x => (x.roic_pct != null && x.wacc_pct != null) ? x.roic_pct - x.wacc_pct : null) }] }),
-      _gfChart({ labels, fmtL:_gfCount, fmtR:_gfPctF, series: [
+      _gfChart({ labels, fmtL:_gfCount, fmtR:_gfPctF, clampR:{lo:-25, hi:25}, series: [
         { name:'Shares Outstanding', color:_GF.blue, values: col('shares') },
-        { name:'Buyback Ratio %', color:_GF.green, colorNeg:_GF.red, axis:'R', values: col('buyback_ratio_pct') }] }),
+        { name:'Buyback %', nameNeg:'Dilution %', color:_GF.green, colorNeg:_GF.red,
+          axis:'R', values: col('buyback_ratio_pct') }] }),
       _gfChart({ labels, series: [
         { name:'Stockholders Equity', color:_GF.green, values: col('equity') },
         { name:'Total Assets', color:_GF.blue, values: col('assets') }] }),
