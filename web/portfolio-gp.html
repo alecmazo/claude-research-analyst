@@ -5924,11 +5924,14 @@ End with the sleeve block at this account's real market value so I can push it t
   // year) can't flatten every other bar — clipped bars draw to the edge, and
   // the tooltip always shows the true value.
   function _gfChart(cfg) {
-    const W = 560, H = 250, padL = 66, padR = (cfg.series.some(s => s.axis === 'R') ? 62 : 12),
-          padT = 10, padB = 36, n = cfg.labels.length;
+    const W = 560, H = 268, padL = 82, padR = (cfg.series.some(s => s.axis === 'R') ? 74 : 14),
+          padT = 12, padB = 44, n = cfg.labels.length;
     if (!n) return '<div style="padding:20px;font-size:12px;color:var(--text-tertiary);">No data.</div>';
     const plotW = W - padL - padR, plotH = H - padT - padB;
-    const FS = 12;   // chart text size (viewBox units)
+    // Chart text size in viewBox units — the SVG scales DOWN to its container
+    // (560 units ≈ 400-450 css px in the 2-col grid), so 17 units ≈ 12-13 real
+    // px. Smaller values render unreadably tiny.
+    const FS = 17;
     const rng = (axis, clamp) => {
       let lo = 0, hi = 0;
       cfg.series.filter(s => (s.axis || 'L') === axis).forEach(s =>
@@ -5966,11 +5969,11 @@ End with the sleeve block at this account's real market value so I can push it t
     for (let i = 0; i <= 4; i++) {
       const v = L.lo + (L.hi - L.lo) * i / 4, y = yOf(v, 'L');
       svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1"/>`
-           + `<text x="${padL - 7}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtL(v))}</text>`;
+           + `<text x="${padL - 8}" y="${(y + 6).toFixed(1)}" text-anchor="end" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtL(v))}</text>`;
     }
     if (padR > 20) for (let i = 0; i <= 4; i++) {
       const v = R.lo + (R.hi - R.lo) * i / 4, y = yOf(v, 'R');
-      svg += `<text x="${W - padR + 7}" y="${(y + 4).toFixed(1)}" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtR(v))}</text>`;
+      svg += `<text x="${W - padR + 8}" y="${(y + 6).toFixed(1)}" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(fmtR(v))}</text>`;
     }
     // zero line
     if (L.lo < 0) svg += `<line x1="${padL}" y1="${yOf(0,'L').toFixed(1)}" x2="${W - padR}" y2="${yOf(0,'L').toFixed(1)}" stroke="var(--text-tertiary,#94a3b8)" stroke-width="1"/>`;
@@ -5998,11 +6001,11 @@ End with the sleeve block at this account's real market value so I can push it t
       });
       if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5"/>`;
     });
-    // x labels (thin out when crowded)
-    const step = Math.ceil(n / 7);
+    // x labels (thin out when crowded — wider text at FS 17 needs fewer labels)
+    const step = Math.ceil(n / 6);
     cfg.labels.forEach((lb, i) => {
       if (i % step) return;
-      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(lb)}</text>`;
+      svg += `<text x="${(padL + slotW * i + slotW / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="${FS}" fill="var(--text-secondary,#64748b)">${_gfEsc(lb)}</text>`;
     });
     // legend — a sign-colored series (colorNeg) gets BOTH chips so the legend
     // never lies about what a red bar means.
