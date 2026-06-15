@@ -1069,7 +1069,6 @@ const styles = StyleSheet.create({
   sheet: {
     position: 'absolute',
     left: 0, right: 0, bottom: 0,
-    height: SCREEN_H,            // sheet spans full height; translateY controls reveal
     backgroundColor: colors.white,
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
