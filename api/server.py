@@ -13232,6 +13232,121 @@ def get_spy_monthly_data():
         return None
 
 
+def _account_overview_from_balance(records: list) -> dict | None:
+    """Single source of truth for a managed account's YTD overview, computed
+    purely from the parsed Fidelity Balance-Detail records (output of
+    _parse_balance_history_csv).
+
+    One CSV in → the complete result_json the account-detail page consumes. This
+    replaces the fragile 3-file Modified-Dietz path (positions + activity +
+    monthly-perf) that produced sign-flipped returns when the three files were
+    out of sync. The balance CSV is internally consistent — its monthly gains
+    reconcile exactly to Fidelity's reported totals — so every figure below ties
+    out to the statement.
+
+    Returns the dict stored as managed_account_ytd_cache.result_json, or None.
+
+    Figures (all for the latest year present in the data = "YTD"):
+      • twrr_return_pct  — Portfolio Return (time-weighted): chained monthly
+                            returns, transfer/inception months skipped. Headline.
+      • md_return_pct    — Modified Dietz over the whole window.
+      • xirr_return_pct  — Personal Return (money-weighted, period MWRR ≈ Dietz).
+      • begin/end/flows/gain, plus the monthly chart series + SPY overlay.
+    """
+    import datetime as _dt
+    if not records:
+        return None
+    years = sorted({r["year"] for r in records})
+    cur_year = years[-1]
+    ytd  = sorted([r for r in records if r["year"] == cur_year], key=lambda r: r["month"])
+    if not ytd:
+        return None
+    live = [r for r in ytd if not r.get("skip")]   # exclude custodial-transfer months
+
+    # Beginning balance: first YTD month's open. Inception-safe — if the account
+    # opened this year (beg == 0), use that month's deposits as the start capital.
+    begin = float(ytd[0].get("beg_balance") or 0.0)
+    if begin == 0.0:
+        begin = float(ytd[0].get("deposits") or 0.0)
+    end = float(ytd[-1].get("end_balance") or 0.0)
+
+    deposits    = round(sum(float(r.get("deposits")    or 0.0) for r in ytd), 2)
+    withdrawals = round(sum(float(r.get("withdrawals") or 0.0) for r in ytd), 2)
+    net_flow    = round(deposits - withdrawals, 2)
+    gain        = round(end - begin - net_flow, 2)   # ties to Fidelity's total
+
+    # TWRR — chain each month's (already Modified-Dietz) return, skip transfers.
+    tw = 1.0
+    for r in live:
+        tw *= (1.0 + float(r.get("return_pct") or 0.0) / 100.0)
+    twrr = round((tw - 1.0) * 100.0, 4)
+
+    # Period MWRR (money-weighted) = Modified Dietz across the whole YTD window,
+    # flows weighted by mid-month. Same time window as TWRR so the two compare.
+    period_start = _dt.date(cur_year, 1, 1)
+    today = _dt.date.today()
+    cd = max(1, (today - period_start).days)
+    weighted = 0.0
+    for r in ytd:
+        mf = float(r.get("deposits") or 0.0) - float(r.get("withdrawals") or 0.0)
+        if mf == 0.0:
+            continue
+        try:
+            mid = _dt.date(cur_year, int(r["month"]), 15)
+            weighted += mf * (cd - max(0, (mid - period_start).days)) / cd
+        except Exception:
+            continue
+    denom = begin + weighted
+    mwrr  = round(gain / denom * 100.0, 4) if denom > 0 else twrr
+
+    _MN = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+           7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+    mc_monthly = [
+        {
+            "label":       _MN.get(r["month"], r["label"]),
+            "month":       r["month"],
+            "return_pct":  r["return_pct"],
+            "beg_balance": float(r.get("beg_balance") or 0.0),
+            "end_balance": r["end_balance"],
+            "start_value": float(r.get("beg_balance") or 0.0),
+            "end_value":   r["end_balance"],
+            "market_change": float(r.get("market_change") or 0.0),
+            "skip":        r.get("skip", False),
+            "exact":       True,
+            "perf_detail": {
+                "deposits":    r.get("deposits",    0.0),
+                "withdrawals": r.get("withdrawals", 0.0),
+                "net_flow":    float(r.get("deposits", 0.0)) - float(r.get("withdrawals", 0.0)),
+            },
+        }
+        for r in ytd
+    ]
+
+    payload = {
+        "twrr_return_pct":       twrr,
+        "md_return_pct":         mwrr,
+        "xirr_return_pct":       mwrr,
+        "begin_value":           round(begin, 2),
+        "end_value":             round(end, 2),
+        "ytd_beg_balance":       round(begin, 2),
+        "ytd_total_deposits":    deposits,
+        "ytd_total_withdrawals": withdrawals,
+        "net_external_flows":    net_flow,
+        "investment_gain":       gain,
+        "year":                  cur_year,
+        "monthly_chart":         {"monthly": mc_monthly},
+        "source":                "balance_history_csv",
+    }
+
+    # Attach the SPY (benchmark) overlay so the chart line + alpha tile render.
+    # Best-effort: never let a benchmark fetch failure block the import.
+    try:
+        payload["spy_monthly"] = get_spy_monthly_data()
+    except Exception:
+        payload["spy_monthly"] = None
+    return payload
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/fund/{fund_id}/import-balance-history")
 async def fund_import_balance_history(
@@ -13245,51 +13360,16 @@ async def fund_import_balance_history(
     records = _parse_balance_history_csv(text)
     if not records:
         raise HTTPException(400, "No valid monthly rows found in file.")
-    # Derive YTD from the LATEST year present in the data, not the wall-clock
-    # year — the CSV's most recent month tells us what "current year" means for
-    # this account. This prevents stale or backdated demo data from showing
-    # zero/missing months and prevents collisions when multiple years share
-    # the same month number.
-    import datetime as _dt
-    years_in_data = sorted({r["year"] for r in records})
-    cur_year = years_in_data[-1] if years_in_data else _dt.date.today().year
-    ytd_months = [r for r in records if r["year"] == cur_year and not r.get("skip")]
-    ytd_chain = 1.0
-    for m in ytd_months:
-        ytd_chain *= (1 + m["return_pct"] / 100)
-    ytd_pct = round((ytd_chain - 1) * 100, 4)
-    nav = records[-1]["end_balance"] if records else 0.0
-    # Short month names for YTD chart labels (tooltip appends the year)
-    _MN = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
-           7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
-    # Include ALL current-year months (skip months shown as N/A placeholder in chart)
-    mc_monthly = [
-        {
-            "label":       _MN.get(r["month"], r["label"]),
-            "month":       r["month"],
-            "return_pct":  r["return_pct"],
-            "beg_balance": float(r.get("beg_balance") or 0),
-            "end_balance": r["end_balance"],
-            "skip":        r.get("skip", False),
-            "perf_detail": {
-                "deposits":    r.get("deposits",    0),
-                "withdrawals": r.get("withdrawals", 0),
-                "net_flow":    r.get("deposits", 0) - r.get("withdrawals", 0),
-            },
-        }
-        for r in records if r["year"] == cur_year
-    ]
-    # Summary totals for positions-based return calculation on the client
-    ytd_beg_balance      = float(ytd_months[0].get("beg_balance") or 0) if ytd_months else None
-    ytd_total_deposits   = round(sum(float(m.get("deposits")    or 0) for m in ytd_months), 2)
-    ytd_total_withdrawals = round(sum(float(m.get("withdrawals") or 0) for m in ytd_months), 2)
-    result_json = {
-        "md_return_pct":       ytd_pct,
-        "monthly_chart":       {"monthly": mc_monthly},
-        "ytd_beg_balance":     ytd_beg_balance,
-        "ytd_total_deposits":  ytd_total_deposits,
-        "ytd_total_withdrawals": ytd_total_withdrawals,
-    }
+    # Derive the COMPLETE YTD overview from this single CSV — one authoritative
+    # computation (TWRR + Modified Dietz + flows + monthly chart + SPY overlay),
+    # internally consistent and reconciling to Fidelity's totals. This is the one
+    # source of truth for the account overview; it intentionally overwrites any
+    # stale value left by the legacy 3-file ytd-run path.
+    result_json = _account_overview_from_balance(records)
+    if not result_json:
+        raise HTTPException(400, "Could not derive YTD figures from the file.")
+    ytd_pct = result_json["twrr_return_pct"]   # headline = time-weighted return
+    nav     = result_json["end_value"]
 
     conn = _fund_conn()
     try:
@@ -13539,6 +13619,32 @@ async def fund_account_ytd_run(
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
             # Resolve fund ID
             fid = _resolve_fund_id(cur, fund_id)
+
+            # ── Preserve the Balance-Detail CSV as the single source of truth ──
+            # If the account overview was already computed from the authoritative
+            # Balance & Income Detail CSV (import-balance-history), this run keeps
+            # those return / NAV / monthly-chart numbers and only OVERLAYS its
+            # attribution + cash-flow detail. Positions+Activity must never flip
+            # the headline YTD return — that is what produced the wrong figure.
+            cur.execute("SELECT result_json FROM managed_account_ytd_cache "
+                        "WHERE fund_id = %s", (fid,))
+            _ex_row = cur.fetchone()
+            _existing = None
+            if _ex_row and _ex_row.get("result_json"):
+                _existing = (_ex_row["result_json"] if isinstance(_ex_row["result_json"], dict)
+                             else _json.loads(_ex_row["result_json"]))
+            if _existing and _existing.get("source") == "balance_history_csv":
+                _AUTH = ("twrr_return_pct", "md_return_pct", "xirr_return_pct",
+                         "begin_value", "end_value", "ytd_beg_balance",
+                         "ytd_total_deposits", "ytd_total_withdrawals",
+                         "net_external_flows", "investment_gain",
+                         "monthly_chart", "spy_monthly", "year", "source")
+                for _k in _AUTH:
+                    if _k in _existing:
+                        result[_k] = _existing[_k]
+                nav     = _existing.get("end_value") or nav
+                ytd_pct = (_existing.get("twrr_return_pct")
+                           if _existing.get("twrr_return_pct") is not None else ytd_pct)
 
             cur.execute("""
                 INSERT INTO managed_account_ytd_cache
