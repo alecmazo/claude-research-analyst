@@ -4140,19 +4140,31 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-badge">CSV</span>
       </header>
 
-      <!-- ① YTD Performance Run -->
+      <!-- ① Run — one button, splits YTD vs full-year automatically -->
       <div class="acd-upload-group">
         <div class="acd-upload-group-label">
           <span class="acd-upload-group-num">1</span>
-          YTD Performance Run
-          <span class="acd-upload-group-sub">Positions + Activity — for holdings analysis &amp; cash-flow attribution. (YTD returns come from the Balance &amp; Income Detail CSV in section ②.)</span>
+          Run Performance Analysis
+          <span class="acd-upload-group-sub">The Balance &amp; Income Detail CSV (full history) fills the YTD overview AND the all-time/annual chart. Add Positions + Activity for holdings &amp; per-stock attribution. Choose your files, then hit Run.</span>
         </div>
         <div class="acd-upload-row">
+          <div class="acd-file-card" id="acd-fc-alltime">
+            <div class="acd-fc-icon">📈</div>
+            <div class="acd-fc-body">
+              <div class="acd-fc-title">Balance &amp; Income Detail <span class="acd-fc-req">required</span></div>
+              <div class="acd-fc-hint">Fidelity → Performance → Income &amp; Balance Detail · full history · drives YTD return/NAV + all-time chart</div>
+              <div class="acd-fc-name" id="acd-fc-alltime-name">No file chosen</div>
+            </div>
+            <label class="acd-fc-btn">
+              Choose
+              <input id="acd-alltime-file" type="file" accept=".csv,.txt" style="display:none">
+            </label>
+          </div>
           <div class="acd-file-card" id="acd-fc-pos">
             <div class="acd-fc-icon">📄</div>
             <div class="acd-fc-body">
-              <div class="acd-fc-title">Positions CSV <span class="acd-fc-req">required</span></div>
-              <div class="acd-fc-hint">Fidelity → Portfolio → Download → Positions</div>
+              <div class="acd-fc-title">Positions CSV <span class="acd-fc-opt">optional</span></div>
+              <div class="acd-fc-hint">Fidelity → Portfolio → Download → Positions · holdings analysis</div>
               <div class="acd-fc-name" id="acd-fc-pos-name">No file chosen</div>
             </div>
             <label class="acd-fc-btn">
@@ -4163,8 +4175,8 @@ End with the sleeve block at this account's real market value so I can push it t
           <div class="acd-file-card" id="acd-fc-act">
             <div class="acd-fc-icon">📋</div>
             <div class="acd-fc-body">
-              <div class="acd-fc-title">Activity CSV <span class="acd-fc-req">required</span></div>
-              <div class="acd-fc-hint">Fidelity → Activity & Orders → Download History</div>
+              <div class="acd-fc-title">Activity CSV <span class="acd-fc-opt">optional</span></div>
+              <div class="acd-fc-hint">Fidelity → Activity &amp; Orders → Download History · cash-flow attribution</div>
               <div class="acd-fc-name" id="acd-fc-act-name">No file chosen</div>
             </div>
             <label class="acd-fc-btn">
@@ -4174,35 +4186,8 @@ End with the sleeve block at this account's real market value so I can push it t
           </div>
         </div>
         <div class="acd-upload-actions">
-          <button id="acd-ytd-run-btn" class="tab-btn" style="font-size:10px;">⚡ Run YTD Analysis</button>
-          <span id="acd-ytd-status" style="font-size:11px;margin-left:6px;"></span>
-        </div>
-      </div>
-
-      <!-- ② All-Time Performance -->
-      <div class="acd-upload-group" style="border-top:1px solid var(--panel-edge);margin-top:0;">
-        <div class="acd-upload-group-label">
-          <span class="acd-upload-group-num">2</span>
-          Balance &amp; Income Detail — drives All-Time chart + YTD overview
-          <span class="acd-upload-group-sub">Upload ONE Fidelity Balance &amp; Income Detail CSV (full history). It powers the all-time chart, the annual table, AND the YTD return / NAV / alpha at the top — no separate YTD upload needed.</span>
-        </div>
-        <div class="acd-upload-row">
-          <div class="acd-file-card" id="acd-fc-alltime">
-            <div class="acd-fc-icon">📈</div>
-            <div class="acd-fc-body">
-              <div class="acd-fc-title">Balance &amp; Income Detail <span class="acd-fc-req">required</span></div>
-              <div class="acd-fc-hint">Fidelity → Performance → Income &amp; Balance Detail · full history · powers the all-time chart, annual table &amp; YTD overview</div>
-              <div class="acd-fc-name" id="acd-fc-alltime-name">No file chosen</div>
-            </div>
-            <label class="acd-fc-btn">
-              Choose
-              <input id="acd-alltime-file" type="file" accept=".csv,.txt" style="display:none">
-            </label>
-          </div>
-        </div>
-        <div class="acd-upload-actions">
-          <button id="acd-alltime-upload-btn" class="tab-btn" style="font-size:10px;">📤 Upload Balance Detail (All-Time + YTD)</button>
-          <span id="acd-alltime-status" style="font-size:11px;margin-left:6px;"></span>
+          <button id="acd-run-btn" class="tab-btn" style="font-size:10px;">▶ Run</button>
+          <span id="acd-run-status" style="font-size:11px;margin-left:6px;"></span>
         </div>
       </div>
 
@@ -12509,9 +12494,9 @@ End with the sleeve block at this account's real market value so I can push it t
         document.getElementById('lpd-nav-status'),
         e.target, 'Upload Annual NAV');
     }
-    // Managed-account YTD run
-    if (e.target.id === 'acd-ytd-run-btn') {
-      runAccountYtd(e.target);
+    // Managed-account — single Run (Balance Detail + optional Positions/Activity)
+    if (e.target.id === 'acd-run-btn') {
+      runAccountAnalysis(e.target);
     }
     // Merge CSVs & download
     if (e.target.id === 'acd-merge-btn') {
@@ -12605,96 +12590,68 @@ End with the sleeve block at this account's real market value so I can push it t
     if (cardEl) cardEl.classList.toggle('has-file', !!file);
   });
 
-  // ── All-Time Performance upload ───────────────────────────────────────────
-  document.addEventListener('click', async function (e) {
-    if (e.target.id !== 'acd-alltime-upload-btn') return;
-    const file = document.getElementById('acd-alltime-file')?.files[0];
-    const stat = document.getElementById('acd-alltime-status');
-    if (!file) { stat.textContent = '❌ Choose a file first'; stat.style.color = 'var(--red)'; return; }
-    if (!CURRENT_FUND_ID) { stat.textContent = '❌ No account selected'; stat.style.color = 'var(--red)'; return; }
-    const btn = e.target;
-    btn.disabled = true; btn.textContent = 'Uploading…';
-    stat.textContent = ''; stat.style.color = '';
+  // ── Managed-Account — single "Run" ────────────────────────────────────────
+  // One button, up to three files. The Balance & Income Detail CSV is the single
+  // source of truth for YTD returns / NAV / monthly chart AND the all-time chart
+  // (server writes the complete reconciled overview). Positions + Activity are
+  // optional and only add holdings analysis + per-stock cash-flow attribution —
+  // the server merges that run on top WITHOUT overwriting the balance-derived
+  // numbers. The balance CSV is also passed to the attribution run so it can
+  // read Jan-1 begin value (no "Jan 1 portfolio value" prompt).
+  async function runAccountAnalysis(btn) {
+    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
+    const bal  = document.getElementById('acd-alltime-file')?.files[0];
+    const pos  = document.getElementById('acd-ytd-pos')?.files[0];
+    const act  = document.getElementById('acd-ytd-act')?.files[0];
+    const stat = document.getElementById('acd-run-status');
+    if (!bal && !(pos && act)) {
+      stat.textContent = '❌ Choose the Balance & Income Detail CSV (Positions + Activity optional).';
+      stat.style.color = 'var(--red)'; return;
+    }
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Running…';
+    stat.textContent = ''; stat.style.color = 'var(--blue)';
+    const notes = [];
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const r = await window.dgaFetch(
-        '/api/fund/' + encodeURIComponent(CURRENT_FUND_ID) + '/import-balance-history',
-        { method: 'POST', body: fd }
-      );
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
-      stat.textContent = '✅ Uploaded · ' + (d.months || '') + ' months · YTD '
-        + (d.ytd_label || '') + ' · Reloading…';
+      // 1) Balance & Income Detail → authoritative YTD overview + all-time chart.
+      if (bal) {
+        const fd = new FormData();
+        fd.append('file', bal);
+        const r = await window.dgaFetch(
+          '/api/fund/' + encodeURIComponent(CURRENT_FUND_ID) + '/import-balance-history',
+          { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Balance import failed (HTTP ' + r.status + ')');
+        notes.push((d.months || '?') + ' mo · YTD ' + (d.ytd_label || ''));
+      }
+      // 2) Positions + Activity → holdings + attribution (merged, never clobbers
+      //    the balance-derived returns). Pass the balance CSV so the attribution
+      //    run has the Jan-1 value and never prompts for it.
+      if (pos && act) {
+        const fd = new FormData();
+        fd.append('positions_file', pos);
+        fd.append('activity_file',  act);
+        if (bal) fd.append('monthly_perf_file', bal);
+        const r = await window.dgaFetch(
+          '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run',
+          { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Attribution run failed (HTTP ' + r.status + ')');
+        notes.push(d.positions_sync_ok ? 'holdings + attribution' : (d.positions_sync_msg || 'attribution'));
+        try { _populateBaselineSection(d); } catch (_) {}
+      }
       stat.style.color = 'var(--green)';
-      // This one CSV now drives BOTH the all-time chart AND the YTD account
-      // overview (server writes the complete, reconciled overview payload), so
-      // refresh both sections — no separate 3-file YTD run needed.
+      stat.textContent = '✅ ' + notes.join(' · ') + ' · Reloading…';
       setTimeout(() => {
         loadAllTimePerf(CURRENT_FUND_ID);
         if (typeof loadAcctYtdSections === 'function') loadAcctYtdSections(CURRENT_FUND_ID);
+        if (typeof loadAcctPositions === 'function') loadAcctPositions(CURRENT_FUND_ID);
       }, 500);
     } catch (err) {
+      stat.style.color = 'var(--red)';
       stat.textContent = '❌ ' + err.message;
-      stat.style.color = 'var(--red)';
     } finally {
-      btn.disabled = false; btn.textContent = '📤 Upload Balance Detail (All-Time + YTD)';
-    }
-  });
-
-  // ── Managed-Account YTD runner ────────────────────────────────────────────
-  // Positions + Activity only — holdings analysis + per-stock cash-flow
-  // attribution. YTD returns / NAV / monthly chart come from the single Balance
-  // & Income Detail CSV (section ②); the server merges this run on top of those
-  // authoritative numbers without overwriting them.
-  async function runAccountYtd(btn) {
-    if (!CURRENT_FUND_ID) { alert('No account selected'); return; }
-    const pos  = document.getElementById('acd-ytd-pos').files[0];
-    const act  = document.getElementById('acd-ytd-act').files[0];
-    const stat = document.getElementById('acd-ytd-status');
-    if (!pos || !act) {
-      stat.textContent = '❌ Positions + Activity CSVs are required.';
-      stat.style.color = 'var(--red)'; return;
-    }
-    btn.disabled = true; btn.textContent = 'Running…'; stat.textContent = '';
-    try {
-      // Positions + Activity only. The Balance & Income Detail CSV (section ②)
-      // is the single source of truth for YTD returns / NAV / monthly chart;
-      // this run contributes holdings analysis + cash-flow attribution and must
-      // NOT overwrite those balance-derived numbers (server merges, preserving
-      // the balance-derived overview).
-      const fd = new FormData();
-      fd.append('positions_file', pos);
-      fd.append('activity_file',  act);
-      const r = await window.dgaFetch(
-        '/api/fund/account/' + encodeURIComponent(CURRENT_FUND_ID) + '/ytd-run',
-        { method: 'POST', body: fd }
-      );
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
-      const posMsg = d.positions_sync_ok
-        ? `✅ ${d.positions_sync_msg}`
-        : `⚠️ ${d.positions_sync_msg || 'positions not synced'}`;
-      let baselineNote = '';
-      if (d.baseline_used) baselineNote = ' · Jan 1 balance auto-filled from saved baseline';
-      stat.style.color = 'var(--green)';
-      stat.textContent = `✅ YTD saved · ${posMsg}${baselineNote}. Reloading…`;
-
-      // ── Populate the "Set as YTD Baseline" section ──────────────────────
-      _populateBaselineSection(d);
-
-      setTimeout(() => {
-        loadAcctYtdSections(CURRENT_FUND_ID);
-        // All-Time chart is driven by its own upload (import-balance-history).
-        // The YTD monthly_perf_file no longer writes to account_balance_history,
-        // so we must NOT call loadAllTimePerf here — it would just show stale data.
-        loadAcctPositions(CURRENT_FUND_ID);
-      }, 400);
-    } catch (e) {
-      stat.style.color = 'var(--red)';
-      stat.textContent = '❌ ' + e.message;
-    } finally {
-      btn.disabled = false; btn.textContent = '⚡ Run YTD';
+      btn.disabled = false; btn.textContent = orig;
     }
   }
 
