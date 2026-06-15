@@ -3921,6 +3921,7 @@ End with the sleeve block at this account's real market value so I can push it t
           the persisted SEC XBRL store. Zero LLM cost per view.
         </div>
         <div id="fin-dash-head" style="display:none;"></div>
+        <div id="fin-dash-price" style="display:none;margin-top:12px;"></div>
         <div id="fin-dash-grid" style="display:none;margin-top:12px;display:none;"></div>
       </div>
     </section>
@@ -6036,6 +6037,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (head) { head.style.display = 'block'; head.innerHTML =
       '<div style="font-size:12px;color:var(--text-tertiary);"><span class="spin" style="display:inline-block;">⟳</span> Loading ' + _gfEsc(tk) + ' from the store…</div>'; }
     if (grid) grid.style.display = 'none';
+    const _ph = document.getElementById('fin-dash-price'); if (_ph) _ph.style.display = 'none';
     try {
       const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/dashboard?period_type=' + _finDashPeriod);
       const d = await r.json();
@@ -6156,6 +6158,174 @@ End with the sleeve block at this account's real market value so I can push it t
     grid.style.display = 'grid';
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
     grid.style.gap = '12px';
+
+    // Interactive price chart (Tradier history) — defaults to YTD on each load.
+    _finPriceLoad(d.ticker, _finPriceRange);
+  }
+
+  // ══ Interactive price chart (GuruFocus-style — SVG, Tradier history) ══
+  const _FIN_PRICE_RANGES = ['5D','1M','3M','YTD','1Y','3Y','5Y','10Y','All'];
+  let _finPriceRange = 'YTD';
+  let _finPriceTk = null;
+
+  async function _finPriceLoad(tk, rng) {
+    tk = (tk || _finPriceTk || '').toUpperCase();
+    if (!tk) return;
+    _finPriceTk = tk; _finPriceRange = rng || _finPriceRange;
+    const host = document.getElementById('fin-dash-price');
+    if (!host) return;
+    host.style.display = 'block';
+    // Keep the range bar responsive: render shell immediately, then fill the plot.
+    host.innerHTML = _finPriceShell('<div style="height:300px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;"><span class="spin" style="display:inline-block;margin-right:6px;">⟳</span> Loading ' + _gfEsc(tk) + ' ' + _gfEsc(_finPriceRange) + '…</div>');
+    _finPriceWireRanges();
+    try {
+      const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/price-history?range=' + encodeURIComponent(_finPriceRange));
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      host.innerHTML = _finPriceShell(_priceChart(d.points || [], d.stats || {}, _finPriceRange));
+      _finPriceWireRanges();
+      _priceWireHover();
+    } catch (e) {
+      host.innerHTML = _finPriceShell('<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;text-align:center;padding:0 12px;">' + _gfEsc(e.message) + '</div>');
+      _finPriceWireRanges();
+    }
+  }
+
+  // Range-button bar + stat line wrapper around the SVG plot.
+  function _finPriceShell(inner) {
+    const segs = _FIN_PRICE_RANGES.map(r => {
+      const on = r.toUpperCase() === _finPriceRange.toUpperCase();
+      return '<button class="fin-price-seg" data-r="' + r + '" style="border:none;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;border-radius:6px;' +
+        (on ? 'background:var(--blue);color:#fff;' : 'background:var(--bg-elevated);color:var(--text-secondary);') + '">' + r + '</button>';
+    }).join('');
+    return '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">' + segs + '</div>' +
+      '<div id="fin-price-stats" style="font-size:12px;margin-bottom:6px;min-height:16px;"></div>' +
+      '<div style="position:relative;">' + inner + '</div>';
+  }
+
+  function _finPriceWireRanges() {
+    document.querySelectorAll('.fin-price-seg').forEach(b => {
+      b.addEventListener('click', () => _finPriceLoad(_finPriceTk, b.dataset.r));
+    });
+  }
+
+  // Build the interactive SVG line/area chart + stat line. Returns HTML; call
+  // _priceWireHover() after injection to attach the crosshair.
+  function _priceChart(points, stats, rng) {
+    const pts = (points || []).filter(p => p && p.c != null);
+    if (pts.length < 2)
+      return '<div style="height:300px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px;">Not enough data to plot.</div>';
+    const W = 920, H = 320, padL = 8, padR = 64, padT = 14, padB = 26;
+    const n = pts.length;
+    const ys = pts.map(p => p.c);
+    let lo = Math.min(...ys), hi = Math.max(...ys);
+    const pad = (hi - lo) * 0.08 || (hi * 0.02) || 1;
+    lo -= pad; hi += pad;
+    const xOf = i => padL + (i / (n - 1)) * (W - padL - padR);
+    const yOf = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const up = ys[n - 1] >= ys[0];
+    const lineCol = up ? '#16a34a' : '#dc2626';
+    const areaCol = up ? 'rgba(22,163,74,0.13)' : 'rgba(220,38,38,0.12)';
+
+    let dLine = '', dArea = '';
+    pts.forEach((p, i) => {
+      const x = xOf(i).toFixed(1), y = yOf(p.c).toFixed(1);
+      dLine += (i ? 'L' : 'M') + x + ' ' + y + ' ';
+      dArea += (i ? 'L' : 'M') + x + ' ' + y + ' ';
+    });
+    dArea += 'L' + xOf(n - 1).toFixed(1) + ' ' + (H - padB) + ' L' + xOf(0).toFixed(1) + ' ' + (H - padB) + ' Z';
+
+    // Y gridlines + right-axis price labels (5 ticks)
+    let grid = '', last = ys[n - 1];
+    for (let k = 0; k <= 4; k++) {
+      const v = lo + (hi - lo) * k / 4, y = yOf(v).toFixed(1);
+      grid += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1" stroke-dasharray="2 4"/>' +
+        '<text x="' + (W - padR + 6) + '" y="' + (parseFloat(y) + 4) + '" font-size="12" fill="var(--text-tertiary,#94a3b8)">' + v.toFixed(v < 5 ? 2 : v < 1000 ? 1 : 0) + '</text>';
+    }
+    // X date labels (first / mid / last)
+    const fmtT = t => { const s = String(t); return s.length > 10 ? s.slice(5, 10) : s.slice(0, 10).slice(5) || s; };
+    let xlab = '';
+    [0, Math.floor((n - 1) / 2), n - 1].forEach(i => {
+      const x = xOf(i), anch = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+      xlab += '<text x="' + x.toFixed(1) + '" y="' + (H - 6) + '" font-size="12" fill="var(--text-tertiary,#94a3b8)" text-anchor="' + anch + '">' + _gfEsc(String(pts[i].t).slice(0, 10)) + '</text>';
+    });
+    // Dashed high/low guides
+    const guide = (v, col) => '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + yOf(v).toFixed(1) + '" y2="' + yOf(v).toFixed(1) + '" stroke="' + col + '" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>';
+    // Last-price pill on the right edge
+    const lpY = yOf(last);
+    const pill = '<rect x="' + (W - padR + 2) + '" y="' + (lpY - 11).toFixed(1) + '" width="' + (padR - 4) + '" height="22" rx="4" fill="' + lineCol + '"/>' +
+      '<text x="' + (W - padR / 2) + '" y="' + (lpY + 4).toFixed(1) + '" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">' + last.toFixed(last < 1000 ? 1 : 0) + '</text>';
+
+    // Serialize point coords for the hover handler (data attributes on the svg)
+    const xsAttr = pts.map((p, i) => xOf(i).toFixed(1)).join(',');
+    const csAttr = pts.map(p => p.c).join(',');
+    const tsAttr = pts.map(p => String(p.t).slice(0, 16)).join('|');
+
+    const svg = '<svg id="fin-price-svg" viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="none" style="display:block;max-height:340px;cursor:crosshair;overflow:visible;"' +
+      ' data-xs="' + xsAttr + '" data-cs="' + csAttr + '" data-lo="' + lo + '" data-hi="' + hi + '" data-padt="' + padT + '" data-h="' + H + '" data-padb="' + padB + '" data-ts="' + _gfEsc(tsAttr) + '">' +
+      grid +
+      guide(Math.max(...ys), '#16a34a') + guide(Math.min(...ys), '#dc2626') +
+      '<path d="' + dArea + '" fill="' + areaCol + '" stroke="none"/>' +
+      '<path d="' + dLine + '" fill="none" stroke="' + lineCol + '" stroke-width="1.8" stroke-linejoin="round"/>' +
+      xlab + pill +
+      '<line id="fin-price-cross" x1="0" x2="0" y1="' + padT + '" y2="' + (H - padB) + '" stroke="var(--text-secondary,#64748b)" stroke-width="1" opacity="0"/>' +
+      '<circle id="fin-price-dot" r="3.5" fill="' + lineCol + '" stroke="#fff" stroke-width="1.5" opacity="0"/>' +
+      '</svg>' +
+      '<div id="fin-price-tip" style="position:absolute;pointer-events:none;display:none;background:var(--text-primary,#0f172a);color:#fff;font-size:11px;font-weight:600;padding:4px 8px;border-radius:5px;white-space:nowrap;transform:translate(-50%,-130%);z-index:5;"></div>';
+
+    // Stat line is filled after injection (so it can also colorize), but render
+    // the markup inline here and patch #fin-price-stats from the wire step.
+    setTimeout(() => _priceFillStats(stats, rng), 0);
+    return svg;
+  }
+
+  function _priceFillStats(stats, rng) {
+    const el = document.getElementById('fin-price-stats');
+    if (!el || !stats) return;
+    const sgn = v => v == null ? 'var(--text-secondary)' : v >= 0 ? '#16a34a' : '#dc2626';
+    const pf = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const item = (lbl, v, col) => '<span style="margin-right:18px;"><span style="color:var(--text-tertiary);">' + lbl + ':</span> <strong style="color:' + (col || sgn(v)) + ';">' + (typeof v === 'number' ? pf(v) : v) + '</strong></span>';
+    el.innerHTML =
+      item((stats.change_label || rng) + ' change', stats.change_pct) +
+      item('Above Low', stats.above_low_pct) +
+      item('Below High', stats.below_high_pct) +
+      (stats.last != null ? '<span style="float:right;color:var(--text-primary);font-weight:800;font-variant-numeric:tabular-nums;">$' + stats.last.toLocaleString('en-US', {maximumFractionDigits:2}) + '</span>' : '');
+  }
+
+  // Attach the crosshair / tooltip to the rendered SVG (re-wired on each load).
+  function _priceWireHover() {
+    const svg = document.getElementById('fin-price-svg');
+    const cross = document.getElementById('fin-price-cross');
+    const dot = document.getElementById('fin-price-dot');
+    const tip = document.getElementById('fin-price-tip');
+    if (!svg || !cross || !dot || !tip) return;
+    const xs = svg.dataset.xs.split(',').map(Number);
+    const cs = svg.dataset.cs.split(',').map(Number);
+    const ts = svg.dataset.ts.split('|');
+    const lo = +svg.dataset.lo, hi = +svg.dataset.hi;
+    const padT = +svg.dataset.padt, padB = +svg.dataset.padb, Hh = +svg.dataset.h;
+    const yOf = v => padT + (1 - (v - lo) / (hi - lo)) * (Hh - padT - padB);
+    const vbW = 920;
+    function move(ev) {
+      const rect = svg.getBoundingClientRect();
+      const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+      const vx = px / rect.width * vbW;                 // → viewBox x
+      // nearest sample
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < xs.length; i++) { const dd = Math.abs(xs[i] - vx); if (dd < bd) { bd = dd; best = i; } }
+      const x = xs[best], y = yOf(cs[best]);
+      cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('opacity', '0.55');
+      dot.setAttribute('cx', x); dot.setAttribute('cy', y.toFixed(1)); dot.setAttribute('opacity', '1');
+      tip.style.display = 'block';
+      tip.style.left = (x / vbW * rect.width) + 'px';
+      tip.style.top = (y / Hh * rect.height) + 'px';
+      tip.innerHTML = '<span style="opacity:.7;">' + _gfEsc(ts[best].replace('T', ' ')) + '</span><br>$' + cs[best].toLocaleString('en-US', {maximumFractionDigits:2});
+    }
+    function leave() { cross.setAttribute('opacity', '0'); dot.setAttribute('opacity', '0'); tip.style.display = 'none'; }
+    svg.addEventListener('mousemove', move);
+    svg.addEventListener('mouseleave', leave);
+    svg.addEventListener('touchmove', move, {passive: true});
+    svg.addEventListener('touchend', leave);
   }
 
   // millions, with commas; handles negatives and nulls

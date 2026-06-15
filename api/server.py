@@ -20707,6 +20707,15 @@ def _ensure_market_tables():
                 PRIMARY KEY (symbol, expiration, strike, opt_type)
             );
             CREATE INDEX IF NOT EXISTS idx_option_quotes_symbol ON option_quotes(symbol);
+            CREATE TABLE IF NOT EXISTS price_history (
+                symbol      TEXT,
+                d           DATE,
+                close       DOUBLE PRECISION,
+                source      TEXT,
+                updated_at  TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (symbol, d)
+            );
+            CREATE INDEX IF NOT EXISTS idx_price_history_symbol ON price_history(symbol);
         """)
         conn.commit()
 
@@ -21352,6 +21361,158 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
             "notes": {"wacc": "WACC est.: 9% cost of equity / 4.3% after-tax debt, "
                               "book-equity weighted",
                       "roic": "NOPAT(21% tax) / (debt + equity − cash)"}}
+
+
+# ── Interactive price chart (GuruFocus-style) — Tradier history, durable cache ─
+# Daily bars persist in price_history so range clicks are instant DB reads.
+# Intraday (5D) is fetched live with a short in-memory TTL (not worth persisting
+# at minute granularity). All pure market data — ZERO LLM tokens.
+_PRICE_SYNC_TS: dict[str, float] = {}     # symbol -> last daily-sync epoch (throttle)
+_INTRADAY_CACHE: dict[str, tuple] = {}    # symbol -> (epoch, [points])
+_PRICE_SYNC_MIN_S = 3 * 3600              # re-sync a symbol's daily tail at most every 3h
+_INTRADAY_TTL_S = 120                     # 5D intraday cache lifetime
+
+
+def _sync_price_history(tk: str) -> None:
+    """Fetch the missing daily-bar tail for tk from Tradier and upsert it.
+    Throttled per-symbol; first call backfills ~11 years. Best-effort: any
+    failure leaves whatever is already stored intact (still served below)."""
+    from datetime import date as _date, timedelta as _td
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    now = time.time()
+    if now - _PRICE_SYNC_TS.get(tk, 0) < _PRICE_SYNC_MIN_S:
+        return                                   # synced recently — serve from DB
+    _PRICE_SYNC_TS[tk] = now                      # set before the call (avoid stampede)
+    try:
+        import market_data as _md
+        _ensure_market_tables()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT max(d) FROM price_history WHERE symbol=%s", (tk,))
+            last_d = cur.fetchone()[0]
+        today = _date.today()
+        if last_d is None:
+            start = (today - _td(days=3700)).isoformat()      # ~11y backfill
+        elif last_d >= today - _td(days=1):
+            return                                            # already current
+        else:
+            start = last_d.isoformat()                        # tail only
+        bars = _md.get_price_history(tk, interval="daily",
+                                     start=start, end=today.isoformat())
+        if not bars:
+            return
+        src = "tradier" if _md.tradier_available() else "yahoo"
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for b in bars:
+                if not b.get("date") or b.get("close") is None:
+                    continue
+                cur.execute("""INSERT INTO price_history (symbol, d, close, source, updated_at)
+                               VALUES (%s,%s,%s,%s, now())
+                               ON CONFLICT (symbol, d) DO UPDATE SET
+                                 close=EXCLUDED.close, source=EXCLUDED.source,
+                                 updated_at=now()""",
+                            (tk, b["date"], b["close"], src))
+            conn.commit()
+    except Exception as e:
+        print(f"[price-hist] sync {tk} failed: {e!s:.160}", flush=True)
+
+
+def _price_stats(pts: list, range_label: str) -> dict:
+    """Window change + above-low / below-high, from a [{t,c}] series."""
+    closes = [p["c"] for p in pts if p.get("c") is not None]
+    if len(closes) < 2:
+        return {}
+    first, last = closes[0], closes[-1]
+    lo, hi = min(closes), max(closes)
+    pct = lambda a, b: ((b - a) / a * 100.0) if a else None
+    return {
+        "last": round(last, 2),
+        "range_low": round(lo, 2), "range_high": round(hi, 2),
+        "change_pct": (round(pct(first, last), 2) if pct(first, last) is not None else None),
+        "change_label": range_label,
+        "above_low_pct": (round(pct(lo, last), 2) if pct(lo, last) is not None else None),
+        "below_high_pct": (round(pct(hi, last), 2) if pct(hi, last) is not None else None),
+    }
+
+
+@app.get("/api/financials/{ticker}/price-history")
+def financials_price_history(ticker: str, request: Request, range: str = "YTD"):
+    """Interactive-chart price series for one ticker. Daily bars from the durable
+    price_history store (Tradier-synced); 5D from live intraday. Pure market
+    data — no LLM. Returns {ok, ticker, range, points:[{t,c}], stats{...}}."""
+    from datetime import date as _date, timedelta as _td, datetime as _dt
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    tk = ticker.upper().strip()
+    rng = (range or "YTD").upper()
+
+    # ── 5D → live intraday (15-min bars), short TTL cache ─────────────────
+    if rng == "5D":
+        cached = _INTRADAY_CACHE.get(tk)
+        if cached and (time.time() - cached[0]) < _INTRADAY_TTL_S:
+            pts = cached[1]
+        else:
+            pts = []
+            try:
+                import market_data as _md
+                bars = _md.get_intraday(tk)            # Tradier (if paid) → Yahoo v8 chart
+                pts = [{"t": b["time"], "c": b["close"]}
+                       for b in (bars or []) if b.get("close") is not None]
+                _INTRADAY_CACHE[tk] = (time.time(), pts)
+            except Exception as e:
+                print(f"[price-hist] intraday {tk} failed: {e!s:.140}", flush=True)
+        if not pts:
+            # Intraday unavailable (e.g. weekend / unsupported) → fall back to the
+            # last ~7 daily closes from the store so the 5D button still plots.
+            _sync_price_history(tk)
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT d, close FROM price_history WHERE symbol=%s "
+                                "ORDER BY d DESC LIMIT 7", (tk,))
+                    daily = [{"t": d.isoformat(), "c": float(c)}
+                             for d, c in cur.fetchall()][::-1]
+                if len(daily) >= 2:
+                    return {"ok": True, "ticker": tk, "range": "5D", "points": daily,
+                            "stats": _price_stats(daily, "5D"), "intraday": False}
+            except Exception as e:
+                print(f"[price-hist] 5D daily-fallback {tk} failed: {e!s:.140}", flush=True)
+            return {"ok": False, "error": f"No intraday data for {tk} "
+                                          f"(market may be closed or symbol unsupported)."}
+        return {"ok": True, "ticker": tk, "range": "5D", "points": pts,
+                "stats": _price_stats(pts, "5D"), "intraday": True}
+
+    # ── Daily ranges → durable store (sync tail, then slice) ──────────────
+    _sync_price_history(tk)
+    today = _date.today()
+    if rng == "YTD":
+        start_d = _date(today.year, 1, 1)
+    elif rng == "ALL":
+        start_d = None
+    else:
+        _days = {"1M": 31, "3M": 92, "1Y": 366, "3Y": 1096,
+                 "5Y": 1827, "10Y": 3653}.get(rng, 366)
+        start_d = today - _td(days=_days)
+
+    pts = []
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            if start_d is None:
+                cur.execute("SELECT d, close FROM price_history WHERE symbol=%s "
+                            "ORDER BY d ASC", (tk,))
+            else:
+                cur.execute("SELECT d, close FROM price_history WHERE symbol=%s "
+                            "AND d >= %s ORDER BY d ASC", (tk, start_d.isoformat()))
+            for d, c in cur.fetchall():
+                pts.append({"t": d.isoformat(), "c": float(c)})
+    except Exception as e:
+        print(f"[price-hist] read {tk} failed: {e!s:.140}", flush=True)
+
+    if not pts:
+        return {"ok": False, "error": f"No price history stored for {tk} yet — "
+                                      f"Tradier may be unavailable or the symbol is unsupported."}
+    return {"ok": True, "ticker": tk, "range": rng, "points": pts,
+            "stats": _price_stats(pts, rng)}
 
 
 # Separate dict for script-generation jobs so they don't collide with audio
