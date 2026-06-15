@@ -16,14 +16,6 @@ import {
 } from '../design';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function sentimentColor(s) {
-  if (!s) return colors.midGray;
-  const u = s.toUpperCase();
-  if (u === 'BULLISH') return colors.green;
-  if (u === 'BEARISH') return colors.red;
-  return colors.amber;
-}
-
 function formatPct(pct) {
   if (pct == null) return '';
   const sign = pct >= 0 ? '+' : '';
@@ -65,118 +57,6 @@ function SimpleMarkdown({ text, style }) {
   );
 }
 
-// ── Market Pulse Detail — Pannable Bottom Sheet ───────────────────────────────
-const SCREEN_H   = Dimensions.get('window').height;
-const SNAP_HALF  = SCREEN_H * 0.52;   // default: half-screen
-const SNAP_FULL  = SCREEN_H * 0.10;   // expanded: near full-screen
-const SNAP_CLOSE = SCREEN_H * 0.95;   // threshold below which we close
-
-function PulseModal({ item, visible, onClose }) {
-  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
-  const lastY      = useRef(SNAP_HALF);
-  const scrollRef  = useRef(null);
-  const [expanded, setExpanded] = useState(false);
-
-  // Slide in when visible
-  useEffect(() => {
-    if (visible) {
-      lastY.current = SNAP_HALF;
-      setExpanded(false);
-      Animated.spring(translateY, {
-        toValue: SNAP_HALF, useNativeDriver: true, damping: 20, stiffness: 180,
-      }).start();
-    } else {
-      translateY.setValue(SCREEN_H);
-    }
-  }, [visible]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderGrant: () => {
-        translateY.setOffset(lastY.current);
-        translateY.setValue(0);
-      },
-      onPanResponderMove: (_, g) => translateY.setValue(g.dy),
-      onPanResponderRelease: (_, g) => {
-        translateY.flattenOffset();
-        const current = lastY.current + g.dy;
-        if (current > SNAP_CLOSE) {
-          // Flicked down past threshold → close
-          Animated.timing(translateY, { toValue: SCREEN_H, duration: 200, useNativeDriver: true }).start(onClose);
-          return;
-        }
-        // Snap to closest point
-        const snapTo = Math.abs(current - SNAP_FULL) < Math.abs(current - SNAP_HALF) ? SNAP_FULL : SNAP_HALF;
-        lastY.current = snapTo;
-        setExpanded(snapTo === SNAP_FULL);
-        Animated.spring(translateY, { toValue: snapTo, useNativeDriver: true, damping: 20, stiffness: 180 }).start();
-      },
-    })
-  ).current;
-
-  const toggleExpand = () => {
-    const snapTo = expanded ? SNAP_HALF : SNAP_FULL;
-    lastY.current = snapTo;
-    setExpanded(!expanded);
-    Animated.spring(translateY, { toValue: snapTo, useNativeDriver: true, damping: 20, stiffness: 180 }).start();
-  };
-
-  if (!item) return null;
-  const { ticker, result } = item;
-  const sentiment = result?.sentiment || 'NEUTRAL';
-  const price     = result?.price;
-  const pct       = result?.pct_change;
-  const markdown  = result?.markdown || '';
-  const isUp      = pct != null && pct >= 0;
-
-  return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      {/* Backdrop */}
-      <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={onClose} />
-
-      <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-        {/* Drag handle strip */}
-        <View {...panResponder.panHandlers} style={styles.sheetHandleZone}>
-          <View style={styles.sheetPill} />
-        </View>
-
-        {/* Header row */}
-        <View style={styles.sheetHeader}>
-          <Text style={styles.modalTicker}>{ticker}</Text>
-          <View style={[styles.sentimentBadge, { backgroundColor: sentimentColor(sentiment) }]}>
-            <Text style={styles.sentimentText}>{sentiment}</Text>
-          </View>
-          {price != null && (
-            <View style={styles.modalPriceRow}>
-              <Text style={styles.modalPrice}>${Number(price).toFixed(2)}</Text>
-              {pct != null && (
-                <Text style={[styles.modalPct, isUp ? styles.pctUp : styles.pctDown]}>
-                  {formatPct(pct)}
-                </Text>
-              )}
-            </View>
-          )}
-          <View style={{ flex: 1 }} />
-          {/* Expand / collapse toggle */}
-          <TouchableOpacity onPress={toggleExpand} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={styles.sheetExpandBtn}>
-            <Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={18} color={colors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={styles.modalCloseBtn}>
-            <Ionicons name="close" size={22} color={colors.midGray} />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView ref={scrollRef} style={styles.sheetBody} contentContainerStyle={styles.modalBodyContent}>
-          <SimpleMarkdown text={markdown} />
-        </ScrollView>
-      </Animated.View>
-    </Modal>
-  );
-}
-
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation, route }) {
   const [ticker, setTicker]             = useState('');
@@ -196,10 +76,11 @@ export default function HomeScreen({ navigation, route }) {
   const [bulkJob, setBulkJob]           = useState(null);   // {bulk_job_id, total, completed:[], failed:[], status}
   const [bulkPolling, setBulkPolling]   = useState(false);
 
-  // Market Pulse strip
-  const [pulseResults, setPulseResults] = useState([]); // [{ticker, result}]
-  const [selectedPulse, setSelectedPulse] = useState(null);
-  const [pulseModalVisible, setPulseModalVisible] = useState(false);
+  // Idea Generator feed (auto-loading movers ≥4% from free sources — no tokens)
+  const [ideas, setIdeas]           = useState(null);  // null = loading, [] = none
+  const [ideasAsOf, setIdeasAsOf]   = useState('');
+  const [ideaExpanded, setIdeaExpanded] = useState({}); // ticker → bool
+  const ideasRef = useRef([]);
 
   const checkServer = async () => {
     const t0 = Date.now();
@@ -213,23 +94,33 @@ export default function HomeScreen({ navigation, route }) {
     }
   };
 
-  const loadPulse = async () => {
+  // Idea Generator — the day's movers ≥4% from free, non-LLM sources. Auto-loads
+  // on focus/refresh (no manual scan, no tokens) — replaces the old Market Pulse.
+  const loadIdeas = async () => {
     try {
-      const data = await api.getLatestScan();
-      if (data?.exists && data?.results) {
-        // Take last 5 by scanned_at
-        const entries = Object.entries(data.results)
-          .map(([t, r]) => ({ ticker: t, result: r }))
-          .sort((a, b) => {
-            const ta = a.result?._scanned_at || a.result?.scanned_at || '';
-            const tb = b.result?._scanned_at || b.result?.scanned_at || '';
-            return tb.localeCompare(ta);
-          })
-          .slice(0, 5);
-        setPulseResults(entries);
-      }
+      const d = await api.getIdeaFeed(4, 30);
+      const m = d.movers || [];
+      ideasRef.current = m;
+      setIdeas(m);
+      setIdeasAsOf(d.as_of || '');
     } catch (err) {
-      console.warn('loadPulse:', err.message);
+      console.warn('loadIdeas:', err.message);
+      setIdeas([]);
+    }
+  };
+
+  const toggleIdea = async (m) => {
+    const tk = m.ticker;
+    setIdeaExpanded(e => ({ ...e, [tk]: !e[tk] }));
+    haptics.onPressTab?.();
+    // Lazy-load free headlines on first expand if the feed didn't include any.
+    if ((!m.news || !m.news.length) && !m._newsTried) {
+      m._newsTried = true;
+      try {
+        const d = await api.getNews(tk, 6);
+        const items = (d.news && d.news[tk]) || [];
+        if (items.length) { m.news = items; setIdeas([...ideasRef.current]); }
+      } catch (e) { /* leave "no headlines" */ }
     }
   };
 
@@ -263,7 +154,7 @@ export default function HomeScreen({ navigation, route }) {
     useCallback(() => {
       checkServer();
       loadReports();
-      loadPulse();
+      loadIdeas();
       getGammaEnabled().then(setGammaEnabled);
       // Pre-fill ticker if navigated here from Intelligence/other screen
       const prefill = route?.params?.prefillTicker || route?.params?.ticker;
@@ -277,7 +168,7 @@ export default function HomeScreen({ navigation, route }) {
   const onRefresh = async () => {
     setRefreshing(true);
     haptics.onPressTab();
-    await Promise.all([checkServer(), loadReports(), loadPulse()]);
+    await Promise.all([checkServer(), loadReports(), loadIdeas()]);
     setRefreshing(false);
   };
 
@@ -728,35 +619,67 @@ export default function HomeScreen({ navigation, route }) {
         <Text style={styles.analystBannerArrow}>›</Text>
       </TouchableOpacity>
 
-      {/* Market Pulse strip */}
-      {pulseResults.length > 0 && (
-        <View style={styles.pulseSection}>
-          <Text style={styles.pulseSectionLabel}>MARKET PULSE</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pulseStrip}>
-            {pulseResults.map(({ ticker: t, result }) => {
-              const sentiment = result?.sentiment || 'NEUTRAL';
-              const price = result?.price;
+      {/* Idea Generator — auto-loading movers ≥4% (free, no tokens). Replaces
+          the old manual Market Pulse strip. Tap a row → free headlines. */}
+      <View style={styles.ideaSection}>
+        <View style={styles.ideaHeadRow}>
+          <Text style={styles.pulseSectionLabel}>🔔 IDEA GENERATOR</Text>
+          {!!ideasAsOf && <Text style={styles.ideaAsOf}>{ideasAsOf}</Text>}
+        </View>
+        {ideas == null ? (
+          <View style={styles.ideaCard}><ActivityIndicator color={colors.primary || colors.navy} /></View>
+        ) : ideas.length === 0 ? (
+          <View style={styles.ideaCard}>
+            <Text style={styles.ideaMuted}>No movers ≥ ±4% in your universe right now.</Text>
+          </View>
+        ) : (
+          <View style={[styles.ideaCard, { padding: 0 }]}>
+            {ideas.map((m, i) => {
+              const open = !!ideaExpanded[m.ticker];
               return (
-                <TouchableOpacity
-                  key={t}
-                  style={styles.pulseChip}
-                  onPress={() => {
-                    setSelectedPulse({ ticker: t, result });
-                    setPulseModalVisible(true);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.pulseChipTicker}>{t}</Text>
-                  <View style={[styles.pulseSentimentDot, { backgroundColor: sentimentColor(sentiment) }]} />
-                  {price != null && (
-                    <Text style={styles.pulseChipPrice}>${Number(price).toFixed(0)}</Text>
+                <View key={m.ticker} style={[styles.ideaWrap, i < ideas.length - 1 && styles.ideaDivider]}>
+                  <TouchableOpacity style={styles.ideaRow} onPress={() => toggleIdea(m)} activeOpacity={0.7}>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.ideaHead}>
+                        <Text style={styles.ideaTk}>{m.ticker}</Text>
+                        {(m.reason_class && m.reason_class !== 'unknown') ? (
+                          <Text style={styles.ideaReasonChip}>{String(m.reason_class).replace('_', ' ')}</Text>
+                        ) : null}
+                      </View>
+                      {!!m.reason_text && (
+                        <Text style={styles.ideaReasonTxt} numberOfLines={open ? 0 : 1}>{m.reason_text}</Text>
+                      )}
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.ideaPct, { color: m.pct_change >= 0 ? colors.green : colors.red }]}>
+                        {formatPct(m.pct_change)}
+                      </Text>
+                      {m.price != null && <Text style={styles.ideaPx}>${Number(m.price).toFixed(2)}</Text>}
+                    </View>
+                    <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.midGray} style={{ marginLeft: 6 }} />
+                  </TouchableOpacity>
+                  {open && (
+                    <View style={styles.ideaDetail}>
+                      {m.sector && m.sector !== 'Unknown' ? (
+                        <Text style={styles.ideaDetailMeta}>
+                          {m.sector}{m.sector_etf ? `  ·  ${m.sector_etf} ${formatPct(m.sector_pct_change)}` : ''}
+                        </Text>
+                      ) : null}
+                      {(m.news && m.news.length) ? m.news.map((n, j) => (
+                        <TouchableOpacity key={j} style={styles.ideaNewsItem}
+                          onPress={() => n.url && Linking.openURL(n.url).catch(() => {})} activeOpacity={n.url ? 0.6 : 1}>
+                          <Text style={styles.ideaNewsTitle}>{n.title}</Text>
+                          <Text style={styles.ideaNewsMeta}>{n.publisher || ''}</Text>
+                        </TouchableOpacity>
+                      )) : <Text style={styles.ideaMuted}>No recent headlines.</Text>}
+                    </View>
                   )}
-                </TouchableOpacity>
+                </View>
               );
             })}
-          </ScrollView>
-        </View>
-      )}
+          </View>
+        )}
+      </View>
 
       {/* Reports section header */}
       <View style={styles.listHeaderRow}>
@@ -845,13 +768,6 @@ export default function HomeScreen({ navigation, route }) {
           }
         />
       )}
-
-      {/* Pulse detail modal */}
-      <PulseModal
-        item={selectedPulse}
-        visible={pulseModalVisible}
-        onClose={() => setPulseModalVisible(false)}
-      />
     </View>
   );
 }
@@ -1016,34 +932,38 @@ const styles = StyleSheet.create({
     fontSize: 10, fontWeight: '800', color: '#9333ea', letterSpacing: 0.5,
   },
 
-  // Market Pulse strip
-  pulseSection: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-  },
+  // Idea Generator (auto-loading movers ≥4%) — replaces the old Market Pulse strip
+  ideaSection: { marginHorizontal: 16, marginBottom: 10 },
+  ideaHeadRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   pulseSectionLabel: {
     fontSize: 10, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5, marginBottom: 6,
+    letterSpacing: 1.5, flex: 1,
   },
-  pulseStrip: { gap: 8, paddingRight: 4 },
-  pulseChip: {
-    backgroundColor: colors.white,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignItems: 'center',
-    minWidth: 72,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: colors.lightGray,
+  ideaAsOf: { fontSize: 10, color: colors.midGray, fontWeight: '500' },
+  ideaCard: {
+    backgroundColor: colors.white, borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: colors.lightGray,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 3, elevation: 2,
   },
-  pulseChipTicker: { fontSize: 12, fontWeight: '800', color: colors.navy, letterSpacing: 0.8 },
-  pulseSentimentDot: { width: 6, height: 6, borderRadius: 3, marginTop: 4 },
-  pulseChipPrice: { fontSize: 10, color: colors.midGray, marginTop: 2, fontFamily: 'Courier New' },
+  ideaMuted: { fontSize: 13, color: colors.midGray },
+  ideaWrap: { paddingHorizontal: 14 },
+  ideaDivider: { borderBottomWidth: 1, borderBottomColor: colors.lightGray },
+  ideaRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
+  ideaHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ideaTk: { fontSize: 15, fontWeight: '800', color: colors.navy, letterSpacing: 0.5 },
+  ideaReasonChip: {
+    fontSize: 9, fontWeight: '700', color: colors.midGray, backgroundColor: colors.offWhite,
+    borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, overflow: 'hidden', textTransform: 'uppercase',
+  },
+  ideaReasonTxt: { fontSize: 11.5, color: colors.midGray, marginTop: 2 },
+  ideaPct: { fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  ideaPx: { fontSize: 11, color: colors.midGray, fontVariant: ['tabular-nums'] },
+  ideaDetail: { paddingBottom: 12, paddingTop: 2 },
+  ideaDetailMeta: { fontSize: 11, color: colors.midGray, marginBottom: 6, fontWeight: '600' },
+  ideaNewsItem: { paddingVertical: 5, borderTopWidth: 1, borderTopColor: colors.offWhite },
+  ideaNewsTitle: { fontSize: 12.5, color: colors.darkGray, fontWeight: '600', lineHeight: 17 },
+  ideaNewsMeta: { fontSize: 10, color: colors.midGray, marginTop: 1 },
 
   // Reports header row
   listHeaderRow: {
