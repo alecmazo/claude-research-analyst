@@ -1,9 +1,8 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
-  Linking, Platform, ScrollView, Modal,
-  Animated, PanResponder, Dimensions,
+  Linking, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,48 +13,6 @@ import AppHeader from '../components/AppHeader';
 import {
   colors, formatTime, formatDateCompact, haptics, SkeletonList,
 } from '../design';
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function formatPct(pct) {
-  if (pct == null) return '';
-  const sign = pct >= 0 ? '+' : '';
-  return `${sign}${Number(pct).toFixed(2)}%`;
-}
-
-// Simple markdown renderer: bold (**text**) and headings (### text)
-function SimpleMarkdown({ text, style }) {
-  if (!text) return null;
-  const lines = text.split('\n');
-  return (
-    <View>
-      {lines.map((line, i) => {
-        const headingMatch = line.match(/^(#{1,3})\s+(.*)/);
-        if (headingMatch) {
-          const level = headingMatch[1].length;
-          const content = headingMatch[2];
-          return (
-            <Text key={i} style={[styles.mdHeading, level === 1 && styles.mdH1, level === 2 && styles.mdH2, style]}>
-              {content}
-            </Text>
-          );
-        }
-        // Parse bold within line
-        const parts = line.split(/\*\*(.+?)\*\*/g);
-        return (
-          <Text key={i} style={[styles.mdBody, style]}>
-            {parts.map((part, j) =>
-              j % 2 === 1 ? (
-                <Text key={j} style={styles.mdBold}>{part}</Text>
-              ) : (
-                part
-              )
-            )}
-          </Text>
-        );
-      })}
-    </View>
-  );
-}
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation, route }) {
@@ -76,12 +33,6 @@ export default function HomeScreen({ navigation, route }) {
   const [bulkJob, setBulkJob]           = useState(null);   // {bulk_job_id, total, completed:[], failed:[], status}
   const [bulkPolling, setBulkPolling]   = useState(false);
 
-  // Idea Generator feed (auto-loading movers ≥4% from free sources — no tokens)
-  const [ideas, setIdeas]           = useState(null);  // null = loading, [] = none
-  const [ideasAsOf, setIdeasAsOf]   = useState('');
-  const [ideaExpanded, setIdeaExpanded] = useState({}); // ticker → bool
-  const ideasRef = useRef([]);
-
   const checkServer = async () => {
     const t0 = Date.now();
     try {
@@ -91,36 +42,6 @@ export default function HomeScreen({ navigation, route }) {
     } catch {
       setServerOk(false);
       setServerLatencyMs(null);
-    }
-  };
-
-  // Idea Generator — the day's movers ≥4% from free, non-LLM sources. Auto-loads
-  // on focus/refresh (no manual scan, no tokens) — replaces the old Market Pulse.
-  const loadIdeas = async () => {
-    try {
-      const d = await api.getIdeaFeed(4, 30);
-      const m = d.movers || [];
-      ideasRef.current = m;
-      setIdeas(m);
-      setIdeasAsOf(d.as_of || '');
-    } catch (err) {
-      console.warn('loadIdeas:', err.message);
-      setIdeas([]);
-    }
-  };
-
-  const toggleIdea = async (m) => {
-    const tk = m.ticker;
-    setIdeaExpanded(e => ({ ...e, [tk]: !e[tk] }));
-    haptics.onPressTab?.();
-    // Lazy-load free headlines on first expand if the feed didn't include any.
-    if ((!m.news || !m.news.length) && !m._newsTried) {
-      m._newsTried = true;
-      try {
-        const d = await api.getNews(tk, 6);
-        const items = (d.news && d.news[tk]) || [];
-        if (items.length) { m.news = items; setIdeas([...ideasRef.current]); }
-      } catch (e) { /* leave "no headlines" */ }
     }
   };
 
@@ -154,7 +75,6 @@ export default function HomeScreen({ navigation, route }) {
     useCallback(() => {
       checkServer();
       loadReports();
-      loadIdeas();
       getGammaEnabled().then(setGammaEnabled);
       // Pre-fill ticker if navigated here from Intelligence/other screen
       const prefill = route?.params?.prefillTicker || route?.params?.ticker;
@@ -168,7 +88,7 @@ export default function HomeScreen({ navigation, route }) {
   const onRefresh = async () => {
     setRefreshing(true);
     haptics.onPressTab();
-    await Promise.all([checkServer(), loadReports(), loadIdeas()]);
+    await Promise.all([checkServer(), loadReports()]);
     setRefreshing(false);
   };
 
@@ -619,68 +539,6 @@ export default function HomeScreen({ navigation, route }) {
         <Text style={styles.analystBannerArrow}>›</Text>
       </TouchableOpacity>
 
-      {/* Idea Generator — auto-loading movers ≥4% (free, no tokens). Replaces
-          the old manual Market Pulse strip. Tap a row → free headlines. */}
-      <View style={styles.ideaSection}>
-        <View style={styles.ideaHeadRow}>
-          <Text style={styles.pulseSectionLabel}>🔔 IDEA GENERATOR</Text>
-          {!!ideasAsOf && <Text style={styles.ideaAsOf}>{ideasAsOf}</Text>}
-        </View>
-        {ideas == null ? (
-          <View style={styles.ideaCard}><ActivityIndicator color={colors.primary || colors.navy} /></View>
-        ) : ideas.length === 0 ? (
-          <View style={styles.ideaCard}>
-            <Text style={styles.ideaMuted}>No movers ≥ ±4% in your universe right now.</Text>
-          </View>
-        ) : (
-          <View style={[styles.ideaCard, { padding: 0 }]}>
-            {ideas.map((m, i) => {
-              const open = !!ideaExpanded[m.ticker];
-              return (
-                <View key={m.ticker} style={[styles.ideaWrap, i < ideas.length - 1 && styles.ideaDivider]}>
-                  <TouchableOpacity style={styles.ideaRow} onPress={() => toggleIdea(m)} activeOpacity={0.7}>
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.ideaHead}>
-                        <Text style={styles.ideaTk}>{m.ticker}</Text>
-                        {(m.reason_class && m.reason_class !== 'unknown') ? (
-                          <Text style={styles.ideaReasonChip}>{String(m.reason_class).replace('_', ' ')}</Text>
-                        ) : null}
-                      </View>
-                      {!!m.reason_text && (
-                        <Text style={styles.ideaReasonTxt} numberOfLines={open ? 0 : 1}>{m.reason_text}</Text>
-                      )}
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[styles.ideaPct, { color: m.pct_change >= 0 ? colors.green : colors.red }]}>
-                        {formatPct(m.pct_change)}
-                      </Text>
-                      {m.price != null && <Text style={styles.ideaPx}>${Number(m.price).toFixed(2)}</Text>}
-                    </View>
-                    <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.midGray} style={{ marginLeft: 6 }} />
-                  </TouchableOpacity>
-                  {open && (
-                    <View style={styles.ideaDetail}>
-                      {m.sector && m.sector !== 'Unknown' ? (
-                        <Text style={styles.ideaDetailMeta}>
-                          {m.sector}{m.sector_etf ? `  ·  ${m.sector_etf} ${formatPct(m.sector_pct_change)}` : ''}
-                        </Text>
-                      ) : null}
-                      {(m.news && m.news.length) ? m.news.map((n, j) => (
-                        <TouchableOpacity key={j} style={styles.ideaNewsItem}
-                          onPress={() => n.url && Linking.openURL(n.url).catch(() => {})} activeOpacity={n.url ? 0.6 : 1}>
-                          <Text style={styles.ideaNewsTitle}>{n.title}</Text>
-                          <Text style={styles.ideaNewsMeta}>{n.publisher || ''}</Text>
-                        </TouchableOpacity>
-                      )) : <Text style={styles.ideaMuted}>No recent headlines.</Text>}
-                    </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
-      </View>
-
       {/* Reports section header */}
       <View style={styles.listHeaderRow}>
         <Text style={styles.sectionTitle}>SAVED REPORTS</Text>
@@ -735,26 +593,28 @@ export default function HomeScreen({ navigation, route }) {
         </View>
       ) : null}
 
-      {/* Reports list */}
-      {initialLoading && reports.length === 0 ? (
-        <SkeletonList count={5} />
-      ) : (
-        <FlatList
-          data={reports}
-          keyExtractor={item => item.ticker}
-          renderItem={renderReport}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-          ListHeaderComponent={
-            reports.length > 0 ? (
-              <View style={styles.colHeader}>
-                <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
-                <Text style={[styles.colHeaderText, styles.colHeaderPrice]}>PRICE</Text>
-                <Text style={[styles.colHeaderText, styles.colHeaderTarget]}>TGT / UPSIDE</Text>
-              </View>
-            ) : null
-          }
-          ListEmptyComponent={
+      {/* Reports list — always a single FlatList for smooth, freeze-free scrolling.
+          SkeletonList is shown via ListEmptyComponent during initial load so there
+          is never a competing scroll container above the list. */}
+      <FlatList
+        data={reports}
+        keyExtractor={item => item.ticker}
+        renderItem={renderReport}
+        ItemSeparatorComponent={() => <View style={styles.sep} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        ListHeaderComponent={
+          reports.length > 0 ? (
+            <View style={styles.colHeader}>
+              <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
+              <Text style={[styles.colHeaderText, styles.colHeaderPrice]}>PRICE</Text>
+              <Text style={[styles.colHeaderText, styles.colHeaderTarget]}>TGT / UPSIDE</Text>
+            </View>
+          ) : null
+        }
+        ListEmptyComponent={
+          initialLoading ? (
+            <SkeletonList count={5} />
+          ) : (
             <View style={styles.emptyWrap}>
               <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
               <Text style={styles.emptyTitle}>No reports yet</Text>
@@ -762,12 +622,13 @@ export default function HomeScreen({ navigation, route }) {
                 Type a ticker above and tap RUN ▶ to generate your first institutional analysis.
               </Text>
             </View>
-          }
-          contentContainerStyle={
-            reports.length > 0 ? styles.listContent : styles.emptyContainer
-          }
-        />
-      )}
+          )
+        }
+        contentContainerStyle={
+          initialLoading ? undefined :
+          reports.length > 0 ? styles.listContent : styles.emptyContainer
+        }
+      />
     </View>
   );
 }
@@ -932,43 +793,10 @@ const styles = StyleSheet.create({
     fontSize: 10, fontWeight: '800', color: '#9333ea', letterSpacing: 0.5,
   },
 
-  // Idea Generator (auto-loading movers ≥4%) — replaces the old Market Pulse strip
-  ideaSection: { marginHorizontal: 16, marginBottom: 10 },
-  ideaHeadRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  pulseSectionLabel: {
-    fontSize: 10, fontWeight: '700', color: colors.midGray,
-    letterSpacing: 1.5, flex: 1,
-  },
-  ideaAsOf: { fontSize: 10, color: colors.midGray, fontWeight: '500' },
-  ideaCard: {
-    backgroundColor: colors.white, borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: colors.lightGray,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 3, elevation: 2,
-  },
-  ideaMuted: { fontSize: 13, color: colors.midGray },
-  ideaWrap: { paddingHorizontal: 14 },
-  ideaDivider: { borderBottomWidth: 1, borderBottomColor: colors.lightGray },
-  ideaRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
-  ideaHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ideaTk: { fontSize: 15, fontWeight: '800', color: colors.navy, letterSpacing: 0.5 },
-  ideaReasonChip: {
-    fontSize: 9, fontWeight: '700', color: colors.midGray, backgroundColor: colors.offWhite,
-    borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, overflow: 'hidden', textTransform: 'uppercase',
-  },
-  ideaReasonTxt: { fontSize: 11.5, color: colors.midGray, marginTop: 2 },
-  ideaPct: { fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  ideaPx: { fontSize: 11, color: colors.midGray, fontVariant: ['tabular-nums'] },
-  ideaDetail: { paddingBottom: 12, paddingTop: 2 },
-  ideaDetailMeta: { fontSize: 11, color: colors.midGray, marginBottom: 6, fontWeight: '600' },
-  ideaNewsItem: { paddingVertical: 5, borderTopWidth: 1, borderTopColor: colors.offWhite },
-  ideaNewsTitle: { fontSize: 12.5, color: colors.darkGray, fontWeight: '600', lineHeight: 17 },
-  ideaNewsMeta: { fontSize: 10, color: colors.midGray, marginTop: 1 },
-
   // Reports header row
   listHeaderRow: {
     flexDirection: 'row', alignItems: 'center',
-    marginHorizontal: 16, marginBottom: 4,
+    marginHorizontal: 16, marginBottom: 4, marginTop: 8,
   },
   sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
   countBadge: {
@@ -1056,65 +884,4 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.navy, marginTop: 12, letterSpacing: 0.4 },
   emptySubtitle: { fontSize: 13, color: colors.midGray, textAlign: 'center', marginTop: 6, lineHeight: 18 },
-
-  // Sentiment badge (used in modal)
-  sentimentBadge: { borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8 },
-  sentimentText: { color: colors.white, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
-
-  // ── Bottom sheet ─────────────────────────────────────────────────────────
-  sheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.38)',
-  },
-  sheet: {
-    position: 'absolute',
-    left: 0, right: 0, bottom: 0,
-    backgroundColor: colors.white,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    elevation: 24,
-  },
-  sheetHandleZone: {
-    alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 6,
-  },
-  sheetPill: {
-    width: 40, height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.dimmer || '#cbd5e1',
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingHorizontal: 18,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.lightGray,
-  },
-  sheetExpandBtn: { padding: 4 },
-  sheetBody: { flex: 1 },
-
-  // Kept for shared use by header items
-  modalContainer: { flex: 1, backgroundColor: colors.offWhite },
-  modalTicker: { fontSize: 20, fontWeight: '900', color: colors.navy, letterSpacing: 1 },
-  modalPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  modalPrice: { fontSize: 14, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New' },
-  modalPct:   { fontSize: 13, fontWeight: '700', fontFamily: 'Courier New' },
-  modalCloseBtn: { padding: 4, marginLeft: 4 },
-  modalBody: { flex: 1 },
-  modalBodyContent: { padding: 20, paddingBottom: 60 },
-
-  // Simple markdown rendering
-  mdHeading: { fontSize: 14, fontWeight: '700', color: colors.navy, marginTop: 14, marginBottom: 4 },
-  mdH1: { fontSize: 17, fontWeight: '800' },
-  mdH2: { fontSize: 15, fontWeight: '800' },
-  mdBody: { fontSize: 13, color: colors.darkGray, lineHeight: 20, marginVertical: 2 },
-  mdBold: { fontWeight: '800', color: colors.navy },
 });
