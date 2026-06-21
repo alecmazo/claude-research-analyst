@@ -19157,8 +19157,8 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
                               bottom: 1.1cm; margin-left: 1.8cm; margin-right: 1.8cm; height: 1cm; } }
       body { font-family: "DejaVuSans"; font-size: 9.5pt; line-height: 1.5; color: #0A1628; }
       table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 13pt; }
-      table.lh td { padding-bottom: 6pt; vertical-align: bottom; }
-      .sub { color: #5BB8D4; font-size: 8pt; font-weight: bold; }
+      table.lh td { padding-bottom: 7pt; vertical-align: middle; }
+      .sub { color: #5BB8D4; font-size: 9pt; font-weight: bold; }
       .stamp { text-align: right; font-size: 7.5pt; color: #64748b; }
       .q { font-weight: bold; font-size: 10pt; color: #0A1628; margin-bottom: 13pt;
            padding: 9pt 11pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
@@ -19183,11 +19183,23 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
            color: #0A1628; }
       #footerContent { font-size: 7pt; color: #94a3b8; text-align: center; }
     """
-    brand = (f'<img src="{logo}" width="92" height="26" alt="DGA Capital" />'
-             if logo else '<span style="font-size:13pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span>')
+    # Logo + subtitle in a nested table so the "· Analyst" label sits vertically
+    # CENTERED against the logo (xhtml2pdf won't vertically align an inline image
+    # with adjacent text, which left the label dangling at the logo's bottom).
+    if logo:
+        brand_block = (
+            '<table style="border:none;"><tr>'
+            f'<td style="border:none;padding:0;vertical-align:middle;width:100px;">'
+            f'<img src="{logo}" width="90" height="25" alt="DGA Capital" /></td>'
+            f'<td style="border:none;padding:0 0 2px 8px;vertical-align:middle;">'
+            f'<span class="sub">&middot; {title_e}</span></td>'
+            '</tr></table>')
+    else:
+        brand_block = (f'<span style="font-size:13pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span> '
+                       f'<span class="sub">&middot; {title_e}</span>')
     head = (f'<table class="lh"><tr>'
-            f'<td>{brand} <span class="sub">&middot; {title_e}</span></td>'
-            f'<td><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
+            f'<td style="vertical-align:middle;">{brand_block}</td>'
+            f'<td style="vertical-align:middle;"><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
             f'</tr></table>')
     qhtml = (f'<div class="q">{q_e}</div>') if q_e else ''
     footer = ('<div id="footerContent">DGA Capital &middot; Confidential — for the intended '
