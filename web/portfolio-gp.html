@@ -6879,22 +6879,29 @@ End with the sleeve block at this account's real market value so I can push it t
     // The server wraps this exact .md-rendered HTML in the DGA letterhead and
     // renders it with WeasyPrint, so the PDF matches the on-screen View. Used by
     // the AI Analyst, the Portfolio Strategist, and the Transcripts Q&A.
+    // OPENS the PDF in a new tab (browser PDF viewer) — the user saves it
+    // themselves; we do NOT auto-download. A blank tab is opened synchronously
+    // (within the click gesture) so pop-up blockers don't kill it; it's then
+    // navigated to the rendered PDF blob.
     async function _dgaResearchPdfDownload({ title, question, answerHTML, stamp, filename }) {
-      const body = { title: title || 'AI Analyst', question: question || '',
-                     answer_html: answerHTML || '', stamp: stamp || '',
-                     filename: filename || null };
-      const r = await window.dgaFetch('/api/research/pdf', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body) });
-      if (!r.ok) { let m = ''; try { m = (await r.json()).detail; } catch (e) {} throw new Error(m || ('HTTP ' + r.status)); }
-      const blob = await r.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      let fn = filename || ('DGA_Capital_' + (title || 'report').replace(/[^A-Za-z0-9]+/g, '_'));
-      if (!/\.pdf$/i.test(fn)) fn += '.pdf';
-      a.href = url; a.download = fn;
-      document.body.appendChild(a); a.click();
-      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+      const win = window.open('', '_blank');   // sync open — preserves user gesture
+      if (win) { try { win.document.write('<p style="font-family:sans-serif;color:#64748b;padding:20px;">Generating PDF…</p>'); } catch (e) {} }
+      try {
+        const body = { title: title || 'AI Analyst', question: question || '',
+                       answer_html: answerHTML || '', stamp: stamp || '',
+                       filename: filename || null };
+        const r = await window.dgaFetch('/api/research/pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body) });
+        if (!r.ok) { let m = ''; try { m = (await r.json()).detail; } catch (e) {} throw new Error(m || ('HTTP ' + r.status)); }
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        if (win) win.location.href = url; else window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (e) {
+        if (win) { try { win.close(); } catch (_) {} }
+        throw e;
+      }
     }
 
     async function _dgaResearchPdfEmail({ title, question, answerHTML, stamp }) {

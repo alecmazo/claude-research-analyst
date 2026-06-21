@@ -19143,10 +19143,14 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
     title_e = _html.escape((title or "AI Analyst").upper())
     q_e     = _html.escape(question or "")
     css = """
+      @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans.ttf); }
+      @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Bold.ttf); font-weight: bold; }
+      @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Oblique.ttf); font-style: italic; }
+      @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-BoldOblique.ttf); font-weight: bold; font-style: italic; }
       @page { size: letter; margin: 2cm 1.8cm 2.4cm;
         @frame footer_frame { -pdf-frame-content: footerContent;
                               bottom: 1.1cm; margin-left: 1.8cm; margin-right: 1.8cm; height: 1cm; } }
-      body { font-family: Helvetica; font-size: 10.5pt; line-height: 1.5; color: #0A1628; }
+      body { font-family: "DejaVuSans"; font-size: 10.5pt; line-height: 1.5; color: #0A1628; }
       table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 14pt; }
       table.lh td { padding-bottom: 6pt; }
       .brand { font-size: 13pt; font-weight: bold; color: #0A1628; }
@@ -19188,13 +19192,32 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             f'</body></html>')
 
 
+_FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "fonts")
+
+
+def _research_link_callback(uri, rel):
+    """Resolve @font-face url() in the PDF template to the bundled font files, so
+    xhtml2pdf embeds the full-Unicode DejaVu Sans face. (The standard base-14
+    Helvetica renders em-dashes, non-breaking hyphens, smart quotes, arrows, …
+    as black boxes — that was the 'worse than before' look.)"""
+    try:
+        p = os.path.join(_FONTS_DIR, os.path.basename(uri))
+        if os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    return uri
+
+
 def _render_research_pdf(html_doc: str) -> bytes:
     """HTML → PDF via xhtml2pdf (pisa). Pure-Python (reportlab-backed) so it runs
-    on Railway without WeasyPrint's native pango/cairo libraries."""
+    on Railway without WeasyPrint's native pango/cairo libraries. Embeds DejaVu
+    Sans for full Unicode coverage so the PDF matches the on-screen View."""
     from xhtml2pdf import pisa
     import io as _io
     out = _io.BytesIO()
-    result = pisa.CreatePDF(src=html_doc, dest=out, encoding="utf-8")
+    result = pisa.CreatePDF(src=html_doc, dest=out, encoding="utf-8",
+                            link_callback=_research_link_callback)
     if result.err:
         raise RuntimeError(f"xhtml2pdf reported {result.err} error(s)")
     data = out.getvalue()
@@ -19224,7 +19247,8 @@ def _research_pdf_filename(req: "ResearchPdfRequest") -> str:
 
 @app.post("/api/research/pdf")
 def research_pdf(body: ResearchPdfRequest, request: Request):
-    """Render the on-screen View HTML to a DGA-branded PDF (download)."""
+    """Render the on-screen View HTML to a DGA-branded PDF, served INLINE so the
+    browser opens it in its PDF viewer (the user saves it themselves)."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -19238,7 +19262,7 @@ def research_pdf(body: ResearchPdfRequest, request: Request):
     from fastapi.responses import Response as _Response
     return _Response(content=pdf, media_type="application/pdf",
                      headers={"Content-Disposition": _content_disposition(
-                         "attachment", _research_pdf_filename(body))})
+                         "inline", _research_pdf_filename(body))})
 
 
 @app.post("/api/research/email-pdf")
