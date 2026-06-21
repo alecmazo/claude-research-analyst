@@ -19140,8 +19140,13 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             stamp = _dt.now().strftime("%B %d, %Y · %-I:%M %p")
         except Exception:
             stamp = _dt.now().strftime("%B %d, %Y")
-    title_e = _html.escape((title or "AI Analyst").upper())
+    # Subtitle next to the logo — "Analyst" (not "AI Analyst") per request.
+    sub_raw = (title or "Analyst")
+    if sub_raw.strip().lower() in ("ai analyst", "analyst"):
+        sub_raw = "Analyst"
+    title_e = _html.escape(sub_raw)
     q_e     = _html.escape(question or "")
+    logo    = _dga_logo_data_uri()
     css = """
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans.ttf); }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Bold.ttf); font-weight: bold; }
@@ -19150,37 +19155,38 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
       @page { size: letter; margin: 2cm 1.8cm 2.4cm;
         @frame footer_frame { -pdf-frame-content: footerContent;
                               bottom: 1.1cm; margin-left: 1.8cm; margin-right: 1.8cm; height: 1cm; } }
-      body { font-family: "DejaVuSans"; font-size: 10.5pt; line-height: 1.5; color: #0A1628; }
-      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 14pt; }
-      table.lh td { padding-bottom: 6pt; }
-      .brand { font-size: 13pt; font-weight: bold; color: #0A1628; }
-      .brand .sub { color: #5BB8D4; font-size: 8.5pt; font-weight: bold; }
-      .stamp { text-align: right; font-size: 8pt; color: #64748b; }
-      .q { font-weight: bold; font-size: 11pt; color: #0A1628; margin-bottom: 14pt;
+      body { font-family: "DejaVuSans"; font-size: 9.5pt; line-height: 1.5; color: #0A1628; }
+      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 13pt; }
+      table.lh td { padding-bottom: 6pt; vertical-align: bottom; }
+      .sub { color: #5BB8D4; font-size: 8pt; font-weight: bold; }
+      .stamp { text-align: right; font-size: 7.5pt; color: #64748b; }
+      .q { font-weight: bold; font-size: 10pt; color: #0A1628; margin-bottom: 13pt;
            padding: 9pt 11pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
       .md-rendered .md-h { font-weight: bold; color: #0A1628; }
-      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 13pt; margin-top: 15pt;
+      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 12pt; margin-top: 14pt;
            margin-bottom: 5pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 2pt; }
-      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 11pt; color: #334155;
-           margin-top: 12pt; margin-bottom: 4pt; }
-      .md-rendered p { margin-top: 0; margin-bottom: 9pt; }
-      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 5pt; margin-bottom: 10pt; }
+      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 10pt; color: #334155;
+           margin-top: 11pt; margin-bottom: 4pt; }
+      .md-rendered p { margin-top: 0; margin-bottom: 8pt; }
+      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 5pt; margin-bottom: 9pt; }
       .md-rendered li { margin-bottom: 3pt; }
       .md-rendered strong { font-weight: bold; color: #0A1628; }
       .md-rendered em { font-style: italic; }
-      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 9pt; }
-      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 12pt; margin-bottom: 12pt; }
+      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 8.5pt; }
+      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 11pt; margin-bottom: 11pt; }
       .md-rendered a { color: #0A1628; }
-      .md-rendered table.md-table { width: 100%; margin-top: 9pt; margin-bottom: 13pt;
-           font-size: 9pt; -pdf-keep-with-next: true; }
+      .md-rendered table.md-table { width: 100%; margin-top: 8pt; margin-bottom: 12pt;
+           font-size: 8.5pt; -pdf-keep-with-next: true; }
       .md-rendered table.md-table th { background-color: #0A1628; color: #ffffff;
-           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 8pt; }
+           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 7.5pt; }
       .md-rendered table.md-table td { padding: 4pt 8pt; border-bottom: 1px solid #e2e8f0;
            color: #0A1628; }
       #footerContent { font-size: 7pt; color: #94a3b8; text-align: center; }
     """
+    brand = (f'<img src="{logo}" width="92" height="26" alt="DGA Capital" />'
+             if logo else '<span style="font-size:13pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span>')
     head = (f'<table class="lh"><tr>'
-            f'<td><span class="brand">DGA CAPITAL <span class="sub">&middot; {title_e}</span></span></td>'
+            f'<td>{brand} <span class="sub">&middot; {title_e}</span></td>'
             f'<td><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
             f'</tr></table>')
     qhtml = (f'<div class="q">{q_e}</div>') if q_e else ''
@@ -19193,6 +19199,25 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
 
 
 _FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "fonts")
+
+_DGA_LOGO_DATA_URI = None
+
+
+def _dga_logo_data_uri() -> str:
+    """The DGA Capital wordmark logo (branding/dga_logo_small.png) as a base64
+    data URI — same asset the reportlab reports + HTML emails use, so the PDF
+    letterhead is brand-consistent. Cached after first read."""
+    global _DGA_LOGO_DATA_URI
+    if _DGA_LOGO_DATA_URI is None:
+        try:
+            import base64 as _b64
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "branding", "dga_logo_small.png")
+            with open(p, "rb") as f:
+                _DGA_LOGO_DATA_URI = "data:image/png;base64," + _b64.b64encode(f.read()).decode("ascii")
+        except Exception:
+            _DGA_LOGO_DATA_URI = ""
+    return _DGA_LOGO_DATA_URI
 
 
 def _research_link_callback(uri, rel):

@@ -6867,7 +6867,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const emailBtn = document.getElementById('agentic-email-btn');
       if (emailBtn) emailBtn.addEventListener('click', () => {
         const ansNode = out.querySelector('.md-rendered');
-        _dgaResearchPdfEmail({ title: 'AI Analyst', question: _lastQuestion || '',
+        _dgaResearchPdfEmail({ title: 'Analyst', question: _lastQuestion || '',
           answerHTML: ansNode ? ansNode.innerHTML : '' });
       });
       // A completed run was just persisted server-side — refresh the saved list
@@ -6887,7 +6887,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const win = window.open('', '_blank');   // sync open — preserves user gesture
       if (win) { try { win.document.write('<p style="font-family:sans-serif;color:#64748b;padding:20px;">Generating PDF…</p>'); } catch (e) {} }
       try {
-        const body = { title: title || 'AI Analyst', question: question || '',
+        const body = { title: title || 'Analyst', question: question || '',
                        answer_html: answerHTML || '', stamp: stamp || '',
                        filename: filename || null };
         const r = await window.dgaFetch('/api/research/pdf', {
@@ -6911,7 +6911,7 @@ End with the sleeve block at this account's real market value so I can push it t
       try {
         const r = await window.dgaFetch('/api/research/email-pdf', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: title || 'AI Analyst', question: question || '',
+          body: JSON.stringify({ title: title || 'Analyst', question: question || '',
                                  answer_html: answerHTML || '', stamp: stamp || '', to }) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
@@ -6923,7 +6923,7 @@ End with the sleeve block at this account's real market value so I can push it t
     // failure falls back to the browser print window (still the rich format).
     async function _openAnalystPrint(question, answerHTML, stamp, title) {
       try {
-        await _dgaResearchPdfDownload({ title: title || 'AI Analyst', question, answerHTML, stamp });
+        await _dgaResearchPdfDownload({ title: title || 'Analyst', question, answerHTML, stamp });
       } catch (e) {
         console.warn('[pdf] server render failed, falling back to print window:', e.message);
         _openAnalystPrintWindow(question, answerHTML, stamp);
