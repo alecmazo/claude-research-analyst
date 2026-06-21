@@ -19127,7 +19127,12 @@ def strategist_review_pdf(review_id: str, request: Request):
 # Analyst, the Portfolio Strategist, and the Transcripts Q&A.
 def _dga_research_pdf_html(title: str, question: str, answer_html: str,
                            stamp: str = "") -> str:
-    """Wrap client-rendered `.md-rendered` HTML in the DGA Capital PDF template."""
+    """Wrap client-rendered `.md-rendered` HTML in the DGA Capital PDF template.
+
+    CSS is written for xhtml2pdf (pure-Python, builds on reportlab — no native
+    libraries, so it renders on Railway where WeasyPrint's pango/cairo are not
+    installed). The subset used here (tables, borders, backgrounds, @frame
+    footer, pagenumber) renders essentially identical to the on-screen View."""
     import html as _html
     from datetime import datetime as _dt
     if not stamp:
@@ -19135,63 +19140,67 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             stamp = _dt.now().strftime("%B %d, %Y · %-I:%M %p")
         except Exception:
             stamp = _dt.now().strftime("%B %d, %Y")
-    title_e = _html.escape(title or "AI Analyst")
+    title_e = _html.escape((title or "AI Analyst").upper())
     q_e     = _html.escape(question or "")
     css = """
-      @page { size: Letter; margin: 0.78in 0.7in 0.9in;
-        @bottom-left  { content: "DGA Capital · Confidential — for the intended recipient only";
-                        font-size: 7pt; color: #94a3b8; }
-        @bottom-right { content: "Page " counter(page) " of " counter(pages);
-                        font-size: 7pt; color: #94a3b8; }
-      }
-      * { box-sizing: border-box; }
-      body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-             font-size: 10.5pt; line-height: 1.55; color: #0A1628; margin: 0; }
-      /* Letterhead — table layout (robust in WeasyPrint) */
-      table.lh { width: 100%; border-collapse: collapse; border-bottom: 2.5pt solid #0A1628;
-                 margin-bottom: 16pt; }
-      table.lh td { padding: 0 0 7pt; vertical-align: bottom; }
-      .brand { font-size: 13pt; font-weight: 800; letter-spacing: 1px; color: #0A1628; }
-      .brand .sub { color: #5BB8D4; font-weight: 700; letter-spacing: 1.5px;
-                    font-size: 8.5pt; text-transform: uppercase; }
-      .stamp { text-align: right; font-size: 8pt; letter-spacing: 0.4px; color: #64748b; white-space: nowrap; }
-      .q { font-weight: 700; font-size: 11.5pt; line-height: 1.4; color: #0A1628;
-           margin: 0 0 16pt; padding: 10pt 12pt; background: #f1f5f9;
-           border-left: 3pt solid #5BB8D4; border-radius: 3px; }
-      /* md-rendered — identical selectors to the on-screen View */
-      .md-rendered p { margin: 0 0 9pt; }
-      .md-rendered .md-h { font-weight: 800; color: #0A1628; line-height: 1.3; }
-      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 13pt; margin: 16pt 0 7pt;
-           padding-bottom: 3pt; border-bottom: 1px solid #e2e8f0; }
-      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 11pt; color: #334155; margin: 13pt 0 5pt; }
-      .md-rendered ul.md-list, .md-rendered ol.md-list { margin: 6pt 0 11pt; padding-left: 20pt; }
-      .md-rendered li { margin: 3pt 0; }
-      .md-rendered strong { font-weight: 700; color: #0A1628; }
+      @page { size: letter; margin: 2cm 1.8cm 2.4cm;
+        @frame footer_frame { -pdf-frame-content: footerContent;
+                              bottom: 1.1cm; margin-left: 1.8cm; margin-right: 1.8cm; height: 1cm; } }
+      body { font-family: Helvetica; font-size: 10.5pt; line-height: 1.5; color: #0A1628; }
+      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 14pt; }
+      table.lh td { padding-bottom: 6pt; }
+      .brand { font-size: 13pt; font-weight: bold; color: #0A1628; }
+      .brand .sub { color: #5BB8D4; font-size: 8.5pt; font-weight: bold; }
+      .stamp { text-align: right; font-size: 8pt; color: #64748b; }
+      .q { font-weight: bold; font-size: 11pt; color: #0A1628; margin-bottom: 14pt;
+           padding: 9pt 11pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
+      .md-rendered .md-h { font-weight: bold; color: #0A1628; }
+      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 13pt; margin-top: 15pt;
+           margin-bottom: 5pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 2pt; }
+      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 11pt; color: #334155;
+           margin-top: 12pt; margin-bottom: 4pt; }
+      .md-rendered p { margin-top: 0; margin-bottom: 9pt; }
+      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 5pt; margin-bottom: 10pt; }
+      .md-rendered li { margin-bottom: 3pt; }
+      .md-rendered strong { font-weight: bold; color: #0A1628; }
       .md-rendered em { font-style: italic; }
-      .md-rendered code { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em;
-           background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
-      .md-rendered .md-hr { border: none; border-top: 1px solid #cbd5e1; margin: 13pt 0; }
-      .md-rendered a { color: #0A1628; text-decoration: underline; }
-      .md-rendered table.md-table { border-collapse: collapse; width: 100%; margin: 11pt 0 14pt;
-           font-size: 8.5pt; line-height: 1.4; }
-      .md-rendered table.md-table th { background: #0A1628; color: #fff; text-align: left;
-           padding: 6pt 9pt; font-weight: 700; font-size: 7.5pt; letter-spacing: 0.4px;
-           text-transform: uppercase; }
-      .md-rendered table.md-table td { padding: 5pt 9pt; border-bottom: 1px solid #e2e8f0;
-           vertical-align: top; color: #0A1628; }
-      .md-rendered table.md-table tr:nth-child(even) td { background: #f8fafc; }
-      .md-rendered table.md-table tr { page-break-inside: avoid; }
-      .md-rendered thead { display: table-header-group; }
+      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 9pt; }
+      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 12pt; margin-bottom: 12pt; }
+      .md-rendered a { color: #0A1628; }
+      .md-rendered table.md-table { width: 100%; margin-top: 9pt; margin-bottom: 13pt;
+           font-size: 9pt; -pdf-keep-with-next: true; }
+      .md-rendered table.md-table th { background-color: #0A1628; color: #ffffff;
+           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 8pt; }
+      .md-rendered table.md-table td { padding: 4pt 8pt; border-bottom: 1px solid #e2e8f0;
+           color: #0A1628; }
+      #footerContent { font-size: 7pt; color: #94a3b8; text-align: center; }
     """
     head = (f'<table class="lh"><tr>'
-            f'<td><span class="brand">DGA CAPITAL <span class="sub">· {title_e}</span></span></td>'
-            f'<td><div class="stamp">CONFIDENTIAL · {_html.escape(stamp)}</div></td>'
+            f'<td><span class="brand">DGA CAPITAL <span class="sub">&middot; {title_e}</span></span></td>'
+            f'<td><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
             f'</tr></table>')
     qhtml = (f'<div class="q">{q_e}</div>') if q_e else ''
+    footer = ('<div id="footerContent">DGA Capital &middot; Confidential — for the intended '
+              'recipient only &middot; Page <pdf:pagenumber> of <pdf:pagecount></div>')
     return (f'<!doctype html><html><head><meta charset="utf-8">'
             f'<style>{css}</style></head><body>'
-            f'{head}{qhtml}<div class="md-rendered">{answer_html or ""}</div>'
+            f'{footer}{head}{qhtml}<div class="md-rendered">{answer_html or ""}</div>'
             f'</body></html>')
+
+
+def _render_research_pdf(html_doc: str) -> bytes:
+    """HTML → PDF via xhtml2pdf (pisa). Pure-Python (reportlab-backed) so it runs
+    on Railway without WeasyPrint's native pango/cairo libraries."""
+    from xhtml2pdf import pisa
+    import io as _io
+    out = _io.BytesIO()
+    result = pisa.CreatePDF(src=html_doc, dest=out, encoding="utf-8")
+    if result.err:
+        raise RuntimeError(f"xhtml2pdf reported {result.err} error(s)")
+    data = out.getvalue()
+    if not data:
+        raise RuntimeError("xhtml2pdf produced no output")
+    return data
 
 
 class ResearchPdfRequest(BaseModel):
@@ -19223,7 +19232,7 @@ def research_pdf(body: ResearchPdfRequest, request: Request):
         raise HTTPException(400, "No content to render.")
     html_doc = _dga_research_pdf_html(body.title, body.question, body.answer_html, body.stamp)
     try:
-        pdf = _render_report_pdf(html_doc)
+        pdf = _render_research_pdf(html_doc)
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
     from fastapi.responses import Response as _Response
@@ -19245,7 +19254,7 @@ def research_email_pdf(body: ResearchPdfRequest, request: Request):
         raise HTTPException(400, "No content to render.")
     html_doc = _dga_research_pdf_html(body.title, body.question, body.answer_html, body.stamp)
     try:
-        pdf = _render_report_pdf(html_doc)
+        pdf = _render_research_pdf(html_doc)
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
     import html as _html
