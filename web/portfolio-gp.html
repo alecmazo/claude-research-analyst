@@ -6849,7 +6849,8 @@ End with the sleeve block at this account's real market value so I can push it t
           (tools ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">${tools}</div>` : '') +
           '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
             sleeveBtn +
-            '<button id="agentic-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">🖨 Print</button>' +
+            '<button id="agentic-print-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">⬇ PDF</button>' +
+            '<button id="agentic-email-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">✉ Email</button>' +
             '<button id="agentic-memo-btn" class="btn-secondary" style="font-size:12px;padding:6px 12px;">📄 Draft memo from this</button>' +
             `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
           '</div>' +
@@ -6863,18 +6864,67 @@ End with the sleeve block at this account's real market value so I can push it t
         const ansNode = out.querySelector('.md-rendered');
         _openAnalystPrint(_lastQuestion || '', ansNode ? ansNode.innerHTML : '');
       });
+      const emailBtn = document.getElementById('agentic-email-btn');
+      if (emailBtn) emailBtn.addEventListener('click', () => {
+        const ansNode = out.querySelector('.md-rendered');
+        _dgaResearchPdfEmail({ title: 'AI Analyst', question: _lastQuestion || '',
+          answerHTML: ansNode ? ansNode.innerHTML : '' });
+      });
       // A completed run was just persisted server-side — refresh the saved list
       // (small delay so the best-effort DB insert lands first).
       setTimeout(loadAnalystReviews, 2000);
     }
 
-    // Shared print/PDF renderer — used by the live Print button AND every saved
-    // review's PDF button, so both produce the identical rich, on-screen format
-    // (not a stripped serif version). `answerHTML` is already-rendered
-    // .md-rendered markup; `stamp` overrides the header date (saved reviews pass
-    // their generated_at). Literal colors + print-color-adjust:exact so navy
-    // table headers & zebra rows actually print. To PDF: Save as PDF in print.
-    function _openAnalystPrint(question, answerHTML, stamp) {
+    // ── Shared: View-identical PDF via the server (DGA Capital template) ──────
+    // The server wraps this exact .md-rendered HTML in the DGA letterhead and
+    // renders it with WeasyPrint, so the PDF matches the on-screen View. Used by
+    // the AI Analyst, the Portfolio Strategist, and the Transcripts Q&A.
+    async function _dgaResearchPdfDownload({ title, question, answerHTML, stamp, filename }) {
+      const body = { title: title || 'AI Analyst', question: question || '',
+                     answer_html: answerHTML || '', stamp: stamp || '',
+                     filename: filename || null };
+      const r = await window.dgaFetch('/api/research/pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) });
+      if (!r.ok) { let m = ''; try { m = (await r.json()).detail; } catch (e) {} throw new Error(m || ('HTTP ' + r.status)); }
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      let fn = filename || ('DGA_Capital_' + (title || 'report').replace(/[^A-Za-z0-9]+/g, '_'));
+      if (!/\.pdf$/i.test(fn)) fn += '.pdf';
+      a.href = url; a.download = fn;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+    }
+
+    async function _dgaResearchPdfEmail({ title, question, answerHTML, stamp }) {
+      const def = (window.DGA_USER && window.DGA_USER.email) || '';
+      const to  = window.prompt('Email this PDF to (LP or yourself):', def);
+      if (!to) return;
+      try {
+        const r = await window.dgaFetch('/api/research/email-pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: title || 'AI Analyst', question: question || '',
+                                 answer_html: answerHTML || '', stamp: stamp || '', to }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+        window.toast('✉ Sent to ' + to, { type: 'success' });
+      } catch (e) { window.toast('Email failed: ' + e.message, { type: 'error' }); }
+    }
+
+    // Public PDF entry point: downloads the View-identical server PDF; on any
+    // failure falls back to the browser print window (still the rich format).
+    async function _openAnalystPrint(question, answerHTML, stamp, title) {
+      try {
+        await _dgaResearchPdfDownload({ title: title || 'AI Analyst', question, answerHTML, stamp });
+      } catch (e) {
+        console.warn('[pdf] server render failed, falling back to print window:', e.message);
+        _openAnalystPrintWindow(question, answerHTML, stamp);
+      }
+    }
+
+    // Fallback: open a print window with the same rich format (Save as PDF).
+    function _openAnalystPrintWindow(question, answerHTML, stamp) {
       const q = esc(question || '');
       if (!stamp) { try { stamp = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { stamp = ''; } }
       const w = window.open('', '_blank', 'width=900,height=1100');
@@ -6918,6 +6968,10 @@ End with the sleeve block at this account's real market value so I can push it t
     // Expose so the Transcripts "Ask the transcripts" card reuses the identical
     // rich print/PDF format for its saved Q&A.
     window._openAnalystPrint = _openAnalystPrint;
+    // Expose the shared PDF/email helpers so the (separately-scoped) Portfolio
+    // Strategist IIFE reuses the identical server-rendered DGA PDF.
+    window._dgaResearchPdfDownload = _dgaResearchPdfDownload;
+    window._dgaResearchPdfEmail    = _dgaResearchPdfEmail;
 
     // ── Saved analyses: list past AI Analyst answers, re-open or PDF them ──
     async function loadAnalystReviews() {
@@ -7193,7 +7247,8 @@ End with the sleeve block at this account's real market value so I can push it t
           `<div class="md-rendered" style="font-size:13.5px;line-height:1.6;color:var(--text-primary);">${answer}</div>` +
           renderVerification(r.verification) +
           '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
-            '<button id="strat-pdf-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">🖨 Full review PDF</button>' +
+            '<button id="strat-pdf-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">⬇ Review PDF</button>' +
+            '<button id="strat-email-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">✉ Email</button>' +
             '<button id="strat-roundup-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;">🎙️ Generate Portfolio Roundup</button>' +
             '<button id="strat-memo-btn" class="btn-secondary" style="font-size:12px;padding:7px 14px;">📄 Draft strategy memo</button>' +
             `<span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'SF Mono',monospace;">${cost} · ${esc(r.model||'')}</span>` +
@@ -7201,19 +7256,40 @@ End with the sleeve block at this account's real market value so I can push it t
           '<div style="margin-top:6px;font-size:10px;color:var(--text-tertiary);">✓ Saved automatically — find it under “Past committee reviews” after any rebuild.</div>' +
         '</div>';
       document.getElementById('strat-pdf-btn')?.addEventListener('click', () => { if (_stratJobId) _openReviewPdf(_stratJobId); });
+      document.getElementById('strat-email-btn')?.addEventListener('click', () => { if (_stratJobId) _emailReviewPdf(_stratJobId); });
       document.getElementById('strat-roundup-btn')?.addEventListener('click', _handoffRoundup);
       document.getElementById('strat-memo-btn')?.addEventListener('click', _handoffMemo);
       _loadStratArchive();
     }
 
-    // Open the full-review PDF in a new tab (blob carries the auth header).
+    // Resolve a review (live result or saved by id) → the same fields the View
+    // renders, so the PDF is View-identical.
+    async function _stratReviewExport(reviewId) {
+      let rv = _stratResult;
+      if (!rv || !rv.answer || _stratJobId !== reviewId) {
+        const d = await (await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(reviewId))).json();
+        if (!d.ok || !d.review) throw new Error(d.error || 'review not found');
+        rv = d.review;
+      }
+      return {
+        title:      'Investment Committee Review',
+        question:   [rv.fund_name, rv.tickers].filter(Boolean).join(' — '),
+        answerHTML: window._dgaMarkdown(rv.answer || ''),
+        stamp:      rv.generated_at ? _parseServerDate(rv.generated_at).toLocaleString() : '',
+        filename:   'IC-Review_' + ((rv.fund_name || 'Portfolio').replace(/[^A-Za-z0-9]+/g, '_')) + '.pdf',
+      };
+    }
+
+    // Download the full-review PDF — View-identical (server DGA template).
     async function _openReviewPdf(reviewId) {
-      try {
-        const r = await window.dgaFetch('/api/research/strategist/reviews/' + encodeURIComponent(reviewId) + '/pdf');
-        if (!r.ok) throw new Error('PDF not ready (HTTP ' + r.status + ')');
-        const blob = await r.blob();
-        window.open(URL.createObjectURL(blob), '_blank');
-      } catch (e) { window.toast('Could not open review PDF: ' + e.message, {type:'error'}); }
+      try { await window._dgaResearchPdfDownload(await _stratReviewExport(reviewId)); }
+      catch (e) { window.toast('Could not export review PDF: ' + e.message, {type:'error'}); }
+    }
+
+    // Email the full-review PDF.
+    async function _emailReviewPdf(reviewId) {
+      try { await window._dgaResearchPdfEmail(await _stratReviewExport(reviewId)); }
+      catch (e) { window.toast('Could not email review PDF: ' + e.message, {type:'error'}); }
     }
 
     async function _loadStratArchive() {

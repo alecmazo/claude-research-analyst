@@ -14,7 +14,7 @@
  *  5. "Track Brief" locks tickers into a paper portfolio (visible below)
  *  6. Paper Portfolios section shows all locked briefs → navigate to tracker
  */
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
   ActivityIndicator, Alert, Platform, Linking,
@@ -48,7 +48,12 @@ export default function IntelligenceScreen({ navigation }) {
   const [error, setError]         = useState(null);
   const [briefRunning, setBriefRunning] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true); // first-focus skeleton
+  const [lastAutoRefresh, setLastAutoRefresh] = useState(null); // timestamp of last bg refresh
   const pollRef                   = useRef(null);
+  const bgPollRef                 = useRef(null);
+  // Keep a ref in sync with result so the background interval avoids stale closures
+  const resultRef                 = useRef(null);
+  resultRef.current = result;
 
   // ── Today's Movers (from latest daily brief tickers) ──────────────────────
   const [moverTickers, setMoverTickers]   = useState([]);
@@ -65,6 +70,59 @@ export default function IntelligenceScreen({ navigation }) {
       console.warn('loadMovers:', err.message);
     }
   };
+
+  // ── 15-minute background poll — reads cached results, NO AI calls ────────
+  // Only calls getLatestIntelligence / getLatestDailyBrief (pure reads).
+  // Updates state only when the server has a newer generated_at timestamp.
+  useEffect(() => {
+    const BG_REFRESH_MS = 15 * 60 * 1000; // 900,000 ms
+
+    const doBackgroundRefresh = async () => {
+      try {
+        const [intelRes, briefRes] = await Promise.allSettled([
+          api.getLatestIntelligence(),
+          api.getLatestDailyBrief(),
+        ]);
+
+        const intel = intelRes.status === 'fulfilled' && intelRes.value?.exists
+          ? intelRes.value : null;
+        const brief = briefRes.status === 'fulfilled' && briefRes.value?.exists
+          ? briefRes.value : null;
+
+        // Refresh movers strip if brief has tickers
+        if (brief?.tickers?.length) {
+          setMoverTickers(brief.tickers);
+          setMoverTimestamp(brief.generated_at || null);
+        }
+
+        // Compare fetched timestamps to decide which to surface
+        const intelDate = intel ? new Date(intel.generated_at).getTime() : 0;
+        const briefDate = brief ? new Date(brief.generated_at).getTime() : 0;
+        const currentAt = resultRef.current?.generated_at
+          ? new Date(resultRef.current.generated_at).getTime() : 0;
+
+        let newerResult = null;
+        let newerKind   = null;
+        if (briefDate >= intelDate && brief?.markdown) {
+          newerResult = brief; newerKind = 'brief';
+        } else if (intel?.markdown) {
+          newerResult = intel; newerKind = 'intel';
+        }
+
+        if (newerResult && new Date(newerResult.generated_at).getTime() > currentAt) {
+          setResult(newerResult);
+          setResultKind(newerKind);
+        }
+
+        setLastAutoRefresh(Date.now());
+      } catch (err) {
+        console.warn('Background refresh error:', err.message);
+      }
+    };
+
+    bgPollRef.current = setInterval(doBackgroundRefresh, BG_REFRESH_MS);
+    return () => clearInterval(bgPollRef.current);
+  }, []); // mount once; interval cleared on unmount
 
   // ── Load latest persisted result on tab focus ──────────────────────────────
   // Show the freshest of (intelligence brief, daily brief) — daily briefs
@@ -301,6 +359,14 @@ export default function IntelligenceScreen({ navigation }) {
               </Text>
             )}
           </View>
+          {lastAutoRefresh && (() => {
+            const minAgo = Math.floor((Date.now() - lastAutoRefresh) / 60000);
+            return (
+              <Text style={styles.autoRefreshLabel}>
+                ↻ {minAgo < 1 ? 'just now' : `${minAgo} min ago`}
+              </Text>
+            );
+          })()}
           {moverTickers.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moversStrip}>
               {moverTickers.map(t => (
@@ -825,6 +891,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.navy,
     letterSpacing: 0.5,
+  },
+
+  // ── Auto-refresh indicator ──
+  autoRefreshLabel: {
+    fontSize: 10,
+    color: colors.midGray,
+    fontStyle: 'italic',
+    marginBottom: 8,
   },
 });
 
