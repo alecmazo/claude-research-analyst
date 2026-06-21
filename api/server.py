@@ -19152,50 +19152,52 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Bold.ttf); font-weight: bold; }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-Oblique.ttf); font-style: italic; }
       @font-face { font-family: "DejaVuSans"; src: url(DejaVuSans-BoldOblique.ttf); font-weight: bold; font-style: italic; }
-      @page { size: letter; margin: 2cm 1.8cm 2.4cm;
+      @page { size: letter; margin: 1.6cm 1.5cm 2.1cm;
         @frame footer_frame { -pdf-frame-content: footerContent;
-                              bottom: 1.1cm; margin-left: 1.8cm; margin-right: 1.8cm; height: 1cm; } }
-      body { font-family: "DejaVuSans"; font-size: 9.5pt; line-height: 1.5; color: #0A1628; }
-      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 13pt; }
+                              bottom: 1cm; margin-left: 1.5cm; margin-right: 1.5cm; height: 1cm; } }
+      body { font-family: "DejaVuSans"; font-size: 8.5pt; line-height: 1.5; color: #0A1628; }
+      table.lh { width: 100%; border-bottom: 2px solid #0A1628; margin-bottom: 12pt; }
       table.lh td { padding-bottom: 7pt; vertical-align: middle; }
-      .sub { color: #5BB8D4; font-size: 9pt; font-weight: bold; }
-      .stamp { text-align: right; font-size: 7.5pt; color: #64748b; }
-      .q { font-weight: bold; font-size: 10pt; color: #0A1628; margin-bottom: 13pt;
-           padding: 9pt 11pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
+      .sub { color: #5BB8D4; font-size: 8pt; font-weight: bold; }
+      .stamp { text-align: right; font-size: 7pt; color: #64748b; }
+      .q { font-weight: bold; font-size: 8.5pt; color: #0A1628; margin-bottom: 12pt;
+           padding: 8pt 10pt; background-color: #f1f5f9; border-left: 3pt solid #5BB8D4; }
       .md-rendered .md-h { font-weight: bold; color: #0A1628; }
-      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 12pt; margin-top: 14pt;
-           margin-bottom: 5pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 2pt; }
-      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 10pt; color: #334155;
-           margin-top: 11pt; margin-bottom: 4pt; }
-      .md-rendered p { margin-top: 0; margin-bottom: 8pt; }
-      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 5pt; margin-bottom: 9pt; }
+      .md-rendered .md-h1, .md-rendered .md-h2 { font-size: 10.5pt; margin-top: 13pt;
+           margin-bottom: 4pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 2pt; }
+      .md-rendered .md-h3, .md-rendered .md-h4 { font-size: 9pt; color: #334155;
+           margin-top: 10pt; margin-bottom: 4pt; }
+      .md-rendered p { margin-top: 0; margin-bottom: 7pt; }
+      .md-rendered ul.md-list, .md-rendered ol.md-list { margin-top: 4pt; margin-bottom: 8pt; }
       .md-rendered li { margin-bottom: 3pt; }
       .md-rendered strong { font-weight: bold; color: #0A1628; }
       .md-rendered em { font-style: italic; }
-      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 8.5pt; }
-      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 11pt; margin-bottom: 11pt; }
+      .md-rendered code { font-family: Courier; background-color: #f1f5f9; font-size: 7.5pt; }
+      .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 10pt; margin-bottom: 10pt; }
       .md-rendered a { color: #0A1628; }
-      .md-rendered table.md-table { width: 100%; margin-top: 8pt; margin-bottom: 12pt;
-           font-size: 8.5pt; -pdf-keep-with-next: true; }
+      .md-rendered table.md-table { width: 100%; margin-top: 7pt; margin-bottom: 11pt;
+           font-size: 8pt; -pdf-keep-with-next: true; }
       .md-rendered table.md-table th { background-color: #0A1628; color: #ffffff;
-           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 7.5pt; }
+           text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 7pt; }
       .md-rendered table.md-table td { padding: 4pt 8pt; border-bottom: 1px solid #e2e8f0;
            color: #0A1628; }
-      #footerContent { font-size: 7pt; color: #94a3b8; text-align: center; }
+      #footerContent { font-size: 6.5pt; color: #94a3b8; text-align: center; }
     """
     # Logo + subtitle in a nested table so the "· Analyst" label sits vertically
     # CENTERED against the logo (xhtml2pdf won't vertically align an inline image
     # with adjacent text, which left the label dangling at the logo's bottom).
     if logo:
+        # Fixed-width nested table (NOT full width — that's what spread the logo
+        # and label apart) so the label sits right beside the logo, centered.
         brand_block = (
-            '<table style="border:none;"><tr>'
-            f'<td style="border:none;padding:0;vertical-align:middle;width:100px;">'
-            f'<img src="{logo}" width="90" height="25" alt="DGA Capital" /></td>'
-            f'<td style="border:none;padding:0 0 2px 8px;vertical-align:middle;">'
+            '<table style="width:188px;border:none;"><tr>'
+            f'<td style="border:none;padding:0;vertical-align:middle;width:86px;">'
+            f'<img src="{logo}" width="84" height="24" alt="DGA Capital" /></td>'
+            f'<td style="border:none;padding:0 0 1px 0;vertical-align:middle;">'
             f'<span class="sub">&middot; {title_e}</span></td>'
             '</tr></table>')
     else:
-        brand_block = (f'<span style="font-size:13pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span> '
+        brand_block = (f'<span style="font-size:12pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span> '
                        f'<span class="sub">&middot; {title_e}</span>')
     head = (f'<table class="lh"><tr>'
             f'<td style="vertical-align:middle;">{brand_block}</td>'
