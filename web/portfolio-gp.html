@@ -3042,20 +3042,23 @@
   <!-- ─── CENTER COLUMN ─────────────────────────────────────── -->
   <section class="col-center">
 
-    <!-- ── 📈 Live Markets (TradingView free widget — real-time charts) ───
-         Front-and-center on the Research page. Collapsible but expanded
-         by default. Live S&P/Nasdaq/Dow/VIX/10Y/DXY data, no API key,
-         no token cost, beautified with Inter typography + brand colors. -->
-    <section class="panel" data-wid="live-markets" data-collapsible="1" data-expanded="1" style="margin-bottom:12px;">
-      <header class="panel-head">
-        <span class="panel-title">📈 Live Markets</span>
-        <span class="panel-badge" style="background:#dcfce7;color:#166534;">REAL-TIME</span>
-        <span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-weight:500;">via TradingView</span>
-      </header>
-      <div style="padding:0;">
-        <div id="tv-symbol-overview" style="height:420px;width:100%;background:transparent;"></div>
-      </div>
+    <!-- Daily Pulse — X-sourced live market pulse (replaces the old Daily Brief) -->
+    <section class="panel" data-wid="daily-brief" style="overflow:visible;">
+      <details open>
+        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+          <span class="panel-title">🌐 Daily Pulse</span>
+          <span class="panel-badge tab-meta" id="brief-meta">—</span>
+          <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;font-size:9px;"
+            onclick="event.stopPropagation();triggerBrief();">📰 Run</button>
+          <span class="ac-chevron" style="margin-left:4px;">›</span>
+        </summary>
+        <div id="brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
+          <div class="tab-loading">Loading…</div>
+        </div>
+      </details>
     </section>
+
+
 
     <!-- ── 🤖 AI Analyst (agentic — Claude calls tools over our data) ─── -->
     <section class="panel" data-wid="ai-analyst" data-collapsible="1" style="margin-bottom:12px;">
@@ -3283,6 +3286,21 @@ End with the sleeve block at this account's real market value so I can push it t
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
   <aside class="col-right">
 
+    <!-- ── 📈 Live Markets (TradingView free widget — real-time charts) ───
+         Front-and-center on the Research page. Collapsible but expanded
+         by default. Live S&P/Nasdaq/Dow/VIX/10Y/DXY data, no API key,
+         no token cost, beautified with Inter typography + brand colors. -->
+    <section class="panel" data-wid="live-markets" data-collapsible="1" data-expanded="1" style="margin-bottom:12px;">
+      <header class="panel-head">
+        <span class="panel-title">📈 Live Markets</span>
+        <span class="panel-badge" style="background:#dcfce7;color:#166534;">REAL-TIME</span>
+        <span style="margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-weight:500;">via TradingView</span>
+      </header>
+      <div style="padding:0;">
+        <div id="tv-symbol-overview" style="height:420px;width:100%;background:transparent;"></div>
+      </div>
+    </section>
+
     <!-- ── Idea Generator (movers ≥ ±4% from your universe) — next to the graph,
          open by default so the day's movers are visible at a glance ─────────── -->
     <section class="panel idea-gen-panel" data-wid="idea-gen" id="idea-gen-panel" data-open="1" style="margin-bottom:12px;">
@@ -3341,21 +3359,7 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </div>
 
-    <!-- Daily Brief -->
-    <section class="panel" data-wid="daily-brief" style="overflow:visible;">
-      <details open>
-        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
-          <span class="panel-title">Daily Brief</span>
-          <span class="panel-badge tab-meta" id="brief-meta">—</span>
-          <button id="run-brief-btn" class="tab-btn" style="margin-left:auto;font-size:9px;"
-            onclick="event.stopPropagation();triggerBrief();">📰 Run</button>
-          <span class="ac-chevron" style="margin-left:4px;">›</span>
-        </summary>
-        <div id="brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
-          <div class="tab-loading">Loading…</div>
-        </div>
-      </details>
-    </section>
+
 
     <!-- Trending tickers — live watchlist quotes -->
     <section class="panel" data-wid="watchlist-live">
@@ -3363,7 +3367,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-title">Today's Movers</span>
         <span class="panel-badge" id="trending-count">LIVE</span>
         <button id="trending-run-brief" type="button"
-                title="Run Daily Brief now (Grok live search · ~30-60s)"
+                title="Run Daily Pulse now (Grok live X search · ~30-60s)"
                 style="margin-left:auto;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">📰 Run Brief</button>
         <span class="panel-action" id="trending-action" style="cursor:default;margin-left:6px;">⟳ AUTO</span>
       </header>
@@ -4695,8 +4699,8 @@ End with the sleeve block at this account's real market value so I can push it t
           <!-- Daily Brief row -->
           <div class="auto-row">
             <div class="auto-label">
-              <strong>📰 Daily Brief</strong>
-              <span>Morning market summary — populates Today's Movers</span>
+              <strong>🌐 Daily Pulse</strong>
+              <span>Live X market pulse — your book + the tape</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-brief-enabled" checked>
@@ -11073,7 +11077,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const r = await window.dgaFetch('/api/daily-brief/latest');
       const d = await r.json();
       if (!d.exists || !d.markdown) {
-        el.innerHTML = '<div class="tab-empty">No brief yet. Click Run Daily Brief to generate one.</div>';
+        el.innerHTML = '<div class="tab-empty">No pulse yet. Click Run Daily Pulse to generate one.</div>';
         return;
       }
       if (meta) meta.textContent = fmtDate(d.generated_at);
@@ -16768,7 +16772,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const tickers = (brief.tickers || []).slice(0, 10);
       if (badge) badge.textContent = tickers.length ? 'LIVE' : 'NO BRIEF';
       if (!tickers.length) {
-        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Run Daily Brief to populate.</div>';
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Run Daily Pulse to populate.</div>';
         return;
       }
       // Fetch live quotes for these tickers
@@ -16797,7 +16801,7 @@ End with the sleeve block at this account's real market value so I can push it t
           openGuruFocus(row.getAttribute('data-ticker'))));
     } catch (e) {
       console.warn('[trending]', e);
-      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Run Daily Brief to populate.</div>';
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Run Daily Pulse to populate.</div>';
     }
   }
 
