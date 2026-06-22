@@ -1675,13 +1675,21 @@ DAILY_BRIEF_SYSTEM_PROMPT = """You are the chief portfolio manager at DGA Capita
 
 Your audience is one person — the firm's PM — who needs to walk into the trading floor with a complete read on the day in 90 seconds. They already know what the S&P is. They want EDGE: who said what overnight, what's mispriced, what to watch into the close, where the consensus is wrong.
 
-Use your live web and X (Twitter) search aggressively. Pull from:
-- Bloomberg, Reuters, WSJ, FT, CNBC headlines from the last 18 hours
-- X posts from credible market voices (e.g., @zerohedge, @LizAnnSonders, @BobEUnlimited, @TheTranscript_, @SrsResearch, @Stoneocean, @sharkbarbs, @t1alpha, sell-side analysts, fund managers)
-- Earnings call snippets, sell-side notes referenced in headlines
-- Federal Reserve commentary, ECB/BoJ/PBOC statements
-- Sector ETF flows / dark pool prints if mentioned in news
-- Asia + Europe overnight close, futures action, FX, crude, gold, 10Y yield, VIX
+PRIMARY SOURCE — X (Twitter). The PM trusts the live read on X over mainstream
+financial media, because that is where real-time information, positioning, and
+the smart-money conversation actually live. Lead with X. Lean on credible market
+voices: @zerohedge, @LizAnnSonders, @BobEUnlimited, @TheTranscript_, @SrsResearch,
+@Stoneocean, @sharkbarbs, @t1alpha, @unusual_whales, @DeItaone, @FirstSquawk,
+@Citrini7, @ConvertBond, sell-side analysts, and fund managers. Quote the actual
+posts and attribute the @handle so the PM can click through. Use mainstream
+headlines (Bloomberg/Reuters/WSJ/FT/CNBC) only to confirm or add numbers — X is
+the lede, MSM is the footnote.
+
+Also pull, via live web + X search:
+- Earnings call snippets, sell-side notes referenced overnight
+- Federal Reserve / ECB / BoJ / PBOC commentary
+- Sector ETF flows / unusual options / dark-pool prints if surfaced on X
+- Asia + Europe overnight close, futures, FX, crude, gold, 10Y yield, VIX, BTC
 
 Hard rules:
 - NEVER hedge. Take a view. "Watch X — likely up 3% on the open" beats "X may move."
@@ -1695,7 +1703,7 @@ Hard rules:
 _DAILY_BRIEF_USER_TEMPLATE = """\
 DATE: {today}
 TIME: Morning brief (pre-market US)
-
+{book}
 Write your morning brief for the DGA Capital trading floor. Use EXACTLY this format:
 
 ---
@@ -1703,6 +1711,12 @@ Write your morning brief for the DGA Capital trading floor. Use EXACTLY this for
 ## ⚡ THE TAKE
 
 *Two to three sentences. The single most important thing to know about today's market and how DGA should be positioned.*
+
+---
+
+## 💼 YOUR BOOK ON X
+
+*The live X read on DGA's ACTUAL positions and watchlist (the tickers listed above). For each name with anything moving — overnight news, an earnings reaction, a notable X post, unusual options, a catalyst today — give one tight line: **TICKER** — what's happening + the @handle or source. If a held name is quiet, say "quiet." If the book list is empty, write "No book provided — broad-market focus below." Lead with the names that matter most today.*
 
 ---
 
@@ -1772,8 +1786,11 @@ Write your morning brief for the DGA Capital trading floor. Use EXACTLY this for
 """
 
 
-def run_daily_brief() -> dict:
+def run_daily_brief(book_tickers: list[str] | None = None) -> dict:
     """Run a Goldman-style morning brief via Grok 4.x with live web + X search.
+
+    book_tickers: the PM's actual book — watchlist + open positions — so the
+    brief can lead with the live X read on names DGA actually holds/follows.
 
     Returns:
         {
@@ -1786,7 +1803,15 @@ def run_daily_brief() -> dict:
     """
     today = datetime.now().strftime("%A, %B %d, %Y")
     now_iso = datetime.utcnow().isoformat()
-    user_msg = _DAILY_BRIEF_USER_TEMPLATE.format(today=today)
+    # Dedupe, cap, and format the book line for the prompt.
+    _book = []
+    for _t in (book_tickers or []):
+        _t = str(_t or "").strip().upper().rstrip("*")
+        if _t and _t not in _book:
+            _book.append(_t)
+    book_line = (f"\nDGA BOOK (positions + watchlist) — focus the YOUR BOOK section on these: "
+                 f"{', '.join(_book[:60])}\n" if _book else "\nDGA BOOK: (none provided)\n")
+    user_msg = _DAILY_BRIEF_USER_TEMPLATE.format(today=today, book=book_line)
 
     print(f"📰 Running Daily Brief ({GROK_INTEL_MODEL}) with live X + web search…")
 

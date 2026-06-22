@@ -9071,11 +9071,42 @@ def get_intelligence_status(job_id: str):
 # Daily Brief — Goldman-style PM morning note (Grok 4.x w/ live X + web)
 # ---------------------------------------------------------------------------
 
+def _dga_book_tickers(limit: int = 80) -> list[str]:
+    """The firm's 'book' for the Daily Pulse — open positions across all live
+    funds + saved-report names. Lets the brief lead with the live X read on the
+    tickers DGA actually holds and follows. Firm-wide (no lp_id needed)."""
+    tks: list[str] = []
+    seen: set[str] = set()
+
+    def _add(t):
+        t = (t or "").strip().upper().rstrip("*")
+        if t and re.fullmatch(r"[A-Z0-9.\-]+", t) and t not in seen:
+            seen.add(t)
+            tks.append(t)
+
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""SELECT DISTINCT s.symbol FROM tax_lots tl
+                                 JOIN securities s ON s.id = tl.security_id
+                                 JOIN funds f ON f.id = tl.fund_id
+                                WHERE f.status != 'closed' AND tl.closed_at IS NULL
+                                  AND tl.quantity > 0 AND s.asset_class != 'cash'""")
+                for r in cur.fetchall():
+                    _add(r[0])
+                cur.execute("SELECT DISTINCT ticker FROM analyst_reports WHERE archived IS NOT TRUE")
+                for r in cur.fetchall():
+                    _add(r[0])
+        except Exception as e:
+            print(f"[daily_brief] book gather failed: {e!s:.140}", flush=True)
+    return tks[:limit]
+
+
 def _run_daily_brief(job_id: str) -> None:
     with _bjobs_lock:
         _bjobs[job_id]["status"] = "running"
     try:
-        result = analyst.run_daily_brief()
+        result = analyst.run_daily_brief(book_tickers=_dga_book_tickers())
         with _bjobs_lock:
             _bjobs[job_id]["status"] = "done" if result.get("ok") else "failed"
             _bjobs[job_id]["result"] = result
