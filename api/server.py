@@ -19180,9 +19180,55 @@ def strategist_review_pdf(review_id: str, request: Request):
 # ── Research → PDF / email (View-identical, DGA Capital template) ──────────────
 # The client renders the answer with _dgaMarkdown into `.md-rendered` HTML — the
 # exact markup shown on screen. It POSTs that HTML here; we wrap it in the DGA
-# Capital letterhead and render with WeasyPrint, so the PDF is pixel-faithful to
-# the on-screen View (no second markdown engine to drift). Shared by the AI
-# Analyst, the Portfolio Strategist, and the Transcripts Q&A.
+# Capital letterhead and render with xhtml2pdf. Shared by the AI Analyst, the
+# Portfolio Strategist, and the Transcripts Q&A.
+def _md_table_colgroup(ncols: int) -> str:
+    """Explicit column widths (first column a bit wider for labels). Widths are
+    ABSOLUTE points, not percentages: with the embedded DejaVu Sans font,
+    xhtml2pdf miscomputes percentage column widths and the columns overlap, but
+    absolute widths render cleanly. Sized to the Letter content width (612pt −
+    ~1.5cm margins each side ≈ 524pt)."""
+    if ncols <= 1:
+        return ""
+    content_w  = 524.0
+    first_frac = 0.40 if ncols >= 3 else 0.50
+    first_w    = first_frac * content_w
+    rest_w     = (content_w - first_w) / (ncols - 1)
+    cols = ['<col width="%dpt"/>' % round(first_w)] + \
+           ['<col width="%dpt"/>' % round(rest_w)] * (ncols - 1)
+    return "<colgroup>" + "".join(cols) + "</colgroup>"
+
+
+def _fix_md_table_widths(html: str) -> str:
+    """xhtml2pdf corrupts markdown tables (columns overlap, numbers collide).
+    Two root causes, both fixed per `.md-table`:
+      1. An EMPTY cell (<td></td>) collapses the WHOLE table's column widths —
+         fill empties with &nbsp; so every cell has width.
+      2. xhtml2pdf's auto column-sizing hogs column 1 and overlaps the rest —
+         strip <thead>/<tbody> (they block colgroup widths) and inject an
+         explicit <colgroup> with absolute point widths."""
+    def _repl(m):
+        table = m.group(0)
+        # 1. fill empty cells
+        table = re.sub(r"<(td|th)([^>]*)>\s*</\1>", r"<\1\2>&nbsp;</\1>",
+                       table, flags=re.IGNORECASE)
+        fr = re.search(r"<tr\b[^>]*>(.*?)</tr>", table, re.DOTALL | re.IGNORECASE)
+        if not fr:
+            return table
+        ncols = len(re.findall(r"<t[hd]\b", fr.group(1), re.IGNORECASE))
+        if ncols < 2:
+            return table
+        # 2. strip thead/tbody + inject colgroup
+        table = re.sub(r"</?(thead|tbody)\b[^>]*>", "", table, flags=re.IGNORECASE)
+        if "<colgroup" not in table.lower():
+            table = re.sub(r"(<table\b[^>]*>)",
+                           lambda mm: mm.group(1) + _md_table_colgroup(ncols),
+                           table, count=1)
+        return table
+    return re.sub(r'<table class="md-table">.*?</table>', _repl, html or "",
+                  flags=re.DOTALL | re.IGNORECASE)
+
+
 def _dga_research_pdf_html(title: str, question: str, answer_html: str,
                            stamp: str = "") -> str:
     """Wrap client-rendered `.md-rendered` HTML in the DGA Capital PDF template.
@@ -19236,7 +19282,7 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
       .md-rendered hr.md-hr { border: 0; border-top: 1px solid #cbd5e1; margin-top: 10pt; margin-bottom: 10pt; }
       .md-rendered a { color: #0A1628; }
       .md-rendered table.md-table { width: 100%; margin-top: 7pt; margin-bottom: 11pt;
-           font-size: 8pt; -pdf-keep-with-next: true; }
+           font-size: 8pt; }
       .md-rendered table.md-table th { background-color: #0A1628; color: #ffffff;
            text-align: left; padding: 5pt 8pt; font-weight: bold; font-size: 7pt; }
       .md-rendered table.md-table td { padding: 4pt 8pt; border-bottom: 1px solid #e2e8f0;
@@ -19271,7 +19317,7 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
               'recipient only &middot; Page <pdf:pagenumber> of <pdf:pagecount></div>')
     return (f'<!doctype html><html><head><meta charset="utf-8">'
             f'<style>{css}</style></head><body>'
-            f'{footer}{head}{qhtml}<div class="md-rendered">{answer_html or ""}</div>'
+            f'{footer}{head}{qhtml}<div class="md-rendered">{_fix_md_table_widths(answer_html or "")}</div>'
             f'</body></html>')
 
 
