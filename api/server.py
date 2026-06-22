@@ -19171,10 +19171,12 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             stamp = _dt.now().strftime("%B %d, %Y · %-I:%M %p")
         except Exception:
             stamp = _dt.now().strftime("%B %d, %Y")
-    # Subtitle next to the logo — "Analyst" (not "AI Analyst") per request.
-    sub_raw = (title or "Analyst")
-    if sub_raw.strip().lower() in ("ai analyst", "analyst"):
-        sub_raw = "Analyst"
+    # Subtitle next to the logo. The AI Analyst PDFs/emails show the logo ONLY
+    # (no "Analyst" label, per request); other docs (e.g. the Portfolio
+    # Strategist's "Investment Committee Review") keep their subtitle.
+    sub_raw = (title or "")
+    if sub_raw.strip().lower() in ("ai analyst", "analyst", ""):
+        sub_raw = ""
     title_e = _html.escape(sub_raw)
     q_e     = _html.escape(question or "")
     logo    = _dga_logo_data_uri()
@@ -19217,7 +19219,7 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
     # Logo + subtitle in a nested table so the "· Analyst" label sits vertically
     # CENTERED against the logo (xhtml2pdf won't vertically align an inline image
     # with adjacent text, which left the label dangling at the logo's bottom).
-    if logo:
+    if logo and title_e:
         # Fixed-width nested table (NOT full width — that's what spread the logo
         # and label apart) so the label sits right beside the logo, centered.
         brand_block = (
@@ -19227,9 +19229,12 @@ def _dga_research_pdf_html(title: str, question: str, answer_html: str,
             f'<td style="border:none;padding:0 0 1px 0;vertical-align:middle;">'
             f'<span class="sub">&middot; {title_e}</span></td>'
             '</tr></table>')
+    elif logo:
+        brand_block = f'<img src="{logo}" width="84" height="24" alt="DGA Capital" />'
     else:
-        brand_block = (f'<span style="font-size:12pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span> '
-                       f'<span class="sub">&middot; {title_e}</span>')
+        brand_block = '<span style="font-size:12pt;font-weight:bold;color:#0A1628;">DGA CAPITAL</span>'
+        if title_e:
+            brand_block += f' <span class="sub">&middot; {title_e}</span>'
     head = (f'<table class="lh"><tr>'
             f'<td style="vertical-align:middle;">{brand_block}</td>'
             f'<td style="vertical-align:middle;"><div class="stamp">CONFIDENTIAL &middot; {_html.escape(stamp)}</div></td>'
@@ -19310,7 +19315,10 @@ def _research_pdf_filename(req: "ResearchPdfRequest") -> str:
     if req.filename:
         fn = req.filename
     else:
-        slug = re.sub(r"[^A-Za-z0-9]+", "_", (req.title or "report")).strip("_") or "report"
+        t = (req.title or "").strip()
+        if t.lower() in ("ai analyst", "analyst", ""):
+            t = "Research"          # AI Analyst docs carry no "Analyst" word
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", t).strip("_") or "Research"
         fn = f"DGA_Capital_{slug}.pdf"
     return fn if fn.lower().endswith(".pdf") else fn + ".pdf"
 
@@ -19352,14 +19360,20 @@ def research_email_pdf(body: ResearchPdfRequest, request: Request):
     except Exception as e:
         raise HTTPException(500, f"PDF render failed: {e!s:.200}")
     import html as _html
-    subject = (body.subject or f"DGA Capital — {body.title}").strip()
+    # Drop the word "Analyst" from analyst emails; keep a real label (e.g. the
+    # Strategist's "Investment Committee Review") when present.
+    _t = (body.title or "").strip()
+    doc_label = "" if _t.lower() in ("ai analyst", "analyst", "") else _t
+    subject = (body.subject or (f"DGA Capital — {doc_label}" if doc_label
+                                else "DGA Capital — Research Note")).strip()
+    lead = (f'Please find the attached <strong>{_html.escape(doc_label)}</strong> report from DGA Capital.'
+            if doc_label else 'Please find the attached research note from DGA Capital.')
     q_line  = (f'<p style="color:#475569;font-size:14px;">{_html.escape(body.question)}</p>'
                if body.question else '')
     email_html = (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         'color:#0A1628;">'
-        f'<p>Please find the attached <strong>{_html.escape(body.title)}</strong> '
-        'report from DGA Capital.</p>' + q_line +
+        f'<p>{lead}</p>' + q_line +
         '<p style="color:#94a3b8;font-size:12px;margin-top:18px;">DGA Capital · Confidential — '
         'for the intended recipient only. Not investment advice.</p></div>')
     res = _send_email_with_pdf_attachment(
