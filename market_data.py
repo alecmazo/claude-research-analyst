@@ -409,12 +409,15 @@ def get_intraday(symbol: str) -> list:
     return yahoo_intraday(symbol) or []
 
 
-def yahoo_market_movers(min_price: float = 3.0, per_list: int = 30) -> list:
+def yahoo_market_movers(min_price: float = 3.0, min_market_cap: float = 2e9,
+                        per_list: int = 30) -> list:
     """Biggest BROAD-MARKET movers from Yahoo's free predefined screeners
     (day_gainers + day_losers + most_actives) — the day's real movers market-wide,
     not just a given universe. No API key; same cloud-tolerant Yahoo host family
-    as the price-chart endpoint. Returns [{ticker, price, pct_change, name}],
-    penny stocks (< min_price) filtered out, deduped to the largest move."""
+    as the price-chart endpoint. Returns [{ticker, price, pct_change, name,
+    market_cap}], deduped to the largest move. Filters out penny stocks
+    (< min_price) and micro/small caps (known marketCap < min_market_cap, default
+    $2B) so speculative names don't clutter the list."""
     import requests
     out: dict = {}
     for scr in ("day_gainers", "day_losers", "most_actives"):
@@ -434,11 +437,15 @@ def yahoo_market_movers(min_price: float = 3.0, per_list: int = 30) -> list:
                     sym = (q.get("symbol") or "").upper().strip()
                     px  = _f(q.get("regularMarketPrice"))
                     pct = _f(q.get("regularMarketChangePercent"))
+                    mc  = _f(q.get("marketCap"))
                     if not sym or px is None or pct is None or px < min_price:
                         continue
+                    if mc is not None and mc < min_market_cap:
+                        continue   # drop micro / small caps
                     if sym not in out or abs(pct) > abs(out[sym]["pct_change"]):
                         out[sym] = {"ticker": sym, "price": px,
                                     "pct_change": round(pct, 4),
+                                    "market_cap": mc,
                                     "name": q.get("shortName") or q.get("longName") or ""}
                 got = True
                 break

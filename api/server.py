@@ -6132,16 +6132,24 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     except Exception as _e:
         print(f"[idea-feed] positions fetch failed: {_e}")
 
-    # ── 2. Batch live quotes (price + pct_change) for the universe ────────────
-    quotes: dict = {}
-    if universe:
-        try:
-            quotes = batch_quotes(",".join(sorted(universe))) or {}
-        except Exception as _e:
-            quotes = {}
-            print(f"[idea-feed] universe quote fetch failed: {_e}")
+    if not universe:
+        out = {"movers": [], "universe_size": 0, "as_of": _pacific_time_str(),
+               "threshold": threshold, "note": "Universe is empty — add to "
+                                                "watchlist, save a report, or upload positions."}
+        _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
+        return out
 
-    # ── 3. Movers ≥ |threshold|% from the universe ────────────────────────────
+    # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
+    try:
+        quotes = batch_quotes(",".join(sorted(universe))) or {}
+    except Exception as _e:
+        return {"movers": [], "universe_size": len(universe),
+                "as_of": _pacific_time_str(),
+                "error": f"quote fetch failed: {_e}"}
+
+    # ── 3. Movers ≥ |threshold|% — YOUR universe only (watchlist / saved reports
+    # / positions). The broad-market biggest movers live on the 'Today's Movers'
+    # card instead, so the Idea Generator stays focused on names DGA cares about. ─
     raw_movers: list[dict] = []
     for tk in universe:
         q = quotes.get(tk) or {}
@@ -6163,36 +6171,14 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
             "sources":    sorted(sources.get(tk, ())),
         })
 
-    # ── 3b. Broad-market movers — the day's biggest gainers/losers market-wide
-    # (Yahoo's free screeners), so real movers surface even when DGA doesn't track
-    # them yet (e.g. SPCX). Tagged source 'market'; deduped against the universe. ─
-    seen = {m["ticker"] for m in raw_movers}
-    try:
-        import market_data as _md
-        for mm in (_md.yahoo_market_movers() or []):
-            tk = mm["ticker"]
-            if tk in seen or abs(mm["pct_change"]) < float(threshold):
-                continue
-            raw_movers.append({
-                "ticker":     tk,
-                "price":      mm["price"],
-                "pct_change": mm["pct_change"],
-                "abs_change": round(mm["price"] * mm["pct_change"] / 100.0, 2),
-                "sources":    ["market"],
-                "name":       mm.get("name") or "",
-            })
-            seen.add(tk)
-    except Exception as _e:
-        print(f"[idea-feed] market movers fetch failed: {_e}")
-
     raw_movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
     movers = raw_movers[: int(limit)]
 
     if not movers:
         out = {"movers": [], "universe_size": len(universe),
                "as_of": _pacific_time_str(), "threshold": threshold,
-               "note": f"No tickers moved ≥ ±{threshold}% today (your {len(universe)}-name "
-                       f"universe + the broad market)."}
+               "note": f"No tickers moved ≥ ±{threshold}% today in your universe of "
+                       f"{len(universe)} symbols."}
         _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
         return out
 
