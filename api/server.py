@@ -6017,6 +6017,31 @@ def research_prioritize(request: Request, top_n: int = 5):
     }
 
 
+_MARKET_MOVERS_CACHE: dict = {"ts": 0.0, "data": None}
+_MARKET_MOVERS_TTL = 180   # 3 min — Yahoo screeners, bounds the request rate
+
+
+@app.get("/api/market/movers")
+def market_movers(request: Request, limit: int = 12, min_price: float = 3.0):
+    """The biggest BROAD-MARKET movers today (Yahoo gainers/losers/most-active
+    screeners) — ranked by absolute % move, penny stocks filtered. Powers the
+    'Today's Movers' card. Cached 3 min. No LLM, no key."""
+    _claims_or_401(request)
+    now = time.time()
+    c = _MARKET_MOVERS_CACHE
+    if c["data"] is None or (now - c["ts"]) >= _MARKET_MOVERS_TTL:
+        try:
+            import market_data as _md
+            rows = _md.yahoo_market_movers(min_price=min_price) or []
+        except Exception as e:
+            return {"ok": False, "movers": [], "error": f"{e!s:.160}"}
+        rows.sort(key=lambda m: abs(m.get("pct_change") or 0.0), reverse=True)
+        c["data"] = rows
+        c["ts"] = now
+    return {"ok": True, "as_of": _pacific_time_str(),
+            "movers": (c["data"] or [])[: int(limit)]}
+
+
 @app.get("/api/v2/research/idea-feed")
 def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60, force: bool = False):
     """Return today's notable movers from the user's universe.
@@ -6107,22 +6132,16 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
     except Exception as _e:
         print(f"[idea-feed] positions fetch failed: {_e}")
 
-    if not universe:
-        out = {"movers": [], "universe_size": 0, "as_of": _pacific_time_str(),
-               "threshold": threshold, "note": "Universe is empty — add to "
-                                                "watchlist, save a report, or upload positions."}
-        _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
-        return out
+    # ── 2. Batch live quotes (price + pct_change) for the universe ────────────
+    quotes: dict = {}
+    if universe:
+        try:
+            quotes = batch_quotes(",".join(sorted(universe))) or {}
+        except Exception as _e:
+            quotes = {}
+            print(f"[idea-feed] universe quote fetch failed: {_e}")
 
-    # ── 2. Batch live quotes (price + pct_change) ─────────────────────────────
-    try:
-        quotes = batch_quotes(",".join(sorted(universe))) or {}
-    except Exception as _e:
-        return {"movers": [], "universe_size": len(universe),
-                "as_of": _pacific_time_str(),
-                "error": f"quote fetch failed: {_e}"}
-
-    # ── 3. Filter to movers ≥ |threshold|% ────────────────────────────────────
+    # ── 3. Movers ≥ |threshold|% from the universe ────────────────────────────
     raw_movers: list[dict] = []
     for tk in universe:
         q = quotes.get(tk) or {}
@@ -6144,14 +6163,36 @@ def research_idea_feed(request: Request, threshold: float = 4.0, limit: int = 60
             "sources":    sorted(sources.get(tk, ())),
         })
 
+    # ── 3b. Broad-market movers — the day's biggest gainers/losers market-wide
+    # (Yahoo's free screeners), so real movers surface even when DGA doesn't track
+    # them yet (e.g. SPCX). Tagged source 'market'; deduped against the universe. ─
+    seen = {m["ticker"] for m in raw_movers}
+    try:
+        import market_data as _md
+        for mm in (_md.yahoo_market_movers() or []):
+            tk = mm["ticker"]
+            if tk in seen or abs(mm["pct_change"]) < float(threshold):
+                continue
+            raw_movers.append({
+                "ticker":     tk,
+                "price":      mm["price"],
+                "pct_change": mm["pct_change"],
+                "abs_change": round(mm["price"] * mm["pct_change"] / 100.0, 2),
+                "sources":    ["market"],
+                "name":       mm.get("name") or "",
+            })
+            seen.add(tk)
+    except Exception as _e:
+        print(f"[idea-feed] market movers fetch failed: {_e}")
+
     raw_movers.sort(key=lambda m: abs(m["pct_change"]), reverse=True)
     movers = raw_movers[: int(limit)]
 
     if not movers:
         out = {"movers": [], "universe_size": len(universe),
                "as_of": _pacific_time_str(), "threshold": threshold,
-               "note": f"No tickers moved ≥ ±{threshold}% today in your universe of "
-                       f"{len(universe)} symbols."}
+               "note": f"No tickers moved ≥ ±{threshold}% today (your {len(universe)}-name "
+                       f"universe + the broad market)."}
         _IDEA_FEED_CACHE[cache_key] = {"data": out, "ts": time.time()}
         return out
 

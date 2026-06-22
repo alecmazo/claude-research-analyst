@@ -407,3 +407,43 @@ def get_intraday(symbol: str) -> list:
         if t:
             return [{"time": x["time"], "close": x["close"]} for x in t]
     return yahoo_intraday(symbol) or []
+
+
+def yahoo_market_movers(min_price: float = 3.0, per_list: int = 30) -> list:
+    """Biggest BROAD-MARKET movers from Yahoo's free predefined screeners
+    (day_gainers + day_losers + most_actives) — the day's real movers market-wide,
+    not just a given universe. No API key; same cloud-tolerant Yahoo host family
+    as the price-chart endpoint. Returns [{ticker, price, pct_change, name}],
+    penny stocks (< min_price) filtered out, deduped to the largest move."""
+    import requests
+    out: dict = {}
+    for scr in ("day_gainers", "day_losers", "most_actives"):
+        got = False
+        for host in ("query1", "query2"):
+            try:
+                r = requests.get(
+                    f"https://{host}.finance.yahoo.com/v1/finance/screener/predefined/saved",
+                    params={"scrIds": scr, "count": per_list},
+                    timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code != 200:
+                    continue
+                res = (((r.json().get("finance") or {}).get("result")) or [None])[0]
+                if not res:
+                    continue
+                for q in (res.get("quotes") or []):
+                    sym = (q.get("symbol") or "").upper().strip()
+                    px  = _f(q.get("regularMarketPrice"))
+                    pct = _f(q.get("regularMarketChangePercent"))
+                    if not sym or px is None or pct is None or px < min_price:
+                        continue
+                    if sym not in out or abs(pct) > abs(out[sym]["pct_change"]):
+                        out[sym] = {"ticker": sym, "price": px,
+                                    "pct_change": round(pct, 4),
+                                    "name": q.get("shortName") or q.get("longName") or ""}
+                got = True
+                break
+            except Exception as e:
+                print(f"[market_data] yahoo movers {scr} {host} failed: {e!s:.120}", flush=True)
+        if not got:
+            print(f"[market_data] yahoo movers {scr}: no data", flush=True)
+    return list(out.values())

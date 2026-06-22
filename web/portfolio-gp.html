@@ -16765,34 +16765,29 @@ End with the sleeve block at this account's real market value so I can push it t
     const badge = document.getElementById('trending-count');
     if (!el) return;
     try {
-      // Pull tickers from today's Daily Brief (auto-runs 8am Pacific)
-      const r = await window.dgaFetch('/api/daily-brief/latest');
-      if (!r.ok) throw new Error('daily-brief ' + r.status);
-      const brief = await r.json();
-      const tickers = (brief.tickers || []).slice(0, 10);
-      if (badge) badge.textContent = tickers.length ? 'LIVE' : 'NO BRIEF';
-      if (!tickers.length) {
-        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Run Daily Pulse to populate.</div>';
+      // The biggest BROAD-MARKET movers today (Yahoo gainers/losers), regardless
+      // of whether DGA tracks them — ranked by absolute % move.
+      const r = await window.dgaFetch('/api/market/movers?limit=12');
+      if (!r.ok) throw new Error('movers ' + r.status);
+      const d = await r.json();
+      const movers = d.movers || [];
+      if (badge) badge.textContent = movers.length ? 'LIVE' : '—';
+      if (!movers.length) {
+        el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">No market movers right now.</div>';
         return;
       }
-      // Fetch live quotes for these tickers
-      let quotes = {};
-      try {
-        const qr = await window.dgaFetch('/api/quotes?tickers=' + tickers.join(','));
-        if (qr.ok) quotes = await qr.json();
-      } catch {}
-      el.innerHTML = tickers.map((tk, i) => {
-        const q = quotes[tk] || {};
+      const _safe = s => String(s || '').replace(/[<>&]/g, '');
+      el.innerHTML = movers.map((m, i) => {
         return `
-          <div class="tr-row" data-ticker="${tk}">
+          <div class="tr-row" data-ticker="${_safe(m.ticker)}">
             <div class="tr-rank">${i + 1}</div>
             <div class="tr-main">
-              <div class="tr-tk">${tk}</div>
-              <div class="tr-meta">Daily brief · live price</div>
+              <div class="tr-tk">${_safe(m.ticker)}</div>
+              <div class="tr-meta">${_safe(m.name).slice(0, 28) || 'biggest mover'}</div>
             </div>
             <div class="tr-right">
-              <div class="tr-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
-              <div class="tr-chg ${cssClass(q.pct)}">${fmtPct(q.pct)}</div>
+              <div class="tr-px">${m.price != null ? '$' + fmtPx(m.price) : '—'}</div>
+              <div class="tr-chg ${cssClass(m.pct_change)}">${fmtPct(m.pct_change)}</div>
             </div>
           </div>`;
       }).join('');
@@ -16800,8 +16795,8 @@ End with the sleeve block at this account's real market value so I can push it t
         row.addEventListener('click', () =>
           openGuruFocus(row.getAttribute('data-ticker'))));
     } catch (e) {
-      console.warn('[trending]', e);
-      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Run Daily Pulse to populate.</div>';
+      console.warn('[movers]', e);
+      if (el) el.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);">Market movers unavailable.</div>';
     }
   }
 
