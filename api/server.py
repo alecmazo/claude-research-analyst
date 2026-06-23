@@ -18601,12 +18601,16 @@ def _render_strategist_review_pdf(review: dict) -> bytes:
 
 
 def _run_agentic_analysis(job_id: str, question: str,
-                           system_override: str | None = None) -> None:
+                           system_override: str | None = None,
+                           tools: list | None = None) -> None:
     """Background worker: manual tool-use loop. Streams progress into
     _agentic_jobs[job_id] so the UI can poll. Tracks cost per turn.
     system_override lets specialized modes (Portfolio Strategist) swap the
-    persona while reusing the same loop, tools, and verification."""
+    persona while reusing the same loop and verification. `tools` overrides the
+    tool set — the Strategist drops list_portfolios/get_portfolio_holdings so the
+    agent analyzes ONLY the provided book and never enumerates the whole firm."""
     import anthropic as _anthropic
+    _tools = tools if tools is not None else _AGENTIC_TOOLS
 
     def _set(**kw):
         _agentic_jobs[job_id] = {**(_agentic_jobs.get(job_id) or {}), **kw,
@@ -18628,7 +18632,7 @@ def _run_agentic_analysis(job_id: str, question: str,
                  steps=step, tool_calls=tool_log[:], cost_usd=round(total_cost, 4))
             resp = client.messages.create(
                 model=model, max_tokens=8000,
-                system=system, tools=_AGENTIC_TOOLS, messages=messages,
+                system=system, tools=_tools, messages=messages,
                 **think,
             )
             # cost accounting
@@ -18915,9 +18919,9 @@ async def memo_from_analysis(request: Request):
 # whole portfolio and proposes adjustments, grounding EV in the calculator.
 # Hands off to the Portfolio Roundup podcast + strategy memo.
 # ═══════════════════════════════════════════════════════════════════════
-def _load_fund_positions(fund_id: str) -> list[dict]:
-    """Return [{ticker, weight_pct}] for a fund's live book (market-value
-    weights from tax_lots, cash excluded)."""
+def _load_fund_positions_valued(fund_id: str) -> list[dict]:
+    """[{ticker, mv}] for a fund's live book (market value from tax_lots, cash
+    excluded). The market value lets multiple accounts be combined correctly."""
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return []
     rows = []
@@ -18946,9 +18950,30 @@ def _load_fund_positions(fund_id: str) -> list[dict]:
         mv = qty * px
         if mv > 0:
             valued.append({"ticker": sym.upper(), "mv": mv})
+    return valued
+
+
+def _positions_from_valued(valued: list[dict]) -> list[dict]:
+    """[{ticker, mv}] → [{ticker, weight_pct}] on the combined total, sorted."""
     total = sum(v["mv"] for v in valued) or 1.0
     return [{"ticker": v["ticker"], "weight_pct": round(v["mv"] / total * 100, 2)}
             for v in sorted(valued, key=lambda x: -x["mv"])]
+
+
+def _load_fund_positions(fund_id: str) -> list[dict]:
+    """[{ticker, weight_pct}] for one fund's live book (market-value weights)."""
+    return _positions_from_valued(_load_fund_positions_valued(fund_id))
+
+
+def _combine_fund_positions(fund_ids: list[str]) -> list[dict]:
+    """Combine several accounts into ONE book: aggregate each ticker's market
+    value across all funds, then weight on the combined total (so e.g. ANAT-IRA +
+    ANAT-DEF are analyzed as a single portfolio)."""
+    agg: dict[str, float] = {}
+    for fid in fund_ids:
+        for v in _load_fund_positions_valued(fid):
+            agg[v["ticker"]] = agg.get(v["ticker"], 0.0) + v["mv"]
+    return _positions_from_valued([{"ticker": tk, "mv": mv} for tk, mv in agg.items()])
 
 
 def _build_strategist_context(positions: list[dict], fund_name: str | None) -> str:
@@ -19023,11 +19048,14 @@ _STRATEGIST_SYSTEM = (
 
 @app.post("/api/research/portfolio-strategist")
 async def research_portfolio_strategist(req: Request, background_tasks: BackgroundTasks):
-    """Kick off an agentic whole-portfolio analysis. Body either:
-      {fund_id: "..."}                      → analyze a fund's live book, OR
-      {positions: [{ticker, weight_pct}]}   → analyze an uploaded/explicit book
-    Returns {ok, job_id, tickers, positions} — the positions are echoed so the
-    frontend can hand off to the Portfolio Roundup podcast."""
+    """Kick off an agentic whole-portfolio analysis. Body one of:
+      {fund_id: "..."}                      → one fund's live book, OR
+      {fund_ids: ["...","..."]}             → SEVERAL accounts COMBINED into one
+                                              book (e.g. ANAT-IRA + ANAT-DEF), OR
+      {positions: [{ticker, weight_pct}]}   → an uploaded/explicit book
+    The agent is scoped to EXACTLY this book (no list_portfolios /
+    get_portfolio_holdings), so it never wanders onto the whole firm.
+    Returns {ok, job_id, tickers, positions, fund_name}."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -19035,15 +19063,24 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
         body = await req.json()
     except Exception:
         body = {}
-    fund_id = (body or {}).get("fund_id") or None
+    fund_id  = (body or {}).get("fund_id") or None
+    fund_ids = [str(f) for f in ((body or {}).get("fund_ids") or []) if f]
+    if not fund_ids and fund_id:
+        fund_ids = [str(fund_id)]
     positions = (body or {}).get("positions") or []
     fund_name = None
 
-    if fund_id:
-        positions = _load_fund_positions(fund_id)
-        fund_name = _fund_name_lookup(fund_id)
+    if fund_ids:
+        if len(fund_ids) == 1:
+            positions = _load_fund_positions(fund_ids[0])
+            fund_name = _fund_name_lookup(fund_ids[0])
+        else:
+            positions = _combine_fund_positions(fund_ids)
+            names = [(_fund_name_lookup(f) or f) for f in fund_ids]
+            fund_name = " + ".join(names) + " (combined)"
         if not positions:
-            return JSONResponse({"ok": False, "error": "No live positions for that fund."},
+            return JSONResponse({"ok": False,
+                                 "error": "No live positions for the selected account(s)."},
                                 status_code=400)
     else:
         # Normalize uploaded/explicit positions
@@ -19064,10 +19101,18 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
         f"Run a full investment-committee review of this book and propose grounded, "
         f"advisory adjustments to optimize expected value while controlling risk.\n\n"
         f"{context}\n\n"
+        f"IMPORTANT SCOPE: the position list above is the COMPLETE and ONLY book to "
+        f"review — analyze exactly these names as a single portfolio"
+        f"{' (it combines multiple accounts)' if (fund_name or '').endswith('(combined)') else ''}. "
+        f"Do NOT look up, list, or fold in any other account or holding.\n\n"
         f"Work through every section of your dossier. Use the tools to ground every "
-        f"number — pull each name's saved report, compute the EV math, check real "
-        f"YTD, and surface cross-portfolio risks the weights alone don't show."
+        f"number — pull each name's saved report, compute the EV math, and surface "
+        f"cross-portfolio risks the weights alone don't show."
     )
+    # Strategist tool set: drop the firm-wide enumeration tools so the agent can't
+    # pull other accounts — it must reason from the book provided above.
+    _strat_tools = [t for t in _AGENTIC_TOOLS
+                    if t.get("name") not in ("list_portfolios", "get_portfolio_holdings")]
     import uuid as _uuid
     job_id = "STRAT_" + _uuid.uuid4().hex[:12]
     _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
@@ -19078,7 +19123,7 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
                               "tickers": tickers, "fund_name": fund_name,
                               "fund_id": fund_id,
                               "generated_by": claims.get("email") or claims.get("lp_id") or "gp"}
-    background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM)
+    background_tasks.add_task(_run_agentic_analysis, job_id, question, _STRATEGIST_SYSTEM, _strat_tools)
     print(f"🧭 [strategist] queued {job_id}  {len(tickers)} positions  fund={fund_name}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers,
             "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}

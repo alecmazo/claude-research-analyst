@@ -3131,10 +3131,9 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
         <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px;">
           <div style="display:flex;flex-direction:column;gap:4px;">
-            <label class="pc-field-label" for="strat-fund">Fund / account</label>
-            <select id="strat-fund" class="settings-input" style="min-width:240px;">
-              <option value="">— select a fund —</option>
-            </select>
+            <label class="pc-field-label" for="strat-fund">Account(s) — pick one or more</label>
+            <select id="strat-fund" class="settings-input" multiple size="4" style="min-width:240px;"></select>
+            <span style="font-size:9.5px;color:var(--text-tertiary);">⌘/Ctrl-click to combine 2–3 accounts (e.g. ANAT-IRA + ANAT-DEF) into one book.</span>
           </div>
           <span style="font-size:10.5px;color:var(--text-tertiary);align-self:center;padding-bottom:8px;">or</span>
           <div style="display:flex;flex-direction:column;gap:4px;">
@@ -7219,8 +7218,7 @@ End with the sleeve block at this account's real market value so I can push it t
         const r = await window.dgaFetch('/api/fund/list');
         const j = await r.json();
         const list = Array.isArray(j) ? j : (j.funds || []);
-        fundSel.innerHTML = '<option value="">— select a fund —</option>' +
-          list.filter(f => f && f.id).map(f =>
+        fundSel.innerHTML = list.filter(f => f && f.id).map(f =>
             `<option value="${f.id}">${esc(f.short_name || f.name || f.id)}</option>`).join('');
       } catch (_) {}
     })();
@@ -7496,10 +7494,13 @@ End with the sleeve block at this account's real market value so I can push it t
     }
 
     btn.addEventListener('click', async () => {
-      const fundId = fundSel.value;
+      const selected = Array.from(fundSel.selectedOptions || []);
+      const fundIds = selected.map(o => o.value).filter(Boolean);
       const file = fileEl.files && fileEl.files[0];
-      if (fundId) {
-        start({ fund_id: fundId }, fundSel.options[fundSel.selectedIndex]?.textContent);
+      if (fundIds.length) {
+        const label = selected.map(o => o.textContent).join(' + ') +
+                      (fundIds.length > 1 ? ' (combined)' : '');
+        start({ fund_ids: fundIds }, label);
       } else if (file) {
         // Upload → parse via the existing roundup upload parser, then strategist
         btn.disabled = true; btn.textContent = '⏳ Parsing file…';
