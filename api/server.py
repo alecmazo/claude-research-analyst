@@ -24076,6 +24076,240 @@ if WEB_DIR.exists():
     app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Memory hygiene + Railway cost tracking
+#
+#  Two related concerns on Railway, where memory is metered and billed:
+#    1. The ~14 in-memory job stores (_agentic_jobs, _bjobs, _podcast_jobs, …)
+#       accumulate COMPLETED jobs — each holding a full result payload — forever.
+#       A janitor thread caps them to their most-recent entries (dicts keep
+#       insertion order, so capping drops the oldest, which are long done). The
+#       persisted copies (analyst_reviews / strategist_reviews / DB tables) are
+#       untouched — only the transient poll-state is trimmed.
+#    2. A cost endpoint reads this container's real cgroup metrics and estimates
+#       the Railway bill from published per-unit prices. Surfaced in Settings.
+# ─────────────────────────────────────────────────────────────────────────────
+_APP_START_TS = time.time()
+
+# Transient job stores — poll-state only; safe to cap to recent entries.
+_JANITOR_JOB_STORES = (
+    "_jobs", "_bulk_reanalyze_jobs", "_pjobs", "_sjobs", "_ijobs", "_bjobs",
+    "_podcast_jobs", "_podcast_script_jobs", "_agentic_jobs", "_transcript_jobs",
+    "_call_sync_jobs", "_fin_sync_jobs", "_options_scan_jobs", "_market_sync_jobs",
+)
+# Ticker/key-keyed caches — smaller strings; keep more, but still bounded.
+_JANITOR_CACHES = (
+    ("_QUOTE_CACHE", 600), ("_NEWS_CACHE", 300), ("_GURUFOCUS_CACHE", 250),
+    ("_ticker_meta_cache", 600), ("_summary_cache", 150), ("_bench_monthly_cache", 80),
+    ("_INTRADAY_CACHE", 150), ("_PRICE_SYNC_TS", 1500), ("_user_resp_cache", 400),
+    ("_IDEA_FEED_CACHE", 50), ("_ytd_bmark_cache", 200), ("_col_exists_cache", 200),
+)
+_JANITOR_JOB_CAP = 50      # recent jobs to retain per store
+_JANITOR_INTERVAL = 600    # seconds between sweeps
+_JANITOR_STATS = {"runs": 0, "evicted": 0, "last_run": None, "last_evicted": 0}
+
+
+def _cap_store(store: dict, max_keep: int) -> int:
+    """Bound an in-memory dict to its most-recent ``max_keep`` entries. Python
+    dicts preserve insertion order, so popping from the front drops the oldest
+    (= longest-finished) entries. Returns the number evicted."""
+    evicted = 0
+    try:
+        while len(store) > max_keep:
+            store.pop(next(iter(store)), None)
+            evicted += 1
+    except Exception:
+        pass
+    return evicted
+
+
+def _janitor_store_sizes() -> dict:
+    """Live entry counts per tracked store/cache (for the cost panel)."""
+    g = globals()
+    jobs = {n: len(g[n]) for n in _JANITOR_JOB_STORES if isinstance(g.get(n), dict)}
+    caches = {n: len(g[n]) for n, _ in _JANITOR_CACHES if isinstance(g.get(n), dict)}
+    return {
+        "job_entries":   sum(jobs.values()),
+        "cache_entries": sum(caches.values()),
+        "jobs":          jobs,
+        "caches":        caches,
+    }
+
+
+def _memory_janitor_loop():
+    g = globals()
+    while True:
+        try:
+            time.sleep(_JANITOR_INTERVAL)
+            evicted = 0
+            for name in _JANITOR_JOB_STORES:
+                s = g.get(name)
+                if isinstance(s, dict):
+                    evicted += _cap_store(s, _JANITOR_JOB_CAP)
+            for name, cap in _JANITOR_CACHES:
+                s = g.get(name)
+                if isinstance(s, dict):
+                    evicted += _cap_store(s, cap)
+            _JANITOR_STATS["runs"] += 1
+            _JANITOR_STATS["evicted"] += evicted
+            _JANITOR_STATS["last_evicted"] = evicted
+            _JANITOR_STATS["last_run"] = time.time()
+            if evicted:
+                print(f"[memory-janitor] trimmed {evicted} stale entries", flush=True)
+        except Exception as exc:
+            print(f"[memory-janitor] {str(exc)[:120]}", flush=True)
+
+
+threading.Thread(target=_memory_janitor_loop, daemon=True, name="memory-janitor").start()
+
+
+# ── Railway cost estimation ──────────────────────────────────────────────────
+# Published Railway usage prices (overridable via env for plan changes).
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_first_int(*paths) -> "int | None":
+    for p in paths:
+        try:
+            with open(p) as fh:
+                return int(fh.read().strip())
+        except Exception:
+            continue
+    return None
+
+
+def _cgroup_cpu_usec() -> "int | None":
+    # cgroup v2: cpu.stat "usage_usec"; v1: cpuacct.usage (nanoseconds).
+    try:
+        with open("/sys/fs/cgroup/cpu.stat") as fh:
+            for line in fh:
+                if line.startswith("usage_usec"):
+                    return int(line.split()[1])
+    except Exception:
+        pass
+    ns = _read_first_int("/sys/fs/cgroup/cpuacct/cpuacct.usage",
+                         "/sys/fs/cgroup/cpu/cpuacct.usage")
+    return ns // 1000 if ns is not None else None
+
+
+def _railway_metrics() -> dict:
+    """Live resource snapshot for THIS container, read from cgroup + /proc."""
+    GB = 1024 ** 3
+    mem_cur = _read_first_int("/sys/fs/cgroup/memory.current",
+                              "/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    mem_max = _read_first_int("/sys/fs/cgroup/memory.max")
+    if mem_max is None or mem_max <= 0 or mem_max > (1 << 60):
+        mem_max = _read_first_int("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if mem_max is not None and mem_max > (1 << 60):
+        mem_max = None  # "max" / unlimited sentinel
+
+    rss = None
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) * 1024
+                    break
+    except Exception:
+        pass
+
+    cpu_usec = _cgroup_cpu_usec()
+    uptime = max(1.0, time.time() - _APP_START_TS)
+    avg_vcpu = (cpu_usec / 1e6) / uptime if cpu_usec else None
+
+    return {
+        "mem_current_bytes": mem_cur,
+        "mem_current_gb":    round(mem_cur / GB, 4) if mem_cur else None,
+        "mem_limit_bytes":   mem_max,
+        "mem_limit_gb":      round(mem_max / GB, 3) if mem_max else None,
+        "mem_pct":           round(100 * mem_cur / mem_max, 1) if (mem_cur and mem_max) else None,
+        "rss_bytes":         rss,
+        "rss_gb":            round(rss / GB, 4) if rss else None,
+        "avg_vcpu":          round(avg_vcpu, 4) if avg_vcpu is not None else None,
+        "uptime_seconds":    int(uptime),
+    }
+
+
+@app.get("/api/admin/railway-usage")
+async def railway_usage(request: Request):
+    """GP-only: live container resource snapshot + estimated Railway cost,
+    plus in-memory store sizes (proof the janitor is keeping memory bounded)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+
+    m = _railway_metrics()
+
+    price_mem  = _envf("RAILWAY_PRICE_MEM_GB_MONTH", 10.0)   # $/GB/month
+    price_cpu  = _envf("RAILWAY_PRICE_VCPU_MONTH", 20.0)     # $/vCPU/month
+    base_fee   = _envf("RAILWAY_BASE_FEE_MONTH", 0.0)        # flat plan fee, if any
+    incl_credit = _envf("RAILWAY_INCLUDED_CREDIT", 0.0)      # plan-included usage credit
+
+    mem_gb   = m["mem_current_gb"] or 0.0
+    vcpu     = m["avg_vcpu"] or 0.0
+    mem_cost = round(mem_gb * price_mem, 2)
+    cpu_cost = round(vcpu * price_cpu, 2)
+    usage_month = mem_cost + cpu_cost
+    total_month = round(base_fee + max(0.0, usage_month - incl_credit), 2)
+
+    now = datetime.now(timezone.utc)
+    if now.month == 12:
+        nxt = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nxt = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    days_in_month = (nxt - month_start).days
+    frac_elapsed = (now - month_start).total_seconds() / (nxt - month_start).total_seconds()
+    mtd = round(total_month * frac_elapsed, 2)
+
+    rw_env = {
+        "project":     os.environ.get("RAILWAY_PROJECT_NAME"),
+        "service":     os.environ.get("RAILWAY_SERVICE_NAME"),
+        "environment": os.environ.get("RAILWAY_ENVIRONMENT_NAME"),
+        "region":      os.environ.get("RAILWAY_REPLICA_REGION") or os.environ.get("RAILWAY_REGION"),
+        "replica":     os.environ.get("RAILWAY_REPLICA_ID"),
+        "deployment":  os.environ.get("RAILWAY_DEPLOYMENT_ID"),
+    }
+    on_railway = any(rw_env.values()) or os.environ.get("RAILWAY_ENVIRONMENT") is not None
+
+    j = dict(_JANITOR_STATS)
+    j["last_run_ago_s"] = int(time.time() - j["last_run"]) if j["last_run"] else None
+
+    return {
+        "ok":         True,
+        "on_railway": on_railway,
+        "env":        rw_env,
+        "metrics":    m,
+        "prices":     {"mem_gb_month": price_mem, "vcpu_month": price_cpu,
+                       "base_fee_month": base_fee, "included_credit": incl_credit},
+        "cost": {
+            "currency":       "USD",
+            "memory_month":   mem_cost,
+            "cpu_month":      cpu_cost,
+            "base_month":     round(base_fee, 2),
+            "included_credit": round(incl_credit, 2),
+            "usage_month":    round(usage_month, 2),
+            "projected_month": total_month,
+            "month_to_date":  mtd,
+            "per_day":        round(total_month / days_in_month, 2) if days_in_month else None,
+            "day_of_month":   now.day,
+            "days_in_month":  days_in_month,
+            "pct_elapsed":    round(frac_elapsed * 100, 1),
+            "remaining_month": round(total_month - mtd, 2),
+        },
+        "memory_hygiene": {**_janitor_store_sizes(), "janitor": j,
+                           "job_cap": _JANITOR_JOB_CAP, "sweep_interval_s": _JANITOR_INTERVAL},
+        "generated_at": now.isoformat(),
+        "note": ("Estimate from this container's live cgroup usage × Railway's "
+                 "published per-unit prices. Egress/volume not metered here. "
+                 "Adjust prices via RAILWAY_PRICE_* env vars."),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

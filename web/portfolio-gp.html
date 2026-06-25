@@ -4504,6 +4504,25 @@ End with the sleeve block at this account's real market value so I can push it t
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
 
+    <!-- 🚂 Railway cost & memory — live container metrics + estimated monthly bill -->
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">🚂 Railway Cost &amp; Memory</span>
+        <span class="panel-badge" id="rw-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
+        <span style="flex:1"></span>
+        <button id="rw-refresh" type="button" class="tab-btn">↻ Refresh</button>
+      </header>
+      <div style="padding:16px 18px;">
+        <div id="rw-body" style="font-size:12px;color:#475569;">Loading live usage…</div>
+        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
+          Estimated from this container's live cgroup usage × Railway's published per-unit prices
+          (memory $10/GB·mo, vCPU $20/vCPU·mo). Egress &amp; volume not metered here.
+          Override rates with <code>RAILWAY_PRICE_MEM_GB_MONTH</code> / <code>RAILWAY_PRICE_VCPU_MONTH</code> /
+          <code>RAILWAY_BASE_FEE_MONTH</code> / <code>RAILWAY_INCLUDED_CREDIT</code> env vars to match your plan.
+        </div>
+      </div>
+    </section>
+
     <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
     <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
       <header class="panel-head">
@@ -17806,9 +17825,78 @@ End with the sleeve block at this account's real market value so I can push it t
     loadReports();
   });
 
-  // Load archived list when Settings tab is opened
+  // ── Railway cost & memory tracker (Settings) ──────────────────────────────
+  function _rwMoney(v){ return (v==null)?'—':('$'+Number(v).toFixed(2)); }
+  function _rwDur(s){
+    if(!s&&s!==0) return '—';
+    const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
+    return d?`${d}d ${h}h`:(h?`${h}h ${m}m`:`${m}m`);
+  }
+  async function loadRailwayUsage(){
+    const body = document.getElementById('rw-body');
+    const badge= document.getElementById('rw-badge');
+    if(!body) return;
+    try{
+      const r = await window.dgaFetch('/api/admin/railway-usage');
+      if(!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{};
+      if(badge){ badge.textContent = d.on_railway?'LIVE':'LOCAL';
+        badge.style.background = d.on_railway?'#dcfce7':'#f1f5f9';
+        badge.style.color = d.on_railway?'#166534':'#64748b'; }
+      const memPct = m.mem_pct!=null ? Math.min(100, m.mem_pct) : null;
+      const barColor = memPct==null?'#cbd5e1':(memPct>85?'#dc2626':memPct>65?'#d97706':'#2563eb');
+      const card=(label,val,sub)=>`<div style="flex:1;min-width:120px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:11px 13px;">
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:#94a3b8;">${label}</div>
+          <div style="font-size:21px;font-weight:800;color:#0A1628;margin-top:3px;line-height:1;">${val}</div>
+          ${sub?`<div style="font-size:10px;color:#64748b;margin-top:4px;">${sub}</div>`:''}
+        </div>`;
+      const row=(k,v,strong)=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f9;${strong?'font-weight:800;color:#0A1628;':'color:#475569;'}">
+          <span>${k}</span><span style="font-variant-numeric:tabular-nums;">${v}</span></div>`;
+      body.innerHTML = `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          ${card('Projected this month', _rwMoney(c.projected_month), `≈ ${_rwMoney(c.per_day)}/day`)}
+          ${card('Month-to-date', _rwMoney(c.month_to_date), `${c.pct_elapsed!=null?c.pct_elapsed+'% of month · day '+c.day_of_month+'/'+c.days_in_month:''}`)}
+          ${card('Remaining', _rwMoney(c.remaining_month), `${c.days_in_month&&c.day_of_month?(c.days_in_month-c.day_of_month)+' days left':''}`)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Cost breakdown · est.</div>
+            ${row('Memory · '+(m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB × $'+(d.prices?.mem_gb_month||10):'—'), _rwMoney(c.memory_month))}
+            ${row('CPU · '+(m.avg_vcpu!=null?m.avg_vcpu.toFixed(3)+' vCPU × $'+(d.prices?.vcpu_month||20):'—'), _rwMoney(c.cpu_month))}
+            ${(c.base_month? row('Base plan', _rwMoney(c.base_month)) : '')}
+            ${(c.included_credit? row('Included credit', '−'+_rwMoney(c.included_credit)) : '')}
+            ${row('Projected total / month', _rwMoney(c.projected_month), true)}
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Live container</div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#475569;margin-bottom:3px;">
+              <span>Memory</span><span style="font-variant-numeric:tabular-nums;">${m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB':'—'}${m.mem_limit_gb?' / '+m.mem_limit_gb+' GB':''}${memPct!=null?'  ('+memPct+'%)':''}</span>
+            </div>
+            <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden;margin-bottom:9px;">
+              <div style="height:100%;width:${memPct||0}%;background:${barColor};border-radius:5px;transition:width .4s;"></div>
+            </div>
+            ${row('Avg vCPU (since boot)', m.avg_vcpu!=null?m.avg_vcpu.toFixed(3):'—')}
+            ${row('Process RSS', m.rss_gb!=null?m.rss_gb.toFixed(2)+' GB':'—')}
+            ${row('Uptime', _rwDur(m.uptime_seconds))}
+            ${env.service?row('Service / region', (env.service||'—')+(env.region?' · '+env.region:'')):''}
+          </div>
+        </div>
+        <div style="margin-top:14px;padding:10px 12px;background:#f0f9ff;border:1px solid #e0f2fe;border-radius:7px;font-size:10.5px;color:#475569;line-height:1.55;">
+          <strong style="color:#0369a1;">Memory hygiene:</strong>
+          ${mh.job_entries||0} active job entries + ${mh.cache_entries||0} cache entries in RAM.
+          Janitor caps job stores to ${mh.job_cap} most-recent every ${Math.round((mh.sweep_interval_s||600)/60)} min
+          ${mh.janitor&&mh.janitor.runs?`· ${mh.janitor.runs} sweeps, ${mh.janitor.evicted} entries trimmed total`:'· first sweep pending'}.
+        </div>`;
+    }catch(e){
+      body.innerHTML = '<span style="color:#94a3b8;">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';
+    }
+  }
+  document.getElementById('rw-refresh')?.addEventListener('click', loadRailwayUsage);
+
+  // Load archived list + Railway usage when Settings tab is opened
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
-    el.addEventListener('click', loadArchivedReports);
+    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); });
   });
 
   setInterval(loadIndices,          60_000);   // ribbon: every 60s
