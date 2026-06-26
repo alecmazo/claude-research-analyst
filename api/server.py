@@ -21604,6 +21604,230 @@ def _dash_lin(v, zero_at, full_at):
     return _dash_clamp((v - zero_at) / (full_at - zero_at) * 100.0)
 
 
+# ── GuruFocus-style ranking cards (Financial Strength / Profitability / Value) ─
+# Pure SEC-store + store-price. Each metric gets an absolute quality Rating and a
+# Vs-History percentile within the company's own ≤12-FY range. Metrics whose
+# source fields aren't extracted into the store (interest expense, current
+# liabilities, goodwill, forward analyst estimates) are omitted, not faked.
+_RK_COLS = {1.0: "#16a34a", 0.5: "#eab308", 0.0: "#dc2626"}   # green / amber / red
+
+
+def _rk_abs_color(v, good, ok, higher_better):
+    """Absolute quality of a value vs good/ok thresholds → (hex, quality 0/.5/1)."""
+    if v is None:
+        return "#cbd5e1", None
+    if higher_better:
+        q = 1.0 if v >= good else 0.5 if v >= ok else 0.0
+    else:
+        q = 1.0 if v <= good else 0.5 if v <= ok else 0.0
+    return _RK_COLS[q], q
+
+
+def _rk_hist(series, current, higher_better):
+    """Percentile of `current` within its own history, oriented by direction."""
+    vals = [x for x in (series or []) if x is not None]
+    if current is None or len(vals) < 3:
+        return None, None
+    eps = max(1e-9, abs(current) * 1e-6)        # treat near-ties as equal (flat metric)
+    worse = tie = 0
+    for x in vals:
+        if abs(x - current) <= eps:
+            tie += 1
+        elif (x < current if higher_better else x > current):
+            worse += 1                           # a year the current value beats
+    pct = (worse + 0.5 * tie) / len(vals)        # mid-rank → constant series = 50%
+    col = "#16a34a" if pct >= 0.66 else "#eab308" if pct >= 0.33 else "#dc2626"
+    return round(pct * 100), col
+
+
+def _rk_row(name, value, fmt, good, ok, higher_better, series=None, note=None):
+    rc, q = _rk_abs_color(value, good, ok, higher_better)
+    hp, hc = _rk_hist(series, value, higher_better)
+    return {"name": name,
+            "value": (round(value, 4) if isinstance(value, (int, float)) else value),
+            "fmt": fmt, "rating": rc, "quality": q,
+            "hist_pct": hp, "hist_color": hc, "note": note}
+
+
+def _build_rank_cards(annuals, price, anchor_map, growth_pct):
+    """Three ranking cards from ≤12 FY of annual history + current store price.
+    Card rank = round(10 × mean quality of its available metrics)."""
+    if not annuals:
+        return None
+    f = _dash_f
+    L = annuals[-1]
+
+    def g(r, k):
+        return f(r.get(k))
+
+    def ratio(a, b):
+        return (a / b) if (a is not None and b not in (None, 0)) else None
+
+    def pv(x):                      # positive-only (drop losses / negative ratios)
+        return x if (x is not None and x > 0) else None
+
+    def margin_series(num_k, den_k):
+        return [(g(r, num_k) / g(r, den_k) * 100)
+                if (g(r, num_k) is not None and g(r, den_k) not in (None, 0)) else None
+                for r in annuals]
+
+    def debt_of(r):
+        d = g(r, "total_debt")
+        if d is None:
+            d = (g(r, "long_term_debt") or 0) + (g(r, "short_term_debt") or 0)
+        return d
+
+    def roic_of(r):
+        op = g(r, "operating_income"); e = g(r, "stockholders_equity")
+        c = (g(r, "cash") or 0) + (g(r, "short_term_investments") or 0)
+        inv = (debt_of(r) or 0) + (e or 0) - c
+        if op is None or not e or inv <= 0:
+            return None
+        return op * (1 - _DASH_TAX) / inv * 100
+
+    def roce_of(r):
+        op = g(r, "operating_income"); den = (g(r, "stockholders_equity") or 0) + (debt_of(r) or 0)
+        return (op / den * 100) if (op is not None and den > 0) else None
+
+    # latest scalars
+    rev = g(L, "revenue"); ni = g(L, "net_income"); ebitda = g(L, "ebitda")
+    opin = g(L, "operating_income")
+    ocf = g(L, "operating_cash_flow"); fcf = g(L, "free_cash_flow")
+    cash = (g(L, "cash") or 0) + (g(L, "short_term_investments") or 0)
+    debt = debt_of(L)
+    eq = g(L, "stockholders_equity"); ta = g(L, "total_assets")
+    shares = g(L, "shares_outstanding") or g(L, "diluted_shares")
+    eps = g(L, "diluted_eps")
+    if eps is None and ni is not None and shares:
+        eps = ni / shares
+    bvps = (eq / shares) if (eq is not None and shares) else None
+    mktcap = (price * shares) if (price and shares) else None
+    ev = (mktcap + (debt or 0) - (cash or 0)) if mktcap is not None else None
+
+    roic_series = [roic_of(r) for r in annuals]
+    roic_latest = roic_series[-1] if roic_series else None
+    wacc_latest = None
+    if eq and eq > 0:
+        d = max(debt or 0, 0.0)
+        wacc_latest = (eq * _DASH_COE + d * _DASH_COD_AT) / (eq + d) * 100
+
+    # ── Financial Strength ──
+    c2d = (10.0 if (not debt and cash) else ratio(cash, debt))
+    cash_series = [(((g(r, "cash") or 0) + (g(r, "short_term_investments") or 0)) / debt_of(r))
+                   if debt_of(r) else None for r in annuals]
+    spread = (roic_latest - wacc_latest) if (roic_latest is not None and wacc_latest is not None) else None
+    fs = [
+        _rk_row("Cash-To-Debt", c2d, "x", 1.0, 0.3, True, cash_series),
+        _rk_row("Equity-to-Asset", ratio(eq, ta), "x", 0.5, 0.3, True,
+                [ratio(g(r, "stockholders_equity"), g(r, "total_assets")) for r in annuals]),
+        _rk_row("Debt-to-Equity", ratio(debt, eq), "x", 0.4, 0.8, False,
+                [ratio(debt_of(r), g(r, "stockholders_equity")) for r in annuals]),
+        _rk_row("Debt-to-EBITDA", ratio(debt, ebitda), "x", 1.0, 3.0, False,
+                [ratio(debt_of(r), g(r, "ebitda")) for r in annuals]),
+        _rk_row("WACC vs ROIC", spread, "spread", 4.0, 0.0, True, None,
+                (f"ROIC {roic_latest:.1f}% vs WACC {wacc_latest:.1f}%"
+                 if spread is not None else None)),
+    ]
+
+    # ── Profitability Rank ──
+    ni_hist = [x for x in [g(r, "net_income") for r in annuals][-10:] if x is not None]
+    yrs_prof = sum(1 for x in ni_hist if x > 0) if ni_hist else None
+    yrs_tot = len(ni_hist)
+    roiic = None
+    if len(annuals) >= 4:
+        def nopat(r):
+            op = g(r, "operating_income")
+            return op * (1 - _DASH_TAX) if op is not None else None
+
+        def invested(r):
+            e = g(r, "stockholders_equity")
+            c = (g(r, "cash") or 0) + (g(r, "short_term_investments") or 0)
+            return ((debt_of(r) or 0) + (e or 0) - c) if e is not None else None
+        n2, n1 = nopat(L), nopat(annuals[-4])
+        i2, i1 = invested(L), invested(annuals[-4])
+        if None not in (n1, n2, i1, i2) and (i2 - i1) != 0:
+            roiic = (n2 - n1) / (i2 - i1) * 100
+    gm_series = margin_series("gross_profit", "revenue")
+    moat = None
+    rv = [x for x in roic_series if x is not None]
+    if rv:
+        moat = round(min(10.0, 6 * (sum(1 for x in rv if x > 12) / len(rv))
+                         + 4 * min(1.0, (gm_series[-1] or 0) / 60)))
+    prof = [
+        _rk_row("Gross Margin %", gm_series[-1], "pct", 40, 20, True, gm_series),
+        _rk_row("Operating Margin %", (margin_series("operating_income", "revenue"))[-1],
+                "pct", 20, 10, True, margin_series("operating_income", "revenue")),
+        _rk_row("Net Margin %", (margin_series("net_income", "revenue"))[-1],
+                "pct", 15, 5, True, margin_series("net_income", "revenue")),
+        _rk_row("EBITDA Margin %", (margin_series("ebitda", "revenue"))[-1],
+                "pct", 25, 12, True, margin_series("ebitda", "revenue")),
+        _rk_row("FCF Margin %", (margin_series("free_cash_flow", "revenue"))[-1],
+                "pct", 12, 5, True, margin_series("free_cash_flow", "revenue")),
+        _rk_row("OCF Margin %", (margin_series("operating_cash_flow", "revenue"))[-1],
+                "pct", 18, 8, True, margin_series("operating_cash_flow", "revenue")),
+        _rk_row("ROE %", (margin_series("net_income", "stockholders_equity"))[-1],
+                "pct", 18, 10, True, margin_series("net_income", "stockholders_equity")),
+        _rk_row("ROA %", (margin_series("net_income", "total_assets"))[-1],
+                "pct", 10, 5, True, margin_series("net_income", "total_assets")),
+        _rk_row("ROIC %", roic_latest, "pct", 15, 8, True, roic_series),
+        _rk_row("3-Year ROIIC %", roiic, "pct", 15, 8, True, None,
+                "Incremental NOPAT / incremental invested capital, 3-yr"),
+        _rk_row("ROCE %", roce_of(L), "pct", 15, 8, True, [roce_of(r) for r in annuals]),
+        _rk_row("Years of Profitability (10y)", (float(yrs_prof) if yrs_prof is not None else None),
+                "int", max(1, round(0.9 * yrs_tot)), max(1, round(0.6 * yrs_tot)), True, None,
+                (f"{yrs_prof}/{yrs_tot} years positive net income" if yrs_prof is not None else None)),
+        _rk_row("Moat Score", (float(moat) if moat is not None else None),
+                "score10", 7, 4, True, None, "0–10 DGA proxy: ROIC durability + gross-margin level"),
+    ]
+
+    # ── DGA Value Rank ──  (lower price/value = better, except yields)
+    am = anchor_map or {}
+    pe = pv(ratio(price, eps))
+    eps_hist = [x for x in [g(r, "diluted_eps") for r in annuals][-10:] if x is not None and x > 0]
+    shiller = pv(ratio(price, (sum(eps_hist) / len(eps_hist)) if eps_hist else None))
+    peg = pv(ratio(pe, growth_pct)) if (pe and growth_pct and growth_pct > 0) else None
+    val = [
+        _rk_row("PE Ratio", pe, "x", 15, 25, False),
+        _rk_row("Shiller PE", shiller, "x", 20, 30, False),
+        _rk_row("Price-to-Owner-Earnings", pv(ratio(mktcap, fcf)), "x", 15, 22, False),
+        _rk_row("PEG Ratio", peg, "x", 1.0, 2.0, False),
+        _rk_row("PS Ratio", pv(ratio(mktcap, rev)), "x", 2, 5, False),
+        _rk_row("PB Ratio", pv(ratio(price, bvps)), "x", 2, 4, False),
+        _rk_row("Price-to-Free-Cash-Flow", pv(ratio(mktcap, fcf)), "x", 15, 25, False),
+        _rk_row("Price-to-Operating-Cash-Flow", pv(ratio(mktcap, ocf)), "x", 12, 20, False),
+        _rk_row("EV-to-EBIT", pv(ratio(ev, opin)), "x", 12, 18, False),
+        _rk_row("EV-to-EBITDA", pv(ratio(ev, ebitda)), "x", 10, 15, False),
+        _rk_row("EV-to-Revenue", pv(ratio(ev, rev)), "x", 2, 5, False),
+        _rk_row("EV-to-FCF", pv(ratio(ev, fcf)), "x", 15, 25, False),
+        _rk_row("Price-to-DGA-Value", pv(ratio(price, am.get("DGA Value (mean of targets)"))),
+                "x", 0.8, 1.0, False),
+        _rk_row("Price-to-DCF (Earnings)", pv(ratio(price, am.get("Earnings Power Value"))),
+                "x", 0.8, 1.0, False),
+        _rk_row("Price-to-DCF (FCF)", pv(ratio(price, am.get("DCF (FCF, 10% disc.)"))),
+                "x", 0.8, 1.0, False),
+        _rk_row("Price-to-Peter-Lynch-Value", pv(ratio(price, am.get("Peter Lynch Value"))),
+                "x", 0.8, 1.0, False),
+        _rk_row("Price-to-Graham-Number", pv(ratio(price, am.get("Graham Number"))),
+                "x", 0.9, 1.1, False),
+        _rk_row("Earnings Yield (Greenblatt) %",
+                (opin / ev * 100) if (opin is not None and ev and ev > 0) else None,
+                "pct", 8, 5, True),
+        _rk_row("FCF Yield %",
+                (fcf / mktcap * 100) if (fcf is not None and mktcap and mktcap > 0) else None,
+                "pct", 5, 3, True),
+    ]
+
+    def card(title, rows):
+        rows = [r for r in rows if r["value"] is not None]
+        qs = [r["quality"] for r in rows if r["quality"] is not None]
+        rank = round(10 * sum(qs) / len(qs)) if qs else None
+        return {"title": title, "rank": rank, "metrics": rows}
+
+    return {"financial_strength": card("Financial Strength", fs),
+            "profitability":      card("Profitability Rank", prof),
+            "value":              card("DGA Value Rank", val)}
+
+
 @app.get("/api/financials/{ticker}/dashboard")
 def financials_dashboard(ticker: str, request: Request, period_type: str = "annual"):
     """Chart-ready company dashboard: series for the six GuruFocus-style charts,
@@ -21837,6 +22061,11 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
                    "Overvalued"                if prem <  0.30  else
                    "Significantly Overvalued")
 
+    # ── GuruFocus-style ranking cards (annual history → quality + Vs-History) ──
+    anchor_map = {a["label"]: a["value"] for a in valuation}
+    growth_pct = (g_cf * 100) if g_cf is not None else (g_rev * 100 if g_rev is not None else None)
+    rank_cards = _build_rank_cards(annuals, price, anchor_map, growth_pct)
+
     return {"ok": True, "ticker": tk,
             "entity_name": rows[-1].get("entity_name") or tk,
             "period_type": pt, "series": series,
@@ -21844,6 +22073,7 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
             "dga_value": dga_value, "verdict": verdict,
             "targets": {"grok": pt_grok, "claude": pt_claude, "as_of": targets_asof},
             "key_metrics": key_metrics,
+            "rank_cards": rank_cards,
             "dga_score": {"total": dga_score, "components": comps},
             "valuation": valuation,
             "notes": {"wacc": "WACC est.: 9% cost of equity / 4.3% after-tax debt, "
