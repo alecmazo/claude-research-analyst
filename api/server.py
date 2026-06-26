@@ -24336,7 +24336,46 @@ _JANITOR_CACHES = (
 )
 _JANITOR_JOB_CAP = 50      # recent jobs to retain per store
 _JANITOR_INTERVAL = 600    # seconds between sweeps
-_JANITOR_STATS = {"runs": 0, "evicted": 0, "last_run": None, "last_evicted": 0}
+_JANITOR_STATS = {"runs": 0, "evicted": 0, "last_run": None, "last_evicted": 0,
+                  "trims": 0, "freed_mb_last": None}
+
+# Rolling memory samples (taken each janitor sweep) so the cost projection tracks
+# AVERAGE usage — how Railway actually bills (GB-hours) — instead of over-reacting
+# to a single instantaneous spike.
+_MEM_STATS = {"n": 0, "sum_gb": 0.0, "peak_gb": 0.0, "last_gb": None}
+
+
+def _malloc_trim() -> "float | None":
+    """Return glibc's free-but-retained heap memory to the OS. Python on Linux
+    holds freed pandas/yfinance/JSON buffers in per-thread malloc arenas and
+    rarely gives them back — this is the main reason a long-lived FastAPI worker's
+    RSS balloons to multiple GB and never shrinks. Returns MB freed (best-effort;
+    no-op / None off glibc, e.g. macOS)."""
+    try:
+        import ctypes
+        before = _read_first_int("/sys/fs/cgroup/memory.current",
+                                 "/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+        after = _read_first_int("/sys/fs/cgroup/memory.current",
+                                "/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        if before and after:
+            return round((before - after) / (1024 ** 2), 1)
+        return 0.0
+    except Exception:
+        return None
+
+
+def _sample_memory() -> None:
+    cur = _read_first_int("/sys/fs/cgroup/memory.current",
+                          "/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    if not cur:
+        return
+    gb = cur / (1024 ** 3)
+    _MEM_STATS["n"] += 1
+    _MEM_STATS["sum_gb"] += gb
+    _MEM_STATS["last_gb"] = round(gb, 4)
+    if gb > _MEM_STATS["peak_gb"]:
+        _MEM_STATS["peak_gb"] = round(gb, 4)
 
 
 def _cap_store(store: dict, max_keep: int) -> int:
@@ -24380,12 +24419,22 @@ def _memory_janitor_loop():
                 s = g.get(name)
                 if isinstance(s, dict):
                     evicted += _cap_store(s, cap)
+            # Reclaim glibc's retained heap back to the OS (the real RSS lever),
+            # then sample memory for the rolling average used by the cost panel.
+            import gc as _gc
+            _gc.collect()
+            freed = _malloc_trim()
+            _sample_memory()
             _JANITOR_STATS["runs"] += 1
             _JANITOR_STATS["evicted"] += evicted
             _JANITOR_STATS["last_evicted"] = evicted
             _JANITOR_STATS["last_run"] = time.time()
-            if evicted:
-                print(f"[memory-janitor] trimmed {evicted} stale entries", flush=True)
+            if freed is not None:
+                _JANITOR_STATS["trims"] += 1
+                _JANITOR_STATS["freed_mb_last"] = freed
+            if evicted or (freed and freed > 1):
+                print(f"[memory-janitor] trimmed {evicted} entries, "
+                      f"reclaimed {freed} MB to OS", flush=True)
         except Exception as exc:
             print(f"[memory-janitor] {str(exc)[:120]}", flush=True)
 
@@ -24479,7 +24528,12 @@ async def railway_usage(request: Request):
     base_fee   = _envf("RAILWAY_BASE_FEE_MONTH", 0.0)        # flat plan fee, if any
     incl_credit = _envf("RAILWAY_INCLUDED_CREDIT", 0.0)      # plan-included usage credit
 
-    mem_gb   = m["mem_current_gb"] or 0.0
+    cur_gb   = m["mem_current_gb"] or 0.0
+    avg_gb   = round(_MEM_STATS["sum_gb"] / _MEM_STATS["n"], 4) if _MEM_STATS["n"] else cur_gb
+    peak_gb  = _MEM_STATS["peak_gb"] or cur_gb
+    # Bill on AVERAGE memory (Railway meters GB-hours), not the latest snapshot —
+    # so a transient spike that glibc hasn't yet released doesn't 4× the estimate.
+    mem_gb   = avg_gb or cur_gb
     vcpu     = m["avg_vcpu"] or 0.0
     mem_cost = round(mem_gb * price_mem, 2)
     cpu_cost = round(vcpu * price_cpu, 2)
@@ -24516,6 +24570,9 @@ async def railway_usage(request: Request):
         "metrics":    m,
         "prices":     {"mem_gb_month": price_mem, "vcpu_month": price_cpu,
                        "base_fee_month": base_fee, "included_credit": incl_credit},
+        "memory": {"current_gb": round(cur_gb, 4), "avg_gb": round(avg_gb, 4),
+                   "peak_gb": round(peak_gb, 4), "samples": _MEM_STATS["n"],
+                   "billed_gb": round(mem_gb, 4)},
         "cost": {
             "currency":       "USD",
             "memory_month":   mem_cost,
@@ -24534,9 +24591,10 @@ async def railway_usage(request: Request):
         "memory_hygiene": {**_janitor_store_sizes(), "janitor": j,
                            "job_cap": _JANITOR_JOB_CAP, "sweep_interval_s": _JANITOR_INTERVAL},
         "generated_at": now.isoformat(),
-        "note": ("Estimate from this container's live cgroup usage × Railway's "
-                 "published per-unit prices. Egress/volume not metered here. "
-                 "Adjust prices via RAILWAY_PRICE_* env vars."),
+        "note": ("Projection bills AVERAGE memory (Railway meters GB-hours) × "
+                 "published per-unit prices, so a transient spike doesn't skew it. "
+                 "Egress/volume not metered here. Adjust prices via RAILWAY_PRICE_* "
+                 "env vars. RSS is reclaimed to the OS every sweep via malloc_trim."),
     }
 
 

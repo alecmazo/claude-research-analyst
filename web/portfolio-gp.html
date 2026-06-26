@@ -17906,7 +17906,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const r = await window.dgaFetch('/api/admin/railway-usage');
       if(!r.ok) throw new Error(r.status);
       const d = await r.json();
-      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{};
+      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{}, mem=d.memory||{};
       if(badge){ badge.textContent = d.on_railway?'LIVE':'LOCAL';
         badge.style.background = d.on_railway?'#dcfce7':'#f1f5f9';
         badge.style.color = d.on_railway?'#166534':'#64748b'; }
@@ -17928,7 +17928,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
           <div>
             <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Cost breakdown · est.</div>
-            ${row('Memory · '+(m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB × $'+(d.prices?.mem_gb_month||10):'—'), _rwMoney(c.memory_month))}
+            ${row('Memory · '+(mem.billed_gb!=null?mem.billed_gb.toFixed(2)+' GB avg × $'+(d.prices?.mem_gb_month||10):'—'), _rwMoney(c.memory_month))}
             ${row('CPU · '+(m.avg_vcpu!=null?m.avg_vcpu.toFixed(3)+' vCPU × $'+(d.prices?.vcpu_month||20):'—'), _rwMoney(c.cpu_month))}
             ${(c.base_month? row('Base plan', _rwMoney(c.base_month)) : '')}
             ${(c.included_credit? row('Included credit', '−'+_rwMoney(c.included_credit)) : '')}
@@ -17937,11 +17937,12 @@ End with the sleeve block at this account's real market value so I can push it t
           <div>
             <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Live container</div>
             <div style="display:flex;justify-content:space-between;font-size:11px;color:#475569;margin-bottom:3px;">
-              <span>Memory</span><span style="font-variant-numeric:tabular-nums;">${m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB':'—'}${m.mem_limit_gb?' / '+m.mem_limit_gb+' GB':''}${memPct!=null?'  ('+memPct+'%)':''}</span>
+              <span>Memory (now)</span><span style="font-variant-numeric:tabular-nums;">${m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB':'—'}${m.mem_limit_gb?' / '+m.mem_limit_gb+' GB':''}${memPct!=null?'  ('+memPct+'%)':''}</span>
             </div>
-            <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden;margin-bottom:9px;">
+            <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden;margin-bottom:6px;">
               <div style="height:100%;width:${memPct||0}%;background:${barColor};border-radius:5px;transition:width .4s;"></div>
             </div>
+            ${row('Memory · avg / peak', (mem.avg_gb!=null?mem.avg_gb.toFixed(2):'—')+' / '+(mem.peak_gb!=null?mem.peak_gb.toFixed(2):'—')+' GB')}
             ${row('Avg vCPU (since boot)', m.avg_vcpu!=null?m.avg_vcpu.toFixed(3):'—')}
             ${row('Process RSS', m.rss_gb!=null?m.rss_gb.toFixed(2)+' GB':'—')}
             ${row('Uptime', _rwDur(m.uptime_seconds))}
@@ -17951,8 +17952,8 @@ End with the sleeve block at this account's real market value so I can push it t
         <div style="margin-top:14px;padding:10px 12px;background:#f0f9ff;border:1px solid #e0f2fe;border-radius:7px;font-size:10.5px;color:#475569;line-height:1.55;">
           <strong style="color:#0369a1;">Memory hygiene:</strong>
           ${mh.job_entries||0} active job entries + ${mh.cache_entries||0} cache entries in RAM.
-          Janitor caps job stores to ${mh.job_cap} most-recent every ${Math.round((mh.sweep_interval_s||600)/60)} min
-          ${mh.janitor&&mh.janitor.runs?`· ${mh.janitor.runs} sweeps, ${mh.janitor.evicted} entries trimmed total`:'· first sweep pending'}.
+          Janitor caps job stores to ${mh.job_cap} most-recent + reclaims heap to the OS every ${Math.round((mh.sweep_interval_s||600)/60)} min
+          ${mh.janitor&&mh.janitor.runs?`· ${mh.janitor.runs} sweeps, ${mh.janitor.evicted} entries trimmed${mh.janitor.freed_mb_last!=null?', '+mh.janitor.freed_mb_last+' MB reclaimed last sweep':''}`:'· first sweep pending'}.
         </div>`;
     }catch(e){
       body.innerHTML = '<span style="color:#94a3b8;">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';

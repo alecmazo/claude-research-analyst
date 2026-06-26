@@ -1,7 +1,12 @@
 [build]
 builder = "nixpacks"
 
+# MALLOC_ARENA_MAX caps glibc's per-thread malloc arenas (default up to 8×CPU).
+# Without it, every FastAPI threadpool / daemon thread that touches pandas /
+# yfinance / SEC-JSON gets its own arena that hoards freed memory and never
+# returns it to the OS — the main cause of multi-GB RSS that never shrinks.
+# MALLOC_TRIM_THRESHOLD_ makes glibc release large freed blocks promptly.
 [deploy]
-startCommand = "uvicorn api.server:app --host 0.0.0.0 --port $PORT"
+startCommand = "MALLOC_ARENA_MAX=2 MALLOC_TRIM_THRESHOLD_=67108864 uvicorn api.server:app --host 0.0.0.0 --port $PORT"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
