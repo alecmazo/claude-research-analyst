@@ -17906,7 +17906,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const r = await window.dgaFetch('/api/admin/railway-usage');
       if(!r.ok) throw new Error(r.status);
       const d = await r.json();
-      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{}, mem=d.memory||{};
+      const c=d.cost||{}, m=d.metrics||{}, mh=d.memory_hygiene||{}, env=d.env||{}, mem=d.memory||{}, act=d.activity||{};
       if(badge){ badge.textContent = d.on_railway?'LIVE':'LOCAL';
         badge.style.background = d.on_railway?'#dcfce7':'#f1f5f9';
         badge.style.color = d.on_railway?'#166534':'#64748b'; }
@@ -17954,6 +17954,11 @@ End with the sleeve block at this account's real market value so I can push it t
           ${mh.job_entries||0} active job entries + ${mh.cache_entries||0} cache entries in RAM.
           Janitor caps job stores to ${mh.job_cap} most-recent + reclaims heap to the OS every ${Math.round((mh.sweep_interval_s||600)/60)} min
           ${mh.janitor&&mh.janitor.runs?`· ${mh.janitor.runs} sweeps, ${mh.janitor.evicted} entries trimmed${mh.janitor.freed_mb_last!=null?', '+mh.janitor.freed_mb_last+' MB reclaimed last sweep':''}`:'· first sweep pending'}.
+          <br><strong style="color:${act.active?'#166534':'#92400e'};">${act.active?'● Active':'○ Idle'}</strong> —
+          ${act.active
+            ? 'background market sync running while in use.'
+            : 'background market sync paused (near-zero idle); resumes within ~1 min of use.'}
+          ${act.last_activity_ago_s!=null?`Last request ${act.last_activity_ago_s<90?act.last_activity_ago_s+'s':Math.round(act.last_activity_ago_s/60)+'m'} ago.`:''}
         </div>`;
     }catch(e){
       body.innerHTML = '<span style="color:#94a3b8;">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';

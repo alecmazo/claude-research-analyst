@@ -1178,8 +1178,28 @@ def _require_fund_token(request: Request) -> None:
     if not _valid_fund_token(token):
         raise HTTPException(status_code=403, detail="Fund access requires GP authentication or fund token")
 
+# ── Idle detection ───────────────────────────────────────────────────────────
+# Heavy background loops (market autosync) gate on recent request activity so an
+# app nobody's using does essentially nothing — near-zero CPU/memory when idle.
+_LAST_ACTIVITY_TS = 0.0
+_IDLE_AFTER_S = float(os.environ.get("IDLE_AFTER_SECONDS", "600") or 600)
+
+
+def _note_activity() -> None:
+    global _LAST_ACTIVITY_TS
+    _LAST_ACTIVITY_TS = time.time()
+
+
+def _app_active() -> bool:
+    """True if a request arrived within the idle window. Before the very first
+    request (TS == 0) the app is idle, so a freshly-deployed-but-unopened
+    instance never spins up the refreshers."""
+    return _LAST_ACTIVITY_TS > 0 and (time.time() - _LAST_ACTIVITY_TS) < _IDLE_AFTER_S
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    _note_activity()                       # any request = the app is in use
     path = request.url.path
     # Always allow: public API paths, static assets, the web app shell
     if (path in _PUBLIC_PATHS
@@ -21455,10 +21475,16 @@ def _market_autosync_loop():
                 continue
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
                 continue
+            # Idle gate: when nobody's used the app recently, do nothing — no
+            # universe pull, no yfinance/Tradier churn, no memory growth. The
+            # bootstrap is deferred to the first activity too, so a deployed-but-
+            # unopened instance stays at near-zero. Resumes within ≤60s of use.
+            if not _app_active():
+                continue
             now = time.time()
             if not bootstrapped:
                 bootstrapped = True
-                _autosync_run(now)   # populate immediately
+                _autosync_run(now)   # populate on first use
                 continue
             if not _is_market_hours():
                 continue
@@ -24590,6 +24616,13 @@ async def railway_usage(request: Request):
         },
         "memory_hygiene": {**_janitor_store_sizes(), "janitor": j,
                            "job_cap": _JANITOR_JOB_CAP, "sweep_interval_s": _JANITOR_INTERVAL},
+        "activity": {
+            "active":               _app_active(),
+            "idle_after_s":         _IDLE_AFTER_S,
+            "last_activity_ago_s":  (int(time.time() - _LAST_ACTIVITY_TS) if _LAST_ACTIVITY_TS else None),
+            "autosync_paused":      (not _app_active()),
+            "autosync_runs":        _market_autosync_state.get("runs"),
+        },
         "generated_at": now.isoformat(),
         "note": ("Projection bills AVERAGE memory (Railway meters GB-hours) × "
                  "published per-unit prices, so a transient spike doesn't skew it. "
