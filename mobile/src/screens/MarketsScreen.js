@@ -1,11 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // MarketsScreen — the mobile home/dashboard tab (opens first).
-// Combines, top to bottom:
 //   1. Live Markets   — index ribbon (S&P, Nasdaq, Dow, VIX, …)
 //   2. Idea Generator — today's movers ≥4% from your universe, tap → news
 //   3. Watchlist      — equities you follow, with live price + % change
 //   4. Daily Brief    — the morning brief (collapsible, with a Run button)
-// Pure RN (no WebView) so it ships over-the-air.
+// Pure RN (no WebView, no SVG) so it ships over-the-air.
+//
+// Phase-2 redesign: icon-led section headers, tinted up/down % pills, cleaner
+// cards. Data/loading logic is unchanged from the previous version.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useCallback, useRef } from 'react';
 import {
@@ -13,11 +15,11 @@ import {
   ActivityIndicator, StyleSheet, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
 import AppHeader from '../components/AppHeader';
-import { colors, spacing, radius, fontSize, Card, haptics, mdStyles } from '../design';
+import { colors, spacing, radius, shadow, fontSize, Card, haptics, mdStyles } from '../design';
 
 // ── format helpers ───────────────────────────────────────────────────────────
 function fmtPct(p) {
@@ -33,10 +35,27 @@ function fmtPx(p) {
 }
 const pctColor = (p) => (p == null ? colors.midGray : p >= 0 ? colors.green : colors.red);
 
-function SectionLabel({ children, right }) {
+// Tinted up/down pill — the signature element of the refreshed look.
+function PctPill({ p, size = 12 }) {
+  const up = p == null ? null : p >= 0;
+  const bg = p == null ? '#f1f5f9' : up ? '#dcfce7' : '#fee2e2';
+  const fg = p == null ? colors.midGray : up ? '#166534' : '#991b1b';
+  return (
+    <View style={[styles.pill, { backgroundColor: bg }]}>
+      {p != null && <Ionicons name={up ? 'caret-up' : 'caret-down'} size={size - 1} color={fg} />}
+      <Text style={{ color: fg, fontWeight: '800', fontSize: size, fontVariant: ['tabular-nums'] }}>{fmtPct(p)}</Text>
+    </View>
+  );
+}
+
+function SectionHeader({ icon, children, right }) {
   return (
     <View style={styles.sectionRow}>
+      <View style={styles.sectionIcon}>
+        <MaterialCommunityIcons name={icon} size={15} color={colors.primary} />
+      </View>
       <Text style={styles.sectionLabel}>{children}</Text>
+      <View style={{ flex: 1 }} />
       {right}
     </View>
   );
@@ -78,7 +97,6 @@ export default function MarketsScreen() {
     const tk = m.ticker;
     setExpanded(e => ({ ...e, [tk]: !e[tk] }));
     haptics.onPressPrimary?.();
-    // Lazy-load news on first expand if the feed didn't include any.
     if ((!m.news || !m.news.length) && !m._newsTried) {
       m._newsTried = true;
       try {
@@ -107,13 +125,13 @@ export default function MarketsScreen() {
 
   return (
     <View style={styles.flex}>
-      <AppHeader title="Markets" subtitle="Live moves · ideas · watchlist · brief" />
+      <AppHeader title="Markets" subtitle="Live moves · ideas · watchlist · brief" showLogo />
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
         {/* ── 1. Live Markets ─────────────────────────────────────────── */}
-        <SectionLabel>📈 Live Markets</SectionLabel>
+        <SectionHeader icon="pulse">Live Markets</SectionHeader>
         {indices.length === 0 ? (
           <Card style={styles.card}><ActivityIndicator color={colors.primary} /></Card>
         ) : (
@@ -122,16 +140,17 @@ export default function MarketsScreen() {
               <View key={ix.symbol} style={styles.idxChip}>
                 <Text style={styles.idxLabel} numberOfLines={1}>{ix.label}</Text>
                 <Text style={styles.idxPx}>{fmtPx(ix.price)}</Text>
-                <Text style={[styles.idxPct, { color: pctColor(ix.pct) }]}>{fmtPct(ix.pct)}</Text>
+                <View style={{ marginTop: 4, alignSelf: 'flex-start' }}><PctPill p={ix.pct} size={11} /></View>
               </View>
             ))}
           </ScrollView>
         )}
 
         {/* ── 2. Idea Generator ──────────────────────────────────────── */}
-        <SectionLabel right={moversAsOf ? <Text style={styles.asOf}>{moversAsOf}</Text> : null}>
-          🔔 Idea Generator
-        </SectionLabel>
+        <SectionHeader icon="lightbulb-on-outline"
+          right={moversAsOf ? <Text style={styles.asOf}>{moversAsOf}</Text> : null}>
+          Idea Generator
+        </SectionHeader>
         {movers == null ? (
           <Card style={styles.card}><ActivityIndicator color={colors.primary} /></Card>
         ) : movers.length === 0 ? (
@@ -152,11 +171,11 @@ export default function MarketsScreen() {
                       </View>
                       {!!m.reason_text && <Text style={styles.reasonTxt} numberOfLines={open ? 0 : 1}>{m.reason_text}</Text>}
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[styles.moverPct, { color: pctColor(m.pct_change) }]}>{fmtPct(m.pct_change)}</Text>
+                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                      <PctPill p={m.pct_change} />
                       <Text style={styles.moverPx}>${fmtPx(m.price)}</Text>
                     </View>
-                    <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.dim} style={{ marginLeft: 6 }} />
+                    <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.dim} style={{ marginLeft: 8 }} />
                   </TouchableOpacity>
                   {open && (
                     <View style={styles.moverDetail}>
@@ -181,7 +200,7 @@ export default function MarketsScreen() {
         )}
 
         {/* ── 3. Watchlist ───────────────────────────────────────────── */}
-        <SectionLabel>⭐ Watchlist</SectionLabel>
+        <SectionHeader icon="star-outline">Watchlist</SectionHeader>
         {watch == null ? (
           <Card style={styles.card}><ActivityIndicator color={colors.primary} /></Card>
         ) : !(watch.tickers || []).length ? (
@@ -194,7 +213,7 @@ export default function MarketsScreen() {
                 <View key={tk} style={[styles.wlRow, i < watch.tickers.length - 1 && styles.divider]}>
                   <Text style={styles.wlTk}>{tk}</Text>
                   <Text style={styles.wlPx}>${fmtPx(q.price)}</Text>
-                  <Text style={[styles.wlPct, { color: pctColor(q.pct) }]}>{fmtPct(q.pct)}</Text>
+                  <View style={{ width: 84, alignItems: 'flex-end' }}><PctPill p={q.pct} /></View>
                 </View>
               );
             })}
@@ -202,14 +221,14 @@ export default function MarketsScreen() {
         )}
 
         {/* ── 4. Daily Brief ─────────────────────────────────────────── */}
-        <SectionLabel
+        <SectionHeader icon="newspaper-variant-outline"
           right={
             <TouchableOpacity onPress={runBrief} disabled={briefBusy} style={styles.runBtn} activeOpacity={0.8}>
               {briefBusy ? <ActivityIndicator color={colors.navy} size="small" />
-                : <Text style={styles.runBtnTxt}>📰 Run</Text>}
+                : <><Ionicons name="refresh" size={13} color={colors.navy} /><Text style={styles.runBtnTxt}>Run</Text></>}
             </TouchableOpacity>
           }
-        >📰 Daily Brief</SectionLabel>
+        >Daily Brief</SectionHeader>
         <Card style={styles.card}>
           {brief === undefined ? (
             <ActivityIndicator color={colors.primary} />
@@ -235,24 +254,32 @@ export default function MarketsScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.offWhite },
   card: { marginBottom: spacing.lg },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm, marginTop: spacing.xs },
-  sectionLabel: { fontSize: 13, fontWeight: '800', color: colors.navy, letterSpacing: 0.3, flex: 1 },
+
+  // Section header
+  sectionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md, marginTop: spacing.xs, gap: 8 },
+  sectionIcon: {
+    width: 26, height: 26, borderRadius: 8, backgroundColor: '#eef6fb',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sectionLabel: { fontSize: 12, fontWeight: '800', color: colors.navy, letterSpacing: 0.8, textTransform: 'uppercase' },
   asOf: { fontSize: 10, color: colors.dim, fontWeight: '500' },
   muted: { fontSize: 13, color: colors.midGray },
 
+  // Tinted % pill
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+
   // Live Markets chips
   idxChip: {
-    backgroundColor: colors.white, borderRadius: radius.lg, paddingVertical: 9, paddingHorizontal: 13,
-    marginRight: 8, minWidth: 104, borderWidth: 1, borderColor: colors.lightGray,
+    backgroundColor: colors.white, borderRadius: radius.xl, paddingVertical: 11, paddingHorizontal: 14,
+    marginRight: 9, minWidth: 112, borderWidth: 1, borderColor: colors.lightGray, ...shadow.card,
   },
-  idxLabel: { fontSize: 10, color: colors.midGray, fontWeight: '700', marginBottom: 3 },
-  idxPx: { fontSize: 15, color: colors.navy, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  idxPct: { fontSize: 12, fontWeight: '700', marginTop: 1, fontVariant: ['tabular-nums'] },
+  idxLabel: { fontSize: 10, color: colors.midGray, fontWeight: '700', marginBottom: 4, letterSpacing: 0.3 },
+  idxPx: { fontSize: 16, color: colors.navy, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
   // Idea Generator
   moverWrap: { paddingHorizontal: 14 },
   divider: { borderBottomWidth: 1, borderBottomColor: colors.lightGray },
-  moverRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
+  moverRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
   moverHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   moverTk: { fontSize: 15, fontWeight: '800', color: colors.navy, letterSpacing: 0.5 },
   reasonChip: {
@@ -260,7 +287,6 @@ const styles = StyleSheet.create({
     borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, overflow: 'hidden', textTransform: 'uppercase',
   },
   reasonTxt: { fontSize: 11.5, color: colors.midGray, marginTop: 2 },
-  moverPct: { fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
   moverPx: { fontSize: 11, color: colors.dim, fontVariant: ['tabular-nums'] },
   moverDetail: { paddingBottom: 12, paddingTop: 2 },
   detailMeta: { fontSize: 11, color: colors.midGray, marginBottom: 6, fontWeight: '600' },
@@ -269,15 +295,14 @@ const styles = StyleSheet.create({
   newsMeta: { fontSize: 10, color: colors.dim, marginTop: 1 },
 
   // Watchlist
-  wlRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 14 },
+  wlRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14 },
   wlTk: { flex: 1, fontSize: 14, fontWeight: '800', color: colors.navy, letterSpacing: 0.5 },
-  wlPx: { fontSize: 13, color: colors.darkGray, fontWeight: '600', fontVariant: ['tabular-nums'], width: 90, textAlign: 'right' },
-  wlPct: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'], width: 76, textAlign: 'right' },
+  wlPx: { fontSize: 13, color: colors.darkGray, fontWeight: '600', fontVariant: ['tabular-nums'], width: 86, textAlign: 'right', marginRight: 8 },
 
   // Daily Brief
   runBtn: {
     backgroundColor: colors.gold, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 5,
-    minWidth: 58, alignItems: 'center', justifyContent: 'center',
+    minWidth: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3,
   },
   runBtnTxt: { fontSize: 12, fontWeight: '800', color: colors.navy },
   briefHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
