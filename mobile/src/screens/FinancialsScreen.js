@@ -4,13 +4,9 @@
  * Pure-DB on the server (GET /api/financials/{ticker}/dashboard + price-history)
  * so it costs ~nothing on Railway — zero LLM, zero live pulls. Charts are drawn
  * with plain Views (rotated segments) so the whole screen ships via OTA with no
- * native dependency (react-native-svg is intentionally NOT used).
- *
- * Sections: ticker search · identity + price · interactive price chart (range
- * pills) · DGA Score · key metrics · the three ranking cards (Financial
- * Strength / Profitability / DGA Value).
+ * native dependency. Theme-aware (light/dark) via useTheme().
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity, ActivityIndicator,
   RefreshControl, StyleSheet, Keyboard,
@@ -19,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AppHeader from '../components/AppHeader';
 import { api } from '../api/client';
-import { colors, spacing, radius, shadow, fontSize } from '../design';
+import { spacing, radius, fontSize, useTheme } from '../design';
 
 const LAST_KEY = '@dga_fin_last';
 const RANGES = ['1M', '3M', 'YTD', '1Y', '3Y', '5Y', '10Y', 'All'];
@@ -33,11 +29,10 @@ const fmtRank = (fmt, v) => {
   if (fmt === 'spread')  return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
   return v.toFixed(2);
 };
-const gradeColor = (v) =>
-  v == null ? colors.dim : v >= 80 ? colors.green : v >= 60 ? '#65a30d'
-    : v >= 40 ? colors.amber : colors.red;
-const rankColor = (r) =>
-  r == null ? colors.dim : r >= 7 ? colors.green : r >= 4 ? colors.amber : colors.red;
+const gradeColor = (t, v) =>
+  v == null ? t.textDim : v >= 80 ? t.green : v >= 60 ? '#65a30d' : v >= 40 ? t.amber : t.red;
+const rankColor = (t, r) =>
+  r == null ? t.textDim : r >= 7 ? t.green : r >= 4 ? t.amber : t.red;
 const fmtCap = (n) => {
   if (n == null) return '—';
   const a = Math.abs(n);
@@ -49,16 +44,15 @@ const fmtCap = (n) => {
 const fmtPrice = (p) => p == null ? '—' : '$' + p.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 // ── pure-View line chart (no SVG) ───────────────────────────────────────────────
-function MiniLine({ points, width, height, color }) {
+function MiniLine({ points, width, height, color, dimColor }) {
   const ys = (points || []).map((p) => p.c).filter((v) => v != null);
   if (ys.length < 2) {
     return (
       <View style={{ width, height, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ color: colors.dim, fontSize: fontSize.small }}>No price history.</Text>
+        <Text style={{ color: dimColor, fontSize: fontSize.small }}>No price history.</Text>
       </View>
     );
   }
-  // Downsample to keep the View count (and memory) bounded on long ranges.
   let pts = ys;
   if (ys.length > 90) {
     const step = ys.length / 90;
@@ -80,26 +74,17 @@ function MiniLine({ points, width, height, color }) {
   }
   return (
     <View style={{ width, height }}>
-      {segs.map((s, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: s.cx - s.len / 2,
-            top: s.cy - 1,
-            width: s.len,
-            height: 2,
-            backgroundColor: color,
-            transform: [{ rotate: s.angle + 'deg' }],
-          }}
-        />
+      {segs.map((sg, i) => (
+        <View key={i} style={{
+          position: 'absolute', left: sg.cx - sg.len / 2, top: sg.cy - 1,
+          width: sg.len, height: 2, backgroundColor: color, transform: [{ rotate: sg.angle + 'deg' }],
+        }} />
       ))}
     </View>
   );
 }
 
-// ── horizontal mini-bar (rating / vs-history / score component) ────────────────
-function Bar({ pct, color, track = '#f1f5f9' }) {
+function Bar({ pct, color, track }) {
   return (
     <View style={{ flex: 1, height: 7, borderRadius: 4, backgroundColor: track, overflow: 'hidden' }}>
       {pct != null && (
@@ -109,17 +94,16 @@ function Bar({ pct, color, track = '#f1f5f9' }) {
   );
 }
 
-// ── one ranking card (Financial Strength / Profitability / DGA Value) ──────────
-function RankCard({ card }) {
+function RankCard({ card, t, s }) {
   if (!card || !(card.metrics || []).length) return null;
-  const rc = rankColor(card.rank);
+  const rc = rankColor(t, card.rank);
   return (
     <View style={s.card}>
       <View style={s.rankHead}>
         <Text style={s.cardTitle}>{card.title}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           <View style={{ width: 56 }}>
-            <Bar pct={card.rank == null ? null : card.rank * 10} color={rc} />
+            <Bar pct={card.rank == null ? null : card.rank * 10} color={rc} track={t.surfaceAlt} />
           </View>
           <Text style={[s.rankNum, { color: rc }]}>
             {card.rank == null ? '—' : card.rank}
@@ -131,8 +115,8 @@ function RankCard({ card }) {
         <View key={i} style={[s.rankRow, i === card.metrics.length - 1 && { borderBottomWidth: 0 }]}>
           <Text style={s.rankName} numberOfLines={1}>{m.name}</Text>
           <Text style={s.rankVal}>{fmtRank(m.fmt, m.value)}</Text>
-          <View style={s.rankBar}><Bar pct={m.quality == null ? null : Math.max(8, m.quality * 100)} color={m.rating} /></View>
-          <View style={s.rankBar}><Bar pct={m.hist_pct} color={m.hist_color || colors.dim} /></View>
+          <View style={s.rankBar}><Bar pct={m.quality == null ? null : Math.max(8, m.quality * 100)} color={m.rating} track={t.surfaceAlt} /></View>
+          <View style={s.rankBar}><Bar pct={m.hist_pct} color={m.hist_color || t.textDim} track={t.surfaceAlt} /></View>
         </View>
       ))}
     </View>
@@ -142,6 +126,8 @@ function RankCard({ card }) {
 // ── screen ──────────────────────────────────────────────────────────────────────
 export default function FinancialsScreen() {
   const insets = useSafeAreaInsets();
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [input, setInput] = useState('');
   const [ticker, setTicker] = useState(null);
   const [data, setData] = useState(null);
@@ -159,11 +145,8 @@ export default function FinancialsScreen() {
     try {
       const h = await api.getFinancialsPriceHistory(tk, rng);
       setHist(h && h.ok ? h : null);
-    } catch (e) {
-      setHist(null);
-    } finally {
-      setHistLoading(false);
-    }
+    } catch (e) { setHist(null); }
+    finally { setHistLoading(false); }
   }, []);
 
   const loadTicker = useCallback(async (tk, rng) => {
@@ -175,13 +158,8 @@ export default function FinancialsScreen() {
     try {
       const d = await api.getFinancialsDashboard(sym);
       if (myReq !== reqId.current) return;
-      if (!d || !d.ok) {
-        setData(null);
-        setError(d?.error || `No financials stored for ${sym}.`);
-      } else {
-        setData(d);
-        AsyncStorage.setItem(LAST_KEY, sym).catch(() => {});
-      }
+      if (!d || !d.ok) { setData(null); setError(d?.error || `No financials stored for ${sym}.`); }
+      else { setData(d); AsyncStorage.setItem(LAST_KEY, sym).catch(() => {}); }
     } catch (e) {
       if (myReq === reqId.current) { setData(null); setError(String(e.message || e)); }
     } finally {
@@ -190,7 +168,6 @@ export default function FinancialsScreen() {
     loadHistory(sym, rng || range);
   }, [range, loadHistory]);
 
-  // Restore last viewed company so the tab isn't blank on each visit.
   useEffect(() => {
     (async () => {
       const last = await AsyncStorage.getItem(LAST_KEY);
@@ -205,13 +182,13 @@ export default function FinancialsScreen() {
   const comps = sc.components || {};
   const rc = data?.rank_cards || {};
   const stats = hist?.stats || {};
-  const lineColor = (stats.change_pct != null && stats.change_pct < 0) ? colors.red : colors.green;
+  const lineColor = (stats.change_pct != null && stats.change_pct < 0) ? t.red : t.green;
 
   const compRow = (label, v) => (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginVertical: 3 }}>
-      <Text style={{ width: 84, fontSize: fontSize.caption, color: colors.midGray }}>{label}</Text>
-      <Bar pct={v} color={gradeColor(v)} />
-      <Text style={{ width: 26, textAlign: 'right', fontSize: fontSize.caption, fontWeight: '700', color: gradeColor(v) }}>
+      <Text style={{ width: 84, fontSize: fontSize.caption, color: t.textSecondary }}>{label}</Text>
+      <Bar pct={v} color={gradeColor(t, v)} track={t.surfaceAlt} />
+      <Text style={{ width: 26, textAlign: 'right', fontSize: fontSize.caption, fontWeight: '700', color: gradeColor(t, v) }}>
         {v == null ? '—' : v}
       </Text>
     </View>
@@ -224,15 +201,14 @@ export default function FinancialsScreen() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.offWhite }}>
+    <View style={{ flex: 1, backgroundColor: t.bg }}>
       <AppHeader title="Financials" showLogo />
 
-      {/* Search bar */}
       <View style={s.searchWrap}>
         <TextInput
           style={s.search}
           placeholder="Search a ticker…"
-          placeholderTextColor={colors.dim}
+          placeholderTextColor={t.textDim}
           autoCapitalize="characters"
           autoCorrect={false}
           value={input}
@@ -248,25 +224,21 @@ export default function FinancialsScreen() {
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 28 }}
         keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={() => ticker && loadTicker(ticker)} tintColor={colors.primary} />
-        }
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => ticker && loadTicker(ticker)} tintColor={t.primary} />}
       >
         {!ticker && !loading && (
           <Text style={s.hint}>Search a ticker to see its SEC fundamentals, DGA Score, and ranking cards.</Text>
         )}
 
         {loading && (
-          <View style={{ paddingTop: 40, alignItems: 'center' }}>
-            <ActivityIndicator color={colors.primary} />
-          </View>
+          <View style={{ paddingTop: 40, alignItems: 'center' }}><ActivityIndicator color={t.primary} /></View>
         )}
 
         {!loading && error && (
           <View style={s.card}>
-            <Text style={{ fontSize: fontSize.bodyLg, fontWeight: '700', color: colors.darkGray }}>{ticker}</Text>
-            <Text style={{ marginTop: 6, fontSize: fontSize.body, color: colors.midGray, lineHeight: 19 }}>{error}</Text>
-            <Text style={{ marginTop: 8, fontSize: fontSize.small, color: colors.dim }}>
+            <Text style={{ fontSize: fontSize.bodyLg, fontWeight: '700', color: t.textPrimary }}>{ticker}</Text>
+            <Text style={{ marginTop: 6, fontSize: fontSize.body, color: t.textSecondary, lineHeight: 19 }}>{error}</Text>
+            <Text style={{ marginTop: 8, fontSize: fontSize.small, color: t.textDim }}>
               Sync this company from the Financials tab on the desktop terminal first.
             </Text>
           </View>
@@ -274,7 +246,6 @@ export default function FinancialsScreen() {
 
         {!loading && data && (
           <>
-            {/* Identity + price */}
             <View style={s.card}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
@@ -301,30 +272,28 @@ export default function FinancialsScreen() {
               </View>
             </View>
 
-            {/* Price chart */}
             <View style={s.card} onLayout={(e) => setChartW(Math.round(e.nativeEvent.layout.width - spacing.lg * 2))}>
               {histLoading
-                ? <View style={{ height: 120, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.primary} /></View>
-                : <MiniLine points={hist?.points} width={chartW} height={120} color={lineColor} />}
+                ? <View style={{ height: 120, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={t.primary} /></View>
+                : <MiniLine points={hist?.points} width={chartW} height={120} color={lineColor} dimColor={t.textDim} />}
               <View style={s.rangeRow}>
                 {RANGES.map((r) => {
                   const on = r === range;
                   return (
                     <TouchableOpacity key={r} onPress={() => onRange(r)} activeOpacity={0.8}
-                      style={[s.rangePill, on && { backgroundColor: colors.primary }]}>
-                      <Text style={[s.rangeTxt, on && { color: colors.white }]}>{r}</Text>
+                      style={[s.rangePill, on && { backgroundColor: t.primary }]}>
+                      <Text style={[s.rangeTxt, on && { color: t.onAccent }]}>{r}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
             </View>
 
-            {/* DGA Score */}
             <View style={s.card}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <Text style={s.sectionLabel}>DGA SCORE</Text>
-                <Text style={{ fontSize: fontSize.hero, fontWeight: '800', color: gradeColor(sc.total) }}>
-                  {sc.total == null ? '—' : sc.total}<Text style={{ fontSize: fontSize.small, color: colors.dim, fontWeight: '600' }}> /100</Text>
+                <Text style={{ fontSize: fontSize.hero, fontWeight: '800', color: gradeColor(t, sc.total) }}>
+                  {sc.total == null ? '—' : sc.total}<Text style={{ fontSize: fontSize.small, color: t.textDim, fontWeight: '600' }}> /100</Text>
                 </Text>
               </View>
               <View style={{ marginTop: 8 }}>
@@ -336,17 +305,16 @@ export default function FinancialsScreen() {
               </View>
               {!!data.dga_value && (
                 <View style={s.dgaValueRow}>
-                  <Text style={{ fontSize: fontSize.caption, color: colors.midGray }}>DGA Value</Text>
-                  <Text style={{ fontSize: fontSize.bodyLg, fontWeight: '800', color: colors.darkGray }}>{fmtPrice(data.dga_value)}</Text>
+                  <Text style={{ fontSize: fontSize.caption, color: t.textSecondary }}>DGA Value</Text>
+                  <Text style={{ fontSize: fontSize.bodyLg, fontWeight: '800', color: t.textPrimary }}>{fmtPrice(data.dga_value)}</Text>
                   {!!data.verdict && <Text style={s.verdict}>{data.verdict}</Text>}
                 </View>
               )}
             </View>
 
-            {/* Ranking cards */}
-            <RankCard card={rc.financial_strength} />
-            <RankCard card={rc.profitability} />
-            <RankCard card={rc.value} />
+            <RankCard card={rc.financial_strength} t={t} s={s} />
+            <RankCard card={rc.profitability} t={t} s={s} />
+            <RankCard card={rc.value} t={t} s={s} />
 
             <Text style={s.footnote}>
               SEC XBRL store · Rating = absolute quality · Vs History = percentile in this company’s own history · zero LLM tokens
@@ -358,57 +326,57 @@ export default function FinancialsScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  searchWrap: {
-    flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md, paddingBottom: spacing.sm, backgroundColor: colors.offWhite,
-  },
-  search: {
-    flex: 1, height: 40, backgroundColor: colors.white, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.lightGray, paddingHorizontal: spacing.lg,
-    fontSize: fontSize.bodyLg, color: colors.darkGray, letterSpacing: 1,
-  },
-  goBtn: {
-    height: 40, paddingHorizontal: spacing.xl, borderRadius: radius.lg,
-    backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center',
-  },
-  goTxt: { color: colors.white, fontWeight: '800', fontSize: fontSize.bodyLg },
-  hint: { color: colors.midGray, fontSize: fontSize.body, lineHeight: 20, paddingTop: 20, textAlign: 'center' },
+function makeStyles(t) {
+  return StyleSheet.create({
+    searchWrap: {
+      flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md, paddingBottom: spacing.sm, backgroundColor: t.bg,
+    },
+    search: {
+      flex: 1, height: 40, backgroundColor: t.surface, borderRadius: radius.lg,
+      borderWidth: 1, borderColor: t.border, paddingHorizontal: spacing.lg,
+      fontSize: fontSize.bodyLg, color: t.textPrimary, letterSpacing: 1,
+    },
+    goBtn: {
+      height: 40, paddingHorizontal: spacing.xl, borderRadius: radius.lg,
+      backgroundColor: t.primary, alignItems: 'center', justifyContent: 'center',
+    },
+    goTxt: { color: t.onAccent, fontWeight: '800', fontSize: fontSize.bodyLg },
+    hint: { color: t.textSecondary, fontSize: fontSize.body, lineHeight: 20, paddingTop: 20, textAlign: 'center' },
 
-  card: {
-    backgroundColor: colors.white, borderRadius: radius.xl, padding: spacing.lg,
-    borderWidth: 1, borderColor: colors.lightGray, marginBottom: spacing.md, ...shadow.card,
-  },
-  entity: { fontSize: fontSize.lg, fontWeight: '800', color: colors.navy },
-  symbol: { fontSize: fontSize.caption, color: colors.dim, marginTop: 1, letterSpacing: 1 },
-  ratingPill: { backgroundColor: '#dcfce7', borderRadius: radius.md, paddingHorizontal: 8, paddingVertical: 3 },
-  ratingTxt: { color: '#166534', fontSize: fontSize.micro, fontWeight: '800', letterSpacing: 0.5 },
-  price: { fontSize: 26, fontWeight: '800', color: colors.navy },
+    card: {
+      backgroundColor: t.surface, borderRadius: radius.xl, padding: spacing.lg,
+      borderWidth: 1, borderColor: t.border, marginBottom: spacing.md,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: t.cardShadowOpacity, shadowRadius: 8, elevation: 3,
+    },
+    entity: { fontSize: fontSize.lg, fontWeight: '800', color: t.textPrimary },
+    symbol: { fontSize: fontSize.caption, color: t.textDim, marginTop: 1, letterSpacing: 1 },
+    ratingPill: { backgroundColor: t.ratingBg, borderRadius: radius.md, paddingHorizontal: 8, paddingVertical: 3 },
+    ratingTxt: { color: t.ratingFg, fontSize: fontSize.micro, fontWeight: '800', letterSpacing: 0.5 },
+    price: { fontSize: 26, fontWeight: '800', color: t.textPrimary },
 
-  kmGrid: {
-    flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, paddingTop: 10,
-    borderTopWidth: 1, borderTopColor: '#eef2f7',
-  },
-  kmCell: { width: '50%', flexDirection: 'row', justifyContent: 'space-between', paddingRight: spacing.lg, paddingVertical: 3 },
-  kmLabel: { fontSize: fontSize.caption, color: colors.dim },
-  kmVal: { fontSize: fontSize.small, fontWeight: '700', color: colors.darkGray },
+    kmGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.borderSubtle },
+    kmCell: { width: '50%', flexDirection: 'row', justifyContent: 'space-between', paddingRight: spacing.lg, paddingVertical: 3 },
+    kmLabel: { fontSize: fontSize.caption, color: t.textDim },
+    kmVal: { fontSize: fontSize.small, fontWeight: '700', color: t.textPrimary },
 
-  rangeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 10 },
-  rangePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.md, backgroundColor: '#f1f5f9' },
-  rangeTxt: { fontSize: fontSize.caption, fontWeight: '700', color: colors.midGray },
+    rangeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 10 },
+    rangePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.md, backgroundColor: t.surfaceAlt },
+    rangeTxt: { fontSize: fontSize.caption, fontWeight: '700', color: t.textSecondary },
 
-  sectionLabel: { fontSize: fontSize.micro, fontWeight: '800', letterSpacing: 1, color: colors.midGray },
-  dgaValueRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#eef2f7' },
-  verdict: { fontSize: fontSize.micro, fontWeight: '800', color: '#7c5e00', backgroundColor: '#fef3c7', borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 3, overflow: 'hidden' },
+    sectionLabel: { fontSize: fontSize.micro, fontWeight: '800', letterSpacing: 1, color: t.textSecondary },
+    dgaValueRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.borderSubtle },
+    verdict: { fontSize: fontSize.micro, fontWeight: '800', color: t.amber, backgroundColor: t.surfaceAlt, borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 3, overflow: 'hidden' },
 
-  rankHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  cardTitle: { fontSize: fontSize.bodyLg, fontWeight: '800', color: colors.navy },
-  rankNum: { fontSize: fontSize.lg, fontWeight: '800' },
-  rankDen: { fontSize: fontSize.caption, color: colors.dim, fontWeight: '600' },
-  rankRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  rankName: { flex: 1.5, fontSize: fontSize.caption, color: colors.midGray },
-  rankVal: { width: 56, textAlign: 'right', fontSize: fontSize.small, fontWeight: '700', color: colors.navy, fontVariant: ['tabular-nums'] },
-  rankBar: { flex: 1, marginLeft: 8 },
+    rankHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+    cardTitle: { fontSize: fontSize.bodyLg, fontWeight: '800', color: t.textPrimary },
+    rankNum: { fontSize: fontSize.lg, fontWeight: '800' },
+    rankDen: { fontSize: fontSize.caption, color: t.textDim, fontWeight: '600' },
+    rankRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
+    rankName: { flex: 1.5, fontSize: fontSize.caption, color: t.textSecondary },
+    rankVal: { width: 56, textAlign: 'right', fontSize: fontSize.small, fontWeight: '700', color: t.textPrimary, fontVariant: ['tabular-nums'] },
+    rankBar: { flex: 1, marginLeft: 8 },
 
-  footnote: { fontSize: fontSize.micro, color: colors.dim, lineHeight: 14, marginTop: 4, paddingHorizontal: 4 },
-});
+    footnote: { fontSize: fontSize.micro, color: t.textDim, lineHeight: 14, marginTop: 4, paddingHorizontal: 4 },
+  });
+}

@@ -26,7 +26,7 @@ import CustomTabBar           from './src/components/CustomTabBar';
 
 import { whoamiV2, getV2User, logoutV2 } from './src/api/client';
 import { isBiometricEnabled, disableBiometric } from './src/api/biometric';
-import { colors } from './src/design';
+import { colors, ThemeProvider } from './src/design';
 
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
@@ -214,12 +214,14 @@ export default function App() {
   const isDemo      = !!authState.demo_mode;
 
   return (
-    <NavigationContainer key={lpMode ? 'lp' : 'gp'}>
-      <StatusBar style="light" />
-      {isGPOrAdmin && !lpMode
-        ? <GPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToLP={() => setLpMode(true)} />
-        : <LPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToAdmin={isGPOrAdmin ? () => setLpMode(false) : null} />
-      }
-    </NavigationContainer>
+    <ThemeProvider>
+      <NavigationContainer key={lpMode ? 'lp' : 'gp'}>
+        <StatusBar style="light" />
+        {isGPOrAdmin && !lpMode
+          ? <GPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToLP={() => setLpMode(true)} />
+          : <LPTabs onLogout={handleLogout} isDemo={isDemo} onSwitchToAdmin={isGPOrAdmin ? () => setLpMode(false) : null} />
+        }
+      </NavigationContainer>
+    </ThemeProvider>
   );
 }

@@ -8,6 +8,7 @@
 export * from './tokens';
 export * from './format';
 export * from './markdown';
+export { ThemeProvider, useTheme } from './ThemeContext';
 export { haptics } from './haptics';
 export { default as Card } from './Card';
 export { default as PrimaryButton } from './PrimaryButton';
