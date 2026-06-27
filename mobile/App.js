@@ -21,6 +21,7 @@ import LockScreen             from './src/screens/LockScreen';
 import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
 import WatchlistScreen        from './src/screens/WatchlistScreen';
 import FinancialsScreen       from './src/screens/FinancialsScreen';
+import MoreScreen             from './src/screens/MoreScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
 import { whoamiV2, getV2User, logoutV2 } from './src/api/client';
@@ -58,7 +59,20 @@ function FundStack() {
   );
 }
 
-// ── GP navigator: Positions first, no Tracker tab ────────────────────────────
+// ── More stack: lower-traffic destinations behind a single tab ───────────────
+function MoreStack({ onLogout, isDemo, onSwitchToLP }) {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="MoreHome" component={MoreScreen} />
+      <Stack.Screen name="Podcast"  component={PodcastScreen} />
+      <Stack.Screen name="Settings">
+        {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
+      </Stack.Screen>
+    </Stack.Navigator>
+  );
+}
+
+// ── GP navigator: five primary tabs + a More hub (Podcast, Settings) ─────────
 function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
   return (
     <Tab.Navigator
@@ -68,11 +82,10 @@ function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
       <Tab.Screen name="Markets"    component={MarketsScreen} />
       <Tab.Screen name="Research"   component={HomeStack} />
       <Tab.Screen name="Financials" component={FinancialsScreen} />
+      <Tab.Screen name="Positions"  component={WatchlistScreen} />
       <Tab.Screen name="Fund"       component={FundStack} />
-      <Tab.Screen name="Positions" component={WatchlistScreen} />
-      <Tab.Screen name="Podcast"   component={PodcastScreen} />
-      <Tab.Screen name="Settings">
-        {() => <SettingsScreen onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} isLpMode={false} />}
+      <Tab.Screen name="More">
+        {() => <MoreStack onLogout={onLogout} isDemo={isDemo} onSwitchToLP={onSwitchToLP} />}
       </Tab.Screen>
     </Tab.Navigator>
   );

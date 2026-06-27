@@ -68,6 +68,11 @@ const TAB_CONFIG = {
     inactive: { family: 'mci', name: 'tune-variant' },
     active:   { family: 'mci', name: 'tune' },
   },
+  More: {
+    // Overflow hub — Podcast + Settings live here after the nav consolidation
+    inactive: { family: 'mci', name: 'dots-horizontal-circle-outline' },
+    active:   { family: 'mci', name: 'dots-horizontal-circle' },
+  },
 };
 
 function TabIcon({ name, size, color }) {
