@@ -20,6 +20,7 @@ import LoginScreen            from './src/screens/LoginScreen';
 import LockScreen             from './src/screens/LockScreen';
 import LPPerformanceScreen    from './src/screens/LPPerformanceScreen';
 import WatchlistScreen        from './src/screens/WatchlistScreen';
+import FinancialsScreen       from './src/screens/FinancialsScreen';
 import CustomTabBar           from './src/components/CustomTabBar';
 
 import { whoamiV2, getV2User, logoutV2 } from './src/api/client';
@@ -64,9 +65,10 @@ function GPTabs({ onLogout, isDemo, onSwitchToLP }) {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen name="Markets"   component={MarketsScreen} />
-      <Tab.Screen name="Research"  component={HomeStack} />
-      <Tab.Screen name="Fund"      component={FundStack} />
+      <Tab.Screen name="Markets"    component={MarketsScreen} />
+      <Tab.Screen name="Research"   component={HomeStack} />
+      <Tab.Screen name="Financials" component={FinancialsScreen} />
+      <Tab.Screen name="Fund"       component={FundStack} />
       <Tab.Screen name="Positions" component={WatchlistScreen} />
       <Tab.Screen name="Podcast"   component={PodcastScreen} />
       <Tab.Screen name="Settings">

@@ -341,6 +341,12 @@ export const api = {
   cancelReanalyzeAll: (bulkId) =>
     request(`/api/reports/reanalyze-all/${bulkId}/cancel`, { method: 'POST' }),
   getQuote:     (ticker) => request(`/api/quote/${ticker}`),
+
+  // ---------- Financials (pure-DB on the server — zero LLM / zero live pulls) ----------
+  getFinancialsDashboard: (ticker, periodType = 'annual') =>
+    request(`/api/financials/${encodeURIComponent(ticker)}/dashboard?period_type=${periodType}`),
+  getFinancialsPriceHistory: (ticker, range = 'YTD') =>
+    request(`/api/financials/${encodeURIComponent(ticker)}/price-history?range=${encodeURIComponent(range)}`),
   getSpyYtd:    ()       => request('/api/market/spy-ytd'),
   // ---------- Markets dashboard (mobile home tab) ----------
   // Live index ribbon (S&P, Nasdaq, Dow, VIX, …)

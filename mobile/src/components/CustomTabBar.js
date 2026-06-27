@@ -47,6 +47,11 @@ const TAB_CONFIG = {
     inactive: { family: 'mci', name: 'chart-areaspline-variant' },
     active:   { family: 'mci', name: 'chart-areaspline' },
   },
+  Financials: {
+    // Bank/ledger glyph — SEC fundamentals dashboard
+    inactive: { family: 'mci', name: 'bank-outline' },
+    active:   { family: 'mci', name: 'bank' },
+  },
   Podcast: {
     // Microphone — DGA HiTech Podcast
     inactive: { family: 'mci', name: 'microphone-outline' },
@@ -112,7 +117,7 @@ export default function CustomTabBar({ state, navigation }) {
                 />
               </View>
 
-              <Text style={[styles.label, focused && styles.labelActive]}>
+              <Text numberOfLines={1} style={[styles.label, focused && styles.labelActive]}>
                 {LABEL_OVERRIDE[route.name] || route.name}
               </Text>
               {/* Glow dot below active label */}
