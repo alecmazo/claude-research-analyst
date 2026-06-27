@@ -12,6 +12,7 @@ import {
   RefreshControl, StyleSheet, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AppHeader from '../components/AppHeader';
 import { api } from '../api/client';
@@ -19,6 +20,23 @@ import { spacing, radius, fontSize, useTheme } from '../design';
 
 const LAST_KEY = '@dga_fin_last';
 const RANGES = ['1M', '3M', 'YTD', '1Y', '3Y', '5Y', '10Y', 'All'];
+
+// Plain-language explanations of the scores/graphics (tap ⓘ to reveal).
+const EXPL_DGA_SCORE =
+  'A 0–100 quality composite blended from five pillars: Profitability (30%), Growth (25%), ' +
+  'Financial Strength (20%), Predictability (15%), and Value (10%). Each bar is that pillar’s own ' +
+  '0–100 sub-score; the headline number weights them as above.';
+const EXPL_RATING_HIST =
+  'Rating bar = absolute quality of today’s value vs fixed good / fair / poor thresholds ' +
+  '(green = strong, amber = ok, red = weak). Vs History bar = where today’s value sits within this ' +
+  'company’s own past (up to 12 fiscal years) — a fuller bar means it’s near its own best. ' +
+  'The card’s /10 = the average quality of the metrics listed.';
+const EXPL_VALUE_RANK =
+  'DGA Value Rank /10 scores how cheap the stock looks across many valuation measures — P/E, EV/EBITDA, ' +
+  'P/FCF, PEG, and price vs the DCF, Graham, Peter-Lynch and DGA Value anchors. Each row’s Rating is ' +
+  'green when the multiple is low (cheap), red when high (expensive); the rank is their average. ' +
+  '10 = cheap on most measures, low = richly valued. These are point-in-time multiples, so there’s no ' +
+  'Vs-History bar here.';
 
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 const fmtRank = (fmt, v) => {
@@ -94,13 +112,87 @@ function Bar({ pct, color, track }) {
   );
 }
 
-function RankCard({ card, t, s }) {
+// Compact number formats for the fundamentals legends.
+const fmtNum = (n) => {
+  if (n == null) return '';
+  const a = Math.abs(n);
+  if (a >= 1e12) return (n / 1e12).toFixed(2) + 'T';
+  if (a >= 1e9)  return (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6)  return (n / 1e6).toFixed(0) + 'M';
+  return String(Math.round(n));
+};
+const fmtMoney = (n) => n == null ? '' : '$' + fmtNum(n);
+const fmtPctS  = (v) => v == null ? '' : v.toFixed(1) + '%';
+
+// ── multi-line fundamentals mini-chart (pure View, shared y-axis) ──────────────
+function MiniMulti({ series, width, height, t }) {
+  const all = series.flatMap((s) => (s.values || [])).filter((v) => v != null);
+  if (all.length < 2) return <View style={{ height }} />;
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (lo > 0) lo = 0;                          // anchor positive series to a 0 baseline
+  const span = (hi - lo) || 1;
+  hi += span * 0.06; if (lo < 0) lo -= span * 0.06;
+  const zeroY = height - ((0 - lo) / (hi - lo)) * height;
+  return (
+    <View style={{ width, height }}>
+      {lo < 0 && <View style={{ position: 'absolute', left: 0, right: 0, top: zeroY, height: 1, backgroundColor: t.border }} />}
+      {series.map((ser, si) => {
+        const vals = ser.values || [];
+        const idx = vals.map((v, i) => [i, v]).filter((p) => p[1] != null);
+        if (idx.length < 2) return null;
+        const n = vals.length;
+        const xOf = (i) => (n === 1 ? width / 2 : (i / (n - 1)) * width);
+        const yOf = (v) => height - ((v - lo) / (hi - lo)) * height;
+        const out = [];
+        for (let k = 1; k < idx.length; k++) {
+          const x1 = xOf(idx[k - 1][0]), y1 = yOf(idx[k - 1][1]);
+          const x2 = xOf(idx[k][0]), y2 = yOf(idx[k][1]);
+          const dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy);
+          out.push(
+            <View key={si + '-' + k} style={{
+              position: 'absolute', left: (x1 + x2) / 2 - len / 2, top: (y1 + y2) / 2 - 1,
+              width: len, height: 2, backgroundColor: ser.color,
+              transform: [{ rotate: (Math.atan2(dy, dx) * 180) / Math.PI + 'deg' }],
+            }} />
+          );
+        }
+        return out;
+      })}
+    </View>
+  );
+}
+
+function FundChart({ title, series, width, fmt, t }) {
+  if (!series.some((s) => (s.values || []).some((v) => v != null))) return null;
+  const last = (vals) => { const f = (vals || []).filter((v) => v != null); return f.length ? f[f.length - 1] : null; };
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+        <Text style={{ fontSize: fontSize.caption, fontWeight: '800', color: t.textPrimary }}>{title}</Text>
+        {series.map((ser, i) => (
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+            <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: ser.color }} />
+            <Text style={{ fontSize: 9.5, color: t.textSecondary }}>{ser.name} {fmt(last(ser.values))}</Text>
+          </View>
+        ))}
+      </View>
+      <MiniMulti series={series} width={width} height={62} t={t} />
+    </View>
+  );
+}
+
+function RankCard({ card, t, s, expl }) {
+  const [open, setOpen] = useState(false);
   if (!card || !(card.metrics || []).length) return null;
   const rc = rankColor(t, card.rank);
   return (
     <View style={s.card}>
       <View style={s.rankHead}>
-        <Text style={s.cardTitle}>{card.title}</Text>
+        <TouchableOpacity onPress={() => setOpen((o) => !o)} activeOpacity={0.7}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1 }}>
+          <Text style={s.cardTitle}>{card.title}</Text>
+          <Ionicons name={open ? 'information-circle' : 'information-circle-outline'} size={15} color={open ? t.primary : t.textDim} />
+        </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           <View style={{ width: 56 }}>
             <Bar pct={card.rank == null ? null : card.rank * 10} color={rc} track={t.surfaceAlt} />
@@ -110,6 +202,13 @@ function RankCard({ card, t, s }) {
             <Text style={s.rankDen}>/10</Text>
           </Text>
         </View>
+      </View>
+      {open && <Text style={s.explTxt}>{expl}</Text>}
+      <View style={s.rankColHead}>
+        <Text style={[s.rankName, { color: t.textDim }]}>Metric</Text>
+        <Text style={[s.rankVal, { color: t.textDim, fontWeight: '700' }]}>Current</Text>
+        <Text style={s.rankColLbl}>Rating</Text>
+        <Text style={s.rankColLbl}>vs Hist</Text>
       </View>
       {card.metrics.map((m, i) => (
         <View key={i} style={[s.rankRow, i === card.metrics.length - 1 && { borderBottomWidth: 0 }]}>
@@ -137,6 +236,7 @@ export default function FinancialsScreen() {
   const [histLoading, setHistLoading] = useState(false);
   const [error, setError] = useState(null);
   const [chartW, setChartW] = useState(300);
+  const [scoreInfo, setScoreInfo] = useState(false);
   const reqId = useRef(0);
 
   const loadHistory = useCallback(async (tk, rng) => {
@@ -181,6 +281,9 @@ export default function FinancialsScreen() {
   const sc = data?.dga_score || {};
   const comps = sc.components || {};
   const rc = data?.rank_cards || {};
+  const anchors = data?.valuation || [];
+  const S = data?.series || [];
+  const col = (k) => S.map((x) => x[k]);
   const stats = hist?.stats || {};
   const lineColor = (stats.change_pct != null && stats.change_pct < 0) ? t.red : t.green;
 
@@ -290,12 +393,17 @@ export default function FinancialsScreen() {
             </View>
 
             <View style={s.card}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <Text style={s.sectionLabel}>DGA SCORE</Text>
+              <TouchableOpacity onPress={() => setScoreInfo((o) => !o)} activeOpacity={0.7}
+                style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <Text style={s.sectionLabel}>DGA SCORE</Text>
+                  <Ionicons name={scoreInfo ? 'information-circle' : 'information-circle-outline'} size={15} color={scoreInfo ? t.primary : t.textDim} />
+                </View>
                 <Text style={{ fontSize: fontSize.hero, fontWeight: '800', color: gradeColor(t, sc.total) }}>
                   {sc.total == null ? '—' : sc.total}<Text style={{ fontSize: fontSize.small, color: t.textDim, fontWeight: '600' }}> /100</Text>
                 </Text>
-              </View>
+              </TouchableOpacity>
+              {scoreInfo && <Text style={s.explTxt}>{EXPL_DGA_SCORE}</Text>}
               <View style={{ marginTop: 8 }}>
                 {compRow('Profitability', comps.profitability)}
                 {compRow('Growth', comps.growth)}
@@ -312,12 +420,54 @@ export default function FinancialsScreen() {
               )}
             </View>
 
-            <RankCard card={rc.financial_strength} t={t} s={s} />
-            <RankCard card={rc.profitability} t={t} s={s} />
-            <RankCard card={rc.value} t={t} s={s} />
+            {/* Fundamentals — the six desktop charts, condensed for mobile */}
+            {S.length > 1 && (
+              <View style={s.card} onLayout={(e) => setChartW(Math.round(e.nativeEvent.layout.width - spacing.lg * 2))}>
+                <Text style={[s.sectionLabel, { marginBottom: 10 }]}>FUNDAMENTALS · {data.period_type === 'quarter' ? 'QUARTERLY' : 'ANNUAL'}</Text>
+                <FundChart title="Revenue · Net income · EBITDA" fmt={fmtMoney} width={chartW} t={t}
+                  series={[{ name: 'Rev', color: t.primary, values: col('revenue') }, { name: 'NI', color: t.green, values: col('net_income') }, { name: 'EBITDA', color: t.amber, values: col('ebitda') }]} />
+                <FundChart title="Cash vs Debt" fmt={fmtMoney} width={chartW} t={t}
+                  series={[{ name: 'Cash', color: t.green, values: col('cash') }, { name: 'Debt', color: t.red, values: col('debt') }]} />
+                <FundChart title="Operating & Free cash flow" fmt={fmtMoney} width={chartW} t={t}
+                  series={[{ name: 'OCF', color: t.amber, values: col('ocf') }, { name: 'FCF', color: t.primary, values: col('fcf') }]} />
+                <FundChart title="ROIC vs WACC" fmt={fmtPctS} width={chartW} t={t}
+                  series={[{ name: 'ROIC', color: t.green, values: col('roic_pct') }, { name: 'WACC', color: t.red, values: col('wacc_pct') }]} />
+                <FundChart title="Shares outstanding" fmt={fmtNum} width={chartW} t={t}
+                  series={[{ name: 'Shares', color: t.primary, values: col('shares') }]} />
+                <FundChart title="Equity vs Assets" fmt={fmtMoney} width={chartW} t={t}
+                  series={[{ name: 'Equity', color: t.green, values: col('equity') }, { name: 'Assets', color: t.primary, values: col('assets') }]} />
+              </View>
+            )}
+
+            <RankCard card={rc.financial_strength} t={t} s={s} expl={EXPL_RATING_HIST} />
+            <RankCard card={rc.profitability} t={t} s={s} expl={EXPL_RATING_HIST} />
+            <RankCard card={rc.value} t={t} s={s} expl={EXPL_VALUE_RANK} />
+
+            {/* Valuation anchors — per-share fair-value models vs current price */}
+            {anchors.length > 0 && (
+              <View style={s.card}>
+                <Text style={[s.sectionLabel, { marginBottom: 8 }]}>VALUATION ANCHORS</Text>
+                {anchors.map((a, i) => {
+                  const maxAbs = Math.max(data.price || 0, ...anchors.map((x) => Math.abs(x.value || 0)), 1);
+                  const w = Math.min(100, (Math.abs(a.value || 0) / maxAbs) * 100);
+                  const barCol = a.value < 0 ? t.red : a.kind === 'dga' ? t.gold : a.kind === 'target' ? t.primary : t.textSecondary;
+                  return (
+                    <View key={i} style={s.anchorRow}>
+                      <Text style={s.anchorLabel} numberOfLines={1}>{a.label}</Text>
+                      <View style={s.anchorTrack}>
+                        <View style={{ height: '100%', width: w + '%', backgroundColor: barCol, borderRadius: 3, opacity: 0.85 }} />
+                        {!!data.price && <View style={{ position: 'absolute', left: Math.min(100, (data.price / maxAbs) * 100) + '%', top: -2, bottom: -2, width: 2, backgroundColor: t.textPrimary }} />}
+                      </View>
+                      <Text style={s.anchorVal}>{fmtPrice(a.value)}</Text>
+                    </View>
+                  );
+                })}
+                {!!data.price && <Text style={s.anchorNote}>▏ vertical line = current price ({fmtPrice(data.price)})</Text>}
+              </View>
+            )}
 
             <Text style={s.footnote}>
-              SEC XBRL store · Rating = absolute quality · Vs History = percentile in this company’s own history · zero LLM tokens
+              SEC XBRL store · tap ⓘ on any score for how it’s computed · zero LLM tokens
             </Text>
           </>
         )}
@@ -376,6 +526,15 @@ function makeStyles(t) {
     rankName: { flex: 1.5, fontSize: fontSize.caption, color: t.textSecondary },
     rankVal: { width: 56, textAlign: 'right', fontSize: fontSize.small, fontWeight: '700', color: t.textPrimary, fontVariant: ['tabular-nums'] },
     rankBar: { flex: 1, marginLeft: 8 },
+    rankColHead: { flexDirection: 'row', alignItems: 'center', paddingBottom: 4 },
+    rankColLbl: { flex: 1, marginLeft: 8, fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: t.textDim, textTransform: 'uppercase' },
+    explTxt: { fontSize: fontSize.caption, color: t.textSecondary, lineHeight: 17, backgroundColor: t.surfaceAlt, padding: 10, borderRadius: radius.md, marginBottom: 10 },
+
+    anchorRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
+    anchorLabel: { width: 132, fontSize: fontSize.caption, color: t.textSecondary },
+    anchorTrack: { flex: 1, height: 12, marginHorizontal: 8, backgroundColor: t.surfaceAlt, borderRadius: 3, position: 'relative' },
+    anchorVal: { width: 64, textAlign: 'right', fontSize: fontSize.small, fontWeight: '700', color: t.textPrimary, fontVariant: ['tabular-nums'] },
+    anchorNote: { fontSize: fontSize.micro, color: t.textDim, marginTop: 6 },
 
     footnote: { fontSize: fontSize.micro, color: t.textDim, lineHeight: 14, marginTop: 4, paddingHorizontal: 4 },
   });
