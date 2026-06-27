@@ -140,7 +140,8 @@ export default function HomeScreen({ navigation, route }) {
           const tickers = reports.map(r => r.ticker);
           try {
             await api.startScan(tickers);
-            navigation.getParent()?.navigate('Scan');
+            Alert.alert('Scan started',
+              'Re-analysis of your saved reports is running in the background. Each report updates as it finishes.');
           } catch (err) {
             haptics.onError();
             Alert.alert('Scan Error', err.message);
