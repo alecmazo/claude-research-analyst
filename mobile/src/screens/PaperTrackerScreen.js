@@ -5,7 +5,7 @@
  * list of Intelligence-brief paper portfolios tracked vs SPY and the live
  * portfolio. YTD upload / attribution is handled in Fund → My Portfolio.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, RefreshControl, TextInput,
@@ -14,10 +14,11 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
-import { colors } from '../components/theme';
-import { Skeleton } from '../design';
+import { Skeleton, useTheme } from '../design';
 
 export default function PaperTrackerScreen({ navigation }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [portfolios,   setPortfolios]   = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState(null);
@@ -59,7 +60,7 @@ export default function PaperTrackerScreen({ navigation }) {
 
   // ── Formatters ────────────────────────────────────────────────────────────
   const fmtPct   = (x) => x == null ? '—' : `${x >= 0 ? '+' : ''}${x.toFixed(2)}%`;
-  const pctColor = (x) => x == null ? colors.midGray : x > 0 ? '#16A34A' : x < 0 ? '#DC2626' : colors.midGray;
+  const pctColor = (x) => x == null ? t.textSecondary : x > 0 ? '#16A34A' : x < 0 ? '#DC2626' : t.textSecondary;
 
   // ── Paper portfolio handlers ───────────────────────────────────────────────
   const openDetail = async (p) => {
@@ -143,11 +144,11 @@ export default function PaperTrackerScreen({ navigation }) {
 
   // ── Render: header ────────────────────────────────────────────────────────
   const renderHeader = () => (
-    <View style={styles.header}>
-      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-        <Ionicons name="arrow-back" size={22} color={colors.white} />
+    <View style={s.header}>
+      <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
+        <Ionicons name="arrow-back" size={22} color={t.onChrome} />
       </TouchableOpacity>
-      <Text style={styles.headerTitle}>Paper Portfolios</Text>
+      <Text style={s.headerTitle}>Paper Portfolios</Text>
       <View style={{ width: 38 }} />
     </View>
   );
@@ -156,9 +157,9 @@ export default function PaperTrackerScreen({ navigation }) {
   const renderLiveCard = () => {
     if (!live) {
       return (
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>LIVE BENCHMARK</Text>
-          <Text style={styles.emptyHint}>
+        <View style={s.card}>
+          <Text style={s.cardLabel}>LIVE BENCHMARK</Text>
+          <Text style={s.emptyHint}>
             No live portfolio yet. Upload Fidelity CSVs in{'\n'}
             <Text style={{ fontWeight: '800' }}>Fund → My Portfolio</Text> to set the benchmark.
           </Text>
@@ -168,68 +169,68 @@ export default function PaperTrackerScreen({ navigation }) {
     const sorted = (live.holdings || []).slice().sort((a, b) => b.weight - a.weight);
 
     return (
-      <View style={styles.card}>
+      <View style={s.card}>
         <TouchableOpacity onPress={toggleLiveDetail} activeOpacity={0.85}>
-          <View style={styles.liveHeaderRow}>
-            <Text style={styles.cardLabel}>LIVE BENCHMARK</Text>
-            <View style={styles.liveDrillHint}>
-              <Text style={styles.liveDrillHintText}>
+          <View style={s.liveHeaderRow}>
+            <Text style={s.cardLabel}>LIVE BENCHMARK</Text>
+            <View style={s.liveDrillHint}>
+              <Text style={s.liveDrillHintText}>
                 {liveExpanded ? 'HIDE YTD' : 'YTD DETAIL →'}
               </Text>
             </View>
           </View>
-          <View style={styles.liveLine}>
-            <Text style={styles.liveKey}>ANCHOR DATE</Text>
-            <Text style={styles.liveVal}>{live.anchor_date || '—'}</Text>
+          <View style={s.liveLine}>
+            <Text style={s.liveKey}>ANCHOR DATE</Text>
+            <Text style={s.liveVal}>{live.anchor_date || '—'}</Text>
           </View>
-          <View style={styles.liveLine}>
-            <Text style={styles.liveKey}>HOLDINGS</Text>
-            <Text style={styles.liveVal}>{sorted.length} positions</Text>
+          <View style={s.liveLine}>
+            <Text style={s.liveKey}>HOLDINGS</Text>
+            <Text style={s.liveVal}>{sorted.length} positions</Text>
           </View>
-          <View style={styles.liveChipsWrap}>
+          <View style={s.liveChipsWrap}>
             {sorted.map(h => (
-              <View key={h.ticker} style={styles.liveChip}>
-                <Text style={styles.liveChipTicker}>{h.ticker}</Text>
-                <Text style={styles.liveChipWeight}>{(h.weight * 100).toFixed(1)}%</Text>
+              <View key={h.ticker} style={s.liveChip}>
+                <Text style={s.liveChipTicker}>{h.ticker}</Text>
+                <Text style={s.liveChipWeight}>{(h.weight * 100).toFixed(1)}%</Text>
               </View>
             ))}
           </View>
         </TouchableOpacity>
 
         {liveExpanded && (
-          <View style={styles.liveDetailWrap}>
+          <View style={s.liveDetailWrap}>
             {liveLoading || !liveDetail ? (
-              <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+              <ActivityIndicator color={t.primary} style={{ marginVertical: 16 }} />
             ) : (
               <>
-                <View style={styles.liveYtdMetrics}>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricKey}>YTD RETURN</Text>
-                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.current_return_pct) }]}>
+                <View style={s.liveYtdMetrics}>
+                  <View style={s.metric}>
+                    <Text style={s.metricKey}>YTD RETURN</Text>
+                    <Text style={[s.metricVal, { color: pctColor(liveDetail.current_return_pct) }]}>
                       {fmtPct(liveDetail.current_return_pct)}
                     </Text>
                   </View>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricKey}>SPY YTD</Text>
-                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.spy_return_pct) }]}>
+                  <View style={s.metric}>
+                    <Text style={s.metricKey}>SPY YTD</Text>
+                    <Text style={[s.metricVal, { color: pctColor(liveDetail.spy_return_pct) }]}>
                       {fmtPct(liveDetail.spy_return_pct)}
                     </Text>
                   </View>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricKey}>VS SPY</Text>
-                    <Text style={[styles.metricVal, { color: pctColor(liveDetail.vs_spy_pct) }]}>
+                  <View style={s.metric}>
+                    <Text style={s.metricKey}>VS SPY</Text>
+                    <Text style={[s.metricVal, { color: pctColor(liveDetail.vs_spy_pct) }]}>
                       {fmtPct(liveDetail.vs_spy_pct)}
                     </Text>
                   </View>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricKey}>MAX DD</Text>
-                    <Text style={[styles.metricVal, { color: colors.midGray }]}>
+                  <View style={s.metric}>
+                    <Text style={s.metricKey}>MAX DD</Text>
+                    <Text style={[s.metricVal, { color: t.textSecondary }]}>
                       -{(liveDetail.max_drawdown_pct || 0).toFixed(1)}%
                     </Text>
                   </View>
                 </View>
 
-                <Text style={styles.liveYtdSub}>
+                <Text style={s.liveYtdSub}>
                   Year-start baseline: {liveDetail.year_start_date} · Day {liveDetail.days_tracked}
                 </Text>
 
@@ -238,46 +239,46 @@ export default function PaperTrackerScreen({ navigation }) {
                   portfolioReturn={liveDetail.weighted_avg_return || 0}
                 />
 
-                <Text style={[styles.detailLabel, { marginTop: 14 }]}>
+                <Text style={[s.detailLabel, { marginTop: 14 }]}>
                   HOLDINGS · sorted by contribution
                 </Text>
-                <View style={styles.tableHeader}>
-                  <Text style={[styles.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
-                  <Text style={styles.thCell}>Wt</Text>
-                  <Text style={styles.thCell}>Ret</Text>
-                  <Text style={styles.thCell}>Contrib</Text>
+                <View style={s.tableHeader}>
+                  <Text style={[s.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
+                  <Text style={s.thCell}>Wt</Text>
+                  <Text style={s.thCell}>Ret</Text>
+                  <Text style={s.thCell}>Contrib</Text>
                 </View>
                 {(liveDetail.holdings || []).map((h, i, arr) => (
-                  <HoldingRow key={h.ticker} h={h} idx={i} arr={arr} />
+                  <HoldingRow t={t} s={s} key={h.ticker} h={h} idx={i} arr={arr} />
                 ))}
 
-                <View style={styles.emailBox}>
-                  <Text style={styles.emailBoxTitle}>EMAIL THIS REPORT</Text>
+                <View style={s.emailBox}>
+                  <Text style={s.emailBoxTitle}>EMAIL THIS REPORT</Text>
                   <TextInput
-                    style={styles.formInput}
+                    style={s.formInput}
                     value={emailAddr}
                     onChangeText={setEmailAddr}
                     placeholder="you@example.com"
-                    placeholderTextColor={colors.midGray}
+                    placeholderTextColor={t.textDim}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
                   <TouchableOpacity
-                    style={[styles.btnPrimary, emailSending && { opacity: 0.6 }]}
+                    style={[s.btnPrimary, emailSending && { opacity: 0.6 }]}
                     onPress={sendEmail}
                     disabled={emailSending}
                   >
                     {emailSending
-                      ? <ActivityIndicator color={colors.navy} />
-                      : <Text style={styles.btnPrimaryText}>Send Report</Text>}
+                      ? <ActivityIndicator color={t.chromeNavy} />
+                      : <Text style={s.btnPrimaryText}>Send Report</Text>}
                   </TouchableOpacity>
                   {emailStatus && (
                     <Text style={[
-                      styles.emailStatus,
+                      s.emailStatus,
                       emailStatus.kind === 'ok'      && { color: '#16A34A' },
-                      emailStatus.kind === 'error'   && { color: '#DC2626' },
-                      emailStatus.kind === 'pending' && { color: colors.midGray, fontStyle: 'italic' },
+                      emailStatus.kind === 'error'   && { color: t.red },
+                      emailStatus.kind === 'pending' && { color: t.textSecondary, fontStyle: 'italic' },
                     ]}>
                       {emailStatus.text}
                     </Text>
@@ -298,88 +299,88 @@ export default function PaperTrackerScreen({ navigation }) {
     const m = p.milestones || {};
 
     return (
-      <View key={p.id} style={[styles.row, p.status === 'closed' && { opacity: 0.6 }]}>
+      <View key={p.id} style={[s.row, p.status === 'closed' && { opacity: 0.6 }]}>
         <TouchableOpacity onPress={() => openDetail(p)} activeOpacity={0.85}>
-          <View style={styles.rowTop}>
+          <View style={s.rowTop}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowName}>{p.name}</Text>
-              <Text style={styles.rowSub}>
+              <Text style={s.rowName}>{p.name}</Text>
+              <Text style={s.rowSub}>
                 {p.n_tickers} tickers · Day {p.days_tracked} · Locked {p.entry_date}
               </Text>
             </View>
-            <View style={[styles.statusPill, p.status === 'closed' && styles.statusPillClosed]}>
-              <Text style={[styles.statusPillText, p.status === 'closed' && { color: colors.midGray }]}>
+            <View style={[s.statusPill, p.status === 'closed' && s.statusPillClosed]}>
+              <Text style={[s.statusPillText, p.status === 'closed' && { color: t.textSecondary }]}>
                 {(p.status || 'tracking').toUpperCase()}
               </Text>
             </View>
           </View>
 
           {(p.holdings_summary || []).length > 0 && (
-            <View style={styles.rowTickers}>
+            <View style={s.rowTickers}>
               {(p.holdings_summary || []).map(h => (
-                <View key={h.ticker} style={styles.rowTickerChip}>
-                  <Text style={styles.rowTickerSym}>{h.ticker}</Text>
-                  <Text style={styles.rowTickerWt}>{(h.weight * 100).toFixed(1)}%</Text>
+                <View key={h.ticker} style={s.rowTickerChip}>
+                  <Text style={s.rowTickerSym}>{h.ticker}</Text>
+                  <Text style={s.rowTickerWt}>{(h.weight * 100).toFixed(1)}%</Text>
                 </View>
               ))}
             </View>
           )}
 
-          <View style={styles.metricsRow}>
-            <Metric label="RETURN"  value={fmtPct(p.current_return_pct)}  color={pctColor(p.current_return_pct)} />
-            <Metric label="VS SPY"  value={fmtPct(p.vs_spy_pct)}          color={pctColor(p.vs_spy_pct)} />
-            <Metric label="VS LIVE" value={fmtPct(p.vs_live_pct)}         color={pctColor(p.vs_live_pct)} />
-            <Metric label="MAX DD"  value={`-${(p.max_drawdown_pct || 0).toFixed(1)}%`} color={colors.midGray} />
+          <View style={s.metricsRow}>
+            <Metric t={t} s={s} label="RETURN"  value={fmtPct(p.current_return_pct)}  color={pctColor(p.current_return_pct)} />
+            <Metric t={t} s={s} label="VS SPY"  value={fmtPct(p.vs_spy_pct)}          color={pctColor(p.vs_spy_pct)} />
+            <Metric t={t} s={s} label="VS LIVE" value={fmtPct(p.vs_live_pct)}         color={pctColor(p.vs_live_pct)} />
+            <Metric t={t} s={s} label="MAX DD"  value={`-${(p.max_drawdown_pct || 0).toFixed(1)}%`} color={t.textSecondary} />
           </View>
 
-          <View style={styles.milestones}>
-            <Milestone label="30D" reached={m.d30} />
-            <Milestone label="60D" reached={m.d60} />
-            <Milestone label="90D" reached={m.d90} />
+          <View style={s.milestones}>
+            <Milestone t={t} s={s} label="30D" reached={m.d30} />
+            <Milestone t={t} s={s} label="60D" reached={m.d60} />
+            <Milestone t={t} s={s} label="90D" reached={m.d90} />
             <Ionicons
               name={isOpen ? 'chevron-up' : 'chevron-down'}
-              size={16} color={colors.midGray}
+              size={16} color={t.textSecondary}
               style={{ marginLeft: 'auto' }}
             />
           </View>
         </TouchableOpacity>
 
         {isOpen && (
-          <View style={styles.detail}>
+          <View style={s.detail}>
             {!detail ? (
-              <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+              <ActivityIndicator color={t.primary} style={{ marginVertical: 16 }} />
             ) : (
               <>
                 <AttributionView
                   holdings={detail.holdings || []}
                   portfolioReturn={detail.weighted_avg_return || 0}
                 />
-                <Text style={[styles.detailLabel, { marginTop: 14 }]}>
+                <Text style={[s.detailLabel, { marginTop: 14 }]}>
                   HOLDINGS · sorted by contribution
                 </Text>
-                <View style={styles.tableHeader}>
-                  <Text style={[styles.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
-                  <Text style={styles.thCell}>Wt</Text>
-                  <Text style={styles.thCell}>Ret</Text>
-                  <Text style={styles.thCell}>Contrib</Text>
+                <View style={s.tableHeader}>
+                  <Text style={[s.thCell, { flex: 1.2, textAlign: 'left' }]}>Ticker</Text>
+                  <Text style={s.thCell}>Wt</Text>
+                  <Text style={s.thCell}>Ret</Text>
+                  <Text style={s.thCell}>Contrib</Text>
                 </View>
                 {(detail.holdings || []).map((h, i, arr) => (
-                  <HoldingRow key={h.ticker} h={h} idx={i} arr={arr} />
+                  <HoldingRow t={t} s={s} key={h.ticker} h={h} idx={i} arr={arr} />
                 ))}
                 {p.status === 'tracking' && (
-                  <View style={styles.actionRow}>
-                    <TouchableOpacity style={styles.btnSecondary} onPress={() => handleClose(p)}>
-                      <Text style={styles.btnSecondaryText}>Stop Tracking</Text>
+                  <View style={s.actionRow}>
+                    <TouchableOpacity style={s.btnSecondary} onPress={() => handleClose(p)}>
+                      <Text style={s.btnSecondaryText}>Stop Tracking</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.btnDanger} onPress={() => handleDelete(p)}>
-                      <Text style={styles.btnDangerText}>Delete</Text>
+                    <TouchableOpacity style={s.btnDanger} onPress={() => handleDelete(p)}>
+                      <Text style={s.btnDangerText}>Delete</Text>
                     </TouchableOpacity>
                   </View>
                 )}
                 {p.status === 'closed' && (
-                  <View style={styles.actionRow}>
-                    <TouchableOpacity style={[styles.btnDanger, { flex: 1 }]} onPress={() => handleDelete(p)}>
-                      <Text style={styles.btnDangerText}>Delete Portfolio</Text>
+                  <View style={s.actionRow}>
+                    <TouchableOpacity style={[s.btnDanger, { flex: 1 }]} onPress={() => handleDelete(p)}>
+                      <Text style={s.btnDangerText}>Delete Portfolio</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -393,7 +394,7 @@ export default function PaperTrackerScreen({ navigation }) {
 
   // ── Root render ────────────────────────────────────────────────────────────
   return (
-    <View style={styles.wrapper}>
+    <View style={s.wrapper}>
       {renderHeader()}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -404,13 +405,13 @@ export default function PaperTrackerScreen({ navigation }) {
           style={{ flex: 1 }}
           contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
           keyboardShouldPersistTaps="handled"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.primary} />}
         >
           {renderLiveCard()}
 
-          <View style={[styles.card, { paddingTop: 14 }]}>
-            <Text style={styles.cardLabel}>PAPER PORTFOLIOS</Text>
-            <Text style={styles.hintText}>
+          <View style={[s.card, { paddingTop: 14 }]}>
+            <Text style={s.cardLabel}>PAPER PORTFOLIOS</Text>
+            <Text style={s.hintText}>
               Intelligence brief baskets tracked vs SPY and your live portfolio from the day they were locked in.
             </Text>
             {loading ? (
@@ -427,9 +428,9 @@ export default function PaperTrackerScreen({ navigation }) {
                 ))}
               </View>
             ) : error ? (
-              <Text style={styles.errorText}>{error}</Text>
+              <Text style={s.errorText}>{error}</Text>
             ) : portfolios.length === 0 ? (
-              <Text style={styles.emptyHint}>
+              <Text style={s.emptyHint}>
                 No paper portfolios yet. Generate an Intelligence brief, then tap{' '}
                 <Text style={{ fontWeight: '800' }}>📌 Track Brief</Text> to lock in.
               </Text>
@@ -444,89 +445,89 @@ export default function PaperTrackerScreen({ navigation }) {
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
-function Metric({ label, value, color }) {
+function Metric({ t, s, label, value, color }) {
   return (
-    <View style={styles.metric}>
-      <Text style={styles.metricKey}>{label}</Text>
-      <Text style={[styles.metricVal, { color }]}>{value}</Text>
+    <View style={s.metric}>
+      <Text style={s.metricKey}>{label}</Text>
+      <Text style={[s.metricVal, { color }]}>{value}</Text>
     </View>
   );
 }
 
-function Milestone({ label, reached }) {
+function Milestone({ t, s, label, reached }) {
   return (
-    <View style={[styles.ms, reached && styles.msReached]}>
-      <Text style={[styles.msText, reached && styles.msTextReached]}>{label}</Text>
+    <View style={[s.ms, reached && s.msReached]}>
+      <Text style={[s.msText, reached && s.msTextReached]}>{label}</Text>
     </View>
   );
 }
 
-function HoldingRow({ h, idx, arr }) {
+function HoldingRow({ t, s, h, idx, arr }) {
   const ret     = h.return_pct;
   const contrib = h.contribution_pct;
-  const cRet    = ret     == null ? colors.midGray : ret     > 0 ? '#16A34A' : ret     < 0 ? '#DC2626' : colors.midGray;
-  const cCon    = contrib == null ? colors.midGray : contrib > 0 ? '#16A34A' : contrib < 0 ? '#DC2626' : colors.midGray;
+  const cRet    = ret     == null ? t.textSecondary : ret     > 0 ? '#16A34A' : ret     < 0 ? '#DC2626' : t.textSecondary;
+  const cCon    = contrib == null ? t.textSecondary : contrib > 0 ? '#16A34A' : contrib < 0 ? '#DC2626' : t.textSecondary;
   const sorted  = [...(arr || [])].sort((a, b) => (b.contribution_pct ?? -1e9) - (a.contribution_pct ?? -1e9));
   const top3    = sorted.filter(x => (x.contribution_pct ?? 0) > 0).slice(0, 3).map(x => x.ticker);
   const bot3    = sorted.slice().reverse().filter(x => (x.contribution_pct ?? 0) < 0).slice(0, 3).map(x => x.ticker);
   const tag     = top3.includes(h.ticker) ? '★ ' : bot3.includes(h.ticker) ? '▼ ' : '';
-  const tagC    = top3.includes(h.ticker) ? colors.primary : bot3.includes(h.ticker) ? '#DC2626' : colors.midGray;
+  const tagC    = top3.includes(h.ticker) ? t.primary : bot3.includes(h.ticker) ? '#DC2626' : t.textSecondary;
   return (
-    <View style={styles.tableRow}>
-      <Text style={[styles.tdCell, { flex: 1.2, textAlign: 'left' }]}>
+    <View style={s.tableRow}>
+      <Text style={[s.tdCell, { flex: 1.2, textAlign: 'left' }]}>
         <Text style={{ color: tagC, fontSize: 10 }}>{tag}</Text>
-        <Text style={{ fontWeight: '800', color: colors.navy }}>{h.ticker}</Text>
+        <Text style={{ fontWeight: '800', color: t.textPrimary }}>{h.ticker}</Text>
       </Text>
-      <Text style={styles.tdCell}>{(h.weight * 100).toFixed(1)}%</Text>
-      <Text style={[styles.tdCell, { color: cRet, fontWeight: '700' }]}>
+      <Text style={s.tdCell}>{(h.weight * 100).toFixed(1)}%</Text>
+      <Text style={[s.tdCell, { color: cRet, fontWeight: '700' }]}>
         {ret == null ? '—' : `${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%`}
       </Text>
-      <Text style={[styles.tdCell, { color: cCon, fontWeight: '700' }]}>
+      <Text style={[s.tdCell, { color: cCon, fontWeight: '700' }]}>
         {contrib == null ? '—' : `${contrib >= 0 ? '+' : ''}${contrib.toFixed(2)}%`}
       </Text>
     </View>
   );
 }
 
-function AttributionView({ holdings, portfolioReturn }) {
+function AttributionView({ t, s, holdings, portfolioReturn }) {
   if (!holdings.length) return null;
   const haveContrib = holdings.some(h => h.contribution_pct != null);
   if (!haveContrib) return null;
   const maxAbs = Math.max(...holdings.map(h => Math.abs(h.contribution_pct ?? 0)), 0.01);
   return (
     <View>
-      <View style={styles.attrSummary}>
+      <View style={s.attrSummary}>
         <View style={[
-          styles.attrTotalPill,
+          s.attrTotalPill,
           { backgroundColor: portfolioReturn >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)' },
         ]}>
-          <Text style={[styles.attrTotalText, { color: portfolioReturn >= 0 ? '#16A34A' : '#DC2626' }]}>
+          <Text style={[s.attrTotalText, { color: portfolioReturn >= 0 ? '#16A34A' : '#DC2626' }]}>
             Portfolio: {portfolioReturn >= 0 ? '+' : ''}{portfolioReturn.toFixed(2)}%
           </Text>
         </View>
-        <Text style={styles.attrHint}>Where the alpha is coming from</Text>
+        <Text style={s.attrHint}>Where the alpha is coming from</Text>
       </View>
-      <View style={styles.attrBars}>
+      <View style={s.attrBars}>
         {holdings.map(h => {
           const v = h.contribution_pct ?? 0;
           const isPos = v >= 0;
           const widthPct = Math.abs(v) / maxAbs * 50;
           const ret = h.return_pct;
           return (
-            <View key={h.ticker} style={styles.attrRow}>
-              <Text style={styles.attrTicker} numberOfLines={1}>{h.ticker}</Text>
-              <View style={styles.attrBarTrack}>
-                <View style={styles.attrAxis} />
+            <View key={h.ticker} style={s.attrRow}>
+              <Text style={s.attrTicker} numberOfLines={1}>{h.ticker}</Text>
+              <View style={s.attrBarTrack}>
+                <View style={s.attrAxis} />
                 {isPos
-                  ? <View style={[styles.attrBarPos, { width: `${widthPct}%` }]} />
-                  : <View style={[styles.attrBarNeg, { width: `${widthPct}%`, right: '50%' }]} />}
+                  ? <View style={[s.attrBarPos, { width: `${widthPct}%` }]} />
+                  : <View style={[s.attrBarNeg, { width: `${widthPct}%`, right: '50%' }]} />}
               </View>
-              <View style={styles.attrValBlock}>
-                <Text style={[styles.attrVal, { color: isPos ? '#16A34A' : '#DC2626' }]}>
+              <View style={s.attrValBlock}>
+                <Text style={[s.attrVal, { color: isPos ? '#16A34A' : '#DC2626' }]}>
                   {isPos ? '+' : ''}{v.toFixed(2)}%
                 </Text>
                 {ret != null && (
-                  <Text style={styles.attrRet}>ret {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</Text>
+                  <Text style={s.attrRet}>ret {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</Text>
                 )}
               </View>
             </View>
@@ -538,105 +539,107 @@ function AttributionView({ holdings, portfolioReturn }) {
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-  wrapper:     { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  wrapper:     { flex: 1, backgroundColor: t.bg },
   header: {
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     paddingTop: 60, paddingBottom: 16, paddingHorizontal: 16,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   backBtn: {
     width: 38, height: 38, borderRadius: 8,
-    backgroundColor: colors.navyLight,
+    backgroundColor: '#1e293b',
     alignItems: 'center', justifyContent: 'center',
   },
-  headerTitle: { color: colors.white, fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
+  headerTitle: { color: t.onChrome, fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
   card: {
-    backgroundColor: colors.white, borderRadius: 12, padding: 14, marginBottom: 14,
+    backgroundColor: t.surface, borderRadius: 12, padding: 14, marginBottom: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
   cardLabel: {
-    fontSize: 11, fontWeight: '700', color: colors.midGray,
+    fontSize: 11, fontWeight: '700', color: t.textSecondary,
     letterSpacing: 1.5, marginBottom: 10,
   },
-  hintText:  { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 12 },
-  emptyHint: { color: colors.midGray, fontSize: 13, fontStyle: 'italic', paddingVertical: 12, lineHeight: 19 },
-  errorText: { color: '#DC2626', fontSize: 13, paddingVertical: 12 },
+  hintText:  { fontSize: 12, color: t.textSecondary, lineHeight: 17, marginBottom: 12 },
+  emptyHint: { color: t.textSecondary, fontSize: 13, fontStyle: 'italic', paddingVertical: 12, lineHeight: 19 },
+  errorText: { color: t.red, fontSize: 13, paddingVertical: 12 },
 
   // Live benchmark
   liveHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   liveDrillHint: { backgroundColor: 'rgba(91,184,212,0.12)', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2 },
-  liveDrillHintText: { color: colors.primary, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
-  liveLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: colors.lightGray },
-  liveKey:  { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 0.5 },
-  liveVal:  { fontSize: 13, fontWeight: '700', color: colors.navy },
-  liveChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.lightGray },
-  liveChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.offWhite, borderWidth: 1, borderColor: colors.lightGray, borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3, gap: 4 },
-  liveChipTicker: { fontFamily: 'Courier New', fontWeight: '800', fontSize: 11, color: colors.navy, letterSpacing: 0.4 },
-  liveChipWeight: { fontFamily: 'Courier New', fontWeight: '600', fontSize: 11, color: colors.midGray },
-  liveDetailWrap: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.lightGray },
+  liveDrillHintText: { color: t.primary, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
+  liveLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: t.border },
+  liveKey:  { fontSize: 11, fontWeight: '700', color: t.textSecondary, letterSpacing: 0.5 },
+  liveVal:  { fontSize: 13, fontWeight: '700', color: t.textPrimary },
+  liveChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.border },
+  liveChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: t.surfaceAlt, borderWidth: 1, borderColor: t.border, borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3, gap: 4 },
+  liveChipTicker: { fontFamily: 'Courier New', fontWeight: '800', fontSize: 11, color: t.textPrimary, letterSpacing: 0.4 },
+  liveChipWeight: { fontFamily: 'Courier New', fontWeight: '600', fontSize: 11, color: t.textSecondary },
+  liveDetailWrap: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: t.border },
   liveYtdMetrics: { flexDirection: 'row', gap: 6, marginBottom: 8 },
-  liveYtdSub: { fontSize: 10, color: colors.midGray, fontStyle: 'italic', marginBottom: 12 },
+  liveYtdSub: { fontSize: 10, color: t.textSecondary, fontStyle: 'italic', marginBottom: 12 },
 
   // Email
   emailBox: { marginTop: 18, padding: 14, borderRadius: 8, backgroundColor: 'rgba(91,184,212,0.05)', borderWidth: 1, borderColor: 'rgba(91,184,212,0.15)' },
-  emailBoxTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 1, color: colors.primary, marginBottom: 8 },
+  emailBoxTitle: { fontSize: 10, fontWeight: '800', letterSpacing: 1, color: t.primary, marginBottom: 8 },
   emailStatus: { fontSize: 12, marginTop: 8, fontWeight: '600' },
-  formInput: { backgroundColor: colors.offWhite, borderWidth: 1, borderColor: colors.lightGray, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: colors.navy, fontFamily: 'Courier New' },
-  btnPrimary: { backgroundColor: colors.primary, paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginTop: 10 },
-  btnPrimaryText: { color: colors.navy, fontSize: 13, fontWeight: '800', letterSpacing: 0.4 },
+  formInput: { backgroundColor: t.surfaceAlt, borderWidth: 1, borderColor: t.border, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: t.textPrimary, fontFamily: 'Courier New' },
+  btnPrimary: { backgroundColor: t.primary, paddingVertical: 12, borderRadius: 6, alignItems: 'center', marginTop: 10 },
+  btnPrimaryText: { color: t.chromeNavy, fontSize: 13, fontWeight: '800', letterSpacing: 0.4 },
 
   // Metrics / milestones
   metricsRow: { flexDirection: 'row', gap: 6, marginTop: 10 },
-  metric: { flex: 1, backgroundColor: colors.white, borderRadius: 6, padding: 7, borderWidth: 1, borderColor: colors.lightGray },
-  metricKey: { fontSize: 9, fontWeight: '700', color: colors.midGray, letterSpacing: 0.4 },
+  metric: { flex: 1, backgroundColor: t.surface, borderRadius: 6, padding: 7, borderWidth: 1, borderColor: t.border },
+  metricKey: { fontSize: 9, fontWeight: '700', color: t.textSecondary, letterSpacing: 0.4 },
   metricVal: { fontSize: 12, fontWeight: '800', fontFamily: 'Courier New', marginTop: 1 },
   milestones: { flexDirection: 'row', gap: 5, marginTop: 10, alignItems: 'center' },
-  ms: { backgroundColor: colors.lightGray, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
-  msReached: { backgroundColor: colors.primary },
-  msText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.7, color: colors.midGray },
-  msTextReached: { color: colors.navy },
+  ms: { backgroundColor: t.surfaceAlt, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
+  msReached: { backgroundColor: t.primary },
+  msText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.7, color: t.textSecondary },
+  msTextReached: { color: t.chromeNavy },
 
   // Portfolio row
-  row: { backgroundColor: colors.offWhite, borderRadius: 10, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: colors.lightGray },
+  row: { backgroundColor: t.surfaceAlt, borderRadius: 10, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: t.border },
   rowTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
-  rowName: { fontSize: 14, fontWeight: '800', color: colors.navy, letterSpacing: 0.3 },
-  rowSub: { fontSize: 11, color: colors.midGray, marginTop: 2 },
+  rowName: { fontSize: 14, fontWeight: '800', color: t.textPrimary, letterSpacing: 0.3 },
+  rowSub: { fontSize: 11, color: t.textSecondary, marginTop: 2 },
   statusPill: { backgroundColor: 'rgba(34,197,94,0.15)', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
-  statusPillClosed: { backgroundColor: colors.lightGray },
+  statusPillClosed: { backgroundColor: t.surfaceAlt },
   statusPillText: { fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#16A34A' },
-  rowTickers: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 10, padding: 7, backgroundColor: colors.white, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray },
-  rowTickerChip: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.offWhite, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  rowTickerSym: { fontFamily: 'Courier New', fontWeight: '800', fontSize: 10, color: colors.navy, letterSpacing: 0.3 },
-  rowTickerWt:  { fontFamily: 'Courier New', fontWeight: '600', fontSize: 10, color: colors.midGray },
+  rowTickers: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 10, padding: 7, backgroundColor: t.surface, borderRadius: 6, borderWidth: 1, borderColor: t.border },
+  rowTickerChip: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: t.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  rowTickerSym: { fontFamily: 'Courier New', fontWeight: '800', fontSize: 10, color: t.textPrimary, letterSpacing: 0.3 },
+  rowTickerWt:  { fontFamily: 'Courier New', fontWeight: '600', fontSize: 10, color: t.textSecondary },
 
   // Detail
-  detail: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.lightGray },
-  detailLabel: { fontSize: 10, fontWeight: '700', color: colors.midGray, letterSpacing: 1.2, marginBottom: 6 },
-  tableHeader: { flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.lightGray },
-  tableRow: { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#F1F4F8' },
-  thCell: { flex: 1, fontSize: 10, fontWeight: '700', color: colors.midGray, letterSpacing: 0.5, textAlign: 'right' },
-  tdCell: { flex: 1, fontSize: 12, color: colors.darkGray, fontFamily: 'Courier New', textAlign: 'right' },
+  detail: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: t.border },
+  detailLabel: { fontSize: 10, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.2, marginBottom: 6 },
+  tableHeader: { flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: t.border },
+  tableRow: { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
+  thCell: { flex: 1, fontSize: 10, fontWeight: '700', color: t.textSecondary, letterSpacing: 0.5, textAlign: 'right' },
+  tdCell: { flex: 1, fontSize: 12, color: t.textPrimary, fontFamily: 'Courier New', textAlign: 'right' },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  btnSecondary: { flex: 1, paddingVertical: 9, borderRadius: 6, borderWidth: 1, borderColor: colors.midGray, alignItems: 'center' },
-  btnSecondaryText: { fontSize: 12, fontWeight: '700', color: colors.darkGray, letterSpacing: 0.4 },
+  btnSecondary: { flex: 1, paddingVertical: 9, borderRadius: 6, borderWidth: 1, borderColor: t.border, alignItems: 'center' },
+  btnSecondaryText: { fontSize: 12, fontWeight: '700', color: t.textPrimary, letterSpacing: 0.4 },
   btnDanger: { flex: 1, paddingVertical: 9, borderRadius: 6, backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.35)', alignItems: 'center' },
-  btnDangerText: { fontSize: 12, fontWeight: '700', color: '#DC2626', letterSpacing: 0.4 },
+  btnDangerText: { fontSize: 12, fontWeight: '700', color: t.red, letterSpacing: 0.4 },
 
   // Attribution tornado
   attrSummary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   attrTotalPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 5 },
   attrTotalText: { fontFamily: 'Courier New', fontSize: 12, fontWeight: '800' },
-  attrHint: { fontSize: 10, color: colors.midGray, fontStyle: 'italic', flexShrink: 1, marginLeft: 8, textAlign: 'right' },
+  attrHint: { fontSize: 10, color: t.textSecondary, fontStyle: 'italic', flexShrink: 1, marginLeft: 8, textAlign: 'right' },
   attrBars: { paddingVertical: 4 },
   attrRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, gap: 6 },
-  attrTicker: { width: 50, fontFamily: 'Courier New', fontSize: 11, fontWeight: '800', color: colors.navy, letterSpacing: 0.3 },
+  attrTicker: { width: 50, fontFamily: 'Courier New', fontSize: 11, fontWeight: '800', color: t.textPrimary, letterSpacing: 0.3 },
   attrBarTrack: { flex: 1, height: 14, position: 'relative', justifyContent: 'center' },
-  attrAxis: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: colors.lightGray },
+  attrAxis: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: t.surfaceAlt },
   attrBarPos: { position: 'absolute', left: '50%', height: 12, backgroundColor: 'rgba(22,163,74,0.85)', borderRadius: 2 },
   attrBarNeg: { position: 'absolute', height: 12, backgroundColor: 'rgba(220,38,38,0.85)', borderRadius: 2 },
   attrValBlock: { width: 64, alignItems: 'flex-end' },
   attrVal: { fontFamily: 'Courier New', fontSize: 11, fontWeight: '800' },
-  attrRet: { fontFamily: 'Courier New', fontSize: 9, color: colors.midGray, marginTop: 1 },
+  attrRet: { fontFamily: 'Courier New', fontSize: 9, color: t.textSecondary, marginTop: 1 },
 });
+}
