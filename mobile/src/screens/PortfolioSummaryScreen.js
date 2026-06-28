@@ -4,7 +4,7 @@
  * completed rebalance run.  Navigated to from PortfolioScreen's
  * "Last Portfolio Run" card via navigation.push('PortfolioSummary').
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Linking,
 } from 'react-native';
@@ -13,13 +13,16 @@ import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
 import AppHeader, { BackButton } from '../components/AppHeader';
 import {
-  colors, mdStyles, formatDate, haptics,
+  makeMdStyles, formatDate, haptics, useTheme,
   MarkdownTOC, TOCToggle, extractHeadings,
 } from '../design';
 
 const LINE_PX = 22;
 
 export default function PortfolioSummaryScreen({ navigation }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
+  const md = useMemo(() => makeMdStyles(t), [t]);
   const [info, setInfo]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState(null);
@@ -54,7 +57,7 @@ export default function PortfolioSummaryScreen({ navigation }) {
   const headingsCount = extractHeadings(info?.summary_md || '').filter(h => h.level === 2).length;
 
   return (
-    <View style={styles.wrapper}>
+    <View style={s.wrapper}>
       <AppHeader
         title="Portfolio Summary"
         showLogo={false}
@@ -75,30 +78,30 @@ export default function PortfolioSummaryScreen({ navigation }) {
       />
 
       {loading && (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Loading summary…</Text>
+        <View style={s.centered}>
+          <ActivityIndicator size="large" color={t.primary} />
+          <Text style={s.loadingText}>Loading summary…</Text>
         </View>
       )}
 
       {!loading && error && (
-        <View style={styles.centered}>
-          <Ionicons name="alert-circle-outline" size={48} color={colors.red} />
-          <Text style={styles.errorText}>{error}</Text>
+        <View style={s.centered}>
+          <Ionicons name="alert-circle-outline" size={48} color={t.red} />
+          <Text style={s.errorText}>{error}</Text>
         </View>
       )}
 
       {!loading && !error && (
         <ScrollView
           ref={scrollRef}
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={64}
         >
           <Markdown
-            style={mdStyles}
+            style={md}
             onLinkPress={(url) => { Linking.openURL(url).catch(() => {}); return false; }}
           >
             {(info?.summary_md || '_No portfolio summary available yet._').replace(/\[\[([^\]]+)\]\]\(([^)]+)\)/g, '[$1]($2)')}
@@ -107,26 +110,27 @@ export default function PortfolioSummaryScreen({ navigation }) {
       )}
 
       {showBackToTop && (
-        <TouchableOpacity onPress={scrollToTop} style={styles.backToTop} activeOpacity={0.8}>
-          <Ionicons name="arrow-up" size={20} color={colors.navy} />
+        <TouchableOpacity onPress={scrollToTop} style={s.backToTop} activeOpacity={0.8}>
+          <Ionicons name="arrow-up" size={20} color={t.onAccent} />
         </TouchableOpacity>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper:    { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  wrapper:    { flex: 1, backgroundColor: t.bg },
   centered:   { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  loadingText:{ marginTop: 12, color: colors.midGray, fontSize: 13 },
-  errorText:  { color: colors.red, marginTop: 12, textAlign: 'center', fontSize: 14 },
+  loadingText:{ marginTop: 12, color: t.textSecondary, fontSize: 13 },
+  errorText:  { color: t.red, marginTop: 12, textAlign: 'center', fontSize: 14 },
   scroll:     { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 60 },
   backToTop: {
     position: 'absolute',
     right: 16, bottom: 24,
     width: 46, height: 46, borderRadius: 23,
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
@@ -135,3 +139,4 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 });
+}

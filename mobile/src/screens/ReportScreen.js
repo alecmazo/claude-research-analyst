@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
   TouchableOpacity, Share, Linking, Alert, RefreshControl,
@@ -8,7 +8,7 @@ import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
 import AppHeader, { BackButton } from '../components/AppHeader';
 import {
-  colors, mdStylesReport, formatDate, haptics,
+  makeMdStyles, formatDate, haptics, useTheme,
   MarkdownTOC, TOCToggle, extractHeadings,
 } from '../design';
 
@@ -28,6 +28,9 @@ export default function ReportScreen({ route, navigation }) {
   const { ticker, provider: routeProvider } = route.params;
   // provider: 'grok' (default) | 'claude' — pulls the right report column
   const provider = (routeProvider || 'grok').toLowerCase();
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
+  const md = useMemo(() => makeMdStyles(t, true), [t]);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -119,14 +122,14 @@ export default function ReportScreen({ route, navigation }) {
   // ── Render ───────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <View style={styles.wrapper}>
+      <View style={s.wrapper}>
         <AppHeader
           title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
           showLogo={false}
           left={<BackButton onPress={() => navigation.goBack()} />}
         />
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.primary} />
+        <View style={s.centered}>
+          <ActivityIndicator size="large" color={t.primary} />
         </View>
       </View>
     );
@@ -134,15 +137,15 @@ export default function ReportScreen({ route, navigation }) {
 
   if (error) {
     return (
-      <View style={styles.wrapper}>
+      <View style={s.wrapper}>
         <AppHeader
           title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
           showLogo={false}
           left={<BackButton onPress={() => navigation.goBack()} />}
         />
-        <View style={styles.centered}>
-          <Ionicons name="alert-circle-outline" size={48} color={colors.red} />
-          <Text style={styles.errorText}>{error}</Text>
+        <View style={s.centered}>
+          <Ionicons name="alert-circle-outline" size={48} color={t.red} />
+          <Text style={s.errorText}>{error}</Text>
         </View>
       </View>
     );
@@ -157,32 +160,32 @@ export default function ReportScreen({ route, navigation }) {
   const isUp     = pct != null && pct >= 0;
 
   return (
-    <View style={styles.wrapper}>
+    <View style={s.wrapper}>
       <AppHeader
         title={provider === 'claude' ? `${ticker} · CLAUDE` : ticker}
         showLogo={false}
         left={<BackButton onPress={() => navigation.goBack()} />}
         right={
-          <View style={styles.headerActions}>
+          <View style={s.headerActions}>
             {headingsCount > 1 && (
               <TOCToggle open={tocOpen} onToggle={() => setTocOpen(o => !o)} />
             )}
-            <TouchableOpacity onPress={handleShare} style={styles.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-              <Ionicons name="share-outline" size={18} color={colors.primary} />
+            <TouchableOpacity onPress={handleShare} style={s.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+              <Ionicons name="share-outline" size={18} color={t.primary} />
             </TouchableOpacity>
             {report?.has_docx !== false && (
-              <TouchableOpacity onPress={() => handleDownload('docx')} style={styles.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Ionicons name="document-outline" size={18} color={colors.primary} />
+              <TouchableOpacity onPress={() => handleDownload('docx')} style={s.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                <Ionicons name="document-outline" size={18} color={t.primary} />
               </TouchableOpacity>
             )}
             {report?.has_pptx && (
-              <TouchableOpacity onPress={() => handleDownload('pptx')} style={[styles.iconBtn, styles.iconBtnGold]} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Ionicons name="easel-outline" size={18} color={colors.navy} />
+              <TouchableOpacity onPress={() => handleDownload('pptx')} style={[s.iconBtn, s.iconBtnGold]} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                <Ionicons name="easel-outline" size={18} color={t.onAccent} />
               </TouchableOpacity>
             )}
             {report?.gamma_url && (
-              <TouchableOpacity onPress={handleViewGamma} style={[styles.iconBtn, styles.iconBtnGold]} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Ionicons name="play-outline" size={18} color={colors.navy} />
+              <TouchableOpacity onPress={handleViewGamma} style={[s.iconBtn, s.iconBtnGold]} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                <Ionicons name="play-outline" size={18} color={t.onAccent} />
               </TouchableOpacity>
             )}
           </View>
@@ -190,13 +193,13 @@ export default function ReportScreen({ route, navigation }) {
       />
 
       {/* Sub-header with live price + generated-at */}
-      <View style={styles.subBar}>
-        <View style={styles.subBarLeft}>
+      <View style={s.subBar}>
+        <View style={s.subBarLeft}>
           {priceStr && (
             <>
-              <Text style={styles.subBarPrice}>{priceStr}</Text>
+              <Text style={s.subBarPrice}>{priceStr}</Text>
               {pctStr && (
-                <Text style={[styles.subBarPct, isUp ? styles.pctUp : styles.pctDown]}>
+                <Text style={[s.subBarPct, isUp ? s.pctUp : s.pctDown]}>
                   {pctStr}
                 </Text>
               )}
@@ -204,7 +207,7 @@ export default function ReportScreen({ route, navigation }) {
           )}
         </View>
         {report?.generated_at && (
-          <Text style={styles.generatedAt}>
+          <Text style={s.generatedAt}>
             {formatDate(report.generated_at)}
           </Text>
         )}
@@ -221,20 +224,20 @@ export default function ReportScreen({ route, navigation }) {
       {/* Body */}
       <ScrollView
         ref={scrollRef}
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        style={s.scroll}
+        contentContainerStyle={s.scrollContent}
         onScroll={handleScroll}
         scrollEventThrottle={64}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.primary}
+            tintColor={t.primary}
           />
         }
       >
         <Markdown
-          style={mdStylesReport}
+          style={md}
           onLinkPress={(url) => {
             Linking.openURL(url).catch(() => {});
             return false; // prevent default behaviour
@@ -248,29 +251,30 @@ export default function ReportScreen({ route, navigation }) {
       {showBackToTop && (
         <TouchableOpacity
           onPress={scrollToTop}
-          style={styles.backToTop}
+          style={s.backToTop}
           activeOpacity={0.8}
         >
-          <Ionicons name="arrow-up" size={20} color={colors.navy} />
+          <Ionicons name="arrow-up" size={20} color={t.onAccent} />
         </TouchableOpacity>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper: { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  wrapper: { flex: 1, backgroundColor: t.bg },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  errorText: { color: colors.red, marginTop: 12, textAlign: 'center', fontSize: 14 },
+  errorText: { color: t.red, marginTop: 12, textAlign: 'center', fontSize: 14 },
 
   headerActions: { flexDirection: 'row', gap: 8 },
   iconBtn: {
-    backgroundColor: colors.navyLight,
+    backgroundColor: t.surfaceAlt,
     borderRadius: 8,
     width: 36, height: 36,
     justifyContent: 'center', alignItems: 'center',
   },
-  iconBtnGold: { backgroundColor: colors.primary },
+  iconBtnGold: { backgroundColor: t.primary },
 
   // ── Sub-bar with live price + generated-at ──
   subBar: {
@@ -278,20 +282,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 8,
-    backgroundColor: colors.white,
-    borderBottomWidth: 1, borderBottomColor: colors.lightGray,
+    backgroundColor: t.surface,
+    borderBottomWidth: 1, borderBottomColor: t.border,
   },
   subBarLeft: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   subBarPrice: {
-    fontSize: 16, fontWeight: '800', color: colors.navy,
+    fontSize: 16, fontWeight: '800', color: t.textPrimary,
     fontFamily: 'Courier New',
   },
   subBarPct: {
     fontSize: 12, fontWeight: '700', fontFamily: 'Courier New',
   },
-  pctUp:   { color: colors.green },
-  pctDown: { color: colors.red },
-  generatedAt: { fontSize: 11, color: colors.midGray },
+  pctUp:   { color: t.green },
+  pctDown: { color: t.red },
+  generatedAt: { fontSize: 11, color: t.textSecondary },
 
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 60 },
@@ -301,7 +305,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16, bottom: 24,
     width: 46, height: 46, borderRadius: 23,
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
@@ -310,3 +314,4 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 });
+}

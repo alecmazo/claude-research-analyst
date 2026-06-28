@@ -77,3 +77,37 @@ export const mdStylesReport = {
   heading2: { ...mdStyles.heading2, fontSize: 18 },
   heading3: { ...mdStyles.heading3, fontSize: 16 },
 };
+
+// ── Theme-aware variant ─────────────────────────────────────────────────────────
+// Builds markdown styles from the active light/dark theme (makeTheme). Pass
+// report=true for the larger long-form headings. Used by migrated screens so the
+// body text stays readable in dark mode.
+export function makeMdStyles(t, report = false) {
+  return {
+    body:     { color: t.textPrimary, fontSize: 14, lineHeight: 22 },
+    heading1: { color: t.textPrimary, fontSize: report ? 22 : 20, fontWeight: '800', marginTop: 20, marginBottom: 8 },
+    heading2: {
+      color: t.textPrimary, fontSize: report ? 18 : 17, fontWeight: '700',
+      marginTop: 18, marginBottom: 6, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: t.border,
+    },
+    heading3: { color: t.textSecondary, fontSize: report ? 16 : 15, fontWeight: '700', marginTop: 14, marginBottom: 4 },
+    strong:   { fontWeight: '800', color: t.textPrimary },
+    em:       { fontStyle: 'italic', color: t.textSecondary },
+    hr:       { backgroundColor: t.border, height: 1, marginVertical: 14 },
+    blockquote: {
+      backgroundColor: t.surfaceAlt, borderLeftWidth: 3, borderLeftColor: t.primary,
+      paddingLeft: 12, paddingVertical: 6, marginVertical: 8, borderRadius: 4,
+    },
+    bullet_list: { marginVertical: 4 },
+    list_item:   { marginVertical: 2 },
+    code_inline: {
+      backgroundColor: t.surfaceAlt, color: t.textPrimary, fontFamily: monoFamily,
+      fontSize: 13, paddingHorizontal: 4, borderRadius: 3,
+    },
+    link:  { color: t.primary, textDecorationLine: 'underline' },
+    table: { borderWidth: 1, borderColor: t.border, borderRadius: 4, marginVertical: 12 },
+    thead: { backgroundColor: t.chromeNavy },
+    th:    { color: '#FFFFFF', fontWeight: '700', padding: 8, fontSize: 12 },
+    td:    { color: t.textPrimary, padding: 8, fontSize: 12, borderTopWidth: 1, borderColor: t.border },
+  };
+}
