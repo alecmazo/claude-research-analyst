@@ -15,7 +15,7 @@ const PODCAST_BUILD = 'pc-v16-public-share-20260525';
  *   Rock    — Grok analyst (fable, British inflection)
  *   Claudia — Claude analyst (nova)
  */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   ActivityIndicator, RefreshControl, Platform, Share, Alert,
@@ -26,7 +26,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { api } from '../api/client';
-import { colors, spacing, radius, shadow, fontSize, letterSpacing, Card, haptics } from '../design';
+import { spacing, radius, shadow, fontSize, letterSpacing, Card, haptics, useTheme } from '../design';
 
 function fmtAgo(iso) {
   if (!iso) return '';
@@ -175,6 +175,8 @@ function cleanTitle(title, ticker, format) {
 
 export default function PodcastScreen() {
   const insets = useSafeAreaInsets();
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [episodes, setEpisodes] = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
@@ -383,26 +385,26 @@ export default function PodcastScreen() {
       <TouchableOpacity
         onPress={() => handleSelect(item)}
         activeOpacity={0.7}
-        style={[styles.epRow, isActive && styles.epRowActive]}
+        style={[s.epRow, isActive && s.epRowActive]}
       >
-        <View style={[styles.epIcon, isActive && styles.epIconActive]}>
+        <View style={[s.epIcon, isActive && s.epIconActive]}>
           <MaterialCommunityIcons
             name={isActive && status?.playing ? 'pause' : 'play'}
             size={20}
-            color={isActive ? colors.navy : colors.white}
+            color={isActive ? t.chromeNavy : t.onChrome}
           />
         </View>
         <View style={{ flex: 1, marginLeft: spacing.md }}>
-          <Text style={styles.epTicker}>
+          <Text style={s.epTicker}>
             {shortTicker(item.ticker)} {ic}
             {item.duration_sec ? (
-              <Text style={styles.epMeta}>  ·  {fmtDuration(item.duration_sec)}</Text>
+              <Text style={s.epMeta}>  ·  {fmtDuration(item.duration_sec)}</Text>
             ) : null}
           </Text>
-          <Text style={styles.epTitle} numberOfLines={1}>
+          <Text style={s.epTitle} numberOfLines={1}>
             {cleanTitle(item.title, item.ticker, item.format)}
           </Text>
-          <Text style={styles.epSub}>
+          <Text style={s.epSub}>
             {fmtWhen(item.generated_at)}
             {item.cost_usd != null ? `  ·  $${Number(item.cost_usd).toFixed(2)}` : ''}
           </Text>
@@ -412,16 +414,16 @@ export default function PodcastScreen() {
   };
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.brand}>🎙️  DGA HiTech</Text>
-        <Text style={styles.brandSub}>Rock vs Claudia · Opus calls it · {PODCAST_BUILD}</Text>
+    <View style={[s.root, { paddingTop: insets.top }]}>
+      <View style={s.header}>
+        <Text style={s.brand}>🎙️  DGA HiTech</Text>
+        <Text style={s.brandSub}>Rock vs Claudia · Opus calls it · {PODCAST_BUILD}</Text>
       </View>
 
       {/* Active episode player (sticky at top once an episode is selected) */}
       {selectedKey ? (
-        <Card style={styles.playerCard}>
-          <Text style={styles.playerTicker}>
+        <Card style={s.playerCard}>
+          <Text style={s.playerTicker}>
             {shortTicker(selectedEp()?.ticker || selectedKey.split('::')[0])}
             {'  '}
             <Text style={{ fontSize: 12, opacity: 0.7 }}>
@@ -433,68 +435,68 @@ export default function PodcastScreen() {
               </Text>
             ) : null}
           </Text>
-          <Text style={styles.playerTitle} numberOfLines={1}>
+          <Text style={s.playerTitle} numberOfLines={1}>
             {cleanTitle(selectedEp()?.title, selectedEp()?.ticker, selectedEp()?.format)}
           </Text>
           {/* Diagnostic strip — temporary until playback is reliable */}
-          <Text style={styles.diag} numberOfLines={2}>
+          <Text style={s.diag} numberOfLines={2}>
             {lastErr
               ? `⚠ ${lastErr}`
               : status?.isLoaded
                 ? `▸ loaded · ${status.playing ? 'PLAYING' : 'paused'} · ${Math.round(status.duration || 0)}s`
                 : `⏳ loading audio…  url: ${(audioUrl || '').replace(/^https?:\/\//, '')}`}
           </Text>
-          <View style={styles.scrubRow}>
-            <Text style={styles.scrubTime}>{fmtDuration(status?.currentTime || 0)}</Text>
-            <View style={styles.scrubTrack}>
+          <View style={s.scrubRow}>
+            <Text style={s.scrubTime}>{fmtDuration(status?.currentTime || 0)}</Text>
+            <View style={s.scrubTrack}>
               <View
                 style={[
-                  styles.scrubFill,
+                  s.scrubFill,
                   { width: `${Math.min(100, ((status?.currentTime || 0) / (status?.duration || 1)) * 100)}%` },
                 ]}
               />
             </View>
-            <Text style={styles.scrubTime}>{fmtDuration(status?.duration || 0)}</Text>
+            <Text style={s.scrubTime}>{fmtDuration(status?.duration || 0)}</Text>
           </View>
-          <View style={styles.controlsRow}>
-            <TouchableOpacity onPress={() => handleSeek(-15)} style={styles.ctrlBtn}>
-              <MaterialCommunityIcons name="rewind-15" size={28} color={colors.white} />
+          <View style={s.controlsRow}>
+            <TouchableOpacity onPress={() => handleSeek(-15)} style={s.ctrlBtn}>
+              <MaterialCommunityIcons name="rewind-15" size={28} color={t.onChrome} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleTogglePlay} style={styles.playBtn}>
+            <TouchableOpacity onPress={handleTogglePlay} style={s.playBtn}>
               <MaterialCommunityIcons
                 name={status?.playing ? 'pause' : 'play'}
                 size={36}
-                color={colors.navy}
+                color={t.chromeNavy}
               />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleSeek(30)} style={styles.ctrlBtn}>
-              <MaterialCommunityIcons name="fast-forward-30" size={28} color={colors.white} />
+            <TouchableOpacity onPress={() => handleSeek(30)} style={s.ctrlBtn}>
+              <MaterialCommunityIcons name="fast-forward-30" size={28} color={t.onChrome} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handleShareEpisode}
-              style={styles.shareBtn}
+              style={s.shareBtn}
               accessibilityLabel="Share episode"
             >
               <MaterialCommunityIcons
                 name={Platform.OS === 'ios' ? 'export-variant' : 'share-variant'}
                 size={20}
-                color={colors.white}
+                color={t.onChrome}
               />
             </TouchableOpacity>
           </View>
 
           {/* Playback speed control */}
-          <View style={styles.speedRow}>
-            <Text style={styles.speedLabel}>SPEED</Text>
+          <View style={s.speedRow}>
+            <Text style={s.speedLabel}>SPEED</Text>
             {[0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => {
               const active = Math.abs(playbackRate - r) < 0.01;
               return (
                 <TouchableOpacity
                   key={r}
                   onPress={() => changeRate(r)}
-                  style={[styles.speedBtn, active && styles.speedBtnActive]}
+                  style={[s.speedBtn, active && s.speedBtnActive]}
                 >
-                  <Text style={[styles.speedBtnTxt, active && styles.speedBtnTxtActive]}>
+                  <Text style={[s.speedBtnTxt, active && s.speedBtnTxtActive]}>
                     {r}×
                   </Text>
                 </TouchableOpacity>
@@ -506,21 +508,21 @@ export default function PodcastScreen() {
 
       {/* Episode list */}
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={colors.gold} />
+        <View style={s.center}>
+          <ActivityIndicator size="large" color={t.gold} />
         </View>
       ) : error ? (
-        <View style={styles.center}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={() => { setLoading(true); loadEpisodes(); }} style={styles.retryBtn}>
-            <Text style={styles.retryTxt}>Retry</Text>
+        <View style={s.center}>
+          <Text style={s.errorText}>{error}</Text>
+          <TouchableOpacity onPress={() => { setLoading(true); loadEpisodes(); }} style={s.retryBtn}>
+            <Text style={s.retryTxt}>Retry</Text>
           </TouchableOpacity>
         </View>
       ) : episodes.length === 0 ? (
-        <View style={styles.center}>
-          <MaterialCommunityIcons name="podcast" size={48} color={colors.midGray} />
-          <Text style={styles.emptyTitle}>No episodes yet</Text>
-          <Text style={styles.emptySub}>
+        <View style={s.center}>
+          <MaterialCommunityIcons name="podcast" size={48} color={t.textSecondary} />
+          <Text style={s.emptyTitle}>No episodes yet</Text>
+          <Text style={s.emptySub}>
             Generate one from the web app (LLM Lab → Podcast → Generate audio).
           </Text>
         </View>
@@ -534,29 +536,30 @@ export default function PodcastScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={() => { setRefreshing(true); loadEpisodes(); }}
-              tintColor={colors.gold}
+              tintColor={t.gold}
             />
           }
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          ItemSeparatorComponent={() => <View style={s.sep} />}
         />
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  root: { flex: 1, backgroundColor: t.bg },
   header: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.lg,
     paddingBottom: spacing.md,
   },
-  brand:    { color: colors.navy, fontSize: fontSize.xl, fontWeight: '800', letterSpacing: -0.3 },
-  brandSub: { color: colors.midGray, fontSize: fontSize.caption, marginTop: 2 },
+  brand:    { color: t.textPrimary, fontSize: fontSize.xl, fontWeight: '800', letterSpacing: -0.3 },
+  brandSub: { color: t.textSecondary, fontSize: fontSize.caption, marginTop: 2 },
 
   // Player card (navy)
   playerCard: {
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
     padding: spacing.lg,
@@ -564,13 +567,13 @@ const styles = StyleSheet.create({
     ...shadow.hero,
   },
   playerTicker: {
-    color: colors.gold,
+    color: t.gold,
     fontSize: fontSize.hero,
     fontWeight: '800',
     letterSpacing: letterSpacing.ticker,
   },
   playerTitle: {
-    color: colors.white,
+    color: t.onChrome,
     fontSize: fontSize.body,
     fontWeight: '600',
     marginTop: 2,
@@ -585,14 +588,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg, gap: spacing.md,
   },
   scrubTime: {
-    color: colors.white, fontSize: fontSize.caption, opacity: 0.7,
+    color: t.onChrome, fontSize: fontSize.caption, opacity: 0.7,
     minWidth: 38, textAlign: 'center',
   },
   scrubTrack: {
     flex: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.15)',
     borderRadius: 2, overflow: 'hidden',
   },
-  scrubFill: { height: '100%', backgroundColor: colors.gold },
+  scrubFill: { height: '100%', backgroundColor: t.gold },
   controlsRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     marginTop: spacing.lg, gap: spacing.xl,
@@ -609,7 +612,7 @@ const styles = StyleSheet.create({
     opacity: 0.85,
   },
   playBtn: {
-    width: 64, height: 64, borderRadius: 32, backgroundColor: colors.gold,
+    width: 64, height: 64, borderRadius: 32, backgroundColor: t.gold,
     alignItems: 'center', justifyContent: 'center', ...shadow.card,
   },
 
@@ -634,29 +637,30 @@ const styles = StyleSheet.create({
   epRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.xl, paddingVertical: spacing.lg,
-    backgroundColor: colors.panel,
+    backgroundColor: t.surface,
   },
-  epRowActive: { backgroundColor: '#fffbeb' },
+  epRowActive: { backgroundColor: t.surfaceAlt },
   epIcon: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.navy,
+    width: 40, height: 40, borderRadius: 20, backgroundColor: t.chromeNavy,
     alignItems: 'center', justifyContent: 'center',
   },
-  epIconActive: { backgroundColor: colors.gold },
+  epIconActive: { backgroundColor: t.gold },
   epTicker: {
-    color: colors.navy, fontSize: fontSize.lg, fontWeight: '800',
+    color: t.textPrimary, fontSize: fontSize.lg, fontWeight: '800',
     letterSpacing: letterSpacing.ticker,
   },
-  epMeta: { color: colors.midGray, fontSize: fontSize.small, fontWeight: '500' },
-  epTitle: { color: colors.navy, fontSize: fontSize.small, marginTop: 2 },
-  epSub:   { color: colors.midGray, fontSize: fontSize.caption, marginTop: 2 },
-  sep:     { height: 1, backgroundColor: colors.lightGray, marginHorizontal: spacing.xl },
+  epMeta: { color: t.textSecondary, fontSize: fontSize.small, fontWeight: '500' },
+  epTitle: { color: t.textPrimary, fontSize: fontSize.small, marginTop: 2 },
+  epSub:   { color: t.textSecondary, fontSize: fontSize.caption, marginTop: 2 },
+  sep:     { height: 1, backgroundColor: t.border, marginHorizontal: spacing.xl },
 
   // States
   center:    { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl },
-  emptyTitle:{ color: colors.navy, fontSize: fontSize.lg, fontWeight: '700', marginTop: spacing.md },
-  emptySub:  { color: colors.midGray, fontSize: fontSize.small, textAlign: 'center', marginTop: spacing.sm },
-  errorText: { color: colors.red, fontSize: fontSize.body, textAlign: 'center' },
+  emptyTitle:{ color: t.textPrimary, fontSize: fontSize.lg, fontWeight: '700', marginTop: spacing.md },
+  emptySub:  { color: t.textSecondary, fontSize: fontSize.small, textAlign: 'center', marginTop: spacing.sm },
+  errorText: { color: t.red, fontSize: fontSize.body, textAlign: 'center' },
   retryBtn:  { marginTop: spacing.md, paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
-               backgroundColor: colors.navy, borderRadius: radius.md },
-  retryTxt:  { color: colors.white, fontWeight: '700', letterSpacing: letterSpacing.button },
+               backgroundColor: t.chromeNavy, borderRadius: radius.md },
+  retryTxt:  { color: t.onChrome, fontWeight: '700', letterSpacing: letterSpacing.button },
 });
+}

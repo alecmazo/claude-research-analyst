@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   Alert, ScrollView, ActivityIndicator, Switch,
@@ -13,7 +13,7 @@ import {
   isBiometricAvailable, isBiometricEnabled, getBiometricLabel,
   enableBiometric, disableBiometric,
 } from '../api/biometric';
-import { colors } from '../components/theme';
+import { useTheme } from '../design';
 import AppHeader from '../components/AppHeader';
 
 // Bump on every JS / OTA push so the user can verify what's running.
@@ -34,23 +34,23 @@ function pad2(n) {
 }
 
 // ── Automation Row ─────────────────────────────────────────────────────────────
-function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHourChange, onMinuteChange, nextRunSecs }) {
+function AutoRow({ t, s, icon, label, subtitle, enabled, onToggle, hour, minute, onHourChange, onMinuteChange, nextRunSecs }) {
   return (
-    <View style={styles.autoRow}>
+    <View style={s.autoRow}>
       {/* Label + subtitle */}
-      <View style={styles.autoRowLeft}>
-        <Text style={styles.autoRowLabel}>{icon} {label}</Text>
-        <Text style={styles.autoRowSubtitle}>{subtitle}</Text>
-        <Text style={[styles.autoNextRun, !enabled && { color: colors.midGray }]}>
+      <View style={s.autoRowLeft}>
+        <Text style={s.autoRowLabel}>{icon} {label}</Text>
+        <Text style={s.autoRowSubtitle}>{subtitle}</Text>
+        <Text style={[s.autoNextRun, !enabled && { color: t.textSecondary }]}>
           {enabled ? fmtNextRun(nextRunSecs) : 'Disabled'}
         </Text>
       </View>
 
       {/* Time inputs + switch */}
-      <View style={styles.autoRowRight}>
-        <View style={styles.timeInputRow}>
+      <View style={s.autoRowRight}>
+        <View style={s.timeInputRow}>
           <TextInput
-            style={[styles.timeInput, !enabled && styles.timeInputDisabled]}
+            style={[s.timeInput, !enabled && s.timeInputDisabled]}
             value={hour}
             onChangeText={v => onHourChange(v.replace(/\D/g, '').slice(0, 2))}
             keyboardType="number-pad"
@@ -58,9 +58,9 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
             editable={enabled}
             selectTextOnFocus
           />
-          <Text style={styles.timeColon}>:</Text>
+          <Text style={s.timeColon}>:</Text>
           <TextInput
-            style={[styles.timeInput, !enabled && styles.timeInputDisabled]}
+            style={[s.timeInput, !enabled && s.timeInputDisabled]}
             value={minute}
             onChangeText={v => onMinuteChange(v.replace(/\D/g, '').slice(0, 2))}
             keyboardType="number-pad"
@@ -72,8 +72,8 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
         <Switch
           value={enabled}
           onValueChange={onToggle}
-          trackColor={{ false: colors.lightGray, true: colors.primary }}
-          thumbColor={colors.white}
+          trackColor={{ false: t.border, true: t.primary }}
+          thumbColor={t.onChrome}
           style={{ marginTop: 6 }}
         />
       </View>
@@ -83,6 +83,8 @@ function AutoRow({ icon, label, subtitle, enabled, onToggle, hour, minute, onHou
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitchToAdmin, isLpMode }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [baseUrl, setBaseUrlState]      = useState('');
   const [password, setPassword]         = useState('');
   const [serverStatus, setServerStatus] = useState(null);
@@ -287,20 +289,20 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
   const isUpdating = updateState === 'checking' || updateState === 'downloading' || updateState === 'reloading';
 
   return (
-    <View style={styles.wrapper}>
+    <View style={s.wrapper}>
       <AppHeader title="Settings" />
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView style={s.container} contentContainerStyle={s.content}>
 
         {/* ── Demo Mode Banner + View Switch ── */}
         {isDemo && (
-          <View style={styles.demoBanner}>
-            <Text style={styles.demoBannerText}>🎭 Demo Mode · Read-only · Investor identities anonymised</Text>
+          <View style={s.demoBanner}>
+            <Text style={s.demoBannerText}>🎭 Demo Mode · Read-only · Investor identities anonymised</Text>
             <TouchableOpacity
-              style={styles.demoSwitchBtn}
+              style={s.demoSwitchBtn}
               onPress={isLpMode ? onSwitchToAdmin : onSwitchToLP}
               activeOpacity={0.8}
             >
-              <Text style={styles.demoSwitchBtnText}>
+              <Text style={s.demoSwitchBtnText}>
                 {isLpMode ? '⚙️  Switch to Admin View' : '👁  Switch to LP View'}
               </Text>
             </TouchableOpacity>
@@ -308,106 +310,106 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
         )}
 
         {/* ── API Server ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>API SERVER</Text>
-          <Text style={styles.sectionHint}>
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>API SERVER</Text>
+          <Text style={s.sectionHint}>
             Your Railway (or local) server URL — e.g. https://your-app.up.railway.app
           </Text>
           <TextInput
-            style={styles.input}
+            style={s.input}
             value={baseUrl}
             onChangeText={setBaseUrlState}
             placeholder="https://your-app.up.railway.app"
-            placeholderTextColor={colors.midGray}
+            placeholderTextColor={t.textDim}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
           />
-          <View style={styles.buttonRow}>
-            <TouchableOpacity style={styles.saveBtn} onPress={saveUrl}>
-              <Text style={styles.saveBtnText}>Save URL</Text>
+          <View style={s.buttonRow}>
+            <TouchableOpacity style={s.saveBtn} onPress={saveUrl}>
+              <Text style={s.saveBtnText}>Save URL</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.testBtn, testingConn && styles.disabledBtn]}
+              style={[s.testBtn, testingConn && s.disabledBtn]}
               onPress={testConnection}
               disabled={testingConn}
             >
               {testingConn
-                ? <ActivityIndicator size="small" color={colors.navy} />
-                : <Ionicons name="wifi-outline" size={16} color={colors.navy} />
+                ? <ActivityIndicator size="small" color={t.textPrimary} />
+                : <Ionicons name="wifi-outline" size={16} color={t.textPrimary} />
               }
-              <Text style={styles.testBtnText}>{testingConn ? 'Testing…' : 'Test'}</Text>
+              <Text style={s.testBtnText}>{testingConn ? 'Testing…' : 'Test'}</Text>
             </TouchableOpacity>
-            {serverStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={colors.green} />}
-            {serverStatus === 'error' && <Ionicons name="close-circle"     size={22} color={colors.red}   />}
+            {serverStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={t.green} />}
+            {serverStatus === 'error' && <Ionicons name="close-circle"     size={22} color={t.red}   />}
           </View>
 
-          <TouchableOpacity style={styles.resetBtn} onPress={resetUrl}>
-            <Ionicons name="refresh-outline" size={14} color={colors.midGray} />
-            <Text style={styles.resetBtnText}>Reset to production server (Railway)</Text>
+          <TouchableOpacity style={s.resetBtn} onPress={resetUrl}>
+            <Ionicons name="refresh-outline" size={14} color={t.textSecondary} />
+            <Text style={s.resetBtnText}>Reset to production server (Railway)</Text>
           </TouchableOpacity>
-          <Text style={styles.sectionHint}>
+          <Text style={s.sectionHint}>
             Tap if "Network request failed" — wipes any stale localhost URL and reconnects to https://dga-portfolio.up.railway.app
           </Text>
         </View>
 
         {/* ── Password ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>SERVER PASSWORD</Text>
-          <Text style={styles.sectionHint}>
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>SERVER PASSWORD</Text>
+          <Text style={s.sectionHint}>
             The password set on your server (PORTFOLIO_PASSWORD in .env).{'\n'}
-            <Text style={styles.hint_default}>Default is </Text>
-            <Text style={styles.hint_code}>dgacapital</Text>
-            <Text style={styles.hint_default}> — leave blank to use the default.</Text>
+            <Text style={s.hint_default}>Default is </Text>
+            <Text style={s.hint_code}>dgacapital</Text>
+            <Text style={s.hint_default}> — leave blank to use the default.</Text>
           </Text>
           <TextInput
-            style={styles.input}
+            style={s.input}
             value={password}
             onChangeText={setPassword}
             placeholder="dgacapital"
-            placeholderTextColor={colors.midGray}
+            placeholderTextColor={t.textDim}
             autoCapitalize="none"
             autoCorrect={false}
             secureTextEntry={false}
           />
-          <View style={styles.buttonRow}>
+          <View style={s.buttonRow}>
             <TouchableOpacity
-              style={[styles.saveBtn, styles.saveBtnGold, savingPw && styles.disabledBtn]}
+              style={[s.saveBtn, s.saveBtnGold, savingPw && s.disabledBtn]}
               onPress={savePassword}
               disabled={savingPw}
             >
               {savingPw
-                ? <ActivityIndicator size="small" color={colors.navy} />
-                : <Text style={styles.saveBtnGoldText}>Save &amp; Connect</Text>
+                ? <ActivityIndicator size="small" color={t.chromeNavy} />
+                : <Text style={s.saveBtnGoldText}>Save &amp; Connect</Text>
               }
             </TouchableOpacity>
-            {authStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={colors.green} />}
-            {authStatus === 'error' && <Ionicons name="close-circle"     size={22} color={colors.red}   />}
+            {authStatus === 'ok'    && <Ionicons name="checkmark-circle" size={22} color={t.green} />}
+            {authStatus === 'error' && <Ionicons name="close-circle"     size={22} color={t.red}   />}
           </View>
           {authStatus === 'ok' && (
-            <Text style={styles.authOkText}>✓ Connected — token saved</Text>
+            <Text style={s.authOkText}>✓ Connected — token saved</Text>
           )}
         </View>
 
         {/* ── Security / Biometric lock ── */}
         {bioAvailable && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SECURITY</Text>
-            <View style={styles.bioRow}>
+          <View style={s.section}>
+            <Text style={s.sectionTitle}>SECURITY</Text>
+            <View style={s.bioRow}>
               <View style={{ flexShrink: 1, paddingRight: 12 }}>
-                <Text style={styles.bioRowTitle}>{bioLabel} lock</Text>
-                <Text style={styles.sectionHint}>
+                <Text style={s.bioRowTitle}>{bioLabel} lock</Text>
+                <Text style={s.sectionHint}>
                   Require {bioLabel} every time you open the app.
                 </Text>
               </View>
               {bioBusy ? (
-                <ActivityIndicator color={colors.primary} style={{ marginTop: 4 }} />
+                <ActivityIndicator color={t.primary} style={{ marginTop: 4 }} />
               ) : (
                 <Switch
                   value={bioEnabled}
                   onValueChange={handleToggleBiometric}
-                  trackColor={{ false: colors.lightGray, true: colors.primary }}
-                  thumbColor={colors.white}
+                  trackColor={{ false: t.border, true: t.primary }}
+                  thumbColor={t.onChrome}
                 />
               )}
             </View>
@@ -415,17 +417,17 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
         )}
 
         {/* ── Automation Schedule ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>AUTOMATION SCHEDULE</Text>
-          <Text style={styles.sectionHint}>
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>AUTOMATION SCHEDULE</Text>
+          <Text style={s.sectionHint}>
             Times are Pacific. Changes take effect on the next scheduled cycle.
           </Text>
 
           {autoLoading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+            <ActivityIndicator color={t.primary} style={{ marginVertical: 16 }} />
           ) : (
             <>
-              <AutoRow
+              <AutoRow t={t} s={s}
                 icon="📰"
                 label="Daily Brief"
                 subtitle="Runs at set time, populates Today's Movers"
@@ -438,9 +440,9 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
                 nextRunSecs={briefNextRun}
               />
 
-              <View style={styles.autoSep} />
+              <View style={s.autoSep} />
 
-              <AutoRow
+              <AutoRow t={t} s={s}
                 icon="⚡"
                 label="Market Pulse Scan"
                 subtitle="Scans saved reports, merges into Market Pulse"
@@ -454,22 +456,22 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
               />
 
               <TouchableOpacity
-                style={[styles.saveBtn, styles.saveBtnGold, styles.autoSaveBtn, autoSaving && styles.disabledBtn]}
+                style={[s.saveBtn, s.saveBtnGold, s.autoSaveBtn, autoSaving && s.disabledBtn]}
                 onPress={saveAutomationSettings}
                 disabled={autoSaving}
                 activeOpacity={0.8}
               >
                 {autoSaving
-                  ? <ActivityIndicator size="small" color={colors.navy} />
-                  : <Text style={styles.saveBtnGoldText}>Save Schedule</Text>
+                  ? <ActivityIndicator size="small" color={t.chromeNavy} />
+                  : <Text style={s.saveBtnGoldText}>Save Schedule</Text>
                 }
               </TouchableOpacity>
 
               {autoSaveMsg ? (
                 <Text style={[
-                  styles.autoSaveMsg,
-                  autoSaveMsg.startsWith('✓') && { color: colors.green },
-                  autoSaveMsg.startsWith('⚠') && { color: colors.red },
+                  s.autoSaveMsg,
+                  autoSaveMsg.startsWith('✓') && { color: t.green },
+                  autoSaveMsg.startsWith('⚠') && { color: t.red },
                 ]}>
                   {autoSaveMsg}
                 </Text>
@@ -479,37 +481,37 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
         </View>
 
         {/* ── App Updates ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>APP UPDATES</Text>
-          <Text style={styles.sectionHint}>
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>APP UPDATES</Text>
+          <Text style={s.sectionHint}>
             Tap to pull the latest UI fixes over-the-air. No TestFlight reinstall needed.
           </Text>
-          <View style={styles.versionRow}>
-            <Text style={styles.versionKey}>App build</Text>
-            <Text style={styles.versionVal}>{APP_BUILD}</Text>
+          <View style={s.versionRow}>
+            <Text style={s.versionKey}>App build</Text>
+            <Text style={s.versionVal}>{APP_BUILD}</Text>
           </View>
-          <View style={styles.versionRow}>
-            <Text style={styles.versionKey}>Server build</Text>
-            <Text style={styles.versionVal}>{serverBuild || 'checking…'}</Text>
+          <View style={s.versionRow}>
+            <Text style={s.versionKey}>Server build</Text>
+            <Text style={s.versionVal}>{serverBuild || 'checking…'}</Text>
           </View>
-          <View style={styles.versionRow}>
-            <Text style={styles.versionKey}>OTA channel</Text>
-            <Text style={styles.versionVal}>{Updates.channel || 'embedded'}</Text>
+          <View style={s.versionRow}>
+            <Text style={s.versionKey}>OTA channel</Text>
+            <Text style={s.versionVal}>{Updates.channel || 'embedded'}</Text>
           </View>
-          <View style={styles.versionRow}>
-            <Text style={styles.versionKey}>Runtime</Text>
-            <Text style={styles.versionVal}>{Updates.runtimeVersion || '—'}</Text>
+          <View style={s.versionRow}>
+            <Text style={s.versionKey}>Runtime</Text>
+            <Text style={s.versionVal}>{Updates.runtimeVersion || '—'}</Text>
           </View>
 
           <TouchableOpacity
-            style={[styles.saveBtn, styles.saveBtnGold, isUpdating && styles.disabledBtn]}
+            style={[s.saveBtn, s.saveBtnGold, isUpdating && s.disabledBtn]}
             onPress={checkForUpdates}
             disabled={isUpdating}
           >
             {isUpdating
-              ? <ActivityIndicator size="small" color={colors.navy} />
-              : <Ionicons name="refresh" size={16} color={colors.navy} />}
-            <Text style={styles.saveBtnGoldText}>
+              ? <ActivityIndicator size="small" color={t.chromeNavy} />
+              : <Ionicons name="refresh" size={16} color={t.chromeNavy} />}
+            <Text style={s.saveBtnGoldText}>
               {updateState === 'checking'    ? 'Checking…'
               : updateState === 'downloading' ? 'Downloading…'
               : updateState === 'reloading'   ? 'Restarting…'
@@ -518,9 +520,9 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
           </TouchableOpacity>
           {updateMessage ? (
             <Text style={[
-              styles.updateStatusText,
-              updateState === 'uptodate' && { color: colors.green },
-              updateState === 'error'    && { color: colors.red },
+              s.updateStatusText,
+              updateState === 'uptodate' && { color: t.green },
+              updateState === 'error'    && { color: t.red },
             ]}>
               {updateState === 'uptodate' ? '✓ ' : updateState === 'error' ? '⚠ ' : ''}{updateMessage}
             </Text>
@@ -528,15 +530,15 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
         </View>
 
         {/* ── About ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ABOUT</Text>
-          <Text style={styles.aboutText}>DGA Capital Research Analyst v1.0</Text>
-          <Text style={styles.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>ABOUT</Text>
+          <Text style={s.aboutText}>DGA Capital Research Analyst v1.0</Text>
+          <Text style={s.aboutText}>Powered by SEC EDGAR + xAI Grok</Text>
         </View>
 
         {/* ── Sign Out ── */}
         <TouchableOpacity
-          style={styles.signOutBtn}
+          style={s.signOutBtn}
           onPress={() =>
             Alert.alert(
               'Sign Out',
@@ -557,7 +559,7 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
           activeOpacity={0.75}
         >
           <Ionicons name="log-out-outline" size={18} color="#DC2626" />
-          <Text style={styles.signOutText}>Sign Out</Text>
+          <Text style={s.signOutText}>Sign Out</Text>
         </TouchableOpacity>
 
       </ScrollView>
@@ -565,12 +567,13 @@ export default function SettingsScreen({ onLogout, isDemo, onSwitchToLP, onSwitc
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper:   { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  wrapper:   { flex: 1, backgroundColor: t.bg },
   container: { flex: 1 },
   content:   { padding: 16, paddingBottom: 60 },
   section: {
-    backgroundColor: colors.white,
+    backgroundColor: t.surface,
     borderRadius: 12,
     padding: 16,
     marginBottom: 14,
@@ -580,41 +583,41 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 8 },
-  sectionHint:  { fontSize: 12, color: colors.midGray, lineHeight: 17, marginBottom: 10 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5, marginBottom: 8 },
+  sectionHint:  { fontSize: 12, color: t.textSecondary, lineHeight: 17, marginBottom: 10 },
   bioRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  bioRowTitle: { fontSize: 15, fontWeight: '600', color: colors.darkGray, marginBottom: 2 },
-  hint_default: { fontSize: 12, color: colors.midGray },
-  hint_code:    { fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '700' },
+  bioRowTitle: { fontSize: 15, fontWeight: '600', color: t.textPrimary, marginBottom: 2 },
+  hint_default: { fontSize: 12, color: t.textSecondary },
+  hint_code:    { fontSize: 12, color: t.textPrimary, fontFamily: 'Courier New', fontWeight: '700' },
   input: {
     borderWidth: 1.5,
-    borderColor: colors.lightGray,
+    borderColor: t.border,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
-    color: colors.navy,
+    color: t.textPrimary,
     fontFamily: 'Courier New',
     marginBottom: 10,
   },
   buttonRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   saveBtn: {
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
-  saveBtnText: { color: colors.white, fontWeight: '700', fontSize: 13 },
+  saveBtnText: { color: t.onChrome, fontWeight: '700', fontSize: 13 },
   saveBtnGold: {
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 18,
   },
-  saveBtnGoldText: { color: colors.navy, fontWeight: '800', fontSize: 13 },
+  saveBtnGoldText: { color: t.chromeNavy, fontWeight: '800', fontSize: 13 },
   testBtn: {
-    backgroundColor: colors.lightGray,
+    backgroundColor: t.surfaceAlt,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -623,26 +626,26 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   disabledBtn:  { opacity: 0.5 },
-  testBtnText:  { color: colors.navy, fontWeight: '700', fontSize: 13 },
-  authOkText:   { fontSize: 12, color: colors.green, marginTop: 8, fontWeight: '600' },
-  aboutText:    { fontSize: 13, color: colors.darkGray, lineHeight: 22 },
+  testBtnText:  { color: t.textPrimary, fontWeight: '700', fontSize: 13 },
+  authOkText:   { fontSize: 12, color: t.green, marginTop: 8, fontWeight: '600' },
+  aboutText:    { fontSize: 13, color: t.textPrimary, lineHeight: 22 },
   versionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 4,
   },
-  versionKey: { fontSize: 12, color: colors.midGray },
+  versionKey: { fontSize: 12, color: t.textSecondary },
   versionVal: {
-    fontSize: 12, color: colors.navy, fontFamily: 'Courier New', fontWeight: '600',
+    fontSize: 12, color: t.textPrimary, fontFamily: 'Courier New', fontWeight: '600',
     maxWidth: '60%', textAlign: 'right',
   },
-  updateStatusText: { fontSize: 12, color: colors.midGray, marginTop: 8, lineHeight: 16 },
+  updateStatusText: { fontSize: 12, color: t.textSecondary, marginTop: 8, lineHeight: 16 },
   resetBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 8, marginTop: 8,
   },
-  resetBtnText: { fontSize: 12, fontWeight: '600', color: colors.midGray, textDecorationLine: 'underline' },
+  resetBtnText: { fontSize: 12, fontWeight: '600', color: t.textSecondary, textDecorationLine: 'underline' },
 
   // ── Sign Out ──
   signOutBtn: {
@@ -655,13 +658,13 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
+    borderColor: t.pillDownBg,
+    backgroundColor: t.pillDownBg,
   },
   signOutText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#DC2626',
+    color: t.red,
     letterSpacing: 0.3,
   },
 
@@ -673,29 +676,29 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   autoRowLeft: { flex: 1, paddingRight: 12 },
-  autoRowLabel: { fontSize: 14, fontWeight: '700', color: colors.navy, marginBottom: 2 },
-  autoRowSubtitle: { fontSize: 12, color: colors.midGray, lineHeight: 16 },
-  autoNextRun: { fontSize: 11, color: colors.green, fontWeight: '600', marginTop: 4 },
+  autoRowLabel: { fontSize: 14, fontWeight: '700', color: t.textPrimary, marginBottom: 2 },
+  autoRowSubtitle: { fontSize: 12, color: t.textSecondary, lineHeight: 16 },
+  autoNextRun: { fontSize: 11, color: t.green, fontWeight: '600', marginTop: 4 },
   autoRowRight: { alignItems: 'flex-end' },
   timeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   timeInput: {
     width: 44,
     height: 36,
     borderWidth: 1.5,
-    borderColor: colors.lightGray,
+    borderColor: t.border,
     borderRadius: 6,
     textAlign: 'center',
     fontSize: 16,
     fontWeight: '700',
-    color: colors.navy,
+    color: t.textPrimary,
     fontFamily: 'Courier New',
-    backgroundColor: colors.offWhite,
+    backgroundColor: t.surfaceAlt,
   },
-  timeInputDisabled: { color: colors.midGray, backgroundColor: colors.lightGray },
-  timeColon: { fontSize: 18, fontWeight: '800', color: colors.navy, paddingHorizontal: 2 },
-  autoSep: { height: 1, backgroundColor: colors.lightGray, marginVertical: 4 },
+  timeInputDisabled: { color: t.textSecondary, backgroundColor: t.surfaceAlt },
+  timeColon: { fontSize: 18, fontWeight: '800', color: t.textPrimary, paddingHorizontal: 2 },
+  autoSep: { height: 1, backgroundColor: t.border, marginVertical: 4 },
   autoSaveBtn: { marginTop: 16, justifyContent: 'center', height: 46 },
-  autoSaveMsg: { fontSize: 12, color: colors.midGray, marginTop: 8, fontWeight: '600' },
+  autoSaveMsg: { fontSize: 12, color: t.textSecondary, marginTop: 8, fontWeight: '600' },
 
   // ── Demo Mode styles ──
   demoBanner: {
@@ -726,3 +729,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 });
+}
