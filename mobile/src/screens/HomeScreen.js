@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, RefreshControl, Alert, Switch,
@@ -11,11 +11,13 @@ import {
 } from '../api/client';
 import AppHeader from '../components/AppHeader';
 import {
-  colors, formatTime, formatDateCompact, haptics, SkeletonList,
+  formatTime, formatDateCompact, haptics, SkeletonList, useTheme,
 } from '../design';
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation, route }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [ticker, setTicker]             = useState('');
   const [loading, setLoading]           = useState(false);
   const [runningTicker, setRunningTicker] = useState('');
@@ -337,31 +339,31 @@ export default function HomeScreen({ navigation, route }) {
 
     return (
       <TouchableOpacity
-        style={styles.reportRow}
+        style={s.reportRow}
         onPress={() => navigation.navigate('Report', { ticker: item.ticker })}
         onLongPress={() => handleRowLongPress(item)}
         delayLongPress={350}
         activeOpacity={0.7}
       >
-        <View style={styles.tickerCell}>
+        <View style={s.tickerCell}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {/* Status icon — last attempt success (✅) or failed (❌) */}
             {item.last_attempt_status === 'failed' ? (
-              <Text style={styles.statusIcon}>❌</Text>
+              <Text style={s.statusIcon}>❌</Text>
             ) : item.generated_at ? (
-              <Text style={styles.statusIcon}>✅</Text>
+              <Text style={s.statusIcon}>✅</Text>
             ) : null}
-            <Text style={styles.reportTicker}>{item.ticker}</Text>
+            <Text style={s.reportTicker}>{item.ticker}</Text>
           </View>
-          <View style={styles.formatRow}>
+          <View style={s.formatRow}>
             {item.has_docx && (
-              <View style={styles.docPill}>
-                <Text style={styles.docPillText}>DOC</Text>
+              <View style={s.docPill}>
+                <Text style={s.docPillText}>DOC</Text>
               </View>
             )}
             {item.has_pptx && (
-              <View style={styles.pptPill}>
-                <Text style={styles.pptPillText}>PPT</Text>
+              <View style={s.pptPill}>
+                <Text style={s.pptPillText}>PPT</Text>
               </View>
             )}
             {/* Tappable LLM provider pills — open that specific report */}
@@ -371,10 +373,10 @@ export default function HomeScreen({ navigation, route }) {
                   e.stopPropagation && e.stopPropagation();
                   navigation.navigate('Report', { ticker: item.ticker, provider: 'grok' });
                 }}
-                style={[styles.llmPill, styles.llmPillGrok]}
+                style={[s.llmPill, s.llmPillGrok]}
                 activeOpacity={0.7}
               >
-                <Text style={styles.llmPillText}>GROK</Text>
+                <Text style={s.llmPillText}>GROK</Text>
               </TouchableOpacity>
             )}
             {(item.providers || []).includes('claude') && (
@@ -383,48 +385,48 @@ export default function HomeScreen({ navigation, route }) {
                   e.stopPropagation && e.stopPropagation();
                   navigation.navigate('Report', { ticker: item.ticker, provider: 'claude' });
                 }}
-                style={[styles.llmPill, styles.llmPillClaude]}
+                style={[s.llmPill, s.llmPillClaude]}
                 activeOpacity={0.7}
               >
-                <Text style={styles.llmPillText}>CLAUDE</Text>
+                <Text style={s.llmPillText}>CLAUDE</Text>
               </TouchableOpacity>
             )}
-            <Text style={styles.reportDate}>{dateStr}</Text>
+            <Text style={s.reportDate}>{dateStr}</Text>
           </View>
         </View>
 
-        <View style={styles.priceCell}>
+        <View style={s.priceCell}>
           {priceStr ? (
             <>
-              <Text style={styles.priceText}>{priceStr}</Text>
+              <Text style={s.priceText}>{priceStr}</Text>
               {pctStr && (
-                <Text style={[styles.pctText, isUp ? styles.pctUp : styles.pctDown]}>
+                <Text style={[s.pctText, isUp ? s.pctUp : s.pctDown]}>
                   {pctStr}
                 </Text>
               )}
             </>
           ) : (
-            <Text style={styles.priceMissing}>—</Text>
+            <Text style={s.priceMissing}>—</Text>
           )}
         </View>
 
-        <View style={styles.targetCell}>
+        <View style={s.targetCell}>
           {targetStr ? (
             <>
-              <Text style={styles.targetLabel}>TGT</Text>
-              <Text style={styles.targetText}>{targetStr}</Text>
+              <Text style={s.targetLabel}>TGT</Text>
+              <Text style={s.targetText}>{targetStr}</Text>
               {upsideStr && (
-                <Text style={[styles.upsideText, targetUp ? styles.pctUp : styles.pctDown]}>
+                <Text style={[s.upsideText, targetUp ? s.pctUp : s.pctDown]}>
                   {upsideStr}
                 </Text>
               )}
             </>
           ) : (
-            <Text style={styles.targetMissing}>—</Text>
+            <Text style={s.targetMissing}>—</Text>
           )}
         </View>
 
-        <Ionicons name="chevron-forward" size={14} color={colors.midGray} style={styles.chev} />
+        <Ionicons name="chevron-forward" size={14} color={t.textSecondary} style={s.chev} />
       </TouchableOpacity>
     );
   };
@@ -432,7 +434,7 @@ export default function HomeScreen({ navigation, route }) {
   const lastLoadedStr = lastLoadedAt ? `Updated ${formatTime(lastLoadedAt)}` : '';
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       <AppHeader
         title="Research"
         right={
@@ -442,21 +444,21 @@ export default function HomeScreen({ navigation, route }) {
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <View style={[
-              styles.statusDot,
-              { backgroundColor: serverOk === true ? colors.green : serverOk === false ? colors.red : colors.amber },
+              s.statusDot,
+              { backgroundColor: serverOk === true ? t.green : serverOk === false ? t.red : t.amber },
             ]} />
           </TouchableOpacity>
         }
       />
 
       {/* Ticker input card */}
-      <View style={styles.inputSection}>
-        <Text style={styles.label}>ANALYZE TICKER</Text>
-        <View style={styles.inputRow}>
+      <View style={s.inputSection}>
+        <Text style={s.label}>ANALYZE TICKER</Text>
+        <View style={s.inputRow}>
           <TextInput
-            style={styles.input}
+            style={s.input}
             placeholder="e.g. AAPL"
-            placeholderTextColor={colors.midGray}
+            placeholderTextColor={t.textDim}
             value={ticker}
             onChangeText={t => setTicker(t.toUpperCase())}
             autoCapitalize="characters"
@@ -465,35 +467,35 @@ export default function HomeScreen({ navigation, route }) {
             onSubmitEditing={handleAnalyze}
           />
           <TouchableOpacity
-            style={[styles.analyzeBtn, loading && styles.analyzeBtnDisabled]}
+            style={[s.analyzeBtn, loading && s.analyzeBtnDisabled]}
             onPress={handleAnalyze}
             disabled={loading || !ticker.trim()}
           >
             {loading ? (
-              <View style={styles.analyzeBtnInner}>
-                <ActivityIndicator color={colors.navy} size="small" />
+              <View style={s.analyzeBtnInner}>
+                <ActivityIndicator color={t.chromeNavy} size="small" />
                 {runningTicker ? (
-                  <Text style={styles.analyzeBtnLoadingText}>{runningTicker}…</Text>
+                  <Text style={s.analyzeBtnLoadingText}>{runningTicker}…</Text>
                 ) : null}
               </View>
             ) : (
-              <Text style={styles.analyzeBtnText}>RUN ▶</Text>
+              <Text style={s.analyzeBtnText}>RUN ▶</Text>
             )}
           </TouchableOpacity>
         </View>
-        <View style={styles.gammaRow}>
-          <Text style={styles.gammaLabel}>Generate Presentation</Text>
+        <View style={s.gammaRow}>
+          <Text style={s.gammaLabel}>Generate Presentation</Text>
           <Switch
             value={gammaEnabled}
             onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
-            trackColor={{ false: colors.lightGray, true: colors.primary }}
-            thumbColor={colors.white}
+            trackColor={{ false: t.border, true: t.primary }}
+            thumbColor={t.onChrome}
           />
         </View>
         {/* LLM engine selector — pick Grok / Claude / Both */}
-        <View style={styles.llmRow}>
-          <Text style={styles.llmRowLabel}>ENGINE</Text>
-          <View style={styles.llmPicker}>
+        <View style={s.llmRow}>
+          <Text style={s.llmRowLabel}>ENGINE</Text>
+          <View style={s.llmPicker}>
             {[
               { v: 'grok',   label: 'Grok' },
               { v: 'claude', label: 'Claude' },
@@ -503,18 +505,18 @@ export default function HomeScreen({ navigation, route }) {
                 key={opt.v}
                 onPress={() => setLlmProvider(opt.v)}
                 style={[
-                  styles.llmPickerOpt,
+                  s.llmPickerOpt,
                   llmProvider === opt.v && (
-                    opt.v === 'claude' ? styles.llmPickerOptActiveClaude :
-                    opt.v === 'both'   ? styles.llmPickerOptActiveBoth   :
-                                          styles.llmPickerOptActiveGrok
+                    opt.v === 'claude' ? s.llmPickerOptActiveClaude :
+                    opt.v === 'both'   ? s.llmPickerOptActiveBoth   :
+                                          s.llmPickerOptActiveGrok
                   ),
                 ]}
                 activeOpacity={0.7}
               >
                 <Text style={[
-                  styles.llmPickerOptText,
-                  llmProvider === opt.v && styles.llmPickerOptTextActive,
+                  s.llmPickerOptText,
+                  llmProvider === opt.v && s.llmPickerOptTextActive,
                 ]}>{opt.label}</Text>
               </TouchableOpacity>
             ))}
@@ -524,52 +526,52 @@ export default function HomeScreen({ navigation, route }) {
 
       {/* AI Analyst entry — agentic Q&A over platform data */}
       <TouchableOpacity
-        style={styles.analystBanner}
+        style={s.analystBanner}
         onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
         activeOpacity={0.85}
       >
-        <View style={styles.analystBannerIcon}>
-          <Text style={styles.analystBannerEmoji}>🤖</Text>
+        <View style={s.analystBannerIcon}>
+          <Text style={s.analystBannerEmoji}>🤖</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.analystBannerTitle}>AI Analyst</Text>
-          <Text style={styles.analystBannerSub}>
+          <Text style={s.analystBannerTitle}>AI Analyst</Text>
+          <Text style={s.analystBannerSub}>
             Ask anything across your coverage — live data, cited & verified
           </Text>
         </View>
-        <Text style={styles.analystBannerArrow}>›</Text>
+        <Text style={s.analystBannerArrow}>›</Text>
       </TouchableOpacity>
 
       {/* Reports section header */}
-      <View style={styles.listHeaderRow}>
-        <Text style={styles.sectionTitle}>SAVED REPORTS</Text>
+      <View style={s.listHeaderRow}>
+        <Text style={s.sectionTitle}>SAVED REPORTS</Text>
         {reports.length > 0 && (
-          <Text style={styles.countBadge}>{reports.length}</Text>
+          <Text style={s.countBadge}>{reports.length}</Text>
         )}
         <View style={{ flex: 1 }} />
         {reports.length > 0 && (
           <TouchableOpacity
-            style={styles.reanalyzeAllBtn}
+            style={s.reanalyzeAllBtn}
             onPress={handleReanalyzeAll}
             disabled={bulkPolling}
             activeOpacity={0.8}
           >
-            <Text style={styles.reanalyzeAllBtnText}>
+            <Text style={s.reanalyzeAllBtnText}>
               {bulkPolling ? '⏳ Re-analyzing…' : '🔄 Re-analyze All'}
             </Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
-          <Text style={styles.scanAllBtnText}>⚡ Scan All</Text>
+        <TouchableOpacity style={s.scanAllBtn} onPress={handleScanAll} activeOpacity={0.8}>
+          <Text style={s.scanAllBtnText}>⚡ Scan All</Text>
         </TouchableOpacity>
       </View>
 
       {/* Bulk re-analyze progress banner */}
       {bulkJob && (bulkJob.status === 'running' || bulkJob.status === 'queued' ||
                    bulkJob.status === 'done' || bulkJob.status === 'cancelled') && (
-        <View style={styles.reanalyzeBanner}>
-          <View style={styles.reanalyzeBannerRow}>
-            <Text style={styles.reanalyzeBannerText}>
+        <View style={s.reanalyzeBanner}>
+          <View style={s.reanalyzeBannerRow}>
+            <Text style={s.reanalyzeBannerText}>
               {bulkJob.status === 'done'
                 ? `✓ Done · ${(bulkJob.completed||[]).length}/${bulkJob.total} succeeded · ${(bulkJob.failed||[]).length} failed`
                 : bulkJob.status === 'cancelled'
@@ -577,20 +579,20 @@ export default function HomeScreen({ navigation, route }) {
                 : `Re-analyzing ${bulkJob.current_ticker || '…'} (${(bulkJob.current_index||0)+1}/${bulkJob.total})`}
             </Text>
             {(bulkJob.status === 'running' || bulkJob.status === 'queued') && (
-              <TouchableOpacity style={styles.reanalyzeCancelBtn} onPress={handleCancelReanalyze}>
-                <Text style={styles.reanalyzeCancelText}>CANCEL</Text>
+              <TouchableOpacity style={s.reanalyzeCancelBtn} onPress={handleCancelReanalyze}>
+                <Text style={s.reanalyzeCancelText}>CANCEL</Text>
               </TouchableOpacity>
             )}
           </View>
-          <View style={styles.reanalyzeBarTrack}>
-            <View style={[styles.reanalyzeBarFill,
+          <View style={s.reanalyzeBarTrack}>
+            <View style={[s.reanalyzeBarFill,
                           { width: `${Math.min(100, Math.max(0, bulkJob.progress_pct || 0))}%` }]} />
           </View>
         </View>
       )}
       {lastLoadedStr ? (
         <View style={{ marginHorizontal: 16, marginBottom: 4 }}>
-          <Text style={styles.lastLoadedText}>{lastLoadedStr}</Text>
+          <Text style={s.lastLoadedText}>{lastLoadedStr}</Text>
         </View>
       ) : null}
 
@@ -601,14 +603,14 @@ export default function HomeScreen({ navigation, route }) {
         data={reports}
         keyExtractor={item => item.ticker}
         renderItem={renderReport}
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        ItemSeparatorComponent={() => <View style={s.sep} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.primary} />}
         ListHeaderComponent={
           reports.length > 0 ? (
-            <View style={styles.colHeader}>
-              <Text style={[styles.colHeaderText, { flex: 1 }]}>TICKER</Text>
-              <Text style={[styles.colHeaderText, styles.colHeaderPrice]}>PRICE</Text>
-              <Text style={[styles.colHeaderText, styles.colHeaderTarget]}>TGT / UPSIDE</Text>
+            <View style={s.colHeader}>
+              <Text style={[s.colHeaderText, { flex: 1 }]}>TICKER</Text>
+              <Text style={[s.colHeaderText, s.colHeaderPrice]}>PRICE</Text>
+              <Text style={[s.colHeaderText, s.colHeaderTarget]}>TGT / UPSIDE</Text>
             </View>
           ) : null
         }
@@ -616,10 +618,10 @@ export default function HomeScreen({ navigation, route }) {
           initialLoading ? (
             <SkeletonList count={5} />
           ) : (
-            <View style={styles.emptyWrap}>
-              <Ionicons name="documents-outline" size={44} color={colors.lightGray} />
-              <Text style={styles.emptyTitle}>No reports yet</Text>
-              <Text style={styles.emptySubtitle}>
+            <View style={s.emptyWrap}>
+              <Ionicons name="documents-outline" size={44} color={t.textDim} />
+              <Text style={s.emptyTitle}>No reports yet</Text>
+              <Text style={s.emptySubtitle}>
                 Type a ticker above and tap RUN ▶ to generate your first institutional analysis.
               </Text>
             </View>
@@ -627,20 +629,21 @@ export default function HomeScreen({ navigation, route }) {
         }
         contentContainerStyle={
           initialLoading ? undefined :
-          reports.length > 0 ? styles.listContent : styles.emptyContainer
+          reports.length > 0 ? s.listContent : s.emptyContainer
         }
       />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container:  { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  container:  { flex: 1, backgroundColor: t.bg },
   statusDot:  { width: 10, height: 10, borderRadius: 5 },
 
   // Input card
   inputSection: {
-    backgroundColor: colors.white,
+    backgroundColor: t.surface,
     margin: 16,
     marginBottom: 8,
     borderRadius: 12,
@@ -651,13 +654,13 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  label:    { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5, marginBottom: 10 },
+  label:    { fontSize: 11, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5, marginBottom: 10 },
 
   // AI Analyst banner
   analystBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     marginHorizontal: 16,
     marginTop: 4,
     marginBottom: 4,
@@ -677,36 +680,36 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   analystBannerEmoji: { fontSize: 20 },
-  analystBannerTitle: { color: colors.white, fontWeight: '800', fontSize: 16, letterSpacing: 0.3 },
+  analystBannerTitle: { color: t.onChrome, fontWeight: '800', fontSize: 16, letterSpacing: 0.3 },
   analystBannerSub:   { color: 'rgba(255,255,255,0.62)', fontSize: 12, marginTop: 2 },
-  analystBannerArrow: { color: colors.gold, fontSize: 28, fontWeight: '300', marginLeft: 8 },
+  analystBannerArrow: { color: t.gold, fontSize: 28, fontWeight: '300', marginLeft: 8 },
   inputRow: { flexDirection: 'row', gap: 10 },
   input: {
     flex: 1,
     height: 50,
     borderWidth: 1.5,
-    borderColor: colors.lightGray,
+    borderColor: t.border,
     borderRadius: 8,
     paddingHorizontal: 14,
     fontSize: 18,
     fontWeight: '700',
-    color: colors.navy,
+    color: t.textPrimary,
     letterSpacing: 2,
   },
   analyzeBtn: {
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     borderRadius: 8,
     paddingHorizontal: 18,
     minWidth: 90,
     justifyContent: 'center',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: colors.primaryLight,
+    borderTopColor: t.primary,
     borderBottomWidth: 2,
-    borderBottomColor: colors.primaryDark,
+    borderBottomColor: t.primary,
     ...Platform.select({
       ios: {
-        shadowColor: colors.primary,
+        shadowColor: t.primary,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.55,
         shadowRadius: 10,
@@ -716,8 +719,8 @@ const styles = StyleSheet.create({
   },
   analyzeBtnDisabled: { opacity: 0.5 },
   analyzeBtnInner: { flexDirection: 'row', alignItems: 'center' },
-  analyzeBtnText: { color: colors.navy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  analyzeBtnLoadingText: { color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 1, marginLeft: 6 },
+  analyzeBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
+  analyzeBtnLoadingText: { color: t.chromeNavy, fontWeight: '800', fontSize: 12, letterSpacing: 1, marginLeft: 6 },
   gammaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -725,9 +728,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: colors.lightGray,
+    borderTopColor: t.border,
   },
-  gammaLabel: { fontSize: 14, fontWeight: '600', color: colors.darkGray },
+  gammaLabel: { fontSize: 14, fontWeight: '600', color: t.textPrimary },
 
   // LLM engine selector (Grok / Claude / Both)
   llmRow: {
@@ -735,10 +738,10 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   llmRowLabel: {
-    fontSize: 10, fontWeight: '800', color: colors.midGray, letterSpacing: 1,
+    fontSize: 10, fontWeight: '800', color: t.textSecondary, letterSpacing: 1,
   },
   llmPicker: {
-    flexDirection: 'row', backgroundColor: colors.lightGray,
+    flexDirection: 'row', backgroundColor: t.surfaceAlt,
     borderRadius: 6, padding: 2, gap: 2,
   },
   llmPickerOpt: {
@@ -748,9 +751,9 @@ const styles = StyleSheet.create({
   llmPickerOptActiveClaude: { backgroundColor: '#d97706' },
   llmPickerOptActiveBoth:   { backgroundColor: '#475569' },
   llmPickerOptText: {
-    fontSize: 11, fontWeight: '700', color: colors.darkGray,
+    fontSize: 11, fontWeight: '700', color: t.textPrimary,
   },
-  llmPickerOptTextActive: { color: colors.white },
+  llmPickerOptTextActive: { color: t.onChrome },
 
   // Per-report provider badges (GROK / CLAUDE) — tappable
   llmPill: {
@@ -759,7 +762,7 @@ const styles = StyleSheet.create({
   },
   llmPillGrok:   { backgroundColor: '#0A1628' },
   llmPillClaude: { backgroundColor: '#d97706' },
-  llmPillText:   { fontSize: 9, fontWeight: '800', color: colors.white, letterSpacing: 0.4 },
+  llmPillText:   { fontSize: 9, fontWeight: '800', color: t.onChrome, letterSpacing: 0.4 },
 
   // Status icon (✅ / ❌) before the ticker
   statusIcon: { fontSize: 13, marginRight: 4 },
@@ -799,26 +802,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     marginHorizontal: 16, marginBottom: 4, marginTop: 8,
   },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: colors.midGray, letterSpacing: 1.5 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5 },
   countBadge: {
     marginLeft: 8,
-    fontSize: 11, fontWeight: '700', color: colors.primary,
-    backgroundColor: colors.navy,
+    fontSize: 11, fontWeight: '700', color: t.primary,
+    backgroundColor: t.chromeNavy,
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
     overflow: 'hidden',
   },
-  lastLoadedText: { fontSize: 10, fontWeight: '600', color: colors.midGray, letterSpacing: 0.3 },
+  lastLoadedText: { fontSize: 10, fontWeight: '600', color: t.textSecondary, letterSpacing: 0.3 },
   scanAllBtn: {
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  scanAllBtnText: { color: colors.navy, fontWeight: '800', fontSize: 12, letterSpacing: 0.5 },
+  scanAllBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 12, letterSpacing: 0.5 },
 
   // List container
   listContent: {
-    backgroundColor: colors.white,
+    backgroundColor: t.surface,
     marginHorizontal: 16,
     borderRadius: 10,
     paddingVertical: 4,
@@ -831,9 +834,9 @@ const styles = StyleSheet.create({
   colHeader: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6,
-    borderBottomWidth: 1, borderBottomColor: colors.lightGray,
+    borderBottomWidth: 1, borderBottomColor: t.border,
   },
-  colHeaderText: { fontSize: 9, fontWeight: '800', color: colors.midGray, letterSpacing: 1.2 },
+  colHeaderText: { fontSize: 9, fontWeight: '800', color: t.textSecondary, letterSpacing: 1.2 },
 
   reportRow: {
     flexDirection: 'row', alignItems: 'center',
@@ -842,31 +845,31 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: 'rgba(91,184,212,0.25)',
   },
-  sep: { height: 1, backgroundColor: colors.lightGray, marginLeft: 14 },
+  sep: { height: 1, backgroundColor: t.border, marginLeft: 14 },
   tickerCell:    { flex: 1 },
-  reportTicker:  { fontSize: 15, fontWeight: '800', color: colors.navy, letterSpacing: 1.2, lineHeight: 18 },
+  reportTicker:  { fontSize: 15, fontWeight: '800', color: t.textPrimary, letterSpacing: 1.2, lineHeight: 18 },
   formatRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
-  docPill: { backgroundColor: colors.navy, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
-  docPillText: { color: colors.white, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
-  pptPill: { backgroundColor: colors.primary, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
-  pptPillText: { color: colors.navy, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
-  reportDate: { fontSize: 11, color: colors.midGray, marginLeft: 3 },
+  docPill: { backgroundColor: t.chromeNavy, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  docPillText: { color: t.onChrome, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
+  pptPill: { backgroundColor: t.primary, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  pptPillText: { color: t.chromeNavy, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
+  reportDate: { fontSize: 11, color: t.textSecondary, marginLeft: 3 },
 
   priceCell: { alignItems: 'flex-end', minWidth: 78, marginRight: 10 },
-  priceText: { fontSize: 14, fontWeight: '700', color: colors.navy, fontFamily: 'Courier New', lineHeight: 16 },
+  priceText: { fontSize: 14, fontWeight: '700', color: t.textPrimary, fontFamily: 'Courier New', lineHeight: 16 },
   pctText: { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', lineHeight: 13, marginTop: 1 },
-  pctUp:   { color: colors.green },
-  pctDown: { color: colors.red },
-  priceMissing: { fontSize: 14, color: colors.lightGray, fontFamily: 'Courier New' },
+  pctUp:   { color: t.green },
+  pctDown: { color: t.red },
+  priceMissing: { fontSize: 14, color: t.textDim, fontFamily: 'Courier New' },
 
   targetCell: { alignItems: 'flex-end', minWidth: 70 },
-  targetLabel: { fontSize: 7, fontWeight: '800', color: colors.primary, letterSpacing: 1.0, lineHeight: 10 },
-  targetText: { fontSize: 13, fontWeight: '700', color: colors.darkGray, fontFamily: 'Courier New', lineHeight: 16 },
+  targetLabel: { fontSize: 7, fontWeight: '800', color: t.primary, letterSpacing: 1.0, lineHeight: 10 },
+  targetText: { fontSize: 13, fontWeight: '700', color: t.textPrimary, fontFamily: 'Courier New', lineHeight: 16 },
   upsideText: { fontSize: 11, fontWeight: '700', fontFamily: 'Courier New', lineHeight: 13, marginTop: 1 },
-  targetMissing: { fontSize: 13, color: colors.lightGray, fontFamily: 'Courier New' },
+  targetMissing: { fontSize: 13, color: t.textDim, fontFamily: 'Courier New' },
 
   colHeaderPrice:  { width: 78, marginRight: 10, textAlign: 'right' },
-  colHeaderTarget: { width: 70, textAlign: 'right', color: colors.primary },
+  colHeaderTarget: { width: 70, textAlign: 'right', color: t.primary },
   chev: { marginLeft: 6 },
 
   emptyContainer: { flexGrow: 1, justifyContent: 'center', backgroundColor: 'transparent' },
@@ -875,7 +878,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingVertical: 24,
     marginHorizontal: 16,
-    backgroundColor: colors.white,
+    backgroundColor: t.surface,
     borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -883,6 +886,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.navy, marginTop: 12, letterSpacing: 0.4 },
-  emptySubtitle: { fontSize: 13, color: colors.midGray, textAlign: 'center', marginTop: 6, lineHeight: 18 },
+  emptyTitle: { fontSize: 17, fontWeight: '800', color: t.textPrimary, marginTop: 12, letterSpacing: 0.4 },
+  emptySubtitle: { fontSize: 13, color: t.textSecondary, textAlign: 'center', marginTop: 6, lineHeight: 18 },
 });
+}
