@@ -16,7 +16,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { api } from '../api/client';
 import AppHeader from '../components/AppHeader';
-import { spacing, radius, fontSize, Card, haptics, mdStyles, useTheme } from '../design';
+import { spacing, radius, fontSize, Card, haptics, makeMdStyles, useTheme } from '../design';
 
 // ── format helpers ───────────────────────────────────────────────────────────
 function fmtPct(p) {
@@ -59,6 +59,7 @@ function SectionHeader({ icon, children, right, t, s }) {
 export default function MarketsScreen() {
   const { theme: t } = useTheme();
   const s = useMemo(() => makeStyles(t), [t]);
+  const md = useMemo(() => makeMdStyles(t), [t]);
   const [indices, setIndices]   = useState([]);
   const [movers, setMovers]     = useState(null);   // null = loading
   const [moversAsOf, setAsOf]   = useState('');
@@ -240,7 +241,7 @@ export default function MarketsScreen() {
                 <Ionicons name={briefOpen ? 'chevron-up' : 'chevron-down'} size={18} color={t.textDim} />
               </TouchableOpacity>
               {briefOpen
-                ? <Markdown style={mdStyles}>{brief.markdown}</Markdown>
+                ? <Markdown style={md}>{brief.markdown}</Markdown>
                 : <Text style={s.muted} numberOfLines={2}>{(brief.markdown || '').replace(/[#*>`]/g, '').replace(/\n+/g, ' ').trim()}</Text>}
             </View>
           )}
