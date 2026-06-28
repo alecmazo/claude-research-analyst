@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator,
   ScrollView, TouchableOpacity, Linking, Animated, Easing,
@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api, getGammaEnabled } from '../api/client';
 import AppHeader, { BackButton } from '../components/AppHeader';
-import { colors, haptics, fontSize, radius, shadow } from '../design';
+import { haptics, fontSize, radius, shadow, useTheme } from '../design';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -26,25 +26,25 @@ const STEPS = [
 
 const ETA_SECONDS = 90; // Coarse user-facing estimate; tweak as the pipeline evolves.
 
-function StepRow({ step, status }) {
+function StepRow({ t, s, step, status }) {
   // status: 'pending' | 'active' | 'done' | 'skipped'
   const iconColor =
-    status === 'done'   ? colors.green
-  : status === 'active' ? colors.primary
-  :                       colors.lightGray;
+    status === 'done'   ? t.green
+  : status === 'active' ? t.primary
+  :                       t.textDim;
   const textColor =
-    status === 'done'   ? colors.darkGray
-  : status === 'active' ? colors.navy
-  :                       colors.midGray;
+    status === 'done'   ? t.textPrimary
+  : status === 'active' ? t.textPrimary
+  :                       t.textSecondary;
   return (
-    <View style={styles.stepRow}>
+    <View style={s.stepRow}>
       <Ionicons name={step.icon} size={20} color={iconColor} />
-      <Text style={[styles.stepLabel, { color: textColor }]}>{step.label}</Text>
+      <Text style={[s.stepLabel, { color: textColor }]}>{step.label}</Text>
       {status === 'active' && (
-        <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 'auto' }} />
+        <ActivityIndicator size="small" color={t.primary} style={{ marginLeft: 'auto' }} />
       )}
       {status === 'done' && (
-        <Ionicons name="checkmark" size={16} color={colors.green} style={{ marginLeft: 'auto' }} />
+        <Ionicons name="checkmark" size={16} color={t.green} style={{ marginLeft: 'auto' }} />
       )}
     </View>
   );
@@ -52,6 +52,8 @@ function StepRow({ step, status }) {
 
 export default function AnalysisScreen({ route, navigation }) {
   const { jobId, ticker } = route.params;
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
   const [job, setJob] = useState(null);
   const [progress, setProgress] = useState({ step: 'queued', pct: 0, label: 'Starting…' });
   const [elapsed, setElapsed] = useState(0);
@@ -171,16 +173,16 @@ export default function AnalysisScreen({ route, navigation }) {
   const r = job?.result;
   const rating = r?.summary?.rating || '';
   const ratingColor =
-    /BUY|OVERWEIGHT/i.test(rating)  ? colors.green
-  : /SELL|UNDERWEIGHT/i.test(rating) ? colors.red
-  :                                    colors.amber;
+    /BUY|OVERWEIGHT/i.test(rating)  ? t.green
+  : /SELL|UNDERWEIGHT/i.test(rating) ? t.red
+  :                                    t.amber;
   const target = r?.summary?.price_target;
   const upsidePct = (target && r?.market_price)
     ? ((Number(target) - Number(r.market_price)) / Number(r.market_price)) * 100
     : null;
 
   return (
-    <View style={styles.wrapper}>
+    <View style={s.wrapper}>
       <AppHeader
         title={ticker}
         showLogo={false}
@@ -188,89 +190,89 @@ export default function AnalysisScreen({ route, navigation }) {
         left={<BackButton onPress={() => navigation.goBack()} />}
       />
 
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView style={s.container} contentContainerStyle={s.content}>
         {/* ── Progress card ── */}
-        <View style={styles.card}>
+        <View style={s.card}>
           {/* Top progress bar + ETA */}
-          <View style={styles.progressBarWrap}>
+          <View style={s.progressBarWrap}>
             <Animated.View
               style={[
-                styles.progressBar,
+                s.progressBar,
                 {
                   width: barPct.interpolate({
                     inputRange:  [0, 1],
                     outputRange: ['0%', '100%'],
                   }),
-                  backgroundColor: isFailed ? colors.red : colors.primary,
+                  backgroundColor: isFailed ? t.red : t.primary,
                 },
               ]}
             />
           </View>
-          <View style={styles.progressMeta}>
-            <Text style={styles.progressLabel}>
+          <View style={s.progressMeta}>
+            <Text style={s.progressLabel}>
               {isDone ? 'Complete' : isFailed ? 'Failed' : (progress.label || 'Working…')}
             </Text>
             {!isDone && !isFailed && (
-              <Text style={styles.progressEta}>{etaStr}</Text>
+              <Text style={s.progressEta}>{etaStr}</Text>
             )}
             {(isDone || isFailed) && (
-              <Text style={styles.progressEta}>{elapsed}s</Text>
+              <Text style={s.progressEta}>{elapsed}s</Text>
             )}
           </View>
 
           {/* Step checklist */}
-          <View style={styles.stepsContainer}>
+          <View style={s.stepsContainer}>
             {STEPS.map((step, i) => (
-              <StepRow key={step.key} step={step} status={stepStatus(i)} />
+              <StepRow t={t} s={s} key={step.key} step={step} status={stepStatus(i)} />
             ))}
           </View>
 
           {isFailed && (
-            <View style={styles.errorBox}>
-              <Ionicons name="alert-circle" size={20} color={colors.red} />
-              <Text style={styles.errorText}>{job?.error || 'Analysis failed'}</Text>
+            <View style={s.errorBox}>
+              <Ionicons name="alert-circle" size={20} color={t.red} />
+              <Text style={s.errorText}>{job?.error || 'Analysis failed'}</Text>
             </View>
           )}
           {isFailed && (
             <TouchableOpacity
-              style={styles.retryBtn}
+              style={s.retryBtn}
               onPress={() => {
                 haptics.onPressPrimary();
                 navigation.replace('Analysis', { jobId: '__retry__', ticker });
               }}
             >
-              <Ionicons name="refresh" size={16} color={colors.primary} />
-              <Text style={styles.retryBtnText}>Retry Analysis</Text>
+              <Ionicons name="refresh" size={16} color={t.primary} />
+              <Text style={s.retryBtnText}>Retry Analysis</Text>
             </TouchableOpacity>
           )}
         </View>
 
         {/* ── Hero result card after done ── */}
         {isDone && r && (
-          <View style={styles.heroCard}>
-            <Text style={styles.heroEntity} numberOfLines={1}>
+          <View style={s.heroCard}>
+            <Text style={s.heroEntity} numberOfLines={1}>
               {r.entity_name || ticker}
             </Text>
-            <View style={styles.heroRow}>
+            <View style={s.heroRow}>
               {rating ? (
-                <View style={[styles.ratingBadge, { backgroundColor: ratingColor }]}>
-                  <Text style={styles.ratingBadgeText}>{rating.toUpperCase()}</Text>
+                <View style={[s.ratingBadge, { backgroundColor: ratingColor }]}>
+                  <Text style={s.ratingBadgeText}>{rating.toUpperCase()}</Text>
                 </View>
               ) : null}
               {r.market_price != null && (
-                <View style={styles.priceBlock}>
-                  <Text style={styles.priceLabel}>PRICE</Text>
-                  <Text style={styles.priceValue}>${Number(r.market_price).toFixed(2)}</Text>
+                <View style={s.priceBlock}>
+                  <Text style={s.priceLabel}>PRICE</Text>
+                  <Text style={s.priceValue}>${Number(r.market_price).toFixed(2)}</Text>
                 </View>
               )}
               {target && (
-                <View style={styles.priceBlock}>
-                  <Text style={styles.priceLabel}>TARGET</Text>
-                  <Text style={styles.priceValue}>${Number(target).toFixed(2)}</Text>
+                <View style={s.priceBlock}>
+                  <Text style={s.priceLabel}>TARGET</Text>
+                  <Text style={s.priceValue}>${Number(target).toFixed(2)}</Text>
                   {upsidePct != null && (
                     <Text style={[
-                      styles.upsideText,
-                      upsidePct >= 0 ? styles.upsideUp : styles.upsideDown,
+                      s.upsideText,
+                      upsidePct >= 0 ? s.upsideUp : s.upsideDown,
                     ]}>
                       {upsidePct >= 0 ? '+' : ''}{upsidePct.toFixed(1)}%
                     </Text>
@@ -284,13 +286,13 @@ export default function AnalysisScreen({ route, navigation }) {
         {/* ── Gamma deck CTA ── */}
         {isDone && r?.gamma_url && (
           <TouchableOpacity
-            style={styles.gammaBtn}
+            style={s.gammaBtn}
             onPress={() => { haptics.onPressPrimary(); Linking.openURL(r.gamma_url); }}
             activeOpacity={0.85}
           >
-            <Ionicons name="easel-outline" size={18} color={colors.navy} />
-            <Text style={styles.gammaBtnText}>View Gamma Presentation</Text>
-            <Ionicons name="open-outline" size={15} color={colors.navy} style={{ marginLeft: 'auto' }} />
+            <Ionicons name="easel-outline" size={18} color={t.chromeNavy} />
+            <Text style={s.gammaBtnText}>View Gamma Presentation</Text>
+            <Ionicons name="open-outline" size={15} color={t.chromeNavy} style={{ marginLeft: 'auto' }} />
           </TouchableOpacity>
         )}
 
@@ -300,22 +302,22 @@ export default function AnalysisScreen({ route, navigation }) {
           const isCredits = /credit|insufficient|billing/i.test(err);
           return (
             <TouchableOpacity
-              style={[styles.gammaErrorBox, isCredits && styles.gammaCreditsBox]}
+              style={[s.gammaErrorBox, isCredits && s.gammaCreditsBox]}
               onPress={() => Linking.openURL('https://gamma.app/account')}
               activeOpacity={isCredits ? 0.6 : 1}
             >
               <Ionicons
                 name={isCredits ? 'card-outline' : 'warning-outline'}
                 size={16}
-                color={isCredits ? '#92400E' : colors.amber}
+                color={isCredits ? t.amber : t.amber}
               />
               <View style={{ flex: 1 }}>
-                <Text style={styles.gammaErrorText}>
+                <Text style={s.gammaErrorText}>
                   {isCredits ? 'Gamma credits exhausted' : 'Gamma error'}
                 </Text>
-                <Text style={[styles.gammaErrorText, { marginTop: 2 }]}>{err}</Text>
+                <Text style={[s.gammaErrorText, { marginTop: 2 }]}>{err}</Text>
                 {isCredits && (
-                  <Text style={[styles.gammaErrorText, { marginTop: 4, fontWeight: '700', textDecorationLine: 'underline' }]}>
+                  <Text style={[s.gammaErrorText, { marginTop: 4, fontWeight: '700', textDecorationLine: 'underline' }]}>
                     Tap to open gamma.app/account →
                   </Text>
                 )}
@@ -327,12 +329,12 @@ export default function AnalysisScreen({ route, navigation }) {
         {/* ── View Full Report CTA ── */}
         {isDone && (
           <TouchableOpacity
-            style={styles.viewReportBtn}
+            style={s.viewReportBtn}
             onPress={() => { haptics.onPressPrimary(); navigation.navigate('Report', { ticker }); }}
             activeOpacity={0.85}
           >
-            <Text style={styles.viewReportText}>View Full Report</Text>
-            <Ionicons name="arrow-forward" size={18} color={colors.navy} />
+            <Text style={s.viewReportText}>View Full Report</Text>
+            <Ionicons name="arrow-forward" size={18} color={t.chromeNavy} />
           </TouchableOpacity>
         )}
       </ScrollView>
@@ -340,13 +342,14 @@ export default function AnalysisScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper:  { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  wrapper:  { flex: 1, backgroundColor: t.bg },
   container: { flex: 1 },
   content: { padding: 16, paddingBottom: 60 },
 
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: t.surface,
     borderRadius: radius.xl + 2,
     padding: 20,
     ...shadow.hero,
@@ -355,7 +358,7 @@ const styles = StyleSheet.create({
   // ── Progress bar ──
   progressBarWrap: {
     height: 6,
-    backgroundColor: colors.lightGray,
+    backgroundColor: t.surfaceAlt,
     borderRadius: 3,
     overflow: 'hidden',
     marginBottom: 8,
@@ -374,11 +377,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: fontSize.body,
     fontWeight: '700',
-    color: colors.navy,
+    color: t.textPrimary,
   },
   progressEta: {
     fontSize: fontSize.small,
-    color: colors.midGray,
+    color: t.textSecondary,
     fontFamily: 'Courier New',
     fontWeight: '600',
     marginLeft: 8,
@@ -393,37 +396,37 @@ const styles = StyleSheet.create({
   errorBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: '#FEF2F2',
+    backgroundColor: t.pillDownBg,
     borderRadius: 8,
     padding: 12,
     marginTop: 20,
     gap: 10,
   },
-  errorText: { color: colors.red, flex: 1, fontSize: 13, lineHeight: 18 },
+  errorText: { color: t.red, flex: 1, fontSize: 13, lineHeight: 18 },
   retryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     borderRadius: 10,
     padding: 14,
     marginTop: 12,
   },
-  retryBtnText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
+  retryBtnText: { color: t.primary, fontWeight: '700', fontSize: 14 },
 
   // ── Hero result card ──
   heroCard: {
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     borderRadius: radius.xl + 2,
     padding: 20,
     marginTop: 14,
     borderWidth: 1.5,
-    borderColor: colors.primary,
+    borderColor: t.primary,
   },
   heroEntity: {
     fontSize: 16, fontWeight: '700',
-    color: colors.lightGray, letterSpacing: 0.4,
+    color: t.onChrome, letterSpacing: 0.4,
     marginBottom: 12,
   },
   heroRow: {
@@ -437,30 +440,30 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   ratingBadgeText: {
-    color: colors.white,
+    color: t.onChrome,
     fontWeight: '900',
     fontSize: 13,
     letterSpacing: 1,
   },
   priceBlock: { alignItems: 'flex-start' },
   priceLabel: {
-    fontSize: 9, fontWeight: '800', color: colors.midGray,
+    fontSize: 9, fontWeight: '800', color: t.textSecondary,
     letterSpacing: 1.2, marginBottom: 2,
   },
   priceValue: {
-    fontSize: 18, fontWeight: '800', color: colors.primary,
+    fontSize: 18, fontWeight: '800', color: t.primary,
     fontFamily: 'Courier New',
   },
   upsideText: {
     fontSize: 11, fontWeight: '800', fontFamily: 'Courier New',
     marginTop: 2,
   },
-  upsideUp:   { color: colors.green },
-  upsideDown: { color: colors.red },
+  upsideUp:   { color: t.green },
+  upsideDown: { color: t.red },
 
   // ── Gamma + view-report CTAs ──
   viewReportBtn: {
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     borderRadius: radius.xl,
     padding: 16,
     marginTop: 14,
@@ -470,11 +473,11 @@ const styles = StyleSheet.create({
     gap: 8,
     ...shadow.hero,
   },
-  viewReportText: { fontSize: 16, fontWeight: '800', color: colors.navy, letterSpacing: 0.6 },
+  viewReportText: { fontSize: 16, fontWeight: '800', color: t.chromeNavy, letterSpacing: 0.6 },
   // The Gamma button is now a strong gold-fill CTA (was offWhite + border)
   // since the deck is a premium output that deserves visual priority.
   gammaBtn: {
-    backgroundColor: colors.primary,
+    backgroundColor: t.primary,
     borderRadius: radius.xl,
     padding: 14,
     marginTop: 10,
@@ -482,22 +485,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  gammaBtnText: { fontSize: 14, fontWeight: '800', color: colors.navy, flex: 1 },
+  gammaBtnText: { fontSize: 14, fontWeight: '800', color: t.chromeNavy, flex: 1 },
   gammaErrorBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
-    backgroundColor: '#FFFBEB',
+    backgroundColor: t.surfaceAlt,
     borderRadius: 8,
     padding: 10,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#F59E0B',
+    borderColor: t.amber,
   },
-  gammaErrorText: { fontSize: 12, color: '#92400E', lineHeight: 16 },
+  gammaErrorText: { fontSize: 12, color: t.amber, lineHeight: 16 },
   gammaCreditsBox: {
-    backgroundColor: '#FEF3C7',
-    borderColor: '#D97706',
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.amber,
     borderWidth: 1.5,
   },
 });
+}
