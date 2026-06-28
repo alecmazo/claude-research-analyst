@@ -7,7 +7,7 @@
  * /api/v2/lp/me/overview.
  * GPs never see this screen — they get the full 6-tab GP navigator.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity, ActivityIndicator, Dimensions,
@@ -15,7 +15,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { v2Fetch, getV2User, logoutV2 } from '../api/client';
 import AppHeader from '../components/AppHeader';
-import { colors, haptics } from '../design';
+import { haptics, useTheme } from '../design';
 
 const SCREEN_W = Dimensions.get('window').width;
 
@@ -33,7 +33,7 @@ function fmtPct(v, decimals = 2) {
   return (v >= 0 ? '+' : '') + Number(v).toFixed(decimals) + '%';
 }
 function pctColor(v) {
-  if (v == null) return colors.navy;
+  if (v == null) return '#94a3b8';
   return v >= 0 ? '#1a7f40' : '#cc3333';
 }
 
@@ -53,6 +53,8 @@ const GROUP_SLOT   = 36;          // 5 margin + 26 content + 5 margin
 const GROUP_CENTER = 18;          // 5 margin + 13 (half of 26 content)
 
 function ReturnChart({ annual, bLabel }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeS(t), [t]);
   const [showLine, setShowLine] = useState(true);
 
   if (!annual.length) return null;
@@ -254,6 +256,8 @@ function ReturnChart({ annual, bLabel }) {
 
 /* ── Annual performance panel (table + chart) for one fund/account ── */
 function AnnualPerfTable({ fid }) {
+  const { theme: t } = useTheme();
+  const s = useMemo(() => makeS(t), [t]);
   const [state, setState] = useState('idle'); // idle | loading | done | error
   const [annual, setAnnual] = useState([]);
   const [bLabel, setBLabel] = useState('Benchmark');
@@ -288,7 +292,7 @@ function AnnualPerfTable({ fid }) {
   if (state === 'loading') {
     return (
       <View style={s.atpLoading}>
-        <ActivityIndicator size="small" color={colors.primary} />
+        <ActivityIndicator size="small" color={t.primary} />
         <Text style={s.atpLoadingText}>Loading performance…</Text>
       </View>
     );
@@ -415,6 +419,8 @@ function AnnualPerfTable({ fid }) {
 
 /* ── Main screen ──────────────────────────────────────────────────── */
 export default function LPPerformanceScreen({ onLogout, isDemo, onSwitchToAdmin }) {
+  const { theme: t } = useTheme();
+  const styles = useMemo(() => makeStyles(t), [t]);
   const [data, setData]             = useState(null);
   const [me,   setMe]               = useState(null);
   const [loading, setLoading]       = useState(true);
@@ -473,12 +479,12 @@ export default function LPPerformanceScreen({ onLogout, isDemo, onSwitchToAdmin 
         }
       />
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.primary} />}
         contentContainerStyle={styles.scroll}
       >
         {loading && !data && (
           <View style={styles.loadingWrap}>
-            <ActivityIndicator color={colors.primary} />
+            <ActivityIndicator color={t.primary} />
             <Text style={styles.loadingText}>Loading your portfolio…</Text>
           </View>
         )}
@@ -672,7 +678,8 @@ export default function LPPerformanceScreen({ onLogout, isDemo, onSwitchToAdmin 
 }
 
 /* ── Styles ───────────────────────────────────────────────────────── */
-const s = StyleSheet.create({
+function makeS(t) {
+  return StyleSheet.create({
   /* Annual perf button (idle) */
   atpBtn: {
     marginTop: 12,
@@ -685,7 +692,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   atpBtnText: {
-    color: colors.navy,
+    color: t.textPrimary,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
@@ -697,14 +704,14 @@ const s = StyleSheet.create({
     gap: 8,
     paddingVertical: 8,
   },
-  atpLoadingText: { fontSize: 11, color: colors.midGray },
+  atpLoadingText: { fontSize: 11, color: t.textSecondary },
   atpError:       { marginTop: 10, fontSize: 11, color: '#cc3333', fontStyle: 'italic' },
 
   /* Expanded panel wrapper */
   atpWrap: {
     marginTop: 12,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.07)',
+    borderTopColor: t.border,
     paddingTop: 10,
   },
 
@@ -718,16 +725,16 @@ const s = StyleSheet.create({
   atpTitle: {
     fontSize: 9,
     fontWeight: '800',
-    color: colors.navy,
+    color: t.textPrimary,
     letterSpacing: 1.1,
   },
-  atpSubtitle: { fontSize: 9, color: colors.midGray, marginTop: 1 },
+  atpSubtitle: { fontSize: 9, color: t.textSecondary, marginTop: 1 },
 
   /* Toggle tabs */
   atpToggle: {
     flexDirection: 'row',
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.12)',
+    borderColor: t.border,
     borderRadius: 6,
     overflow: 'hidden',
   },
@@ -736,15 +743,15 @@ const s = StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: 'transparent',
   },
-  atpTabActive:     { backgroundColor: colors.navy },
-  atpTabText:       { fontSize: 9, fontWeight: '800', color: colors.midGray, letterSpacing: 0.7 },
-  atpTabTextActive: { color: '#fff' },
+  atpTabActive:     { backgroundColor: t.chromeNavy },
+  atpTabText:       { fontSize: 9, fontWeight: '800', color: t.textSecondary, letterSpacing: 0.7 },
+  atpTabTextActive: { color: t.onChrome },
 
   /* Table */
   atpRow:        { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
-  atpHeadRow:    { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.08)', paddingBottom: 4 },
-  atpRowAlt:     { backgroundColor: 'rgba(0,0,0,0.02)' },
-  atpSummaryRow: { borderTopWidth: 2, borderTopColor: 'rgba(0,0,0,0.12)', marginTop: 2, paddingTop: 6 },
+  atpHeadRow:    { borderBottomWidth: 1, borderBottomColor: t.border, paddingBottom: 4 },
+  atpRowAlt:     { backgroundColor: t.surfaceAlt },
+  atpSummaryRow: { borderTopWidth: 2, borderTopColor: t.border, marginTop: 2, paddingTop: 6 },
 
   atpCell:     { paddingHorizontal: 5, fontSize: 11 },
   atpColYear:  { width: 42 },
@@ -753,9 +760,9 @@ const s = StyleSheet.create({
   atpColAlph:  { width: 60, textAlign: 'right' },
   atpColFlow:  { width: 88, textAlign: 'right' },
 
-  atpHeadText:     { fontSize: 8, fontWeight: '800', color: colors.midGray, letterSpacing: 0.8 },
-  atpYearText:     { fontWeight: '700', color: colors.navy },
-  atpSummaryLabel: { fontWeight: '800', fontSize: 10, color: colors.navy },
+  atpHeadText:     { fontSize: 8, fontWeight: '800', color: t.textSecondary, letterSpacing: 0.8 },
+  atpYearText:     { fontWeight: '700', color: t.textPrimary },
+  atpSummaryLabel: { fontWeight: '800', fontSize: 10, color: t.textPrimary },
 
   /* Chart (pure View — no SVG) */
   chartContainer: { marginTop: 6, overflow: 'hidden' },
@@ -779,10 +786,10 @@ const s = StyleSheet.create({
 
   bar:      { width: 11, minHeight: 0 },
   barLabel: { fontSize: 7, fontWeight: '700', marginBottom: 1, textAlign: 'center' },
-  zeroLine: { height: 1, width: 26, backgroundColor: 'rgba(0,0,0,0.18)' },
-  xLabel:   { fontSize: 8, color: '#666', marginTop: 4, textAlign: 'center' },
+  zeroLine: { height: 1, width: 26, backgroundColor: t.border },
+  xLabel:   { fontSize: 8, color: t.textSecondary, marginTop: 4, textAlign: 'center' },
 
-  yLabel: { fontSize: 8, color: '#aaa', textAlign: 'right' },
+  yLabel: { fontSize: 8, color: t.textDim, textAlign: 'right' },
 
   chartLegend: {
     flexDirection: 'row',
@@ -793,7 +800,7 @@ const s = StyleSheet.create({
   },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot:  { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 9, color: colors.midGray, fontWeight: '600' },
+  legendText: { fontSize: 9, color: t.textSecondary, fontWeight: '600' },
 
   legendLinePill: {
     flexDirection: 'row',
@@ -802,7 +809,7 @@ const s = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.12)',
+    borderColor: t.border,
     backgroundColor: 'transparent',
   },
   legendLinePillOn: {
@@ -810,41 +817,43 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(91,184,212,0.10)',
   },
 });
+}
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.offWhite },
+function makeStyles(t) {
+  return StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg },
   scroll:    { padding: 14, paddingBottom: 40 },
 
   logoutText: {
-    color: colors.primary,
+    color: t.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1.5,
   },
 
   loadingWrap: { padding: 30, alignItems: 'center' },
-  loadingText: { color: colors.midGray, fontSize: 12, marginTop: 10 },
+  loadingText: { color: t.textSecondary, fontSize: 12, marginTop: 10 },
 
   errorWrap: {
-    backgroundColor: '#fee', padding: 16, borderRadius: 10,
+    backgroundColor: t.pillDownBg, padding: 16, borderRadius: 10,
     alignItems: 'center', margin: 14,
   },
-  errorText: { color: colors.red, fontSize: 13, textAlign: 'center', marginBottom: 10 },
+  errorText: { color: t.red, fontSize: 13, textAlign: 'center', marginBottom: 10 },
   retryBtn: {
     paddingHorizontal: 18, paddingVertical: 8,
-    backgroundColor: colors.navy, borderRadius: 6,
+    backgroundColor: t.chromeNavy, borderRadius: 6,
   },
-  retryText: { color: '#fff', fontSize: 11, fontWeight: '800', letterSpacing: 1.3 },
+  retryText: { color: t.onChrome, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 },
 
   heroCard: {
-    backgroundColor: colors.navy,
+    backgroundColor: t.chromeNavy,
     borderRadius: 12,
     padding: 18,
     borderWidth: 1, borderColor: 'rgba(91,184,212,0.30)',
     marginBottom: 14,
   },
   heroEyebrow: {
-    color: colors.primary,
+    color: t.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1.3,
@@ -852,7 +861,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   heroTitle: {
-    color: '#fff',
+    color: t.onChrome,
     fontSize: 20,
     fontWeight: '800',
     marginBottom: 6,
@@ -875,7 +884,7 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(91,184,212,0.18)',
   },
   heroTotalLabel: {
-    color: colors.primary,
+    color: t.primary,
     fontSize: 8,
     fontWeight: '800',
     letterSpacing: 1.3,
@@ -883,7 +892,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   heroTotalVal: {
-    color: '#fff',
+    color: t.onChrome,
     fontSize: 30,
     fontWeight: '900',
     letterSpacing: -0.5,
@@ -904,13 +913,13 @@ const styles = StyleSheet.create({
     padding: 11,
   },
   heroTileLabel: {
-    color: colors.primary,
+    color: t.primary,
     fontSize: 8,
     fontWeight: '800',
     letterSpacing: 1.1,
   },
   heroTileVal: {
-    color: '#fff',
+    color: t.onChrome,
     fontSize: 17,
     fontWeight: '800',
     marginTop: 4,
@@ -923,55 +932,55 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: t.surface,
     borderRadius: 10,
     padding: 14,
     marginBottom: 12,
-    borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)',
+    borderWidth: 1, borderColor: t.border,
   },
   cardHead:  { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   cardTitle: {
     flex: 1,
     fontSize: 14,
     fontWeight: '800',
-    color: colors.navy,
+    color: t.textPrimary,
     letterSpacing: 0.4,
   },
   cardBadge: {
     fontSize: 9,
     fontWeight: '800',
-    color: colors.primary,
-    backgroundColor: colors.navy,
+    color: t.primary,
+    backgroundColor: t.chromeNavy,
     paddingHorizontal: 7, paddingVertical: 2,
     borderRadius: 9,
     letterSpacing: 0.5,
     overflow: 'hidden',
   },
-  cardAlias:      { fontSize: 10, color: colors.midGray, letterSpacing: 0.6, marginBottom: 8 },
-  cardAliasValue: { color: colors.primaryDark, fontWeight: '800' },
+  cardAlias:      { fontSize: 10, color: t.textSecondary, letterSpacing: 0.6, marginBottom: 8 },
+  cardAliasValue: { color: t.primary, fontWeight: '800' },
 
   cardStats: { flexDirection: 'row', gap: 10 },
   cardStat: {
     flex: 1,
-    backgroundColor: colors.offWhite,
+    backgroundColor: t.surfaceAlt,
     borderRadius: 8,
     padding: 10,
-    borderWidth: 1, borderColor: colors.lightGray,
+    borderWidth: 1, borderColor: t.border,
   },
   cardStatLabel: {
     fontSize: 8,
     fontWeight: '800',
-    color: colors.midGray,
+    color: t.textSecondary,
     letterSpacing: 1.0,
   },
   cardStatVal: {
     fontSize: 16,
     fontWeight: '800',
-    color: colors.navy,
+    color: t.textPrimary,
     marginTop: 4,
     fontVariant: ['tabular-nums'],
   },
-  cardStatSub: { fontSize: 9, color: colors.midGray, marginTop: 2 },
+  cardStatSub: { fontSize: 9, color: t.textSecondary, marginTop: 2 },
 
   // YOUR CURRENT STAKE — full-width highlighted tile at top of fund card
   cardStatStake: {
@@ -984,7 +993,7 @@ const styles = StyleSheet.create({
   cardStatStakeVal: {
     fontSize: 22,
     fontWeight: '900',
-    color: colors.navy,
+    color: t.textPrimary,
     marginTop: 4,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.3,
@@ -992,7 +1001,7 @@ const styles = StyleSheet.create({
 
   footnote: {
     fontSize: 11,
-    color: colors.midGray,
+    color: t.textSecondary,
     textAlign: 'center',
     marginTop: 8,
     marginBottom: 20,
@@ -1030,3 +1039,4 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 });
+}
