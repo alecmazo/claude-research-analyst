@@ -124,40 +124,44 @@ const fmtNum = (n) => {
 const fmtMoney = (n) => n == null ? '' : '$' + fmtNum(n);
 const fmtPctS  = (v) => v == null ? '' : v.toFixed(1) + '%';
 
-// ── multi-line fundamentals mini-chart (pure View, shared y-axis) ──────────────
-function MiniMulti({ series, width, height, t }) {
+// ── grouped-bar fundamentals mini-chart (pure View — matches desktop bars) ─────
+// Bars per fiscal period, one group of side-by-side bars per series, sharing a
+// zero baseline so negative values (e.g. net income, FCF) drop below the line.
+function MiniBars({ series, width, height, t }) {
   const all = series.flatMap((s) => (s.values || [])).filter((v) => v != null);
-  if (all.length < 2) return <View style={{ height }} />;
-  let lo = Math.min(...all), hi = Math.max(...all);
-  if (lo > 0) lo = 0;                          // anchor positive series to a 0 baseline
-  const span = (hi - lo) || 1;
-  hi += span * 0.06; if (lo < 0) lo -= span * 0.06;
-  const zeroY = height - ((0 - lo) / (hi - lo)) * height;
+  if (!all.length) return <View style={{ height }} />;
+  const hi = Math.max(0, ...all);
+  const lo = Math.min(0, ...all);
+  const range = (hi - lo) || 1;
+  const zeroY = height * (hi / range);                 // y of the zero baseline
+  const n = Math.max(...series.map((s) => (s.values || []).length), 1);
+  const slotW = width / n;
+  const k = series.length;
+  const gap = 1;
+  const barW = Math.max(2, Math.min(9, slotW / (k + 0.6)));
+  const groupW = k * barW + (k - 1) * gap;
+  const bars = [];
+  for (let i = 0; i < n; i++) {
+    const groupLeft = i * slotW + (slotW - groupW) / 2;
+    series.forEach((ser, j) => {
+      const v = (ser.values || [])[i];
+      if (v == null) return;
+      let barTop, barH;
+      if (v >= 0) { barH = hi > 0 ? (v / hi) * zeroY : 0; barTop = zeroY - barH; }
+      else        { barH = lo < 0 ? (Math.abs(v) / Math.abs(lo)) * (height - zeroY) : 0; barTop = zeroY; }
+      if (barH < 1 && v !== 0) barH = 1;                // keep tiny values visible
+      bars.push(
+        <View key={i + '-' + j} style={{
+          position: 'absolute', left: groupLeft + j * (barW + gap), top: barTop,
+          width: barW, height: barH, backgroundColor: ser.color, borderRadius: 1,
+        }} />
+      );
+    });
+  }
   return (
     <View style={{ width, height }}>
       {lo < 0 && <View style={{ position: 'absolute', left: 0, right: 0, top: zeroY, height: 1, backgroundColor: t.border }} />}
-      {series.map((ser, si) => {
-        const vals = ser.values || [];
-        const idx = vals.map((v, i) => [i, v]).filter((p) => p[1] != null);
-        if (idx.length < 2) return null;
-        const n = vals.length;
-        const xOf = (i) => (n === 1 ? width / 2 : (i / (n - 1)) * width);
-        const yOf = (v) => height - ((v - lo) / (hi - lo)) * height;
-        const out = [];
-        for (let k = 1; k < idx.length; k++) {
-          const x1 = xOf(idx[k - 1][0]), y1 = yOf(idx[k - 1][1]);
-          const x2 = xOf(idx[k][0]), y2 = yOf(idx[k][1]);
-          const dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy);
-          out.push(
-            <View key={si + '-' + k} style={{
-              position: 'absolute', left: (x1 + x2) / 2 - len / 2, top: (y1 + y2) / 2 - 1,
-              width: len, height: 2, backgroundColor: ser.color,
-              transform: [{ rotate: (Math.atan2(dy, dx) * 180) / Math.PI + 'deg' }],
-            }} />
-          );
-        }
-        return out;
-      })}
+      {bars}
     </View>
   );
 }
@@ -176,7 +180,7 @@ function FundChart({ title, series, width, fmt, t }) {
           </View>
         ))}
       </View>
-      <MiniMulti series={series} width={width} height={62} t={t} />
+      <MiniBars series={series} width={width} height={62} t={t} />
     </View>
   );
 }
