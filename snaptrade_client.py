@@ -51,7 +51,31 @@ def register_user(user_id: str) -> dict:
     """Register a SnapTrade user; returns {userId, userSecret}. The userSecret is
     a per-user credential — caller must encrypt it at rest."""
     r = _client().authentication.register_snap_trade_user(user_id=str(user_id))
-    return _to_dict(r.body)
+    body = r.body
+    secret = _pluck(body, "userSecret", "user_secret")
+    uid = _pluck(body, "userId", "user_id") or str(user_id)
+    return {"userId": uid, "userSecret": secret}
+
+
+def _pluck(body, *keys):
+    """Extract a field from an SDK body whether it's a dict, a schema object, or
+    needs coercion."""
+    for k in keys:
+        try:
+            v = body[k]
+            if v is not None:
+                return v
+        except Exception:
+            pass
+        v = getattr(body, k, None)
+        if v is not None:
+            return v
+    d = _to_dict(body)
+    if isinstance(d, dict):
+        for k in keys:
+            if d.get(k) is not None:
+                return d.get(k)
+    return None
 
 
 def delete_user(user_id: str) -> dict:

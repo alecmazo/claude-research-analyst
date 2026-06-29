@@ -24965,7 +24965,9 @@ def _snaptrade_error_detail(e) -> str:
                     return f"{code}: {msg}".strip(": ")
         except Exception:
             pass
-    return str(e)[:300]
+    txt = getattr(e, "reason", None) or getattr(e, "text", None)
+    base = f"{type(e).__name__}: {str(e)}"
+    return (f"{str(txt)[:200]} | {base}")[:300] if txt else base[:300]
 
 
 def _snaptrade_ensure_user():
@@ -25109,12 +25111,15 @@ async def snaptrade_connect(request: Request):
         raise HTTPException(503, "DATA_ENCRYPTION_KEY not set — refusing to store the SnapTrade secret without at-rest encryption.")
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    uid, secret = _snaptrade_ensure_user()
     redirect = os.environ.get("SNAPTRADE_REDIRECT_URI", "").strip() or _st.DEFAULT_REDIRECT
     broker = os.environ.get("SNAPTRADE_BROKER", "").strip()
     try:
+        uid, secret = _snaptrade_ensure_user()
         url = _st.login_url(uid, secret, custom_redirect=redirect, broker=broker, connection_type="read")
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(502, f"SnapTrade connect failed: {_snaptrade_error_detail(e)}")
     if not url:
         raise HTTPException(502, "SnapTrade returned no connection URL.")
@@ -25129,10 +25134,13 @@ async def snaptrade_sync(request: Request):
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
     import snaptrade_client as _st
-    uid, secret = _snaptrade_ensure_user()
     try:
+        uid, secret = _snaptrade_ensure_user()
         body = _st.get_all_holdings(uid, secret)
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(502, f"SnapTrade holdings failed: {_snaptrade_error_detail(e)}")
     _ensure_snaptrade_tables()
     out = []
