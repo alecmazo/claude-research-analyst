@@ -25251,6 +25251,42 @@ async def snaptrade_accounts(request: Request):
     return {"ok": True, "accounts": out, "managed_accounts": _plaid_managed_accounts()}
 
 
+@app.get("/api/snaptrade/debug")
+async def snaptrade_debug(request: Request):
+    """GP-only diagnostic: the raw holdings shape for the first connected account,
+    so we can tell whether positions are genuinely empty (SnapTrade still pulling /
+    test-key gating) vs a parsing issue. Truncated; no secrets returned."""
+    _plaid_require_gp(request)
+    import snaptrade_link as _st
+    try:
+        uid, secret = _snaptrade_ensure_user()
+        accts = _st.list_accounts(uid, secret)
+    except Exception as e:
+        raise HTTPException(502, f"SnapTrade accounts failed: {_snaptrade_error_detail(e)}")
+    if isinstance(accts, dict):
+        accts = accts.get("accounts") or accts.get("data") or []
+    if not accts:
+        return {"ok": True, "accounts": 0, "note": "SnapTrade returned no accounts."}
+    acct = accts[0] if isinstance(accts[0], dict) else {}
+    acct_id = acct.get("id")
+    out = {"ok": True, "accounts": len(accts), "first_account_id": acct_id,
+           "account_keys": sorted([str(k) for k in acct.keys()])}
+    try:
+        ah = _st.get_account_holdings(uid, secret, acct_id)
+        if isinstance(ah, dict):
+            out["holdings_keys"] = sorted([str(k) for k in ah.keys()])
+            poss = ah.get("positions") or []
+            out["positions_count"] = len(poss)
+            out["first_position"] = str(poss[0])[:2500] if poss else None
+            out["total_value"] = ah.get("total_value")
+        else:
+            out["holdings_type"] = str(type(ah))
+            out["holdings_raw"] = str(ah)[:2500]
+    except Exception as e:
+        out["holdings_error"] = _snaptrade_error_detail(e)
+    return out
+
+
 @app.post("/api/snaptrade/assign")
 async def snaptrade_assign(request: Request):
     """GP-only: link (or unlink) a SnapTrade account to a managed account. Sets only

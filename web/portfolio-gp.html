@@ -4530,6 +4530,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-title">🔗 Linked Accounts · Fidelity (SnapTrade)</span>
         <span class="panel-badge" id="snaptrade-badge" style="background:#f1f5f9;color:#64748b;">…</span>
         <span style="flex:1"></span>
+        <button id="snaptrade-debug" type="button" class="tab-btn" style="margin-right:6px;">🐞 Diagnose</button>
         <button id="snaptrade-sync" type="button" class="tab-btn" style="margin-right:6px;">↻ Sync</button>
         <button id="snaptrade-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
       </header>
@@ -18239,8 +18240,18 @@ End with the sleeve block at this account's real market value so I can push it t
     try { await window.dgaFetch('/api/snaptrade/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ connection_id: connectionId }) }); } catch (e) {}
     loadSnapTrade();
   }
+  async function dgaSnapDebug(){
+    const body = document.getElementById('snaptrade-body');
+    if (body) body.innerHTML = '<span style="color:#64748b;">Reading raw SnapTrade response…</span>';
+    try {
+      const d = await (await window.dgaFetch('/api/snaptrade/debug')).json();
+      if (body) body.innerHTML = '<pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;max-height:380px;overflow:auto;">'+_gfEsc(JSON.stringify(d,null,2))+'</pre><button class="tab-btn" id="snaptrade-back" style="margin-top:8px;">← Back</button>';
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Diagnose failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+  }
   document.getElementById('snaptrade-connect')?.addEventListener('click', dgaSnapConnect);
   document.getElementById('snaptrade-sync')?.addEventListener('click', dgaSnapSync);
+  document.getElementById('snaptrade-debug')?.addEventListener('click', dgaSnapDebug);
 
   async function dgaPlaidConnect(){
     const body = document.getElementById('plaid-body');
