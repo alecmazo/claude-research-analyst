@@ -24974,7 +24974,7 @@ def _snaptrade_ensure_user():
     """Return (user_id, user_secret) for the single GP SnapTrade user, registering
     one (encrypted at rest) on first use. Uses a generated userId so a lost DB row
     just mints a fresh user rather than colliding with SnapTrade's 'already exists'."""
-    import snaptrade_client as _st
+    import snaptrade_link as _st
     import secure_store as _sec
     import uuid as _uuid
     _ensure_snaptrade_tables()
@@ -25083,7 +25083,7 @@ def _snaptrade_holdings_items(body):
 @app.get("/api/snaptrade/status")
 async def snaptrade_status(request: Request):
     _plaid_require_gp(request)
-    import snaptrade_client as _st
+    import snaptrade_link as _st
     import secure_store as _sec
     n = 0
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -25103,7 +25103,7 @@ async def snaptrade_connect(request: Request):
     """GP-only: register the SnapTrade user (if needed) and return a Connection
     Portal URL (read-only). Open it in a new tab to link Fidelity."""
     _plaid_require_gp(request)
-    import snaptrade_client as _st
+    import snaptrade_link as _st
     if not _st.available():
         raise HTTPException(503, "SnapTrade is not configured (set SNAPTRADE_CLIENT_ID / SNAPTRADE_CONSUMER_KEY).")
     import secure_store as _sec
@@ -25133,7 +25133,7 @@ async def snaptrade_sync(request: Request):
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    import snaptrade_client as _st
+    import snaptrade_link as _st
     try:
         uid, secret = _snaptrade_ensure_user()
         body = _st.get_all_holdings(uid, secret)
@@ -25234,7 +25234,7 @@ async def snaptrade_remove(request: Request):
     connection_id = (body or {}).get("connection_id")
     if not connection_id:
         raise HTTPException(400, "connection_id required")
-    import snaptrade_client as _st
+    import snaptrade_link as _st
     uid, secret = _snaptrade_ensure_user()
     try:
         _st.remove_connection(uid, secret, connection_id)
