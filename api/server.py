@@ -24920,6 +24920,324 @@ async def plaid_assign(request: Request):
     return {"ok": True, "item_id": item_id, "fund_id": fund_id}
 
 
+# ── SnapTrade (Fidelity holdings — Plaid can't connect Fidelity since Oct 2023) ──
+def _ensure_snaptrade_tables():
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS snaptrade_user (
+                    user_id          TEXT PRIMARY KEY,
+                    user_secret_enc  TEXT NOT NULL,
+                    created_at       TIMESTAMPTZ DEFAULT now(),
+                    updated_at       TIMESTAMPTZ DEFAULT now()
+                )""")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS snaptrade_accounts (
+                    account_id        TEXT PRIMARY KEY,
+                    connection_id     TEXT,
+                    brokerage_name    TEXT,
+                    account_name      TEXT,
+                    account_mask      TEXT,
+                    total_value       NUMERIC,
+                    holdings_json     JSONB,
+                    fund_id           UUID,
+                    status            TEXT DEFAULT 'active',
+                    last_synced_at    TIMESTAMPTZ,
+                    created_at        TIMESTAMPTZ DEFAULT now(),
+                    updated_at        TIMESTAMPTZ DEFAULT now()
+                )""")
+            conn.commit()
+    except Exception as e:
+        print(f"[snaptrade] ensure tables failed: {e!s:.150}", flush=True)
+
+
+def _snaptrade_error_detail(e) -> str:
+    body = getattr(e, "body", None)
+    if body:
+        try:
+            j = json.loads(body) if isinstance(body, str) else body
+            if isinstance(j, dict):
+                msg = j.get("detail") or j.get("message") or j.get("error") or ""
+                code = j.get("code") or j.get("status_code") or ""
+                if msg:
+                    return f"{code}: {msg}".strip(": ")
+        except Exception:
+            pass
+    return str(e)[:300]
+
+
+def _snaptrade_ensure_user():
+    """Return (user_id, user_secret) for the single GP SnapTrade user, registering
+    one (encrypted at rest) on first use. Uses a generated userId so a lost DB row
+    just mints a fresh user rather than colliding with SnapTrade's 'already exists'."""
+    import snaptrade_client as _st
+    import secure_store as _sec
+    import uuid as _uuid
+    _ensure_snaptrade_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT user_id, user_secret_enc FROM snaptrade_user ORDER BY created_at LIMIT 1")
+        row = cur.fetchone()
+    if row:
+        return row[0], _sec.decrypt(row[1])
+    uid = "dga-gp-" + _uuid.uuid4().hex[:12]
+    reg = _st.register_user(uid)
+    secret = reg.get("userSecret") if isinstance(reg, dict) else None
+    if not secret:
+        raise RuntimeError("SnapTrade registration returned no userSecret")
+    enc = _sec.encrypt(secret)
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO snaptrade_user (user_id, user_secret_enc, updated_at) VALUES (%s,%s,now())", (uid, enc))
+        conn.commit()
+    return uid, secret
+
+
+def _snaptrade_mask(num) -> str | None:
+    if not num:
+        return None
+    s = str(num)
+    return s[-4:] if len(s) >= 4 else s
+
+
+def _snaptrade_symbol(pos: dict):
+    """Drill SnapTrade's nested PositionSymbol → (ticker, description)."""
+    node = pos.get("symbol")
+    ticker, desc = None, None
+    seen = 0
+    while isinstance(node, dict) and seen < 6:
+        if not ticker and isinstance(node.get("raw_symbol"), str):
+            ticker = node.get("raw_symbol")
+        if not desc and node.get("description"):
+            desc = node.get("description")
+        nxt = node.get("symbol")
+        if isinstance(nxt, str):
+            ticker = ticker or nxt
+            break
+        node = nxt
+        seen += 1
+    if isinstance(node, str) and not ticker:
+        ticker = node
+    return ticker, desc
+
+
+def _snaptrade_normalize_account(ah: dict) -> dict:
+    """One SnapTrade account-holding → normalized positions in the SAME shape as
+    the Plaid normalizer (symbol, name, quantity, price, market_value, cost_basis)."""
+    acct = ah.get("account") or {}
+    positions, total_value, total_cost = [], 0.0, 0.0
+    for p in (ah.get("positions") or []):
+        ticker, desc = _snaptrade_symbol(p)
+        units = p.get("units")
+        price = p.get("price")
+        avg = p.get("average_purchase_price")
+        mv = cost = None
+        try:
+            if units is not None and price is not None:
+                mv = float(units) * float(price); total_value += mv
+        except Exception:
+            pass
+        try:
+            if units is not None and avg is not None:
+                cost = float(units) * float(avg); total_cost += cost
+        except Exception:
+            pass
+        positions.append({
+            "symbol": ticker or "—", "name": desc, "asset_class": "",
+            "quantity": units, "price": price, "market_value": mv, "cost_basis": cost,
+        })
+    positions.sort(key=lambda x: (x.get("market_value") or 0), reverse=True)
+    tv = ah.get("total_value")
+    if isinstance(tv, dict):
+        tv = tv.get("value")
+    if tv is None:
+        tv = total_value
+    brk = acct.get("institution_name")
+    if not brk and isinstance(acct.get("brokerage"), dict):
+        brk = acct["brokerage"].get("name")
+    conn_id = acct.get("brokerage_authorization")
+    if isinstance(conn_id, dict):
+        conn_id = conn_id.get("id")
+    return {
+        "account_id":    acct.get("id"),
+        "connection_id": conn_id,
+        "brokerage":     brk,
+        "account_name":  acct.get("name"),
+        "account_mask":  _snaptrade_mask(acct.get("number")),
+        "total_value":   tv,
+        "positions":     positions,
+        "count":         len(positions),
+    }
+
+
+def _snaptrade_holdings_items(body):
+    if isinstance(body, dict):
+        return body.get("accounts") or body.get("account_holdings") or []
+    if isinstance(body, list):
+        return body
+    return []
+
+
+@app.get("/api/snaptrade/status")
+async def snaptrade_status(request: Request):
+    _plaid_require_gp(request)
+    import snaptrade_client as _st
+    import secure_store as _sec
+    n = 0
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        _ensure_snaptrade_tables()
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM snaptrade_accounts WHERE status='active'")
+                n = cur.fetchone()[0]
+        except Exception:
+            pass
+    return {"ok": True, "configured": _st.available(),
+            "encryption_ready": _sec.is_configured(), "connected_accounts": n}
+
+
+@app.post("/api/snaptrade/connect")
+async def snaptrade_connect(request: Request):
+    """GP-only: register the SnapTrade user (if needed) and return a Connection
+    Portal URL (read-only). Open it in a new tab to link Fidelity."""
+    _plaid_require_gp(request)
+    import snaptrade_client as _st
+    if not _st.available():
+        raise HTTPException(503, "SnapTrade is not configured (set SNAPTRADE_CLIENT_ID / SNAPTRADE_CONSUMER_KEY).")
+    import secure_store as _sec
+    if not _sec.is_configured():
+        raise HTTPException(503, "DATA_ENCRYPTION_KEY not set — refusing to store the SnapTrade secret without at-rest encryption.")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    uid, secret = _snaptrade_ensure_user()
+    redirect = os.environ.get("SNAPTRADE_REDIRECT_URI", "").strip() or _st.DEFAULT_REDIRECT
+    broker = os.environ.get("SNAPTRADE_BROKER", "").strip()
+    try:
+        url = _st.login_url(uid, secret, custom_redirect=redirect, broker=broker, connection_type="read")
+    except Exception as e:
+        raise HTTPException(502, f"SnapTrade connect failed: {_snaptrade_error_detail(e)}")
+    if not url:
+        raise HTTPException(502, "SnapTrade returned no connection URL.")
+    return {"ok": True, "redirect_uri": url}
+
+
+@app.post("/api/snaptrade/sync")
+async def snaptrade_sync(request: Request):
+    """GP-only: pull holdings for all connected accounts and upsert them. Read-only;
+    preserves each account's managed-account assignment (fund_id)."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    import snaptrade_client as _st
+    uid, secret = _snaptrade_ensure_user()
+    try:
+        body = _st.get_all_holdings(uid, secret)
+    except Exception as e:
+        raise HTTPException(502, f"SnapTrade holdings failed: {_snaptrade_error_detail(e)}")
+    _ensure_snaptrade_tables()
+    out = []
+    for ah in _snaptrade_holdings_items(body):
+        norm = _snaptrade_normalize_account(ah if isinstance(ah, dict) else {})
+        if not norm.get("account_id"):
+            continue
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO snaptrade_accounts (account_id, connection_id, brokerage_name,
+                                                account_name, account_mask, total_value,
+                                                holdings_json, status, last_synced_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s, %s::jsonb, 'active', now(), now())
+                ON CONFLICT (account_id) DO UPDATE SET
+                    connection_id=EXCLUDED.connection_id, brokerage_name=EXCLUDED.brokerage_name,
+                    account_name=EXCLUDED.account_name, account_mask=EXCLUDED.account_mask,
+                    total_value=EXCLUDED.total_value, holdings_json=EXCLUDED.holdings_json,
+                    status='active', last_synced_at=now(), updated_at=now()
+            """, (norm["account_id"], norm["connection_id"], norm["brokerage"],
+                  norm["account_name"], norm["account_mask"], norm["total_value"],
+                  json.dumps(norm["positions"], default=str)))
+            conn.commit()
+        out.append({"account_id": norm["account_id"], "account_name": norm["account_name"],
+                    "brokerage": norm["brokerage"], "positions": norm["count"],
+                    "total_value": norm["total_value"]})
+    return {"ok": True, "synced": out}
+
+
+@app.get("/api/snaptrade/accounts")
+async def snaptrade_accounts(request: Request):
+    """GP-only: stored SnapTrade accounts + normalized positions + managed accounts
+    for the assign dropdown. No secrets returned."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "accounts": []}
+    _ensure_snaptrade_tables()
+    out = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("""SELECT account_id, connection_id, brokerage_name, account_name,
+                              account_mask, total_value, holdings_json, fund_id, last_synced_at
+                         FROM snaptrade_accounts WHERE status='active' ORDER BY created_at""")
+        for r in cur.fetchall():
+            out.append({
+                "account_id":    r["account_id"],
+                "connection_id": r["connection_id"],
+                "brokerage":     r["brokerage_name"],
+                "account_name":  r["account_name"],
+                "account_mask":  r["account_mask"],
+                "total_value":   float(r["total_value"]) if r["total_value"] is not None else None,
+                "positions":     r["holdings_json"] or [],
+                "fund_id":       str(r["fund_id"]) if r["fund_id"] else None,
+                "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
+            })
+    return {"ok": True, "accounts": out, "managed_accounts": _plaid_managed_accounts()}
+
+
+@app.post("/api/snaptrade/assign")
+async def snaptrade_assign(request: Request):
+    """GP-only: link (or unlink) a SnapTrade account to a managed account. Sets only
+    fund_id — never writes into tax_lots / the manual CSV path."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    account_id = (body or {}).get("account_id")
+    fund_id = (body or {}).get("fund_id") or None
+    if not account_id:
+        raise HTTPException(400, "account_id required")
+    _ensure_snaptrade_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        if fund_id:
+            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type='managed_account'", (fund_id,))
+            if not cur.fetchone():
+                raise HTTPException(400, "Unknown managed account.")
+        cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() WHERE account_id=%s",
+                    (fund_id, account_id))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Unknown SnapTrade account.")
+        conn.commit()
+    return {"ok": True, "account_id": account_id, "fund_id": fund_id}
+
+
+@app.post("/api/snaptrade/remove")
+async def snaptrade_remove(request: Request):
+    """GP-only: disconnect a brokerage connection at SnapTrade and purge its
+    accounts. Body: {connection_id}."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    connection_id = (body or {}).get("connection_id")
+    if not connection_id:
+        raise HTTPException(400, "connection_id required")
+    import snaptrade_client as _st
+    uid, secret = _snaptrade_ensure_user()
+    try:
+        _st.remove_connection(uid, secret, connection_id)
+    except Exception as e:
+        print(f"[snaptrade] remove_connection warning {connection_id}: {e!s:.120}", flush=True)
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM snaptrade_accounts WHERE connection_id=%s", (connection_id,))
+        conn.commit()
+    return {"ok": True, "removed": connection_id}
+
+
 if BRANDING_DIR.exists():
     app.mount("/branding", StaticFiles(directory=str(BRANDING_DIR)), name="branding")
 

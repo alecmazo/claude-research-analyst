@@ -4524,13 +4524,33 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- 🔗 Linked accounts — Plaid (Fidelity auto-import) -->
+    <!-- 🔗 Linked accounts — SnapTrade (Fidelity holdings) -->
     <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
       <header class="panel-head">
-        <span class="panel-title">🔗 Linked Accounts · Fidelity (Plaid)</span>
+        <span class="panel-title">🔗 Linked Accounts · Fidelity (SnapTrade)</span>
+        <span class="panel-badge" id="snaptrade-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+        <span style="flex:1"></span>
+        <button id="snaptrade-sync" type="button" class="tab-btn" style="margin-right:6px;">↻ Sync</button>
+        <button id="snaptrade-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
+      </header>
+      <div style="padding:16px 18px;">
+        <div id="snaptrade-body" style="font-size:12px;color:#475569;">Loading…</div>
+        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
+          Connects Fidelity via SnapTrade (read-only — holdings only, no trading). Your brokerage
+          credentials are entered on the brokerage's own page and never reach this server; the SnapTrade
+          secret is encrypted at rest. GP-only. Set <code>SNAPTRADE_CLIENT_ID</code> /
+          <code>SNAPTRADE_CONSUMER_KEY</code> + <code>DATA_ENCRYPTION_KEY</code> on Railway to enable.
+        </div>
+      </div>
+    </section>
+
+    <!-- 🔗 Linked accounts — Plaid (non-Fidelity banks; Fidelity left Plaid Oct 2023) -->
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">🔗 Linked Accounts · Plaid (non-Fidelity)</span>
         <span class="panel-badge" id="plaid-badge" style="background:#f1f5f9;color:#64748b;">…</span>
         <span style="flex:1"></span>
-        <button id="plaid-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
+        <button id="plaid-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect bank</button>
       </header>
       <div style="padding:16px 18px;">
         <div id="plaid-body" style="font-size:12px;color:#475569;">Loading…</div>
@@ -18114,6 +18134,114 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail || r.status));
     } catch (e) { alert('Assign failed: ' + (e.message || e)); }
   }
+
+  // ── Linked Accounts · SnapTrade (Fidelity holdings) ───────────────────────
+  async function loadSnapTrade(){
+    const body = document.getElementById('snaptrade-body');
+    const badge = document.getElementById('snaptrade-badge');
+    const connectBtn = document.getElementById('snaptrade-connect');
+    const syncBtn = document.getElementById('snaptrade-sync');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/snaptrade/status')).json();
+      const ok = st.configured && st.encryption_ready;
+      if (badge) {
+        badge.textContent = !st.configured ? 'NOT CONFIGURED' : (st.connected_accounts ? 'CONNECTED' : 'READY');
+        badge.style.background = ok ? '#dcfce7' : '#fef3c7';
+        badge.style.color = ok ? '#166534' : '#92400e';
+      }
+      if (connectBtn) connectBtn.disabled = !ok;
+      if (syncBtn) syncBtn.disabled = !ok;
+      if (!st.configured) { body.innerHTML = '<span style="color:#92400e;">SnapTrade isn’t configured. Set SNAPTRADE_CLIENT_ID / SNAPTRADE_CONSUMER_KEY on Railway.</span>'; return; }
+      if (!st.encryption_ready) { body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — linking disabled until at-rest encryption is on.</span>'; return; }
+      const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
+      const accounts = ad.accounts || [];
+      const mAccts = ad.managed_accounts || [];
+      if (!accounts.length) { body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
+      const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc(m.short_name||m.name)}</option>`)).join('');
+      body.innerHTML = accounts.map(a => {
+        const positions = a.positions || [];
+        const posRows = positions.map(p =>
+          `<tr style="font-size:11px;">
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:#0A1628;">${_gfEsc(p.symbol||'—')}</td>
+             <td style="padding:2px 6px;color:#94a3b8;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name||'')}</td>
+             <td style="padding:2px 6px;text-align:right;color:#475569;">${p.quantity!=null?Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}):'—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:#0A1628;">${_plaidMoney(p.market_value)}</td>
+           </tr>`).join('');
+        const posBlock = positions.length
+          ? `<div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#64748b;margin-bottom:4px;">
+                 <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
+                 <span>Total <strong style="color:#0A1628;">${_plaidMoney(a.total_value)}</strong></span>
+               </div>
+               <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
+             </div>`
+          : '<div style="font-size:11px;color:#94a3b8;margin-top:6px;">No positions returned yet — click ↻ Sync once the connection finishes.</div>';
+        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#94a3b8;font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
+            <span style="flex:1;"></span>
+            ${a.connection_id?`<button class="tab-btn" data-snap-remove="${_gfEsc(a.connection_id)}" style="color:#dc2626;">Remove</button>`:''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
+            <span>Feeds managed account:</span>
+            <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(a.fund_id)}</select>
+          </div>
+          ${posBlock}
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · holdings read-only; manual CSV uploads unaffected</div>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('[data-snap-remove]').forEach(b => b.addEventListener('click', () => dgaSnapRemove(b.getAttribute('data-snap-remove'))));
+      body.querySelectorAll('[data-snap-assign]').forEach(s => s.addEventListener('change', () => dgaSnapAssign(s.getAttribute('data-snap-assign'), s.value)));
+    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load SnapTrade accounts.</span>'; }
+  }
+  async function dgaSnapConnect(){
+    const btn = document.getElementById('snaptrade-connect');
+    if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+    try {
+      const d = await (await window.dgaFetch('/api/snaptrade/connect', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!d.ok || !d.redirect_uri) { alert(d.detail || 'Could not start SnapTrade connection.'); return; }
+      window.open(d.redirect_uri, '_blank');
+      const body = document.getElementById('snaptrade-body');
+      if (body) body.innerHTML = '<span style="color:#64748b;">Finish linking Fidelity in the new tab, then click <strong>↻ Sync</strong> to pull holdings.</span>';
+      let tries = 0;
+      const iv = setInterval(async () => {
+        tries++;
+        try {
+          const r = await (await window.dgaFetch('/api/snaptrade/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+          if (r.ok && (r.synced||[]).length) { clearInterval(iv); loadSnapTrade(); }
+        } catch (e) {}
+        if (tries >= 12) clearInterval(iv);
+      }, 5000);
+    } catch (e) { alert('SnapTrade connect failed: ' + (e.message||e)); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = '+ Connect Fidelity'; } }
+  }
+  async function dgaSnapSync(){
+    const btn = document.getElementById('snaptrade-sync');
+    if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
+    try {
+      const r = await (await window.dgaFetch('/api/snaptrade/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!r.ok) alert('Sync failed: ' + (r.detail||''));
+    } catch (e) { alert('Sync failed: ' + (e.message||e)); }
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+    loadSnapTrade();
+  }
+  async function dgaSnapAssign(accountId, fundId){
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/assign', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ account_id: accountId, fund_id: fundId||null }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail||r.status));
+    } catch (e) { alert('Assign failed: ' + (e.message||e)); }
+  }
+  async function dgaSnapRemove(connectionId){
+    if (!confirm('Disconnect this brokerage connection and delete its stored holdings?')) return;
+    try { await window.dgaFetch('/api/snaptrade/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ connection_id: connectionId }) }); } catch (e) {}
+    loadSnapTrade();
+  }
+  document.getElementById('snaptrade-connect')?.addEventListener('click', dgaSnapConnect);
+  document.getElementById('snaptrade-sync')?.addEventListener('click', dgaSnapSync);
+
   async function dgaPlaidConnect(){
     const body = document.getElementById('plaid-body');
     try {
@@ -18232,7 +18360,7 @@ End with the sleeve block at this account's real market value so I can push it t
 
   // Load archived list + Railway usage + linked accounts + 2FA when Settings tab is opened
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
-    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadPlaid(); loadMfa(); });
+    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadSnapTrade(); loadPlaid(); loadMfa(); });
   });
 
   // If we returned from an OAuth institution (Fidelity), resume Plaid Link now.
