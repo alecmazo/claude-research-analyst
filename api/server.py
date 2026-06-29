@@ -24772,29 +24772,6 @@ async def plaid_exchange(request: Request):
         raise HTTPException(502, f"Plaid exchange/holdings failed: {_plaid_error_detail(e)}")
 
 
-@app.post("/api/plaid/sandbox-link")
-async def plaid_sandbox_link(request: Request):
-    """GP-only, SANDBOX-only: mint a Plaid test public_token directly (no Link UI,
-    no OAuth, no institution picker) and ingest it — to verify the holdings
-    pipeline end-to-end. Hard-refuses unless PLAID_ENV=sandbox."""
-    _plaid_require_gp(request)
-    import plaid_client as _plaid
-    if (_plaid.PLAID_ENV or "sandbox") != "sandbox":
-        raise HTTPException(400, "Sandbox-only: PLAID_ENV is not 'sandbox'.")
-    if not _plaid.available():
-        raise HTTPException(503, "Plaid is not configured (set PLAID_CLIENT_ID / PLAID_SECRET).")
-    import secure_store as _sec
-    if not _sec.is_configured():
-        raise HTTPException(503, "DATA_ENCRYPTION_KEY not set — refusing to store tokens without at-rest encryption.")
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        raise HTTPException(503, "Database not available.")
-    try:
-        sb = _plaid.sandbox_public_token_create()
-        return _plaid_ingest_public_token(sb["public_token"])
-    except Exception as e:
-        raise HTTPException(502, f"Plaid sandbox link failed: {_plaid_error_detail(e)}")
-
-
 @app.get("/api/plaid/items")
 async def plaid_items(request: Request):
     """GP-only: connected institutions + masked accounts. No tokens returned."""

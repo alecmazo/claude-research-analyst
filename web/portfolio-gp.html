@@ -18049,18 +18049,11 @@ End with the sleeve block at this account's real market value so I can push it t
       if (connectBtn) connectBtn.disabled = !(st.configured && st.encryption_ready);
       if (!st.configured) { body.innerHTML = '<span style="color:#92400e;">Plaid isn’t configured. Set PLAID_CLIENT_ID / PLAID_SECRET / PLAID_ENV on Railway.</span>'; return; }
       if (!st.encryption_ready) { body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — linking disabled until at-rest encryption is on.</span>'; return; }
-      const isSandbox = (st.env || 'sandbox') === 'sandbox';
-      const sandboxBtn = isSandbox
-        ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e2e8f0;">
-             <button id="plaid-sandbox-btn" class="tab-btn" style="font-size:11.5px;">🧪 Load sandbox test data</button>
-             <span style="color:#94a3b8;font-size:10.5px;margin-left:8px;">Verifies the holdings pipeline without the bank picker (fake data).</span>
-           </div>` : '';
       const id = await (await window.dgaFetch('/api/plaid/items')).json();
       const items = id.items || [];
       const mAccts = id.managed_accounts || [];
       if (!items.length) {
-        body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>' + sandboxBtn;
-        document.getElementById('plaid-sandbox-btn')?.addEventListener('click', dgaPlaidSandbox);
+        body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>';
         return;
       }
       // Normalized positions (read-only; never touches the manual CSV path).
@@ -18108,11 +18101,10 @@ End with the sleeve block at this account's real market value so I can push it t
           ${accts}${posBlock}
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'} · holdings shown read-only; manual CSV uploads unaffected</div>
         </div>`;
-      }).join('') + sandboxBtn;
+      }).join('');
       body.querySelectorAll('[data-plaid-sync]').forEach(b => b.addEventListener('click', () => dgaPlaidSync(b.getAttribute('data-plaid-sync'))));
       body.querySelectorAll('[data-plaid-remove]').forEach(b => b.addEventListener('click', () => dgaPlaidRemove(b.getAttribute('data-plaid-remove'))));
       body.querySelectorAll('[data-plaid-assign]').forEach(s => s.addEventListener('change', () => dgaPlaidAssign(s.getAttribute('data-plaid-assign'), s.value)));
-      document.getElementById('plaid-sandbox-btn')?.addEventListener('click', dgaPlaidSandbox);
     } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load linked accounts.</span>'; }
   }
   async function dgaPlaidAssign(itemId, fundId){
@@ -18121,16 +18113,6 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await r.json();
       if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail || r.status));
     } catch (e) { alert('Assign failed: ' + (e.message || e)); }
-  }
-  async function dgaPlaidSandbox(){
-    const b = document.getElementById('plaid-sandbox-btn');
-    if (b) { b.disabled = true; b.textContent = '🧪 Linking test data…'; }
-    try {
-      const r = await window.dgaFetch('/api/plaid/sandbox-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      const d = await r.json();
-      if (!r.ok || !d.ok) { alert('Sandbox link failed: ' + (d.detail || r.status)); if (b){ b.disabled=false; b.textContent='🧪 Load sandbox test data'; } return; }
-    } catch (e) { alert('Sandbox link failed: ' + (e.message || e)); if (b){ b.disabled=false; b.textContent='🧪 Load sandbox test data'; } return; }
-    loadPlaid();
   }
   async function dgaPlaidConnect(){
     const body = document.getElementById('plaid-body');

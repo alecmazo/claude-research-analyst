@@ -65,19 +65,6 @@ def create_link_token(user_id: str = "dga-gp") -> dict:
     return _client().link_token_create(LinkTokenCreateRequest(**kw)).to_dict()
 
 
-def sandbox_public_token_create(institution_id: str = "ins_109508",
-                                products=None) -> dict:
-    """SANDBOX ONLY: mint a test public_token directly (no Link UI, no OAuth),
-    so the holdings pipeline can be verified end-to-end. ins_109508 = First
-    Platypus Bank (a non-OAuth sandbox institution that supports investments)."""
-    from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
-    from plaid.model.products import Products
-    prods = [Products(p) for p in (products or ["investments"])]
-    return _client().sandbox_public_token_create(
-        SandboxPublicTokenCreateRequest(institution_id=institution_id,
-                                        initial_products=prods)).to_dict()
-
-
 def exchange_public_token(public_token: str) -> dict:
     """Exchange a public_token for {access_token, item_id, request_id}."""
     from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
