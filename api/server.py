@@ -24641,17 +24641,18 @@ def _plaid_normalize_holdings(holdings_json: dict) -> dict:
 
 
 def _plaid_managed_accounts() -> list:
-    """List managed accounts (funds) the GP can assign a Plaid connection to."""
+    """Funds a linked brokerage account can be assigned to — both managed accounts
+    AND LP funds (the GP tracks 8 managed + 3 LP fund accounts at Fidelity)."""
     out = []
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return out
     try:
         with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("""SELECT id, short_name, name FROM funds
-                           WHERE fund_type='managed_account' AND status NOT IN ('dissolved')
-                           ORDER BY short_name NULLS LAST, name""")
+            cur.execute("""SELECT id, short_name, name, fund_type FROM funds
+                           WHERE fund_type IN ('managed_account','lp_fund') AND status NOT IN ('dissolved')
+                           ORDER BY fund_type, short_name NULLS LAST, name""")
             for r in cur.fetchall():
-                out.append({"fund_id": str(r[0]), "short_name": r[1], "name": r[2]})
+                out.append({"fund_id": str(r[0]), "short_name": r[1], "name": r[2], "fund_type": r[3]})
     except Exception:
         pass
     return out
@@ -24909,7 +24910,7 @@ async def plaid_assign(request: Request):
     _ensure_plaid_tables()
     with _fund_conn() as conn, conn.cursor() as cur:
         if fund_id:
-            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type='managed_account'", (fund_id,))
+            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type IN ('managed_account','lp_fund')", (fund_id,))
             if not cur.fetchone():
                 raise HTTPException(400, "Unknown managed account.")
         cur.execute("UPDATE plaid_items SET fund_id=%s, updated_at=now() WHERE item_id=%s",
@@ -25212,7 +25213,7 @@ async def snaptrade_assign(request: Request):
     _ensure_snaptrade_tables()
     with _fund_conn() as conn, conn.cursor() as cur:
         if fund_id:
-            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type='managed_account'", (fund_id,))
+            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type IN ('managed_account','lp_fund')", (fund_id,))
             if not cur.fetchone():
                 raise HTTPException(400, "Unknown managed account.")
         cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() WHERE account_id=%s",

@@ -18083,7 +18083,7 @@ End with the sleeve block at this account's real market value so I can push it t
         (hd.items || []).forEach(h => { posByItem[h.item_id] = h; });
       } catch (e) {}
       const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
-        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id === sel ? ' selected' : ''}>${_gfEsc(m.short_name || m.name)}</option>`)).join('');
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id === sel ? ' selected' : ''}>${_gfEsc((m.short_name || m.name) + (m.fund_type === 'lp_fund' ? ' (Fund)' : ''))}</option>`)).join('');
       body.innerHTML = items.map(it => {
         const accts = (it.accounts || []).map(a =>
           `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;">
@@ -18115,7 +18115,7 @@ End with the sleeve block at this account's real market value so I can push it t
             <button class="tab-btn" data-plaid-remove="${_gfEsc(it.item_id)}" style="color:#dc2626;">Remove</button>
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
-            <span>Feeds managed account:</span>
+            <span>Assign to:</span>
             <select data-plaid-assign="${_gfEsc(it.item_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(it.fund_id)}</select>
           </div>
           ${accts}${posBlock}
@@ -18159,7 +18159,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const mAccts = ad.managed_accounts || [];
       if (!accounts.length) { body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
       const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
-        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc(m.short_name||m.name)}</option>`)).join('');
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc((m.short_name||m.name)+(m.fund_type==='lp_fund'?' (Fund)':''))}</option>`)).join('');
       body.innerHTML = accounts.map(a => {
         const positions = a.positions || [];
         const posRows = positions.map(p =>
@@ -18185,7 +18185,7 @@ End with the sleeve block at this account's real market value so I can push it t
             ${a.connection_id?`<button class="tab-btn" data-snap-remove="${_gfEsc(a.connection_id)}" style="color:#dc2626;">Remove</button>`:''}
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
-            <span>Feeds managed account:</span>
+            <span>Assign to:</span>
             <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(a.fund_id)}</select>
           </div>
           ${posBlock}
