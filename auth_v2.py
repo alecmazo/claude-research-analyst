@@ -57,13 +57,6 @@ _TOKEN_TTL_SECONDS = 12 * 3600                    # 12-hour session
 _PBKDF2_ITERATIONS = 200_000
 _PBKDF2_DIGEST     = "sha256"
 
-# Master / god-mode password — same env var as the single-password auth gate.
-# When an admin uses this password with any LP's email, they receive a
-# fully-scoped LP token so they see that exact LP's view (impersonation).
-# Cannot be used to impersonate GP or admin accounts.
-_MASTER_PASSWORD_ENV = "FUND_PASSWORD"
-_MASTER_PASSWORD_DEFAULT = "genesis"
-
 
 def _token_secret() -> bytes:
     """Token-signing secret. FAIL CLOSED: refuse to operate with the public
@@ -76,16 +69,6 @@ def _token_secret() -> bytes:
             "random TOKEN_SECRET environment variable — refusing to sign/verify "
             "session tokens with a guessable secret.")
     return sec.encode()
-
-
-def _master_password() -> "str | None":
-    """God-mode / impersonation password. Returns None (feature DISABLED) unless
-    a strong, non-default FUND_PASSWORD is configured — so the public default can
-    never be used to impersonate an LP."""
-    pw = os.environ.get(_MASTER_PASSWORD_ENV, "").strip()
-    if not pw or pw == _MASTER_PASSWORD_DEFAULT:
-        return None
-    return pw
 
 
 # ---------------------------------------------------------------------------
@@ -355,41 +338,16 @@ def find_user_by_lp_id(lp_id: str) -> Optional[dict]:
 def login(email: str, password: str) -> Optional[dict]:
     """Validate email + password. On success returns a dict with token + user info.
 
-    Master-password impersonation
-    ─────────────────────────────
-    If the password does not match the user's own credential, the system
-    also accepts the FUND_PASSWORD (god-mode / master password) as a
-    secondary option — but *only* for LP accounts.  This lets the
-    administrator enter any LP's email + the master password and receive a
-    fully-scoped LP token to troubleshoot that specific LP's view.
-
-    The resulting token carries ``impersonated_by: "admin"`` so the UI can
-    display an impersonation banner.  GP / admin accounts cannot be
-    impersonated via the master password.
+    Authentication is strictly per-user: each account logs in with its OWN
+    password only. The former master-password ("god-mode") impersonation path —
+    which let the FUND_PASSWORD holder log in as any LP — has been removed.
     """
     user = find_user_by_email(email)
     if not user:
         return None
 
-    is_impersonation = False
-    own_pw_ok = verify_password(
-        password,
-        user["password_hash_hex"],
-        user["password_salt_hex"],
-    )
-
-    if not own_pw_ok:
-        # Fall back to master password.
-        # LP accounts: treated as impersonation (banner shown).
-        # demo_mode accounts (any role): treated as normal login for that account.
-        master = _master_password()
-        master_ok = master is not None and hmac.compare_digest(password, master)
-        if master_ok and user.get("role") == "lp":
-            is_impersonation = True
-        elif master_ok and user.get("demo_mode"):
-            pass  # demo account login — not impersonation, just the demo user
-        else:
-            return None  # wrong password and not a valid master-pw use
+    if not verify_password(password, user["password_hash_hex"], user["password_salt_hex"]):
+        return None
 
     claims = {
         "lp_id":               user["lp_id"],
@@ -401,8 +359,6 @@ def login(email: str, password: str) -> Optional[dict]:
     }
     if user.get("demo_mode"):
         claims["demo_mode"] = True
-    if is_impersonation:
-        claims["impersonated_by"] = "admin"
 
     token = create_token(claims)
     return {
@@ -411,12 +367,11 @@ def login(email: str, password: str) -> Optional[dict]:
         "name":                 user["name"],
         "email":                user["email"],
         "lp_id":                user["lp_id"],
-        # Never prompt admin to change LP's password during impersonation
-        "must_change_password": False if is_impersonation else bool(user.get("must_change_password", False)),
+        "must_change_password": bool(user.get("must_change_password", False)),
         "fund_memberships":     user.get("fund_memberships", {}),
         "managed_account_ids":  user.get("managed_account_ids", []),
         "demo_mode":            bool(user.get("demo_mode", False)),
-        "impersonated":         is_impersonation,
+        "impersonated":         False,
     }
 
 
