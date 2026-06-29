@@ -23,6 +23,8 @@ import { colors, haptics } from '../design';
 export default function LoginScreen({ onLoggedIn }) {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode]         = useState('');     // TOTP / recovery code
+  const [mfaStage, setMfaStage] = useState(false);  // true once 2FA is required
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState('');
   // Biometrics: `bioEnabled` → already enrolled (show the Face ID button);
@@ -72,27 +74,40 @@ export default function LoginScreen({ onLoggedIn }) {
       setError('Email and password are required.');
       return;
     }
+    if (mfaStage && !code.trim()) {
+      setError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      const user = await loginV2(e, p);
+      const user = await loginV2(e, p, mfaStage ? code.trim() : undefined);
       await finishLogin(user, e, p);
     } catch (err) {
-      haptics.onError?.();
-      setError(err?.isAuthError ? 'Invalid email or password.' : (err?.message || 'Login failed.'));
+      if (err?.mfaRequired) {
+        setMfaStage(true);
+        setError('');
+        haptics.onWarn?.();
+      } else {
+        haptics.onError?.();
+        setError(err?.isAuthError
+          ? (mfaStage ? 'Invalid authentication code.' : 'Invalid email or password.')
+          : (err?.message || 'Login failed.'));
+      }
     } finally {
       setBusy(false);
     }
-  }, [email, password, finishLogin]);
+  }, [email, password, code, mfaStage, finishLogin]);
 
   // Face ID button: authenticate, then re-login with the Keychain-stored creds.
   const handleBiometric = useCallback(async () => {
     setBusy(true);
     setError('');
+    let creds = null;
     try {
       const ok = await authenticate(`Unlock with ${bioLabel}`);
       if (!ok) { setBusy(false); return; }
-      const creds = await getBiometricCredentials();
+      creds = await getBiometricCredentials();
       if (!creds?.email || !creds?.password) {
         setError(`${bioLabel} sign-in unavailable — please log in with your password.`);
         setBusy(false);
@@ -102,8 +117,15 @@ export default function LoginScreen({ onLoggedIn }) {
       haptics.onSuccess?.();
       onLoggedIn?.(user);
     } catch (err) {
-      haptics.onError?.();
-      setError(err?.isAuthError ? `Saved ${bioLabel} login is no longer valid — use your password.` : (err?.message || 'Login failed.'));
+      if (err?.mfaRequired) {
+        // Session expired and 2FA is on — biometric can't supply the code.
+        setEmail(creds?.email || '');
+        setMfaStage(true);
+        setError('Your session expired — enter your password and 2FA code.');
+      } else {
+        haptics.onError?.();
+        setError(err?.isAuthError ? `Saved ${bioLabel} login is no longer valid — use your password.` : (err?.message || 'Login failed.'));
+      }
     } finally {
       setBusy(false);
     }
@@ -149,9 +171,24 @@ export default function LoginScreen({ onLoggedIn }) {
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
-          returnKeyType="go"
+          returnKeyType={mfaStage ? 'next' : 'go'}
           onSubmitEditing={handleSubmit}
         />
+
+        {mfaStage && (
+          <TextInput
+            style={[styles.input, styles.inputPassword]}
+            placeholder="6-digit code"
+            placeholderTextColor="rgba(255,255,255,0.30)"
+            value={code}
+            onChangeText={setCode}
+            keyboardType="number-pad"
+            autoFocus
+            maxLength={9}
+            returnKeyType="go"
+            onSubmitEditing={handleSubmit}
+          />
+        )}
 
         <TouchableOpacity
           style={[styles.btn, busy && styles.btnDisabled]}
@@ -165,7 +202,7 @@ export default function LoginScreen({ onLoggedIn }) {
               <Text style={[styles.btnText, { marginLeft: 8 }]}>SIGNING IN…</Text>
             </View>
           ) : (
-            <Text style={styles.btnText}>CONTINUE</Text>
+            <Text style={styles.btnText}>{mfaStage ? 'VERIFY' : 'CONTINUE'}</Text>
           )}
         </TouchableOpacity>
 

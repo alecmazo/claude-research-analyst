@@ -130,18 +130,20 @@ export async function clearToken() {
 /** Sign in via POST /api/auth/v2/login. Stores the token + user record
  *  in AsyncStorage and returns the user object. Throws with isAuthError
  *  on a 401. */
-export async function loginV2(email, password) {
+export async function loginV2(email, password, totpCode) {
   const base = await getBaseUrl();
+  const payload = {
+    email: String(email || '').trim(),
+    password: String(password || ''),
+  };
+  if (totpCode) payload.totp_code = String(totpCode).trim();
   const resp = await fetch(`${base}/api/auth/v2/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: String(email || '').trim(),
-      password: String(password || ''),
-    }),
+    body: JSON.stringify(payload),
   });
   if (resp.status === 401) {
-    const err = new Error('Invalid email or password');
+    const err = new Error(totpCode ? 'Invalid authentication code' : 'Invalid email or password');
     err.isAuthError = true;
     throw err;
   }
@@ -149,6 +151,12 @@ export async function loginV2(email, password) {
     throw new Error(`Login failed (${resp.status})`);
   }
   const data = await resp.json();
+  // Password OK but a second factor (TOTP) is required — signal the UI.
+  if (data && data.mfa_required) {
+    const err = new Error('Two-factor authentication code required');
+    err.mfaRequired = true;
+    throw err;
+  }
   const user = {
     lp_id:                data.lp_id,
     name:                 data.name,

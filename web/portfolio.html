@@ -203,6 +203,16 @@
       placeholder="Password"
       autocomplete="current-password">
 
+    <input
+      id="login-totp"
+      class="login-input"
+      type="text"
+      inputmode="numeric"
+      autocomplete="one-time-code"
+      placeholder="6-digit code"
+      maxlength="9"
+      style="display:none; letter-spacing:3px; text-align:center;">
+
     <button id="login-btn">CONTINUE</button>
 
     <div id="login-error"></div>
@@ -224,8 +234,10 @@
 
   const $email   = document.getElementById('login-email');
   const $pw      = document.getElementById('login-password');
+  const $code    = document.getElementById('login-totp');
   const $btn     = document.getElementById('login-btn');
   const $err     = document.getElementById('login-error');
+  let _mfaStage  = false;   // true once the server asks for a 2FA code
 
   // Migrate any older sessionStorage token to localStorage so existing
   // sessions don't get bumped back to the login screen.
@@ -263,8 +275,14 @@
   async function handleLogin() {
     const email = $email.value.trim();
     const pw    = $pw.value;
+    const code  = $code ? $code.value.trim() : '';
     if (!email || !pw) {
       $err.textContent = 'Email and password are required.';
+      return;
+    }
+    if (_mfaStage && !code) {
+      $err.textContent = 'Enter the 6-digit code from your authenticator app.';
+      $code.focus();
       return;
     }
 
@@ -273,16 +291,18 @@
     $btn.innerHTML = '<span class="spinner"></span>SIGNING IN…';
 
     try {
+      const payload = { email, password: pw };
+      if (code) payload.totp_code = code;
       const r = await fetch('/api/auth/v2/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: pw }),
+        body: JSON.stringify(payload),
       });
 
       if (r.status === 401) {
-        $err.textContent = 'Invalid email or password.';
-        $pw.value = '';
-        $pw.focus();
+        $err.textContent = _mfaStage ? 'Invalid authentication code.' : 'Invalid email or password.';
+        if (_mfaStage) { $code.value = ''; $code.focus(); }
+        else { $pw.value = ''; $pw.focus(); }
         shake();
         return;
       }
@@ -292,6 +312,15 @@
       }
 
       const data = await r.json();
+      // Password OK but a second factor is required — reveal the code field.
+      if (data && data.mfa_required) {
+        _mfaStage = true;
+        $code.style.display = 'block';
+        $code.focus();
+        $btn.textContent = 'VERIFY';
+        $err.textContent = '';
+        return;
+      }
       localStorage.setItem(TOKEN_KEY, data.token);
       // Stash a hint so the next page can render the user's name immediately
       localStorage.setItem(USER_KEY, JSON.stringify({
@@ -311,7 +340,7 @@
       $err.textContent = 'Network error — check connection and retry.';
     } finally {
       $btn.disabled = false;
-      $btn.textContent = 'CONTINUE';
+      $btn.textContent = _mfaStage ? 'VERIFY' : 'CONTINUE';
     }
   }
 
@@ -327,6 +356,7 @@
   $btn.addEventListener('click', handleLogin);
   $email.addEventListener('keypress', e => { if (e.key === 'Enter') $pw.focus(); });
   $pw.addEventListener('keypress', e => { if (e.key === 'Enter') handleLogin(); });
+  if ($code) $code.addEventListener('keypress', e => { if (e.key === 'Enter') handleLogin(); });
 
   setTimeout(() => $email.focus(), 80);
 </script>

@@ -1397,8 +1397,9 @@ import auth_v2 as auth_v2_mod   # noqa: E402  — imported here to avoid top-of-
 
 
 class AuthV2LoginRequest(BaseModel):
-    email:    str
-    password: str
+    email:     str
+    password:  str
+    totp_code: str | None = None   # 6-digit TOTP or a recovery code, when 2FA is on
 
 
 class AuthV2ChangePasswordRequest(BaseModel):
@@ -1427,11 +1428,21 @@ def auth_v2_login(req: AuthV2LoginRequest, request: Request):
         _audit("login", email, ip, False, "bad_credentials")
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    # ── Second factor (opt-in TOTP). Password is verified; gate the token on MFA. ──
+    mfa = _mfa_get(result.get("lp_id"))
+    if mfa and mfa.get("enabled"):
+        code = (req.totp_code or "").strip()
+        if not code:
+            # Password was correct but a code is required — don't issue a token yet.
+            return {"ok": False, "mfa_required": True}
+        if not _mfa_verify(result.get("lp_id"), code):
+            _rl_record_failure(email)
+            _audit("login", email, ip, False, "bad_mfa")
+            raise HTTPException(status_code=401, detail="Invalid authentication code")
+        _audit("login", result.get("email", email), ip, True, "mfa_ok")
+
     _rl_clear(email)
-    if result.get("impersonated"):
-        _audit("login", result.get("email", email), ip, True, "impersonated_by_admin")
-    else:
-        _audit("login", result.get("email", email), ip, True)
+    _audit("login", result.get("email", email), ip, True)
     return result
 
 
@@ -24330,6 +24341,154 @@ async def no_cache_shell_middleware(request: Request, call_next):
         response.headers["Surrogate-Control"] = "no-store"
         response.headers["CDN-Cache-Control"] = "no-store"
     return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Two-factor authentication (TOTP) — opt-in second factor on login
+#
+#  Off by default; nothing changes until a user enables it. The TOTP secret is
+#  encrypted at rest (secure_store). Enabling issues one-time recovery codes
+#  (stored only as SHA-256 hashes) so a lost authenticator can't lock you out.
+# ─────────────────────────────────────────────────────────────────────────────
+def _ensure_mfa_table() -> None:
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_mfa (
+                    lp_id            TEXT PRIMARY KEY,
+                    totp_secret_enc  TEXT,
+                    enabled          BOOLEAN DEFAULT FALSE,
+                    recovery_hashes  JSONB DEFAULT '[]'::jsonb,
+                    updated_at       TIMESTAMPTZ DEFAULT now()
+                )""")
+            conn.commit()
+    except Exception as e:
+        print(f"[mfa] ensure table failed: {e!s:.150}", flush=True)
+
+
+def _mfa_get(lp_id):
+    if not (lp_id and _PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return None
+    _ensure_mfa_table()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT lp_id, totp_secret_enc, enabled, recovery_hashes "
+                        "FROM user_mfa WHERE lp_id=%s", (lp_id,))
+            return cur.fetchone()
+    except Exception:
+        return None
+
+
+def _mfa_verify(lp_id, code) -> bool:
+    """Verify a 6-digit TOTP, or consume a one-time recovery code."""
+    import secure_store as _sec
+    import hashlib
+    row = _mfa_get(lp_id)
+    if not row or not row.get("enabled") or not row.get("totp_secret_enc"):
+        return False
+    code = (code or "").strip().replace(" ", "")
+    try:
+        import pyotp
+        if pyotp.TOTP(_sec.decrypt(row["totp_secret_enc"])).verify(code, valid_window=1):
+            return True
+    except Exception:
+        pass
+    h = hashlib.sha256(code.upper().encode()).hexdigest()
+    hashes = row.get("recovery_hashes") or []
+    if h in hashes:
+        remaining = [x for x in hashes if x != h]
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("UPDATE user_mfa SET recovery_hashes=%s::jsonb, updated_at=now() WHERE lp_id=%s",
+                            (json.dumps(remaining), lp_id))
+                conn.commit()
+        except Exception:
+            pass
+        return True
+    return False
+
+
+@app.get("/api/auth/v2/mfa/status")
+async def mfa_status(request: Request):
+    claims = _claims_or_401(request)
+    import secure_store as _sec
+    row = _mfa_get(claims.get("lp_id"))
+    return {"ok": True, "enabled": bool(row and row.get("enabled")),
+            "encryption_ready": _sec.is_configured(),
+            "recovery_remaining": len(row.get("recovery_hashes") or []) if row else 0}
+
+
+@app.post("/api/auth/v2/mfa/setup")
+async def mfa_setup(request: Request):
+    """Generate a new TOTP secret (pending — not enabled until verified). Returns
+    the otpauth URI, a QR data-URI, and the secret for manual entry."""
+    claims = _claims_or_401(request)
+    lp_id = claims.get("lp_id"); email = claims.get("email") or "user"
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    import secure_store as _sec
+    if not _sec.is_configured():
+        raise HTTPException(503, "DATA_ENCRYPTION_KEY not set.")
+    import pyotp
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(name=email, issuer_name="DGA Capital")
+    _ensure_mfa_table()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO user_mfa (lp_id, totp_secret_enc, enabled, updated_at)
+                       VALUES (%s,%s, FALSE, now())
+                       ON CONFLICT (lp_id) DO UPDATE SET
+                         totp_secret_enc=EXCLUDED.totp_secret_enc, enabled=FALSE, updated_at=now()""",
+                    (lp_id, _sec.encrypt(secret)))
+        conn.commit()
+    qr = None
+    try:
+        import qrcode, io, base64
+        buf = io.BytesIO(); qrcode.make(uri).save(buf, format="PNG")
+        qr = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        pass
+    return {"ok": True, "otpauth_uri": uri, "secret": secret, "qr": qr}
+
+
+@app.post("/api/auth/v2/mfa/enable")
+async def mfa_enable(request: Request):
+    """Confirm a code against the pending secret, enable 2FA, return recovery codes."""
+    claims = _claims_or_401(request)
+    lp_id = claims.get("lp_id")
+    body = await request.json()
+    code = (body or {}).get("code", "")
+    row = _mfa_get(lp_id)
+    if not row or not row.get("totp_secret_enc"):
+        raise HTTPException(400, "Run setup first.")
+    import secure_store as _sec, pyotp, hashlib, secrets as _s
+    if not pyotp.TOTP(_sec.decrypt(row["totp_secret_enc"])).verify((code or "").strip().replace(" ", ""), valid_window=1):
+        raise HTTPException(400, "That code didn't match — check your authenticator and try again.")
+    codes = ["-".join(_s.token_hex(2).upper() for _ in range(2)) for _ in range(8)]
+    hashes = [hashlib.sha256(c.encode()).hexdigest() for c in codes]
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE user_mfa SET enabled=TRUE, recovery_hashes=%s::jsonb, updated_at=now() WHERE lp_id=%s",
+                    (json.dumps(hashes), lp_id))
+        conn.commit()
+    _audit("mfa_enable", claims.get("email"), request.client.host if request.client else "?", True)
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/auth/v2/mfa/disable")
+async def mfa_disable(request: Request):
+    """Disable 2FA. Requires the account password (so a hijacked session can't)."""
+    claims = _claims_or_401(request)
+    body = await request.json()
+    if not auth_v2_mod.login(claims.get("email", ""), (body or {}).get("password", "")):
+        raise HTTPException(401, "Password incorrect.")
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        _ensure_mfa_table()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM user_mfa WHERE lp_id=%s", (claims.get("lp_id"),))
+            conn.commit()
+    _audit("mfa_disable", claims.get("email"), request.client.host if request.client else "?", True)
+    return {"ok": True}
 
 
 # ── Public privacy policy page (Plaid questionnaire Q9 wants a link) ──────────

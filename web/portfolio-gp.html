@@ -4631,6 +4631,19 @@ End with the sleeve block at this account's real market value so I can push it t
 
     <div class="wide-grid-2">
 
+      <!-- 🔐 Two-Factor Authentication (TOTP) -->
+      <section class="panel" data-collapsible="1">
+        <header class="panel-head">
+          <span class="panel-title">🔐 Two-Factor Authentication</span>
+          <span class="panel-badge" id="mfa-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+          <span style="flex:1"></span>
+          <button id="mfa-toggle-btn" type="button" class="tab-btn" style="display:none;">…</button>
+        </header>
+        <div style="padding:14px 16px;">
+          <div id="mfa-body" style="font-size:12.5px;color:#475569;line-height:1.5;">Loading…</div>
+        </div>
+      </section>
+
       <!-- Change Own Password -->
       <section class="panel" data-collapsible="1">
         <header class="panel-head">
@@ -18062,11 +18075,97 @@ End with the sleeve block at this account's real market value so I can push it t
     try { await window.dgaFetch('/api/plaid/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
     loadPlaid();
   }
+  // ── Two-Factor Authentication (TOTP) ──────────────────────────────────────
+  async function loadMfa(){
+    const body = document.getElementById('mfa-body');
+    const badge = document.getElementById('mfa-badge');
+    const tbtn = document.getElementById('mfa-toggle-btn');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/auth/v2/mfa/status')).json();
+      if (!st.encryption_ready) {
+        if (badge) { badge.textContent = 'UNAVAILABLE'; badge.style.background = '#fef3c7'; badge.style.color = '#92400e'; }
+        if (tbtn) tbtn.style.display = 'none';
+        body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — 2FA can’t be enabled until at-rest encryption is on.</span>';
+        return;
+      }
+      if (badge) {
+        badge.textContent = st.enabled ? 'ON' : 'OFF';
+        badge.style.background = st.enabled ? '#dcfce7' : '#f1f5f9';
+        badge.style.color = st.enabled ? '#166534' : '#64748b';
+      }
+      if (tbtn) {
+        tbtn.style.display = 'inline-block';
+        tbtn.textContent = st.enabled ? 'Disable' : 'Enable 2FA';
+        tbtn.onclick = st.enabled ? dgaMfaDisable : dgaMfaSetup;
+      }
+      body.innerHTML = st.enabled
+        ? `<span style="color:#166534;font-weight:700;">✓ Two-factor authentication is on.</span> You’ll enter a 6-digit code at login.
+           <span style="color:#94a3b8;">${st.recovery_remaining} recovery code(s) remaining.</span>`
+        : 'Protect your login with an authenticator app (Google Authenticator, Authy, 1Password). Required by Plaid before linking accounts. Click <strong>Enable 2FA</strong> to set it up.';
+    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load 2FA status.</span>'; }
+  }
+  async function dgaMfaSetup(){
+    const body = document.getElementById('mfa-body');
+    body.innerHTML = '<span style="color:#64748b;">Generating secret…</span>';
+    let d;
+    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
+    catch (e) { body.innerHTML = '<span style="color:#dc2626;">Setup failed.</span>'; return; }
+    if (!d.ok) { body.innerHTML = '<span style="color:#dc2626;">' + (d.detail || 'Setup failed.') + '</span>'; return; }
+    body.innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+        ${d.qr ? `<img src="${d.qr}" alt="QR" style="width:150px;height:150px;border:1px solid #e2e8f0;border-radius:8px;">` : ''}
+        <div style="flex:1;min-width:200px;">
+          <div style="margin-bottom:8px;">1. Scan the QR with your authenticator app, or enter this key manually:</div>
+          <code style="display:inline-block;background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:12px;word-break:break-all;">${_gfEsc(d.secret)}</code>
+          <div style="margin:12px 0 6px;">2. Enter the 6-digit code it shows:</div>
+          <div style="display:flex;gap:8px;">
+            <input id="mfa-verify-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456"
+              style="width:120px;height:34px;border:1px solid #cbd5e1;border-radius:6px;text-align:center;letter-spacing:3px;font-size:15px;">
+            <button id="mfa-verify-btn" class="btn-primary" style="height:34px;padding:0 14px;">Verify &amp; Enable</button>
+          </div>
+          <div id="mfa-verify-msg" style="font-size:11.5px;margin-top:6px;min-height:14px;"></div>
+        </div>
+      </div>`;
+    document.getElementById('mfa-verify-btn').onclick = dgaMfaVerify;
+    document.getElementById('mfa-verify-code').addEventListener('keypress', e => { if (e.key === 'Enter') dgaMfaVerify(); });
+  }
+  async function dgaMfaVerify(){
+    const code = (document.getElementById('mfa-verify-code')?.value || '').trim();
+    const msg = document.getElementById('mfa-verify-msg');
+    if (code.length < 6) { msg.style.color = '#dc2626'; msg.textContent = 'Enter the 6-digit code.'; return; }
+    let d;
+    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json(); }
+    catch (e) { msg.style.color = '#dc2626'; msg.textContent = 'Verification failed.'; return; }
+    if (!d.ok || !d.recovery_codes) { msg.style.color = '#dc2626'; msg.textContent = d.detail || 'That code didn’t match.'; return; }
+    const body = document.getElementById('mfa-body');
+    body.innerHTML = `
+      <div style="color:#166534;font-weight:700;margin-bottom:8px;">✓ Two-factor authentication is now ON.</div>
+      <div style="margin-bottom:6px;">Save these <strong>recovery codes</strong> somewhere safe — each works once if you lose your authenticator. They won’t be shown again:</div>
+      <div style="font-family:'SF Mono',monospace;font-size:13px;background:#0A1628;color:#e8eef7;border-radius:8px;padding:12px 14px;line-height:1.9;letter-spacing:1px;">
+        ${d.recovery_codes.map(c => _gfEsc(c)).join('<br>')}
+      </div>
+      <button id="mfa-copy-codes" class="tab-btn" style="margin-top:10px;">📋 Copy codes</button>
+      <button id="mfa-done" class="tab-btn" style="margin-top:10px;">Done</button>`;
+    document.getElementById('mfa-copy-codes').onclick = () => { navigator.clipboard?.writeText(d.recovery_codes.join('\n')); };
+    document.getElementById('mfa-done').onclick = loadMfa;
+    loadMfa();   // refresh the badge/button to "ON"
+  }
+  async function dgaMfaDisable(){
+    const pw = prompt('Enter your account password to turn OFF two-factor authentication:');
+    if (!pw) return;
+    let d;
+    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/disable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) })).json(); }
+    catch (e) { alert('Could not disable 2FA.'); return; }
+    if (!d.ok) { alert(d.detail || 'Password incorrect.'); return; }
+    loadMfa();
+  }
+
   document.getElementById('plaid-connect')?.addEventListener('click', dgaPlaidConnect);
 
-  // Load archived list + Railway usage + linked accounts when Settings tab is opened
+  // Load archived list + Railway usage + linked accounts + 2FA when Settings tab is opened
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
-    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadPlaid(); });
+    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadPlaid(); loadMfa(); });
   });
 
   setInterval(loadIndices,          60_000);   // ribbon: every 60s
