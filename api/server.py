@@ -24566,6 +24566,21 @@ def _plaid_require_gp(request: Request) -> dict:
     return claims
 
 
+def _plaid_error_detail(e) -> str:
+    """Pull Plaid's real error_code + error_message out of an ApiException body."""
+    body = getattr(e, "body", None)
+    if body:
+        try:
+            j = json.loads(body) if isinstance(body, str) else body
+            code = j.get("error_code") or ""
+            msg = j.get("error_message") or j.get("display_message") or ""
+            if code or msg:
+                return f"{code}: {msg}".strip(": ")
+        except Exception:
+            pass
+    return str(e)[:300]
+
+
 def _plaid_accounts_summary(accounts: list) -> list:
     """Masked, non-sensitive account list for the UI (last-4 only, no full #s)."""
     out = []
@@ -24615,7 +24630,7 @@ async def plaid_link_token(request: Request):
     try:
         res = _plaid.create_link_token(user_id=claims.get("lp_id") or "dga-gp")
     except Exception as e:
-        raise HTTPException(502, f"Plaid link-token failed: {str(e)[:200]}")
+        raise HTTPException(502, f"Plaid link-token failed: {_plaid_error_detail(e)}")
     return {"ok": True, "link_token": res.get("link_token"), "expiration": str(res.get("expiration") or "")}
 
 
@@ -24650,7 +24665,7 @@ async def plaid_exchange(request: Request):
         holdings = _plaid.get_holdings(access_token)
         accounts = _plaid_accounts_summary(holdings.get("accounts"))
     except Exception as e:
-        raise HTTPException(502, f"Plaid exchange/holdings failed: {str(e)[:200]}")
+        raise HTTPException(502, f"Plaid exchange/holdings failed: {_plaid_error_detail(e)}")
 
     enc = _sec.encrypt(access_token)
     _ensure_plaid_tables()
