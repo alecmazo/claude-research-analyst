@@ -102,11 +102,11 @@ def login_url(user_id: str, user_secret: str, custom_redirect: str = "",
     return str(body)
 
 
-def get_all_holdings(user_id: str, user_secret: str):
-    """Holdings across all of the user's connected accounts. Returns whatever the
-    SDK gives (list of per-account holdings, or a dict) — caller normalizes."""
-    r = _client().account_information.get_all_user_holdings(
-        user_id=str(user_id), user_secret=user_secret)
+def get_account_holdings(user_id: str, user_secret: str, account_id: str):
+    """Holdings for ONE account — {account, balances, positions, total_value, …}.
+    Replaces the deprecated get_all_user_holdings ('endpoint no longer available')."""
+    r = _client().account_information.get_user_holdings(
+        account_id=str(account_id), user_id=str(user_id), user_secret=user_secret)
     return _to_dict(r.body)
 
 

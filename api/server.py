@@ -25077,6 +25077,14 @@ def _snaptrade_normalize_account(ah: dict) -> dict:
     if isinstance(tv, dict):
         tv = tv.get("value")
     if tv is None:
+        # Fall back to the account's reported balance, then the summed positions.
+        bal = acct.get("balance") or {}
+        tot = bal.get("total") if isinstance(bal, dict) else None
+        if isinstance(tot, dict):
+            tv = tot.get("amount")
+        elif isinstance(bal, (int, float)):
+            tv = bal
+    if tv is None:
         tv = total_value
     brk = acct.get("institution_name")
     if not brk and isinstance(acct.get("brokerage"), dict):
@@ -25160,18 +25168,40 @@ async def snaptrade_sync(request: Request):
     import snaptrade_link as _st
     try:
         uid, secret = _snaptrade_ensure_user()
-        body = _st.get_all_holdings(uid, secret)
+        accts = _st.list_accounts(uid, secret)
     except HTTPException:
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        raise HTTPException(502, f"SnapTrade holdings failed: {_snaptrade_error_detail(e)}")
+        raise HTTPException(502, f"SnapTrade accounts failed: {_snaptrade_error_detail(e)}")
+    if isinstance(accts, dict):
+        accts = accts.get("accounts") or accts.get("data") or []
     _ensure_snaptrade_tables()
     out = []
-    for ah in _snaptrade_holdings_items(body):
-        norm = _snaptrade_normalize_account(ah if isinstance(ah, dict) else {})
-        if not norm.get("account_id"):
+    errors = []
+    for acct in (accts or []):
+        if not isinstance(acct, dict):
             continue
+        acct_id = acct.get("id")
+        if not acct_id:
+            continue
+        # Per-account holdings (get_all_user_holdings is deprecated).
+        try:
+            ah = _st.get_account_holdings(uid, secret, acct_id)
+        except Exception as e:
+            print(f"[snaptrade] holdings {acct_id}: {e!s:.140}", flush=True)
+            errors.append({"account_id": acct_id, "error": _snaptrade_error_detail(e)})
+            ah = {}
+        # Merge: list_user_accounts has the richest account metadata (number,
+        # institution, brokerage_authorization); holdings response has positions.
+        merged = {
+            "account": acct,
+            "positions": (ah.get("positions") if isinstance(ah, dict) else None) or [],
+            "total_value": (ah.get("total_value") if isinstance(ah, dict) else None),
+        }
+        norm = _snaptrade_normalize_account(merged)
+        if not norm.get("account_id"):
+            norm["account_id"] = str(acct_id)
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO snaptrade_accounts (account_id, connection_id, brokerage_name,
@@ -25190,7 +25220,7 @@ async def snaptrade_sync(request: Request):
         out.append({"account_id": norm["account_id"], "account_name": norm["account_name"],
                     "brokerage": norm["brokerage"], "positions": norm["count"],
                     "total_value": norm["total_value"]})
-    return {"ok": True, "synced": out}
+    return {"ok": True, "synced": out, "errors": errors}
 
 
 @app.get("/api/snaptrade/accounts")
