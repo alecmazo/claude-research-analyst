@@ -24332,6 +24332,42 @@ async def no_cache_shell_middleware(request: Request, call_next):
     return response
 
 
+# ── Public privacy policy page (Plaid questionnaire Q9 wants a link) ──────────
+@app.get("/privacy")
+def privacy_policy_page():
+    from fastapi.responses import HTMLResponse
+    import html as _html, re as _re
+    try:
+        md = (Path(__file__).resolve().parent.parent / "PRIVACY_POLICY.md").read_text(encoding="utf-8")
+    except Exception:
+        md = "# Privacy Policy\nPolicy unavailable."
+    out, in_list = [], False
+    for line in md.splitlines():
+        s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", _html.escape(line))
+        if line.startswith("- "):
+            if not in_list:
+                out.append("<ul>"); in_list = True
+            out.append(f"<li>{s[2:]}</li>"); continue
+        if in_list:
+            out.append("</ul>"); in_list = False
+        if line.startswith("## "):  out.append(f"<h2>{s[3:]}</h2>")
+        elif line.startswith("# "): out.append(f"<h1>{s[2:]}</h1>")
+        elif line.strip() == "":     out.append("")
+        else:                        out.append(f"<p>{s}</p>")
+    if in_list:
+        out.append("</ul>")
+    body = "\n".join(out)
+    page = (f"<!doctype html><html><head><meta charset='utf-8'>"
+            f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            f"<title>Privacy Policy — DGA Capital</title>"
+            f"<style>body{{max-width:760px;margin:40px auto;padding:0 20px;"
+            f"font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;line-height:1.6}}"
+            f"h1{{font-size:24px}}h2{{font-size:17px;margin-top:24px;color:#0A1628}}"
+            f"a{{color:#2563eb}}code{{background:#f1f5f9;padding:1px 4px;border-radius:3px}}</style>"
+            f"</head><body>{body}</body></html>")
+    return HTMLResponse(page)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Plaid — Fidelity auto-import (Investments)
 #
