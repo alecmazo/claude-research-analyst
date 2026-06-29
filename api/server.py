@@ -24491,15 +24491,10 @@ async def mfa_disable(request: Request):
     return {"ok": True}
 
 
-# ── Public privacy policy page (Plaid questionnaire Q9 wants a link) ──────────
-@app.get("/privacy")
-def privacy_policy_page():
+# ── Public policy/contact pages (Plaid + SnapTrade questionnaires want links) ──
+def _render_md_page(md: str, title: str):
     from fastapi.responses import HTMLResponse
     import html as _html, re as _re
-    try:
-        md = (Path(__file__).resolve().parent.parent / "PRIVACY_POLICY.md").read_text(encoding="utf-8")
-    except Exception:
-        md = "# Privacy Policy\nPolicy unavailable."
     out, in_list = [], False
     for line in md.splitlines():
         s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", _html.escape(line))
@@ -24518,13 +24513,41 @@ def privacy_policy_page():
     body = "\n".join(out)
     page = (f"<!doctype html><html><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            f"<title>Privacy Policy — DGA Capital</title>"
+            f"<title>{_html.escape(title)} — DGA Capital</title>"
             f"<style>body{{max-width:760px;margin:40px auto;padding:0 20px;"
             f"font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;line-height:1.6}}"
             f"h1{{font-size:24px}}h2{{font-size:17px;margin-top:24px;color:#0A1628}}"
             f"a{{color:#2563eb}}code{{background:#f1f5f9;padding:1px 4px;border-radius:3px}}</style>"
             f"</head><body>{body}</body></html>")
     return HTMLResponse(page)
+
+
+def _read_policy_md(filename: str, fallback: str) -> str:
+    try:
+        return (Path(__file__).resolve().parent.parent / filename).read_text(encoding="utf-8")
+    except Exception:
+        return fallback
+
+
+@app.get("/privacy")
+def privacy_policy_page():
+    return _render_md_page(_read_policy_md("PRIVACY_POLICY.md", "# Privacy Policy\nPolicy unavailable."), "Privacy Policy")
+
+
+@app.get("/terms")
+def terms_page():
+    return _render_md_page(_read_policy_md("TERMS_OF_SERVICE.md", "# Terms of Service\nUnavailable."), "Terms of Service")
+
+
+@app.get("/contact")
+def contact_page():
+    md = ("# Contact Us\n\n"
+          "**DGA Capital Management LP** — a single-family office.\n\n"
+          "For questions about this application or data accessed via connected "
+          "brokerage accounts, please reach us:\n\n"
+          "**Email:** a.mazo@dgacapital.com\n\n"
+          "**Phone:** +1 (415) 407-8621\n")
+    return _render_md_page(md, "Contact")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
