@@ -1146,9 +1146,16 @@ def _valid_token(token: str) -> bool:
     return hmac.compare_digest(token.strip(), expected)
 
 # Fund-specific auth — second layer on top of main auth.
-# FUND_PASSWORD defaults to "dgacapital"; set env var to change it independently.
+# FAIL CLOSED: never accept the public default ("genesis"). When FUND_PASSWORD
+# is unset or default, return a random per-process value that matches nothing,
+# so fund operations stay locked until a strong FUND_PASSWORD is configured.
+import secrets as _secrets
+_UNSET_FUND_PW = "unset-" + _secrets.token_urlsafe(24)
 def _fund_password() -> str:
-    return os.environ.get("FUND_PASSWORD", "genesis").strip()
+    pw = os.environ.get("FUND_PASSWORD", "").strip()
+    if not pw or pw == "genesis":
+        return _UNSET_FUND_PW
+    return pw
 
 def _make_fund_token() -> str:
     """Deterministic fund token: HMAC of 'fund:<password>' with shared secret."""

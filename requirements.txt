@@ -17,6 +17,7 @@ yfinance>=0.2.40
 youtube-transcript-api>=0.6.2
 duckdb>=1.0.0
 psycopg2-binary>=2.9.0
+cryptography>=42.0.0  # Fernet token encryption at rest (Plaid access_tokens) — secure_store.py
 reportlab>=4.0.0
 xhtml2pdf>=0.2.17  # pure-Python HTML→PDF (research PDFs) — no native libs, runs on Railway
 Pillow>=10.0.0

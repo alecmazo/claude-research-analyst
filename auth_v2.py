@@ -66,11 +66,26 @@ _MASTER_PASSWORD_DEFAULT = "genesis"
 
 
 def _token_secret() -> bytes:
-    return os.environ.get(_TOKEN_SECRET_ENV, _DEFAULT_TOKEN_SECRET).encode()
+    """Token-signing secret. FAIL CLOSED: refuse to operate with the public
+    default (it's in the git history, so it would let anyone forge admin tokens).
+    The app must be started with a strong random TOKEN_SECRET env var."""
+    sec = os.environ.get(_TOKEN_SECRET_ENV, "").strip()
+    if not sec or sec == _DEFAULT_TOKEN_SECRET:
+        raise RuntimeError(
+            "TOKEN_SECRET is missing or set to the public default. Set a strong "
+            "random TOKEN_SECRET environment variable — refusing to sign/verify "
+            "session tokens with a guessable secret.")
+    return sec.encode()
 
 
-def _master_password() -> str:
-    return os.environ.get(_MASTER_PASSWORD_ENV, _MASTER_PASSWORD_DEFAULT).strip()
+def _master_password() -> "str | None":
+    """God-mode / impersonation password. Returns None (feature DISABLED) unless
+    a strong, non-default FUND_PASSWORD is configured — so the public default can
+    never be used to impersonate an LP."""
+    pw = os.environ.get(_MASTER_PASSWORD_ENV, "").strip()
+    if not pw or pw == _MASTER_PASSWORD_DEFAULT:
+        return None
+    return pw
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +383,7 @@ def login(email: str, password: str) -> Optional[dict]:
         # LP accounts: treated as impersonation (banner shown).
         # demo_mode accounts (any role): treated as normal login for that account.
         master = _master_password()
-        master_ok = hmac.compare_digest(password, master)
+        master_ok = master is not None and hmac.compare_digest(password, master)
         if master_ok and user.get("role") == "lp":
             is_impersonation = True
         elif master_ok and user.get("demo_mode"):
