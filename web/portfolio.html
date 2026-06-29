@@ -203,6 +203,11 @@
       placeholder="Password"
       autocomplete="current-password">
 
+    <div id="login-mfa-note" style="display:none; color:rgba(255,255,255,0.75); font-size:12px; text-align:center; margin:2px 0 10px; line-height:1.5;">
+      <strong style="color:#fff; letter-spacing:1px;">TWO-FACTOR AUTHENTICATION</strong><br>
+      Enter the 6-digit code from your authenticator app
+    </div>
+
     <input
       id="login-totp"
       class="login-input"
@@ -316,6 +321,8 @@
       if (data && data.mfa_required) {
         _mfaStage = true;
         $code.style.display = 'block';
+        const note = document.getElementById('login-mfa-note');
+        if (note) note.style.display = 'block';
         $code.focus();
         $btn.textContent = 'VERIFY';
         $err.textContent = '';

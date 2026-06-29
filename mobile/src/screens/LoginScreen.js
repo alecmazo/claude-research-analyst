@@ -176,6 +176,13 @@ export default function LoginScreen({ onLoggedIn }) {
         />
 
         {mfaStage && (
+          <Text style={styles.mfaNote}>
+            <Text style={{ fontWeight: '800', color: '#fff' }}>TWO-FACTOR AUTHENTICATION{'\n'}</Text>
+            Enter the 6-digit code from your authenticator app
+          </Text>
+        )}
+
+        {mfaStage && (
           <TextInput
             style={[styles.input, styles.inputPassword]}
             placeholder="6-digit code"
@@ -275,6 +282,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   inputPassword: { letterSpacing: 3, textAlign: 'center' },
+  mfaNote: {
+    color: 'rgba(255,255,255,0.75)', fontSize: 12, textAlign: 'center',
+    lineHeight: 18, marginBottom: 10, letterSpacing: 0.5,
+  },
   btn: {
     width: '100%',
     height: 54,
