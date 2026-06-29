@@ -24550,10 +24550,14 @@ def _ensure_plaid_tables() -> None:
                     accounts_json     JSONB,
                     holdings_json     JSONB,
                     status            TEXT DEFAULT 'active',
+                    fund_id           UUID,
                     created_at        TIMESTAMPTZ DEFAULT now(),
                     updated_at        TIMESTAMPTZ DEFAULT now(),
                     last_synced_at    TIMESTAMPTZ
                 )""")
+            # Additive: link a Plaid connection to a managed account (fund). Nullable;
+            # a NULL fund_id just means "not assigned yet". Never touches the CSV path.
+            cur.execute("ALTER TABLE plaid_items ADD COLUMN IF NOT EXISTS fund_id UUID")
             conn.commit()
     except Exception as e:
         print(f"[plaid] ensure tables failed: {e!s:.150}", flush=True)
@@ -24579,6 +24583,78 @@ def _plaid_error_detail(e) -> str:
         except Exception:
             pass
     return str(e)[:300]
+
+
+def _plaid_normalize_holdings(holdings_json: dict) -> dict:
+    """Turn Plaid's raw {accounts, holdings, securities} into clean positions for
+    the UI — at READ time only. Pure function; writes nothing. Returns
+    {positions: [...], total_value, total_cost, currency}. Manual tax_lots are
+    never involved, so this is fully additive to the CSV path."""
+    hj = holdings_json or {}
+    secs = {s.get("security_id"): s for s in (hj.get("securities") or [])}
+    accts = {a.get("account_id"): a for a in (hj.get("accounts") or [])}
+    positions = []
+    total_value = 0.0
+    total_cost = 0.0
+    ccy = "USD"
+    for h in (hj.get("holdings") or []):
+        sec = secs.get(h.get("security_id")) or {}
+        acct = accts.get(h.get("account_id")) or {}
+        qty = h.get("quantity")
+        price = h.get("institution_price")
+        if price is None:
+            price = sec.get("close_price")
+        mv = h.get("institution_value")
+        if mv is None and qty is not None and price is not None:
+            try:
+                mv = float(qty) * float(price)
+            except Exception:
+                mv = None
+        cost = h.get("cost_basis")
+        symbol = sec.get("ticker_symbol") or sec.get("name") or "—"
+        if h.get("iso_currency_code"):
+            ccy = h.get("iso_currency_code")
+        try:
+            if mv is not None:
+                total_value += float(mv)
+        except Exception:
+            pass
+        try:
+            if cost is not None:
+                total_cost += float(cost)
+        except Exception:
+            pass
+        positions.append({
+            "symbol":       symbol,
+            "name":         sec.get("name"),
+            "asset_class":  str(sec.get("type") or ""),
+            "quantity":     qty,
+            "price":        price,
+            "market_value": mv,
+            "cost_basis":   cost,
+            "account_name": acct.get("official_name") or acct.get("name"),
+            "account_mask": acct.get("mask"),
+        })
+    positions.sort(key=lambda p: (p.get("market_value") or 0), reverse=True)
+    return {"positions": positions, "total_value": total_value,
+            "total_cost": total_cost, "currency": ccy, "count": len(positions)}
+
+
+def _plaid_managed_accounts() -> list:
+    """List managed accounts (funds) the GP can assign a Plaid connection to."""
+    out = []
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return out
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT id, short_name, name FROM funds
+                           WHERE fund_type='managed_account' AND status NOT IN ('dissolved')
+                           ORDER BY short_name NULLS LAST, name""")
+            for r in cur.fetchall():
+                out.append({"fund_id": str(r[0]), "short_name": r[1], "name": r[2]})
+    except Exception:
+        pass
+    return out
 
 
 def _plaid_accounts_summary(accounts: list) -> list:
@@ -24729,7 +24805,7 @@ async def plaid_items(request: Request):
     items = []
     with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
         cur.execute("""SELECT item_id, institution_name, institution_id, accounts_json,
-                              status, created_at, last_synced_at
+                              status, created_at, last_synced_at, fund_id
                          FROM plaid_items WHERE status='active'
                         ORDER BY created_at""")
         for r in cur.fetchall():
@@ -24738,9 +24814,10 @@ async def plaid_items(request: Request):
                 "institution":    r["institution_name"],
                 "accounts":       r["accounts_json"] or [],
                 "status":         r["status"],
+                "fund_id":        str(r["fund_id"]) if r["fund_id"] else None,
                 "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
             })
-    return {"ok": True, "items": items}
+    return {"ok": True, "items": items, "managed_accounts": _plaid_managed_accounts()}
 
 
 @app.post("/api/plaid/sync")
@@ -24806,6 +24883,64 @@ async def plaid_remove(request: Request):
             cur.execute("DELETE FROM plaid_items WHERE item_id=%s", (item_id,))
             conn.commit()
     return {"ok": True, "removed": item_id}
+
+
+@app.get("/api/plaid/holdings")
+async def plaid_holdings(request: Request):
+    """GP-only: normalized positions from each linked institution's stored holdings
+    snapshot (READ-only transform of holdings_json). Does NOT read or write tax_lots,
+    so the manual CSV path is unaffected. Optional ?item_id= to scope to one."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "items": []}
+    only = request.query_params.get("item_id")
+    _ensure_plaid_tables()
+    out = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        if only:
+            cur.execute("""SELECT item_id, institution_name, holdings_json, fund_id, last_synced_at
+                             FROM plaid_items WHERE status='active' AND item_id=%s""", (only,))
+        else:
+            cur.execute("""SELECT item_id, institution_name, holdings_json, fund_id, last_synced_at
+                             FROM plaid_items WHERE status='active' ORDER BY created_at""")
+        rows = cur.fetchall()
+    for r in rows:
+        norm = _plaid_normalize_holdings(r["holdings_json"] or {})
+        out.append({
+            "item_id":        r["item_id"],
+            "institution":    r["institution_name"],
+            "fund_id":        str(r["fund_id"]) if r["fund_id"] else None,
+            "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
+            **norm,
+        })
+    return {"ok": True, "items": out, "managed_accounts": _plaid_managed_accounts()}
+
+
+@app.post("/api/plaid/assign")
+async def plaid_assign(request: Request):
+    """GP-only: link (or unlink) a Plaid connection to a managed account. This only
+    sets plaid_items.fund_id — it never writes holdings into tax_lots or the CSV
+    tables, so manual uploads keep working untouched. Pass fund_id=null to unlink."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    item_id = (body or {}).get("item_id")
+    fund_id = (body or {}).get("fund_id") or None
+    if not item_id:
+        raise HTTPException(400, "item_id required")
+    _ensure_plaid_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        if fund_id:
+            cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type='managed_account'", (fund_id,))
+            if not cur.fetchone():
+                raise HTTPException(400, "Unknown managed account.")
+        cur.execute("UPDATE plaid_items SET fund_id=%s, updated_at=now() WHERE item_id=%s",
+                    (fund_id, item_id))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Unknown Plaid item.")
+        conn.commit()
+    return {"ok": True, "item_id": item_id, "fund_id": fund_id}
 
 
 if BRANDING_DIR.exists():

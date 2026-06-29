@@ -18057,30 +18057,70 @@ End with the sleeve block at this account's real market value so I can push it t
            </div>` : '';
       const id = await (await window.dgaFetch('/api/plaid/items')).json();
       const items = id.items || [];
+      const mAccts = id.managed_accounts || [];
       if (!items.length) {
         body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>' + sandboxBtn;
         document.getElementById('plaid-sandbox-btn')?.addEventListener('click', dgaPlaidSandbox);
         return;
       }
+      // Normalized positions (read-only; never touches the manual CSV path).
+      let posByItem = {};
+      try {
+        const hd = await (await window.dgaFetch('/api/plaid/holdings')).json();
+        (hd.items || []).forEach(h => { posByItem[h.item_id] = h; });
+      } catch (e) {}
+      const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
+        .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id === sel ? ' selected' : ''}>${_gfEsc(m.short_name || m.name)}</option>`)).join('');
       body.innerHTML = items.map(it => {
         const accts = (it.accounts || []).map(a =>
           `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;">
              <span style="color:#475569;">${_gfEsc(a.name || 'Account')} <span style="color:#94a3b8;">••${_gfEsc(a.mask || '')}</span></span>
              <span style="font-weight:700;color:#0A1628;">${_plaidMoney(a.value)}</span></div>`).join('');
+        const h = posByItem[it.item_id];
+        const positions = (h && h.positions || []);
+        const posRows = positions.map(p =>
+          `<tr style="font-size:11px;">
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:#0A1628;">${_gfEsc(p.symbol || '—')}</td>
+             <td style="padding:2px 6px;color:#94a3b8;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name || '')}</td>
+             <td style="padding:2px 6px;text-align:right;color:#475569;">${p.quantity != null ? Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}) : '—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:#0A1628;">${_plaidMoney(p.market_value)}</td>
+           </tr>`).join('');
+        const posBlock = positions.length
+          ? `<div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#64748b;margin-bottom:4px;">
+                 <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
+                 <span>Total <strong style="color:#0A1628;">${_plaidMoney(h.total_value)}</strong></span>
+               </div>
+               <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
+             </div>`
+          : '';
         return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(it.institution || 'Fidelity')}</span>
             <span style="flex:1;"></span>
             <button class="tab-btn" data-plaid-sync="${_gfEsc(it.item_id)}">↻ Sync</button>
             <button class="tab-btn" data-plaid-remove="${_gfEsc(it.item_id)}" style="color:#dc2626;">Remove</button>
-          </div>${accts}
-          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
+            <span>Feeds managed account:</span>
+            <select data-plaid-assign="${_gfEsc(it.item_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(it.fund_id)}</select>
+          </div>
+          ${accts}${posBlock}
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'} · holdings shown read-only; manual CSV uploads unaffected</div>
         </div>`;
       }).join('') + sandboxBtn;
       body.querySelectorAll('[data-plaid-sync]').forEach(b => b.addEventListener('click', () => dgaPlaidSync(b.getAttribute('data-plaid-sync'))));
       body.querySelectorAll('[data-plaid-remove]').forEach(b => b.addEventListener('click', () => dgaPlaidRemove(b.getAttribute('data-plaid-remove'))));
+      body.querySelectorAll('[data-plaid-assign]').forEach(s => s.addEventListener('change', () => dgaPlaidAssign(s.getAttribute('data-plaid-assign'), s.value)));
       document.getElementById('plaid-sandbox-btn')?.addEventListener('click', dgaPlaidSandbox);
     } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load linked accounts.</span>'; }
+  }
+  async function dgaPlaidAssign(itemId, fundId){
+    try {
+      const r = await window.dgaFetch('/api/plaid/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId, fund_id: fundId || null }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail || r.status));
+    } catch (e) { alert('Assign failed: ' + (e.message || e)); }
   }
   async function dgaPlaidSandbox(){
     const b = document.getElementById('plaid-sandbox-btn');
