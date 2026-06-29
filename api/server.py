@@ -24332,6 +24332,242 @@ async def no_cache_shell_middleware(request: Request, call_next):
     return response
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Plaid — Fidelity auto-import (Investments)
+#
+#  GP-only. The Plaid access_token is the key to all the account data, so it is
+#  ENCRYPTED at rest (secure_store / Fernet, key held separately from the DB) and
+#  NEVER returned to any client. The browser only ever handles short-lived
+#  link/public tokens. Fidelity credentials are entered on Fidelity's own OAuth
+#  page via Plaid Link and never reach this server.
+# ─────────────────────────────────────────────────────────────────────────────
+def _ensure_plaid_tables() -> None:
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS plaid_items (
+                    item_id           TEXT PRIMARY KEY,
+                    institution_name  TEXT,
+                    institution_id    TEXT,
+                    access_token_enc  TEXT NOT NULL,
+                    accounts_json     JSONB,
+                    holdings_json     JSONB,
+                    status            TEXT DEFAULT 'active',
+                    created_at        TIMESTAMPTZ DEFAULT now(),
+                    updated_at        TIMESTAMPTZ DEFAULT now(),
+                    last_synced_at    TIMESTAMPTZ
+                )""")
+            conn.commit()
+    except Exception as e:
+        print(f"[plaid] ensure tables failed: {e!s:.150}", flush=True)
+
+
+def _plaid_require_gp(request: Request) -> dict:
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP access required")
+    return claims
+
+
+def _plaid_accounts_summary(accounts: list) -> list:
+    """Masked, non-sensitive account list for the UI (last-4 only, no full #s)."""
+    out = []
+    for a in (accounts or []):
+        bal = (a.get("balances") or {})
+        out.append({
+            "account_id": a.get("account_id"),
+            "name":       a.get("official_name") or a.get("name"),
+            "mask":       a.get("mask"),            # last 4 only
+            "type":       str(a.get("type") or ""),
+            "subtype":    str(a.get("subtype") or ""),
+            "value":      bal.get("current"),
+            "currency":   bal.get("iso_currency_code") or "USD",
+        })
+    return out
+
+
+@app.get("/api/plaid/status")
+async def plaid_status(request: Request):
+    """GP-only: is Plaid configured + how many institutions are connected."""
+    _plaid_require_gp(request)
+    import plaid_client as _plaid
+    import secure_store as _sec
+    n = 0
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        _ensure_plaid_tables()
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM plaid_items WHERE status='active'")
+                n = cur.fetchone()[0]
+        except Exception:
+            pass
+    return {"ok": True, "configured": _plaid.available(), "env": _plaid.PLAID_ENV,
+            "encryption_ready": _sec.is_configured(), "connected_items": n}
+
+
+@app.post("/api/plaid/link-token")
+async def plaid_link_token(request: Request):
+    """GP-only: mint a short-lived Link token for the Investments product."""
+    claims = _plaid_require_gp(request)
+    import plaid_client as _plaid
+    if not _plaid.available():
+        raise HTTPException(503, "Plaid is not configured (set PLAID_CLIENT_ID / PLAID_SECRET).")
+    import secure_store as _sec
+    if not _sec.is_configured():
+        raise HTTPException(503, "DATA_ENCRYPTION_KEY not set — refusing to link accounts without at-rest encryption.")
+    try:
+        res = _plaid.create_link_token(user_id=claims.get("lp_id") or "dga-gp")
+    except Exception as e:
+        raise HTTPException(502, f"Plaid link-token failed: {str(e)[:200]}")
+    return {"ok": True, "link_token": res.get("link_token"), "expiration": str(res.get("expiration") or "")}
+
+
+@app.post("/api/plaid/exchange")
+async def plaid_exchange(request: Request):
+    """GP-only: exchange a public_token, encrypt the access_token, store it, and
+    pull the first holdings snapshot. The access_token never leaves the server."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    public_token = (body or {}).get("public_token", "")
+    if not public_token:
+        raise HTTPException(400, "public_token required")
+    import plaid_client as _plaid
+    import secure_store as _sec
+    try:
+        ex = _plaid.exchange_public_token(public_token)
+        access_token = ex["access_token"]
+        item_id = ex["item_id"]
+        # Institution name (best-effort)
+        inst_name, inst_id = None, None
+        try:
+            item = _plaid.get_item(access_token)
+            inst_id = (item.get("item") or {}).get("institution_id")
+            if inst_id:
+                inst = _plaid.get_institution(inst_id)
+                inst_name = (inst.get("institution") or {}).get("name")
+        except Exception:
+            pass
+        # First holdings snapshot
+        holdings = _plaid.get_holdings(access_token)
+        accounts = _plaid_accounts_summary(holdings.get("accounts"))
+    except Exception as e:
+        raise HTTPException(502, f"Plaid exchange/holdings failed: {str(e)[:200]}")
+
+    enc = _sec.encrypt(access_token)
+    _ensure_plaid_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO plaid_items (item_id, institution_name, institution_id,
+                                     access_token_enc, accounts_json, holdings_json,
+                                     status, last_synced_at, updated_at)
+            VALUES (%s,%s,%s,%s, %s::jsonb, %s::jsonb, 'active', now(), now())
+            ON CONFLICT (item_id) DO UPDATE SET
+                institution_name=EXCLUDED.institution_name,
+                institution_id=EXCLUDED.institution_id,
+                access_token_enc=EXCLUDED.access_token_enc,
+                accounts_json=EXCLUDED.accounts_json,
+                holdings_json=EXCLUDED.holdings_json,
+                status='active', last_synced_at=now(), updated_at=now()
+        """, (item_id, inst_name, inst_id, enc,
+              json.dumps(accounts, default=str),
+              json.dumps(holdings, default=str)))
+        conn.commit()
+    return {"ok": True, "item_id": item_id, "institution": inst_name, "accounts": accounts}
+
+
+@app.get("/api/plaid/items")
+async def plaid_items(request: Request):
+    """GP-only: connected institutions + masked accounts. No tokens returned."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "items": []}
+    _ensure_plaid_tables()
+    items = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("""SELECT item_id, institution_name, institution_id, accounts_json,
+                              status, created_at, last_synced_at
+                         FROM plaid_items WHERE status='active'
+                        ORDER BY created_at""")
+        for r in cur.fetchall():
+            items.append({
+                "item_id":        r["item_id"],
+                "institution":    r["institution_name"],
+                "accounts":       r["accounts_json"] or [],
+                "status":         r["status"],
+                "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
+            })
+    return {"ok": True, "items": items}
+
+
+@app.post("/api/plaid/sync")
+async def plaid_sync(request: Request):
+    """GP-only: refresh holdings for one item (or all). Decrypts the token in
+    memory only, re-pulls, and stores the new snapshot."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    only = (body or {}).get("item_id")
+    import plaid_client as _plaid
+    import secure_store as _sec
+    _ensure_plaid_tables()
+    rows = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        if only:
+            cur.execute("SELECT item_id, access_token_enc FROM plaid_items WHERE item_id=%s AND status='active'", (only,))
+        else:
+            cur.execute("SELECT item_id, access_token_enc FROM plaid_items WHERE status='active'")
+        rows = cur.fetchall()
+    synced = []
+    for r in rows:
+        try:
+            tok = _sec.decrypt(r["access_token_enc"])
+            holdings = _plaid.get_holdings(tok)
+            accounts = _plaid_accounts_summary(holdings.get("accounts"))
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""UPDATE plaid_items SET accounts_json=%s::jsonb,
+                                    holdings_json=%s::jsonb, last_synced_at=now(), updated_at=now()
+                                WHERE item_id=%s""",
+                            (json.dumps(accounts, default=str),
+                             json.dumps(holdings, default=str), r["item_id"]))
+                conn.commit()
+            synced.append({"item_id": r["item_id"], "accounts": accounts})
+        except Exception as e:
+            synced.append({"item_id": r["item_id"], "error": str(e)[:160]})
+    return {"ok": True, "synced": synced}
+
+
+@app.post("/api/plaid/remove")
+async def plaid_remove(request: Request):
+    """GP-only: disconnect an institution at Plaid and purge its stored data."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    item_id = (body or {}).get("item_id")
+    if not item_id:
+        raise HTTPException(400, "item_id required")
+    import plaid_client as _plaid
+    import secure_store as _sec
+    _ensure_plaid_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT access_token_enc FROM plaid_items WHERE item_id=%s", (item_id,))
+        row = cur.fetchone()
+    if row:
+        try:
+            _plaid.remove_item(_sec.decrypt(row[0]))   # revoke at Plaid first
+        except Exception as e:
+            print(f"[plaid] item_remove warning {item_id}: {e!s:.120}", flush=True)
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM plaid_items WHERE item_id=%s", (item_id,))
+            conn.commit()
+    return {"ok": True, "removed": item_id}
+
+
 if BRANDING_DIR.exists():
     app.mount("/branding", StaticFiles(directory=str(BRANDING_DIR)), name="branding")
 

@@ -4524,6 +4524,25 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
+    <!-- 🔗 Linked accounts — Plaid (Fidelity auto-import) -->
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">🔗 Linked Accounts · Fidelity (Plaid)</span>
+        <span class="panel-badge" id="plaid-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+        <span style="flex:1"></span>
+        <button id="plaid-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
+      </header>
+      <div style="padding:16px 18px;">
+        <div id="plaid-body" style="font-size:12px;color:#475569;">Loading…</div>
+        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
+          Connects via Plaid Link → Fidelity OAuth. Your Fidelity credentials are entered on Fidelity's
+          page and never reach this server. The access token is encrypted at rest. GP-only.
+          Set <code>PLAID_CLIENT_ID</code> / <code>PLAID_SECRET</code> / <code>PLAID_ENV</code> and
+          <code>DATA_ENCRYPTION_KEY</code> on Railway to enable.
+        </div>
+      </div>
+    </section>
+
     <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
     <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
       <header class="panel-head">
@@ -17966,9 +17985,88 @@ End with the sleeve block at this account's real market value so I can push it t
   }
   document.getElementById('rw-refresh')?.addEventListener('click', loadRailwayUsage);
 
-  // Load archived list + Railway usage when Settings tab is opened
+  // ── Linked Accounts · Plaid (Fidelity auto-import) ────────────────────────
+  function _loadPlaidScript(){
+    return new Promise((resolve, reject) => {
+      if (window.Plaid) return resolve();
+      const s = document.createElement('script');
+      s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+      s.onload = () => resolve(); s.onerror = () => reject(new Error('Plaid Link failed to load'));
+      document.head.appendChild(s);
+    });
+  }
+  const _plaidMoney = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  async function loadPlaid(){
+    const body = document.getElementById('plaid-body');
+    const badge = document.getElementById('plaid-badge');
+    const connectBtn = document.getElementById('plaid-connect');
+    if (!body) return;
+    try {
+      const st = await (await window.dgaFetch('/api/plaid/status')).json();
+      if (badge) {
+        const ok = st.configured && st.encryption_ready;
+        badge.textContent = !st.configured ? 'NOT CONFIGURED' : (st.env || 'sandbox').toUpperCase();
+        badge.style.background = ok ? '#dcfce7' : '#fef3c7';
+        badge.style.color = ok ? '#166534' : '#92400e';
+      }
+      if (connectBtn) connectBtn.disabled = !(st.configured && st.encryption_ready);
+      if (!st.configured) { body.innerHTML = '<span style="color:#92400e;">Plaid isn’t configured. Set PLAID_CLIENT_ID / PLAID_SECRET / PLAID_ENV on Railway.</span>'; return; }
+      if (!st.encryption_ready) { body.innerHTML = '<span style="color:#92400e;">DATA_ENCRYPTION_KEY not set — linking disabled until at-rest encryption is on.</span>'; return; }
+      const id = await (await window.dgaFetch('/api/plaid/items')).json();
+      const items = id.items || [];
+      if (!items.length) { body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>'; return; }
+      body.innerHTML = items.map(it => {
+        const accts = (it.accounts || []).map(a =>
+          `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;">
+             <span style="color:#475569;">${_gfEsc(a.name || 'Account')} <span style="color:#94a3b8;">••${_gfEsc(a.mask || '')}</span></span>
+             <span style="font-weight:700;color:#0A1628;">${_plaidMoney(a.value)}</span></div>`).join('');
+        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(it.institution || 'Fidelity')}</span>
+            <span style="flex:1;"></span>
+            <button class="tab-btn" data-plaid-sync="${_gfEsc(it.item_id)}">↻ Sync</button>
+            <button class="tab-btn" data-plaid-remove="${_gfEsc(it.item_id)}" style="color:#dc2626;">Remove</button>
+          </div>${accts}
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'}</div>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('[data-plaid-sync]').forEach(b => b.addEventListener('click', () => dgaPlaidSync(b.getAttribute('data-plaid-sync'))));
+      body.querySelectorAll('[data-plaid-remove]').forEach(b => b.addEventListener('click', () => dgaPlaidRemove(b.getAttribute('data-plaid-remove'))));
+    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load linked accounts.</span>'; }
+  }
+  async function dgaPlaidConnect(){
+    const body = document.getElementById('plaid-body');
+    try {
+      await _loadPlaidScript();
+      const d = await (await window.dgaFetch('/api/plaid/link-token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      if (!d.ok || !d.link_token) { alert(d.detail || 'Could not start Plaid Link.'); return; }
+      window.Plaid.create({
+        token: d.link_token,
+        onSuccess: async (public_token) => {
+          if (body) body.innerHTML = '<span style="color:#64748b;">Linking… pulling first holdings snapshot.</span>';
+          const ed = await (await window.dgaFetch('/api/plaid/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public_token }) })).json();
+          if (!ed.ok) alert(ed.detail || 'Link exchange failed.');
+          loadPlaid();
+        },
+        onExit: (err) => { if (err) loadPlaid(); },
+      }).open();
+    } catch (e) { alert('Plaid Link could not load: ' + (e.message || e)); }
+  }
+  async function dgaPlaidSync(itemId){
+    const b = document.getElementById('plaid-body'); if (b) b.style.opacity = '0.5';
+    try { await window.dgaFetch('/api/plaid/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
+    if (b) b.style.opacity = '1'; loadPlaid();
+  }
+  async function dgaPlaidRemove(itemId){
+    if (!confirm('Disconnect this institution and delete its stored data?')) return;
+    try { await window.dgaFetch('/api/plaid/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
+    loadPlaid();
+  }
+  document.getElementById('plaid-connect')?.addEventListener('click', dgaPlaidConnect);
+
+  // Load archived list + Railway usage + linked accounts when Settings tab is opened
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
-    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); });
+    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadPlaid(); });
   });
 
   setInterval(loadIndices,          60_000);   // ribbon: every 60s
