@@ -17999,6 +17999,7 @@ End with the sleeve block at this account's real market value so I can push it t
   document.getElementById('rw-refresh')?.addEventListener('click', loadRailwayUsage);
 
   // ── Linked Accounts · Plaid (Fidelity auto-import) ────────────────────────
+  const _PLAID_LT_KEY = 'dga_plaid_link_token';
   function _loadPlaidScript(){
     return new Promise((resolve, reject) => {
       if (window.Plaid) return resolve();
@@ -18007,6 +18008,29 @@ End with the sleeve block at this account's real market value so I can push it t
       s.onload = () => resolve(); s.onerror = () => reject(new Error('Plaid Link failed to load'));
       document.head.appendChild(s);
     });
+  }
+  async function _plaidExchange(public_token){
+    const ed = await (await window.dgaFetch('/api/plaid/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public_token }) })).json();
+    if (!ed.ok) alert(ed.detail || 'Link exchange failed.');
+    localStorage.removeItem(_PLAID_LT_KEY);
+    loadPlaid();
+  }
+  // OAuth institutions (e.g. Fidelity) redirect back here with ?oauth_state_id=…
+  // We stored the link_token before opening Link; resume it to finish.
+  async function _plaidOAuthResume(){
+    if (!/oauth_state_id=/.test(window.location.search)) return;
+    const lt = localStorage.getItem(_PLAID_LT_KEY);
+    if (!lt) return;
+    try {
+      await _loadPlaidScript();
+      window.Plaid.create({
+        token: lt,
+        receivedRedirectUri: window.location.href,
+        onSuccess: async (public_token) => { await _plaidExchange(public_token); cleanUrl(); },
+        onExit: () => { localStorage.removeItem(_PLAID_LT_KEY); cleanUrl(); },
+      }).open();
+    } catch (e) { /* leave the user on the page */ }
+    function cleanUrl(){ try { window.history.replaceState({}, '', window.location.pathname); } catch (_) {} }
   }
   const _plaidMoney = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
   async function loadPlaid(){
@@ -18053,15 +18077,15 @@ End with the sleeve block at this account's real market value so I can push it t
       await _loadPlaidScript();
       const d = await (await window.dgaFetch('/api/plaid/link-token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
       if (!d.ok || !d.link_token) { alert(d.detail || 'Could not start Plaid Link.'); return; }
+      // Persist the link_token so an OAuth redirect (Fidelity) can resume after return.
+      localStorage.setItem(_PLAID_LT_KEY, d.link_token);
       window.Plaid.create({
         token: d.link_token,
         onSuccess: async (public_token) => {
           if (body) body.innerHTML = '<span style="color:#64748b;">Linking… pulling first holdings snapshot.</span>';
-          const ed = await (await window.dgaFetch('/api/plaid/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public_token }) })).json();
-          if (!ed.ok) alert(ed.detail || 'Link exchange failed.');
-          loadPlaid();
+          await _plaidExchange(public_token);
         },
-        onExit: (err) => { if (err) loadPlaid(); },
+        onExit: (err) => { localStorage.removeItem(_PLAID_LT_KEY); if (err) loadPlaid(); },
       }).open();
     } catch (e) { alert('Plaid Link could not load: ' + (e.message || e)); }
   }
@@ -18167,6 +18191,9 @@ End with the sleeve block at this account's real market value so I can push it t
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
     el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadPlaid(); loadMfa(); });
   });
+
+  // If we returned from an OAuth institution (Fidelity), resume Plaid Link now.
+  _plaidOAuthResume();
 
   setInterval(loadIndices,          60_000);   // ribbon: every 60s
   setInterval(loadWatchlist,        60_000);   // watchlist: every 60s
