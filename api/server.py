@@ -24634,38 +24634,28 @@ async def plaid_link_token(request: Request):
     return {"ok": True, "link_token": res.get("link_token"), "expiration": str(res.get("expiration") or "")}
 
 
-@app.post("/api/plaid/exchange")
-async def plaid_exchange(request: Request):
-    """GP-only: exchange a public_token, encrypt the access_token, store it, and
-    pull the first holdings snapshot. The access_token never leaves the server."""
-    _plaid_require_gp(request)
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        raise HTTPException(503, "Database not available.")
-    body = await request.json()
-    public_token = (body or {}).get("public_token", "")
-    if not public_token:
-        raise HTTPException(400, "public_token required")
+def _plaid_ingest_public_token(public_token: str) -> dict:
+    """Exchange a public_token, encrypt + store the access_token, and snapshot the
+    first holdings. Shared by the live Link exchange and the sandbox test link.
+    The access_token never leaves the server. Raises on Plaid/DB failure."""
     import plaid_client as _plaid
     import secure_store as _sec
+    ex = _plaid.exchange_public_token(public_token)
+    access_token = ex["access_token"]
+    item_id = ex["item_id"]
+    # Institution name (best-effort)
+    inst_name, inst_id = None, None
     try:
-        ex = _plaid.exchange_public_token(public_token)
-        access_token = ex["access_token"]
-        item_id = ex["item_id"]
-        # Institution name (best-effort)
-        inst_name, inst_id = None, None
-        try:
-            item = _plaid.get_item(access_token)
-            inst_id = (item.get("item") or {}).get("institution_id")
-            if inst_id:
-                inst = _plaid.get_institution(inst_id)
-                inst_name = (inst.get("institution") or {}).get("name")
-        except Exception:
-            pass
-        # First holdings snapshot
-        holdings = _plaid.get_holdings(access_token)
-        accounts = _plaid_accounts_summary(holdings.get("accounts"))
-    except Exception as e:
-        raise HTTPException(502, f"Plaid exchange/holdings failed: {_plaid_error_detail(e)}")
+        item = _plaid.get_item(access_token)
+        inst_id = (item.get("item") or {}).get("institution_id")
+        if inst_id:
+            inst = _plaid.get_institution(inst_id)
+            inst_name = (inst.get("institution") or {}).get("name")
+    except Exception:
+        pass
+    # First holdings snapshot
+    holdings = _plaid.get_holdings(access_token)
+    accounts = _plaid_accounts_summary(holdings.get("accounts"))
 
     enc = _sec.encrypt(access_token)
     _ensure_plaid_tables()
@@ -24687,6 +24677,46 @@ async def plaid_exchange(request: Request):
               json.dumps(holdings, default=str)))
         conn.commit()
     return {"ok": True, "item_id": item_id, "institution": inst_name, "accounts": accounts}
+
+
+@app.post("/api/plaid/exchange")
+async def plaid_exchange(request: Request):
+    """GP-only: exchange a public_token, encrypt the access_token, store it, and
+    pull the first holdings snapshot. The access_token never leaves the server."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    public_token = (body or {}).get("public_token", "")
+    if not public_token:
+        raise HTTPException(400, "public_token required")
+    try:
+        return _plaid_ingest_public_token(public_token)
+    except Exception as e:
+        raise HTTPException(502, f"Plaid exchange/holdings failed: {_plaid_error_detail(e)}")
+
+
+@app.post("/api/plaid/sandbox-link")
+async def plaid_sandbox_link(request: Request):
+    """GP-only, SANDBOX-only: mint a Plaid test public_token directly (no Link UI,
+    no OAuth, no institution picker) and ingest it — to verify the holdings
+    pipeline end-to-end. Hard-refuses unless PLAID_ENV=sandbox."""
+    _plaid_require_gp(request)
+    import plaid_client as _plaid
+    if (_plaid.PLAID_ENV or "sandbox") != "sandbox":
+        raise HTTPException(400, "Sandbox-only: PLAID_ENV is not 'sandbox'.")
+    if not _plaid.available():
+        raise HTTPException(503, "Plaid is not configured (set PLAID_CLIENT_ID / PLAID_SECRET).")
+    import secure_store as _sec
+    if not _sec.is_configured():
+        raise HTTPException(503, "DATA_ENCRYPTION_KEY not set — refusing to store tokens without at-rest encryption.")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    try:
+        sb = _plaid.sandbox_public_token_create()
+        return _plaid_ingest_public_token(sb["public_token"])
+    except Exception as e:
+        raise HTTPException(502, f"Plaid sandbox link failed: {_plaid_error_detail(e)}")
 
 
 @app.get("/api/plaid/items")
