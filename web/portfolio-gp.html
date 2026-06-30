@@ -18544,9 +18544,12 @@ End with the sleeve block at this account's real market value so I can push it t
         if (!col) return;
         var wids = saved[s];
         if (!Array.isArray(wids)) return;
+        // Append every saved panel in order — appending a node already in this
+        // column re-positions it, so this restores WITHIN-column order too
+        // (not just cross-column moves).
         wids.forEach(function(wid) {
           var panel = RESEARCH.querySelector('section.panel[data-wid="' + wid + '"]');
-          if (panel && panel.parentNode !== col) col.appendChild(panel);
+          if (panel) col.appendChild(panel);
         });
       });
     }
