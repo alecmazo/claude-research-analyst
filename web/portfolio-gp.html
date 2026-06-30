@@ -1121,12 +1121,14 @@
   .fid-sort-btn:hover { background: #cbd5e1; color: #1e293b; }
   .fid-sort-btn:disabled { opacity: 0.2; cursor: default; }
   .fid-acct-name {
-    font-size: 12px; font-weight: 700; color: var(--text-primary);
+    font-size: 13px; font-weight: 600; color: var(--text-primary);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
   }
-  .fid-acct-val { font-size: 12px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
-  .fid-acct-day { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .fid-acct-sub { font-size: 10px; color: #94a3b8; margin-top: 1px; }
+  .fid-acct-val { font-size: 13px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  /* Row 2: positions count (left) + day gain (right, under the value) */
+  .fid-acct-row2 { margin-top: 3px; }
+  .fid-acct-day { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .fid-acct-sub { font-size: 11px; color: #94a3b8; }
   /* ── Right pane ──────────────────────────────────────────────────────────── */
   .fid-pos-pane {
     flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0;
@@ -11922,8 +11924,10 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div class="fid-acct-val">' + (g.navSum > 0 ? fmtUSD(g.navSum) : '—') + '</div>'
           + '</div>'
           + '</div>'
+          + '<div class="fid-acct-row fid-acct-row2">'
+          + '<div class="fid-acct-sub">' + g.positions.length + ' position' + (g.positions.length!==1?'s':'') + '</div>'
           + dayRow
-          + '<div class="fid-acct-sub">' + g.positions.length + ' position' + (g.positions.length!==1?'s':'') + '</div></div>';
+          + '</div></div>';
       });
       acctList.innerHTML = html;
 
