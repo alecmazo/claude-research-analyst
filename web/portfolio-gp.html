@@ -4434,7 +4434,7 @@ End with the sleeve block at this account's real market value so I can push it t
                style="width:78px;height:30px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;margin-right:8px;">
         <button id="ql-preview" type="button" class="tab-btn" style="margin-right:6px;">👁 Preview</button>
         <button id="ql-save" type="button" class="tab-btn" style="margin-right:6px;">💾 Save draft</button>
-        <button id="ql-publish" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">📢 Publish to LPs</button>
+        <button id="ql-publish" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">📢 Publish to all LPs</button>
       </header>
       <div style="padding:16px 18px;">
         <div id="ql-status" style="font-size:12px;color:#64748b;margin-bottom:14px;">A <strong>shared firm-wide intro</strong> + your <strong>note</strong> go to every LP. Each <strong>fund section</strong> is seen only by that fund/account's holders. Generate each piece, edit, then Save.</div>
@@ -17677,10 +17677,7 @@ End with the sleeve block at this account's real market value so I can push it t
     document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
     document.getElementById('ql-preview')?.addEventListener('click', _qlPreview);
     document.getElementById('ql-save')?.addEventListener('click', function(){ _qlSave('draft'); });
-    document.getElementById('ql-publish')?.addEventListener('click', function(){
-      if (!confirm('Publish this letter to LPs? Each LP will see the shared note + intro and only the sections for funds they hold.')) return;
-      _qlSave('published');
-    });
+    document.getElementById('ql-publish')?.addEventListener('click', _qlPublishAll);
     _qlLoadFunds();
     _qlRenderSaved();
   }
@@ -17742,8 +17739,10 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
           + '<span style="font-weight:700;color:#0A1628;">'+_gfEsc(f.short_name||f.name)+'</span>'
           + '<span style="font-size:10px;color:#94a3b8;">'+tag+attr+'</span>'
+          + '<span id="ql-pubtag-'+_gfEsc(f.fund_id)+'" style="display:none;font-size:10px;color:#16a34a;font-weight:800;">✓ published</span>'
           + '<span style="flex:1;"></span>'
           + '<button id="ql-genbtn-'+_gfEsc(f.fund_id)+'" type="button" class="tab-btn" style="font-size:11px;height:26px;" data-ql-fund="'+_gfEsc(f.fund_id)+'" data-ql-name="'+_gfEsc(f.short_name||f.name)+'">✨ Generate</button>'
+          + '<button id="ql-pubbtn-'+_gfEsc(f.fund_id)+'" type="button" class="tab-btn" style="font-size:11px;height:26px;margin-left:6px;color:#2563eb;" data-ql-pub="'+_gfEsc(f.fund_id)+'" data-ql-pubname="'+_gfEsc(f.short_name||f.name)+'">📢 Publish to LP</button>'
           + '</div>'
           + '<textarea id="ql-fund-'+_gfEsc(f.fund_id)+'" rows="6" placeholder="Generate this fund’s section, then edit…" style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:10px;font-size:12.5px;line-height:1.55;resize:vertical;font-family:inherit;"></textarea>'
           + '</div>';
@@ -17751,6 +17750,10 @@ End with the sleeve block at this account's real market value so I can push it t
       wrap.querySelectorAll('[data-ql-fund]').forEach(function(b){
         b.addEventListener('click', function(){ _qlGenFund(b.getAttribute('data-ql-fund'), b.getAttribute('data-ql-name')); });
       });
+      wrap.querySelectorAll('[data-ql-pub]').forEach(function(b){
+        b.addEventListener('click', function(){ _qlPublishFund(b.getAttribute('data-ql-pub'), b.getAttribute('data-ql-pubname')); });
+      });
+      if (_qlCurrentId) { try { _qlSyncPublishedBadges(); } catch(e){} }
     } catch (e) { wrap.innerHTML = '<span style="color:#94a3b8;">Could not load funds.</span>'; }
   }
   function _qlPreviewMd(text) {
@@ -17809,38 +17812,79 @@ End with the sleeve block at this account's real market value so I can push it t
     });
     return out;
   }
-  async function _qlSave(statusVal) {
-    statusVal = statusVal || 'draft';
-    const btn = document.getElementById(statusVal === 'published' ? 'ql-publish' : 'ql-save');
-    const status = document.getElementById('ql-status');
+  // Persist current composer content as a draft; returns the letter id (or null).
+  async function _qlPersist() {
     const year = _qlYear();
     const note = document.getElementById('ql-note')?.value || '';
     const intro = document.getElementById('ql-intro')?.value || '';
     const sections = _qlCollectSections();
-    if (!note.trim() && !intro.trim() && !Object.keys(sections).length) { if (status) status.textContent = 'Nothing to save yet.'; return; }
-    const origLabel = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = statusVal === 'published' ? '📢 Publishing…' : '💾 Saving…'; }
+    if (!note.trim() && !intro.trim() && !Object.keys(sections).length) return null;
+    const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year, year: year,
+                      manual_note: note, shared_intro_md: intro, fund_sections: sections,
+                      scope_fund_ids: Object.keys(sections), status: 'draft' };
+    const r = await (await window.dgaFetch('/api/quarterly-letter/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
+    if (!r.ok) throw new Error(r.detail || 'save failed');
+    _qlCurrentId = r.id;
+    return r.id;
+  }
+  async function _qlSave() {
+    const btn = document.getElementById('ql-save');
+    const status = document.getElementById('ql-status');
+    if (btn) { btn.disabled = true; btn.textContent = '💾 Saving…'; }
     try {
-      const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year, year: year,
-                        manual_note: note, shared_intro_md: intro, fund_sections: sections,
-                        scope_fund_ids: Object.keys(sections), status: statusVal };
-      const r = await (await window.dgaFetch('/api/quarterly-letter/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
-      if (!r.ok) throw new Error(r.detail || 'save failed');
-      _qlCurrentId = r.id;
-      if (statusVal === 'published') {
-        if (status) status.textContent = '📢 Published — emailing LPs…';
-        let emailMsg = '';
-        try {
-          const n = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(_qlCurrentId) + '/notify', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
-          if (n.ok) emailMsg = ' Emailed ' + (n.sent||0) + ' LP(s)' + (n.skipped ? ' (' + n.skipped + ' skipped — no holdings)' : '') + (n.errors && n.errors.length ? ', ' + n.errors.length + ' failed' : '') + '.';
-        } catch (e) { emailMsg = ' (email step failed: ' + (e.message||e) + ')'; }
-        if (status) status.textContent = '📢 Published — LPs see the note, intro, and their fund sections.' + emailMsg;
-      } else {
-        if (status) status.textContent = '✓ Saved (' + Object.keys(sections).length + ' fund section(s)).';
-      }
+      const id = await _qlPersist();
+      if (status) status.textContent = id ? '✓ Saved (' + Object.keys(_qlCollectSections()).length + ' fund section(s)).' : 'Nothing to save yet.';
       _qlRenderSaved();
     } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft'; }
+  }
+  function _qlEmailMsg(em) {
+    if (!em) return '';
+    return ' Emailed ' + (em.sent||0) + ' LP(s)' + (em.skipped ? ' (' + em.skipped + ' skipped)' : '') + ((em.errors && em.errors.length) ? ', ' + em.errors.length + ' failed' : '') + '.';
+  }
+  async function _qlPublishAll() {
+    const btn = document.getElementById('ql-publish');
+    const status = document.getElementById('ql-status');
+    if (!confirm('Publish ALL filled fund sections to every holding LP (and email them)?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '📢 Publishing…'; }
+    try {
+      const id = await _qlPersist();
+      if (!id) throw new Error('nothing to publish');
+      const r = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id) + '/publish-all', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!r.ok) throw new Error(r.detail || 'publish failed');
+      if (status) status.textContent = '📢 Published all ' + (r.published_fund_ids||[]).length + ' section(s).' + _qlEmailMsg(r.email);
+      _qlMarkPublished(r.published_fund_ids || []);
+    } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '📢 Publish to all LPs'; }
+  }
+  async function _qlPublishFund(fid, name) {
+    const status = document.getElementById('ql-status');
+    const btn = document.getElementById('ql-pubbtn-' + fid);
+    const ta = document.getElementById('ql-fund-' + fid);
+    if (!ta || !ta.value.trim()) { if (status) status.textContent = 'Generate ' + name + '’s section before publishing it.'; return; }
+    if (!confirm('Publish the ' + name + ' section to its LP(s) and email them?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '📢 …'; }
+    try {
+      const id = await _qlPersist();
+      if (!id) throw new Error('nothing to publish');
+      const r = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id) + '/publish-fund', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fund_id: fid }) })).json();
+      if (!r.ok) throw new Error(r.detail || 'publish failed');
+      if (status) status.textContent = '📢 Published ' + name + '.' + _qlEmailMsg(r.email);
+      _qlMarkPublished(r.published_fund_ids || []);
+    } catch (e) { if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '📢 Publish to LP'; }
+  }
+  let _qlPublished = [];
+  function _qlMarkPublished(pubIds) {
+    _qlPublished = pubIds || [];
+    _qlSyncPublishedBadges();
+  }
+  function _qlSyncPublishedBadges() {
+    const set = {}; (_qlPublished||[]).forEach(function(f){ set[f] = 1; });
+    _qlFunds.forEach(function(f){
+      const badge = document.getElementById('ql-pubtag-' + f.fund_id);
+      if (badge) badge.style.display = set[f.fund_id] ? 'inline' : 'none';
+    });
   }
   async function _qlRenderSaved() {
     const el = document.getElementById('ql-saved');
@@ -17870,6 +17914,7 @@ End with the sleeve block at this account's real market value so I can push it t
         const ta = document.getElementById('ql-fund-' + fid);
         if (ta) ta.value = (secs[fid] && secs[fid].md) || '';
       });
+      _qlMarkPublished(l.published_fund_ids || []);
       const status = document.getElementById('ql-status'); if (status) status.textContent = 'Loaded "' + (l.title||l.id) + '".';
     } catch (e) {}
   }

@@ -19515,6 +19515,10 @@ def _ensure_quarterly_letters_table() -> None:
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS shared_intro_md TEXT")
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS fund_sections JSONB")
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS year INTEGER")
+            # Which fund sections are published (decoupled from content saves so
+            # editing/saving never changes what LPs can see). LP visibility = a
+            # fund being in this list AND held by that LP.
+            cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS published_fund_ids JSONB DEFAULT '[]'::jsonb")
             # Per-LP read receipts so the Performance banner clears once read.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS quarterly_letter_reads (
@@ -19601,6 +19605,7 @@ def quarterly_letter_get(letter_id: str, request: Request):
         "id": r["id"], "title": r["title"], "period": r["period"], "year": r.get("year"),
         "scope_fund_ids": r["scope_fund_ids"] or [], "manual_note": r["manual_note"],
         "shared_intro_md": r.get("shared_intro_md"), "fund_sections": r.get("fund_sections") or {},
+        "published_fund_ids": r.get("published_fund_ids") or [],
         "body_md": r["body_md"], "status": r["status"],
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
 
@@ -19639,7 +19644,10 @@ def lp_quarterly_letter(request: Request):
         return {"ok": True, "letter": None}
     _ensure_quarterly_letters_table()
     with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-        cur.execute("SELECT * FROM quarterly_letters WHERE status='published' ORDER BY updated_at DESC LIMIT 1")
+        # Latest letter that has at least one PUBLISHED fund section.
+        cur.execute("SELECT * FROM quarterly_letters "
+                    "WHERE published_fund_ids IS NOT NULL AND published_fund_ids::text <> '[]' "
+                    "ORDER BY updated_at DESC LIMIT 1")
         r = cur.fetchone()
     if not r:
         return {"ok": True, "letter": None}
@@ -19647,15 +19655,25 @@ def lp_quarterly_letter(request: Request):
     if isinstance(secs, str):
         try: secs = json.loads(secs)
         except Exception: secs = {}
+    pub = r.get("published_fund_ids") or []
+    if isinstance(pub, str):
+        try: pub = json.loads(pub)
+        except Exception: pub = []
+    pub = set(str(x) for x in pub)
     my_fids = set(_lp_fund_ids_for_claims(claims))
     is_priv = claims.get("role") in ("gp", "admin")
     sections = []
     for fid, v in secs.items():
-        if not (is_priv or fid in my_fids):
+        if fid not in pub:                       # only published sections
+            continue
+        if not (is_priv or fid in my_fids):      # only this LP's funds
             continue
         if not isinstance(v, dict) or not (v.get("md") or "").strip():
             continue
         sections.append({"fund_id": fid, "name": v.get("name") or fid, "md": v.get("md")})
+    # Nothing published for THIS LP yet → no letter to show them.
+    if not sections and not is_priv:
+        return {"ok": True, "letter": None}
     sections.sort(key=lambda s: (s["name"] or "").lower())
     # Per-LP read receipt → drives the dismissible Performance banner.
     lp_key = str(claims.get("lp_id") or claims.get("email") or "")
@@ -19694,28 +19712,15 @@ async def lp_quarterly_letter_read(request: Request):
     return {"ok": True}
 
 
-@app.post("/api/quarterly-letter/{letter_id}/notify")
-def quarterly_letter_notify(letter_id: str, request: Request):
-    """GP-only: email LPs (those with real holdings) a notification + portal link.
-    Sends a notification only — the letter content stays behind login."""
-    claims = _claims_or_401(request)
-    if claims.get("role") not in ("gp", "admin"):
-        raise HTTPException(403, "GP only")
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        raise HTTPException(503, "Database not available.")
-    _ensure_quarterly_letters_table()
-    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-        cur.execute("SELECT title, period, year FROM quarterly_letters WHERE id=%s", (letter_id,))
-        L = cur.fetchone()
-    if not L:
-        raise HTTPException(404, "Letter not found.")
-    period = L["period"] or (f"YTD {L['year']}" if L.get("year") else "the latest quarter")
+def _qletter_email_lps(period: str, target_fund_id: str | None = None) -> dict:
+    """Email LP holders a notification + portal link (content stays behind login).
+    target_fund_id → only LPs who hold that fund; None → all LPs with any holdings."""
     portal = os.environ.get("LP_PORTAL_URL", "https://portfolio.dgacapital.com").rstrip("/")
     from_addr = os.environ.get("LETTER_EMAIL_FROM", "DGA Capital <onboarding@resend.dev>")
     try:
         users = auth_v2_mod.list_users()
     except Exception as e:
-        raise HTTPException(502, f"Could not list LP users: {e!s:.140}")
+        return {"sent": 0, "skipped": 0, "errors": [{"error": f"list_users: {e!s:.120}"}]}
     from email.message import EmailMessage as _EmailMessage
     sent, skipped, errors = [], [], []
     for u in (users or []):
@@ -19727,8 +19732,9 @@ def quarterly_letter_notify(letter_id: str, request: Request):
         pseudo = {"role": "lp",
                   "managed_account_ids": u.get("managed_account_ids") or [],
                   "fund_memberships": u.get("fund_memberships") or {}}
-        if not _lp_fund_ids_for_claims(pseudo):
-            skipped.append(email)          # no holdings → skip
+        my_fids = set(_lp_fund_ids_for_claims(pseudo))
+        if not my_fids or (target_fund_id and target_fund_id not in my_fids):
+            skipped.append(email)
             continue
         name = (u.get("name") or "").split(" ")[0] or "there"
         msg = _EmailMessage()
@@ -19754,8 +19760,77 @@ def quarterly_letter_notify(letter_id: str, request: Request):
                 sent.append(email)
         except Exception as e:
             errors.append({"email": email, "error": f"{e!s:.140}"})
-    print(f"🗒️ [qletter] notify {letter_id}: sent={len(sent)} skipped={len(skipped)} errors={len(errors)}", flush=True)
-    return {"ok": True, "sent": len(sent), "skipped": len(skipped), "errors": errors}
+    return {"sent": len(sent), "skipped": len(skipped), "errors": errors}
+
+
+def _qletter_publish(letter_id: str, fund_ids: list[str] | None) -> dict:
+    """Mark fund sections published (fund_ids=None → all filled sections) and email
+    the affected LPs. Returns {published_fund_ids, email}."""
+    _ensure_quarterly_letters_table()
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("SELECT period, year, fund_sections, published_fund_ids FROM quarterly_letters WHERE id=%s",
+                    (letter_id,))
+        L = cur.fetchone()
+        if not L:
+            raise HTTPException(404, "Letter not found.")
+        secs = L["fund_sections"] or {}
+        if isinstance(secs, str):
+            try: secs = json.loads(secs)
+            except Exception: secs = {}
+        already = L["published_fund_ids"] or []
+        if isinstance(already, str):
+            try: already = json.loads(already)
+            except Exception: already = []
+        targets = list(secs.keys()) if fund_ids is None else [f for f in fund_ids if f in secs]
+        if not targets:
+            raise HTTPException(400, "No matching fund section to publish (generate + save it first).")
+        new_pub = sorted(set([str(x) for x in already]) | set(str(t) for t in targets))
+        cur.execute("UPDATE quarterly_letters SET published_fund_ids=%s::jsonb, status='published', updated_at=now() WHERE id=%s",
+                    (json.dumps(new_pub), letter_id))
+        conn.commit()
+    period = L["period"] or (f"YTD {L['year']}" if L.get("year") else "the latest quarter")
+    if fund_ids is None:
+        email = _qletter_email_lps(period, target_fund_id=None)
+    else:
+        # one fund → email only its holders (union if several)
+        agg = {"sent": 0, "skipped": 0, "errors": []}
+        seen = set()
+        for fid in targets:
+            r = _qletter_email_lps(period, target_fund_id=fid)
+            agg["errors"] += r["errors"]
+        # recompute sent uniquely by re-running once per fund is wasteful; simplest: sum
+            agg["sent"] += r["sent"]; agg["skipped"] += r["skipped"]
+        email = agg
+    print(f"🗒️ [qletter] publish {letter_id} funds={fund_ids or 'ALL'} → {new_pub}", flush=True)
+    return {"published_fund_ids": new_pub, "email": email}
+
+
+@app.post("/api/quarterly-letter/{letter_id}/publish-fund")
+async def quarterly_letter_publish_fund(letter_id: str, request: Request):
+    """GP-only: publish ONE fund's section to its LP(s). Body: {fund_id}."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    fund_id = str((body or {}).get("fund_id") or "").strip()
+    if not fund_id:
+        raise HTTPException(400, "fund_id required")
+    res = _qletter_publish(letter_id, [fund_id])
+    return {"ok": True, **res}
+
+
+@app.post("/api/quarterly-letter/{letter_id}/publish-all")
+def quarterly_letter_publish_all(letter_id: str, request: Request):
+    """GP-only: publish ALL filled fund sections to every holding LP."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    res = _qletter_publish(letter_id, None)
+    return {"ok": True, **res}
 
 
 @app.get("/api/research/strategist/reviews")
