@@ -25072,8 +25072,10 @@ def _snaptrade_normalize_account(ah: dict) -> dict:
         except Exception:
             pass
         positions.append({
-            "symbol": ticker or "—", "name": desc, "asset_class": "",
+            "symbol": ticker or "—", "name": desc,
+            "asset_class": "cash" if p.get("cash_equivalent") else "equity",
             "quantity": units, "price": price, "market_value": mv, "cost_basis": cost,
+            "cost_basis_per_unit": avg,
         })
     positions.sort(key=lambda x: (x.get("market_value") or 0), reverse=True)
     tv = ah.get("total_value")
@@ -25105,6 +25107,119 @@ def _snaptrade_normalize_account(ah: dict) -> dict:
         "positions":     positions,
         "count":         len(positions),
     }
+
+
+def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
+    """Make SnapTrade the LIVE position source for one fund: close ALL existing
+    open tax_lots for the fund (CSV- or SnapTrade-sourced), then insert fresh
+    open lots from `positions` (the normalized SnapTrade holdings).
+
+    Mirrors the YTD-CSV positions-sync path (close open → adjustment txn →
+    transaction_lines → tax_lots), so the Positions panel + live NAV reflect
+    Fidelity. Does NOT touch managed_account_ytd_cache / account_balance_history,
+    so the YTD return + all-time chart stay CSV-driven. `cur` must be a
+    RealDictCursor. Returns the number of lots written.
+
+    Passing positions=[] just closes the fund's open lots (used on unassign).
+    """
+    _seed_coa_for_fund(cur, fund_id)
+    cur.execute("""SELECT code, id FROM accounts
+                    WHERE fund_id=%s AND code IN ('1020','1030','1100','3000')""", (fund_id,))
+    acct_map = {r["code"]: str(r["id"]) for r in cur.fetchall()}
+    sec_acct = acct_map.get("1100")
+    mm_acct  = acct_map.get("1030") or acct_map.get("1020")
+    cap_acct = acct_map.get("3000")
+    if not (sec_acct and cap_acct):
+        raise RuntimeError(f"fund {fund_id} missing chart-of-accounts (1100/3000)")
+
+    # Close existing open lots so re-syncing never double-counts.
+    cur.execute("UPDATE tax_lots SET closed_at=NOW() WHERE fund_id=%s AND closed_at IS NULL",
+                (fund_id,))
+
+    # Keep only real, positive-quantity rows with a symbol.
+    rows = []
+    for p in (positions or []):
+        sym = (p.get("symbol") or "").strip()
+        try:
+            qty = float(p.get("quantity"))
+        except (TypeError, ValueError):
+            qty = 0.0
+        if not sym or sym == "—" or qty <= 0:
+            continue
+        rows.append((p, sym, qty))
+    if not rows:
+        return 0
+
+    # Upsert securities, capturing ids.
+    sec_ids = {}
+    for p, sym, _qty in rows:
+        is_cash = (p.get("asset_class") == "cash")
+        cur.execute("""
+            INSERT INTO securities (symbol, name, asset_class, is_public)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (symbol) DO UPDATE
+                SET name=EXCLUDED.name, asset_class=EXCLUDED.asset_class,
+                    is_public=EXCLUDED.is_public
+            RETURNING id
+        """, (sym, p.get("name") or sym, "cash" if is_cash else "equity", not is_cash))
+        sec_ids[sym] = str(cur.fetchone()["id"])
+
+    today_iso = datetime.utcnow().date().isoformat()
+    cur.execute("""
+        INSERT INTO transactions (fund_id, effective_date, category, description)
+        VALUES (%s, %s, 'adjustment', 'Position import from SnapTrade (Fidelity)')
+        RETURNING id
+    """, (fund_id, today_iso))
+    txn_id = str(cur.fetchone()["id"])
+
+    total_cost = 0.0
+    ln = 1
+    for p, sym, qty in rows:
+        per_unit = p.get("cost_basis_per_unit")
+        try:
+            per_unit = float(per_unit) if per_unit is not None else 0.0
+        except (TypeError, ValueError):
+            per_unit = 0.0
+        cost = qty * per_unit
+        if cost > 0:
+            total_cost += cost
+            acct = mm_acct if p.get("asset_class") == "cash" else sec_acct
+            if acct:
+                cur.execute("""INSERT INTO transaction_lines
+                                 (transaction_id, line_number, account_id, debit, security_id)
+                               VALUES (%s,%s,%s,%s,%s)""",
+                            (txn_id, ln, acct, round(cost, 4), sec_ids[sym]))
+                ln += 1
+        cur.execute("""INSERT INTO tax_lots
+                         (fund_id, security_id, acquired_at, quantity,
+                          cost_basis_per_unit, open_transaction_id)
+                       VALUES (%s,%s,NOW(),%s,%s,%s)""",
+                    (fund_id, sec_ids[sym], qty, per_unit, txn_id))
+    if total_cost > 0:
+        cur.execute("""INSERT INTO transaction_lines
+                         (transaction_id, line_number, account_id, credit)
+                       VALUES (%s,%s,%s,%s)""",
+                    (txn_id, ln, cap_acct, round(total_cost, 4)))
+    return len(rows)
+
+
+def _snaptrade_recompute_fund(cur, fund_id: str) -> int:
+    """Rewrite a fund's live tax_lots from the stored holdings of EVERY active
+    SnapTrade account currently assigned to it. If none are assigned, this just
+    closes the fund's open lots. `cur` must be a RealDictCursor."""
+    cur.execute("SELECT holdings_json FROM snaptrade_accounts "
+                "WHERE status='active' AND fund_id=%s", (fund_id,))
+    poss = []
+    for r in cur.fetchall():
+        hj = r["holdings_json"]
+        if isinstance(hj, str):
+            try:
+                hj = json.loads(hj)
+            except Exception:
+                hj = []
+        if isinstance(hj, list):
+            poss.extend(hj)
+    return _snaptrade_write_lots(cur, fund_id, poss)
 
 
 def _snaptrade_holdings_items(body):
@@ -25182,6 +25297,7 @@ async def snaptrade_sync(request: Request):
     _ensure_snaptrade_tables()
     out = []
     errors = []
+    acct_norm = {}   # account_id -> normalized positions, for the tax_lots bridge
     for acct in (accts or []):
         if not isinstance(acct, dict):
             continue
@@ -25220,10 +25336,34 @@ async def snaptrade_sync(request: Request):
                   norm["account_name"], norm["account_mask"], norm["total_value"],
                   json.dumps(norm["positions"], default=str)))
             conn.commit()
+        acct_norm[norm["account_id"]] = norm["positions"]
         out.append({"account_id": norm["account_id"], "account_name": norm["account_name"],
                     "brokerage": norm["brokerage"], "positions": norm["count"],
                     "total_value": norm["total_value"]})
-    return {"ok": True, "synced": out, "errors": errors}
+
+    # ── Bridge: push assigned accounts' holdings into tax_lots (live positions) ──
+    # Group by fund (a fund may have >1 linked account) and write once per fund.
+    lots_written = []
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT account_id, fund_id FROM snaptrade_accounts "
+                        "WHERE status='active' AND fund_id IS NOT NULL")
+            by_fund = {}
+            for r in cur.fetchall():
+                if r["account_id"] in acct_norm:
+                    by_fund.setdefault(str(r["fund_id"]), []).extend(acct_norm[r["account_id"]])
+            for fid, poss in by_fund.items():
+                try:
+                    n = _snaptrade_write_lots(cur, fid, poss)
+                    lots_written.append({"fund_id": fid, "lots": n})
+                except Exception as e:
+                    errors.append({"fund_id": fid, "error": _snaptrade_error_detail(e)})
+            conn.commit()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        errors.append({"stage": "tax_lots", "error": _snaptrade_error_detail(e)})
+
+    return {"ok": True, "synced": out, "errors": errors, "lots_written": lots_written}
 
 
 @app.get("/api/snaptrade/accounts")
@@ -25313,8 +25453,10 @@ async def snaptrade_debug(request: Request):
 
 @app.post("/api/snaptrade/assign")
 async def snaptrade_assign(request: Request):
-    """GP-only: link (or unlink) a SnapTrade account to a managed account. Sets only
-    fund_id — never writes into tax_lots / the manual CSV path."""
+    """GP-only: link (or unlink) a SnapTrade account to a managed account, then
+    rewrite the affected fund(s)' live tax_lots so the Positions panel + live NAV
+    update immediately (SnapTrade is the live position source for linked funds).
+    Does not touch the YTD/all-time CSV path."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
@@ -25324,17 +25466,31 @@ async def snaptrade_assign(request: Request):
     if not account_id:
         raise HTTPException(400, "account_id required")
     _ensure_snaptrade_tables()
-    with _fund_conn() as conn, conn.cursor() as cur:
+    lots = None
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
         if fund_id:
             cur.execute("SELECT 1 FROM funds WHERE id=%s AND fund_type IN ('managed_account','lp_fund')", (fund_id,))
             if not cur.fetchone():
                 raise HTTPException(400, "Unknown managed account.")
+        cur.execute("SELECT fund_id FROM snaptrade_accounts WHERE account_id=%s", (account_id,))
+        prev = cur.fetchone()
+        if not prev:
+            raise HTTPException(404, "Unknown SnapTrade account.")
+        old_fund = str(prev["fund_id"]) if prev["fund_id"] else None
         cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() WHERE account_id=%s",
                     (fund_id, account_id))
-        if cur.rowcount == 0:
-            raise HTTPException(404, "Unknown SnapTrade account.")
+        # Rewrite live lots for every fund whose membership changed.
+        try:
+            affected = {f for f in (fund_id, old_fund) if f}
+            for fid in affected:
+                n = _snaptrade_recompute_fund(cur, fid)
+                if fid == fund_id:
+                    lots = n
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(500, f"Assignment saved-back failed (tax_lots): {_snaptrade_error_detail(e)}")
         conn.commit()
-    return {"ok": True, "account_id": account_id, "fund_id": fund_id}
+    return {"ok": True, "account_id": account_id, "fund_id": fund_id, "lots_written": lots}
 
 
 @app.post("/api/snaptrade/hide")
