@@ -4432,6 +4432,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <label style="font-size:11px;color:#64748b;margin-right:6px;">Year</label>
         <input id="ql-year" type="number" min="2020" max="2099"
                style="width:78px;height:30px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;margin-right:8px;">
+        <button id="ql-preview" type="button" class="tab-btn" style="margin-right:6px;">👁 Preview</button>
         <button id="ql-save" type="button" class="tab-btn" style="margin-right:6px;">💾 Save draft</button>
         <button id="ql-publish" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">📢 Publish to LPs</button>
       </header>
@@ -17674,6 +17675,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (_qlInit) { _qlRenderSaved(); return; }
     _qlInit = true;
     document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
+    document.getElementById('ql-preview')?.addEventListener('click', _qlPreview);
     document.getElementById('ql-save')?.addEventListener('click', function(){ _qlSave('draft'); });
     document.getElementById('ql-publish')?.addEventListener('click', function(){
       if (!confirm('Publish this letter to LPs? Each LP will see the shared note + intro and only the sections for funds they hold.')) return;
@@ -17750,6 +17752,53 @@ End with the sleeve block at this account's real market value so I can push it t
         b.addEventListener('click', function(){ _qlGenFund(b.getAttribute('data-ql-fund'), b.getAttribute('data-ql-name')); });
       });
     } catch (e) { wrap.innerHTML = '<span style="color:#94a3b8;">Could not load funds.</span>'; }
+  }
+  function _qlPreviewMd(text) {
+    const LINK = 'color:#2563eb;text-decoration:underline;font-weight:600;';
+    return String(text || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<div style="font-size:12px;font-weight:800;color:#5BB8D4;letter-spacing:.6px;margin:14px 0 4px;text-transform:uppercase;">$1</div>')
+      .replace(/^## (.+)$/gm,  '<div style="font-size:16px;font-weight:800;color:#0A1628;margin:16px 0 6px;">$1</div>')
+      .replace(/^# (.+)$/gm,   '<div style="font-size:17px;font-weight:800;color:#0A1628;margin:16px 0 6px;">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,   '<em>$1</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="'+LINK+'">$1</a>')
+      .replace(/^- (.+)$/gm,   '<div style="padding:2px 0 2px 12px;border-left:2px solid #5BB8D4;margin:3px 0;">$1</div>')
+      .replace(/\n{2,}/g,      '<div style="height:9px;"></div>')
+      .replace(/\n/g,          ' ');
+  }
+  function _qlPreview() {
+    const year = _qlYear();
+    const note = document.getElementById('ql-note')?.value || '';
+    const intro = document.getElementById('ql-intro')?.value || '';
+    const sections = _qlCollectSections();
+    const slist = Object.keys(sections).map(function(fid){ return sections[fid]; });
+    document.getElementById('ql-preview-modal')?.remove();
+    let inner = '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;">DGA Capital · YTD ' + year + '</div>'
+      + '<div style="font-size:20px;font-weight:800;color:#0A1628;margin:2px 0 14px;">Quarterly Letter</div>';
+    if (note.trim()) inner += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:14px;line-height:1.6;color:#1e293b;font-style:italic;">' + _qlPreviewMd(note) + '</div>';
+    if (intro.trim()) inner += '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlPreviewMd(intro) + '</div>';
+    if (slist.length) {
+      slist.forEach(function(s){
+        inner += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">'
+          + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:6px;">' + _gfEsc(s.name) + '</div>'
+          + '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlPreviewMd(s.md) + '</div></div>';
+      });
+    } else {
+      inner += '<div style="margin-top:14px;color:#94a3b8;font-size:13px;">No fund sections filled in yet.</div>';
+    }
+    inner += '<div style="margin-top:18px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:10px;">'
+      + 'GP preview — shows ALL filled sections. Each LP sees the note, intro, and only the sections for funds they hold.</div>';
+    const overlay = document.createElement('div');
+    overlay.id = 'ql-preview-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:10px;width:min(720px,94vw);max-height:86vh;overflow:auto;box-shadow:0 18px 48px rgba(0,0,0,0.3);">'
+      + '<div style="display:flex;align-items:center;gap:8px;padding:12px 18px;border-bottom:1px solid #e2e8f0;position:sticky;top:0;background:#fff;">'
+      + '<span style="font-size:13px;font-weight:800;color:#0A1628;">👁 Letter preview</span><span style="flex:1;"></span>'
+      + '<button onclick="document.getElementById(\'ql-preview-modal\').remove()" style="background:rgba(0,0,0,0.05);border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:3px 11px;font-size:14px;cursor:pointer;">&times;</button></div>'
+      + '<div style="padding:22px 26px;">' + inner + '</div></div>';
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
   }
   function _qlCollectSections() {
     const out = {};
