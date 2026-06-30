@@ -24972,6 +24972,9 @@ def _ensure_snaptrade_tables():
                     created_at        TIMESTAMPTZ DEFAULT now(),
                     updated_at        TIMESTAMPTZ DEFAULT now()
                 )""")
+            # Migration: per-account hide so unwanted accounts (e.g. empty IRAs)
+            # can be dismissed from the list WITHOUT removing the whole connection.
+            cur.execute("ALTER TABLE snaptrade_accounts ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE")
             conn.commit()
     except Exception as e:
         print(f"[snaptrade] ensure tables failed: {e!s:.150}", flush=True)
@@ -25234,8 +25237,10 @@ async def snaptrade_accounts(request: Request):
     out = []
     with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
         cur.execute("""SELECT account_id, connection_id, brokerage_name, account_name,
-                              account_mask, total_value, holdings_json, fund_id, last_synced_at
-                         FROM snaptrade_accounts WHERE status='active' ORDER BY created_at""")
+                              account_mask, total_value, holdings_json, fund_id, last_synced_at,
+                              COALESCE(hidden, FALSE) AS hidden
+                         FROM snaptrade_accounts WHERE status='active'
+                         ORDER BY COALESCE(hidden, FALSE), created_at""")
         for r in cur.fetchall():
             out.append({
                 "account_id":    r["account_id"],
@@ -25247,6 +25252,7 @@ async def snaptrade_accounts(request: Request):
                 "positions":     r["holdings_json"] or [],
                 "fund_id":       str(r["fund_id"]) if r["fund_id"] else None,
                 "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
+                "hidden":        bool(r["hidden"]),
             })
     return {"ok": True, "accounts": out, "managed_accounts": _plaid_managed_accounts()}
 
@@ -25329,6 +25335,29 @@ async def snaptrade_assign(request: Request):
             raise HTTPException(404, "Unknown SnapTrade account.")
         conn.commit()
     return {"ok": True, "account_id": account_id, "fund_id": fund_id}
+
+
+@app.post("/api/snaptrade/hide")
+async def snaptrade_hide(request: Request):
+    """GP-only: hide (or unhide) a single SnapTrade account from the list without
+    touching the brokerage connection. Body: {account_id, hidden}. Hidden accounts
+    stay hidden across syncs; unlike Remove, this never drops the connection."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    account_id = (body or {}).get("account_id")
+    hidden = bool((body or {}).get("hidden", True))
+    if not account_id:
+        raise HTTPException(400, "account_id required")
+    _ensure_snaptrade_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE snaptrade_accounts SET hidden=%s, updated_at=now() WHERE account_id=%s",
+                    (hidden, account_id))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Unknown SnapTrade account.")
+        conn.commit()
+    return {"ok": True, "account_id": account_id, "hidden": hidden}
 
 
 @app.post("/api/snaptrade/remove")

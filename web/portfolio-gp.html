@@ -18161,7 +18161,9 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!accounts.length) { body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
       const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
         .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc((m.short_name||m.name)+(m.fund_type==='lp_fund'?' (Fund)':''))}</option>`)).join('');
-      body.innerHTML = accounts.map(a => {
+      const visibleAccts = accounts.filter(a => !a.hidden);
+      const hiddenAccts  = accounts.filter(a => a.hidden);
+      body.innerHTML = visibleAccts.map(a => {
         const positions = a.positions || [];
         const posRows = positions.map(p =>
           `<tr style="font-size:11px;">
@@ -18183,6 +18185,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#94a3b8;font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
             <span style="flex:1;"></span>
+            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:#64748b;margin-right:6px;">Ignore</button>
             ${a.connection_id?`<button class="tab-btn" data-snap-remove="${_gfEsc(a.connection_id)}" style="color:#dc2626;">Remove</button>`:''}
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
@@ -18193,8 +18196,20 @@ End with the sleeve block at this account's real market value so I can push it t
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · holdings read-only; manual CSV uploads unaffected</div>
         </div>`;
       }).join('');
+      if (!visibleAccts.length) body.innerHTML = '<div style="font-size:11px;color:#94a3b8;">All linked accounts are ignored. Restore one below.</div>';
+      if (hiddenAccts.length) {
+        body.innerHTML += `<div style="margin-top:6px;font-size:11px;color:#94a3b8;">
+          <div style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${hiddenAccts.length} Ignored</div>
+          ${hiddenAccts.map(a => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+             <span style="flex:1;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#cbd5e1;">••${_gfEsc(a.account_mask||'')}</span></span>
+             <button class="tab-btn" data-snap-unhide="${_gfEsc(a.account_id)}" style="color:#0A1628;">Restore</button>
+           </div>`).join('')}
+        </div>`;
+      }
       body.querySelectorAll('[data-snap-remove]').forEach(b => b.addEventListener('click', () => dgaSnapRemove(b.getAttribute('data-snap-remove'))));
       body.querySelectorAll('[data-snap-assign]').forEach(s => s.addEventListener('change', () => dgaSnapAssign(s.getAttribute('data-snap-assign'), s.value)));
+      body.querySelectorAll('[data-snap-hide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-hide'), true)));
+      body.querySelectorAll('[data-snap-unhide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-unhide'), false)));
     } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load SnapTrade accounts.</span>'; }
   }
   async function dgaSnapConnect(){
@@ -18238,6 +18253,14 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await r.json();
       if (!r.ok || !d.ok) alert('Assign failed: ' + (d.detail||r.status));
     } catch (e) { alert('Assign failed: ' + (e.message||e)); }
+  }
+  async function dgaSnapHide(accountId, hidden){
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/hide', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ account_id: accountId, hidden: hidden }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) { alert((hidden?'Ignore':'Restore')+' failed: ' + (d.detail||r.status)); return; }
+    } catch (e) { alert((hidden?'Ignore':'Restore')+' failed: ' + (e.message||e)); return; }
+    loadSnapTrade();
   }
   async function dgaSnapRemove(connectionId){
     if (!confirm('Disconnect this brokerage connection and delete its stored holdings?')) return;
