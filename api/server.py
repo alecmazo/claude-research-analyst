@@ -19515,6 +19515,14 @@ def _ensure_quarterly_letters_table() -> None:
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS shared_intro_md TEXT")
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS fund_sections JSONB")
             cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS year INTEGER")
+            # Per-LP read receipts so the Performance banner clears once read.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS quarterly_letter_reads (
+                    letter_id  TEXT,
+                    lp_key     TEXT,
+                    read_at    TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (letter_id, lp_key)
+                )""")
             conn.commit()
     except Exception as e:
         print(f"[qletter] ensure table failed: {e!s:.150}", flush=True)
@@ -19649,11 +19657,41 @@ def lp_quarterly_letter(request: Request):
             continue
         sections.append({"fund_id": fid, "name": v.get("name") or fid, "md": v.get("md")})
     sections.sort(key=lambda s: (s["name"] or "").lower())
+    # Per-LP read receipt → drives the dismissible Performance banner.
+    lp_key = str(claims.get("lp_id") or claims.get("email") or "")
+    unread = True
+    if lp_key:
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM quarterly_letter_reads WHERE letter_id=%s AND lp_key=%s",
+                            (r["id"], lp_key))
+                unread = cur.fetchone() is None
+        except Exception:
+            pass
     return {"ok": True, "letter": {
-        "title": r["title"], "period": r["period"], "year": r.get("year"),
+        "id": r["id"], "title": r["title"], "period": r["period"], "year": r.get("year"),
         "manual_note": r["manual_note"], "shared_intro_md": r.get("shared_intro_md") or r.get("body_md"),
-        "sections": sections,
+        "sections": sections, "unread": unread,
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
+
+
+@app.post("/api/lp/quarterly-letter/read")
+async def lp_quarterly_letter_read(request: Request):
+    """Mark the current published letter read for THIS user. Body: {letter_id}."""
+    claims = _claims_or_401(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True}
+    body = await request.json()
+    lid = (body or {}).get("letter_id")
+    lp_key = str(claims.get("lp_id") or claims.get("email") or "")
+    if not lid or not lp_key:
+        return {"ok": True}
+    _ensure_quarterly_letters_table()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO quarterly_letter_reads (letter_id, lp_key) VALUES (%s,%s) "
+                    "ON CONFLICT (letter_id, lp_key) DO NOTHING", (lid, lp_key))
+        conn.commit()
+    return {"ok": True}
 
 
 @app.get("/api/research/strategist/reviews")

@@ -709,6 +709,9 @@
 <div id="tab-lp-reports" class="tab-panel">
   <div class="lp-tab-shell">
 
+    <!-- Quarterly Letter (rendered here; reading it clears the Performance banner) -->
+    <div id="lp-rpt-letter" style="margin-bottom:16px;"></div>
+
     <!-- heading card -->
     <div class="card">
       <div class="card-head">
@@ -904,6 +907,7 @@
     document.querySelectorAll('.tab-panel').forEach(p =>
       p.classList.toggle('active', p.id === 'tab-' + name));
     if (TAB_LOADERS[name]) { TAB_LOADERS[name](); delete TAB_LOADERS[name]; }
+    if (name === 'lp-reports') { try { _qlMarkRead(); } catch (e) {} }
   }
 
   document.querySelectorAll('.topbar-link[data-tab]').forEach(l =>
@@ -2366,34 +2370,56 @@
       .replace(/\n{2,}/g,      '<div style="height:9px;"></div>')
       .replace(/\n/g,          ' ');
   }
+  let _lpLetter = null;
   async function loadQuarterlyLetter() {
-    const wrap = document.getElementById('lp-quarterly-letter');
-    if (!wrap) return;
     let L;
     try { L = (await (await window.dgaFetch('/api/lp/quarterly-letter')).json()).letter; }
     catch (e) { return; }
     if (!L) return;
     const hasContent = (L.manual_note||'').trim() || (L.shared_intro_md||'').trim() || (L.sections||[]).length;
     if (!hasContent) return;
-    // Render on a white "paper" card so the long-form letter is fully readable
-    // (the dark hero-card theme washes out body text).
-    let h = '<div style="background:#fff;border-radius:14px;padding:28px 32px;margin-bottom:18px;box-shadow:0 2px 14px rgba(0,0,0,0.12);">'
-      + '<div style="font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#5BB8D4;">DGA Capital · ' + esc(L.period || ('Letter ' + (L.year||''))) + '</div>'
-      + '<div style="font-size:24px;font-weight:800;color:#0A1628;margin:4px 0 16px;">' + esc(L.title || 'Quarterly Letter') + '</div>';
-    if ((L.manual_note||'').trim()) {
-      h += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:14px 16px;margin:14px 0;font-size:14px;line-height:1.65;color:#1e293b;font-style:italic;">' + _qlMd(L.manual_note) + '</div>';
+    _lpLetter = L;
+    // Full letter → Reports tab (white "paper" card, fully readable).
+    const rpt = document.getElementById('lp-rpt-letter');
+    if (rpt) {
+      let h = '<div style="background:#fff;border-radius:14px;padding:28px 32px;box-shadow:0 2px 14px rgba(0,0,0,0.12);">'
+        + '<div style="font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#5BB8D4;">DGA Capital · ' + esc(L.period || ('Letter ' + (L.year||''))) + '</div>'
+        + '<div style="font-size:24px;font-weight:800;color:#0A1628;margin:4px 0 16px;">' + esc(L.title || 'Quarterly Letter') + '</div>';
+      if ((L.manual_note||'').trim())
+        h += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:14px 16px;margin:14px 0;font-size:14px;line-height:1.65;color:#1e293b;font-style:italic;">' + _qlMd(L.manual_note) + '</div>';
+      if ((L.shared_intro_md||'').trim())
+        h += '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(L.shared_intro_md) + '</div>';
+      (L.sections||[]).forEach(function(s){
+        h += '<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e2e8f0;">'
+          + '<div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:8px;">' + esc(s.name) + '</div>'
+          + '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(s.md) + '</div></div>';
+      });
+      h += '</div>';
+      rpt.innerHTML = h;
     }
-    if ((L.shared_intro_md||'').trim()) {
-      h += '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(L.shared_intro_md) + '</div>';
+    // Dismissible banner on Performance — only while unread.
+    const wrap = document.getElementById('lp-quarterly-letter');
+    if (wrap && L.unread) {
+      wrap.innerHTML = '<div style="display:flex;align-items:center;gap:14px;background:linear-gradient(90deg,#0A1628,#16324f);border:1px solid #5BB8D4;border-radius:12px;padding:16px 20px;margin-bottom:18px;">'
+        + '<span style="font-size:22px;">📬</span>'
+        + '<div style="flex:1;"><div style="font-size:14px;font-weight:800;color:#fff;">Your ' + esc(L.period || ('YTD ' + (L.year||''))) + ' letter is ready</div>'
+        + '<div style="font-size:12px;color:#cbd5e1;">A note from your GP plus commentary on your holdings.</div></div>'
+        + '<button id="lp-letter-read-btn" style="background:#5BB8D4;border:0;color:#0A1628;font-weight:800;border-radius:8px;padding:9px 16px;font-size:12px;cursor:pointer;">Read it →</button></div>';
+      wrap.style.display = 'block';
+      document.getElementById('lp-letter-read-btn')?.addEventListener('click', function(){
+        showTab('lp-reports'); _qlMarkRead();
+      });
+    } else if (wrap) {
+      wrap.style.display = 'none';
     }
-    (L.sections||[]).forEach(function(s){
-      h += '<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e2e8f0;">'
-        + '<div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:8px;">' + esc(s.name) + '</div>'
-        + '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(s.md) + '</div></div>';
-    });
-    h += '</div>';
-    wrap.innerHTML = h;
-    wrap.style.display = 'block';
+  }
+  async function _qlMarkRead() {
+    const wrap = document.getElementById('lp-quarterly-letter');
+    if (wrap) { wrap.style.display = 'none'; wrap.innerHTML = ''; }
+    if (!_lpLetter || !_lpLetter.unread || !_lpLetter.id) return;
+    _lpLetter.unread = false;
+    try { await window.dgaFetch('/api/lp/quarterly-letter/read', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ letter_id: _lpLetter.id }) }); }
+    catch (e) {}
   }
 
   // ── Init ─────────────────────────────────────────────────────
