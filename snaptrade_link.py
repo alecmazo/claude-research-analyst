@@ -119,11 +119,17 @@ def get_account_holdings(user_id: str, user_secret: str, account_id: str):
     if isinstance(positions, dict):
         positions = positions.get("positions") or positions.get("data") or []
 
-    # total_value = cash (from balances) + market value of positions.
+    # total_value = market value of positions + uninvested cash.
+    # NOTE: Fidelity's core sweep (e.g. SPAXX) appears BOTH as a cash_equivalent
+    # position AND in the balance `cash` field — adding both double-counts it.
+    # So we only fold in balance cash when no cash-equivalent position exists.
     pos_mv = 0.0
+    has_cash_position = False
     for p in positions:
         if not isinstance(p, dict):
             continue
+        if p.get("cash_equivalent"):
+            has_cash_position = True
         units, price = p.get("units"), p.get("price")
         try:
             if units is not None and price is not None:
@@ -132,22 +138,23 @@ def get_account_holdings(user_id: str, user_secret: str, account_id: str):
             pass
 
     cash = 0.0
-    try:
-        balances = _to_dict(
-            ai.get_user_account_balance(account_id=aid, user_id=uid, user_secret=sec).body
-        ) or []
-        if isinstance(balances, dict):
-            balances = balances.get("balances") or balances.get("data") or [balances]
-        for b in balances:
-            if not isinstance(b, dict):
-                continue
-            c = b.get("cash")
-            if isinstance(c, dict):
-                c = c.get("amount") or c.get("value")
-            if c is not None:
-                cash += float(c)
-    except Exception:
-        balances = None
+    if not has_cash_position:
+        try:
+            balances = _to_dict(
+                ai.get_user_account_balance(account_id=aid, user_id=uid, user_secret=sec).body
+            ) or []
+            if isinstance(balances, dict):
+                balances = balances.get("balances") or balances.get("data") or [balances]
+            for b in balances:
+                if not isinstance(b, dict):
+                    continue
+                c = b.get("cash")
+                if isinstance(c, dict):
+                    c = c.get("amount") or c.get("value")
+                if c is not None:
+                    cash += float(c)
+        except Exception:
+            pass
 
     return {"positions": positions, "total_value": (pos_mv + cash) or None}
 

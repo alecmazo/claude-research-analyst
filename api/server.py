@@ -25267,24 +25267,28 @@ async def snaptrade_debug(request: Request):
         accts = accts.get("accounts") or accts.get("data") or []
     if not accts:
         return {"ok": True, "accounts": 0, "note": "SnapTrade returned no accounts."}
-    acct = accts[0] if isinstance(accts[0], dict) else {}
-    acct_id = acct.get("id")
-    out = {"ok": True, "accounts": len(accts), "first_account_id": acct_id,
-           "account_keys": sorted([str(k) for k in acct.keys()])}
-    try:
-        ah = _st.get_account_holdings(uid, secret, acct_id)
-        if isinstance(ah, dict):
-            out["holdings_keys"] = sorted([str(k) for k in ah.keys()])
-            poss = ah.get("positions") or []
-            out["positions_count"] = len(poss)
-            out["first_position"] = str(poss[0])[:2500] if poss else None
-            out["total_value"] = ah.get("total_value")
-        else:
-            out["holdings_type"] = str(type(ah))
-            out["holdings_raw"] = str(ah)[:2500]
-    except Exception as e:
-        out["holdings_error"] = _snaptrade_error_detail(e)
-    return out
+    # Probe EVERY account so a single failing one (e.g. ANAT-IRA) is visible.
+    per_account = []
+    for acct in accts:
+        if not isinstance(acct, dict):
+            continue
+        aid = acct.get("id")
+        row = {"account_id": aid, "name": acct.get("name"),
+               "institution": acct.get("institution_name"),
+               "number": _snaptrade_mask(acct.get("number")),
+               "sync_status": acct.get("sync_status")}
+        try:
+            ah = _st.get_account_holdings(uid, secret, aid)
+            poss = (ah.get("positions") if isinstance(ah, dict) else None) or []
+            row["positions_count"] = len(poss)
+            row["total_value"] = ah.get("total_value") if isinstance(ah, dict) else None
+        except Exception as e:
+            row["error"] = _snaptrade_error_detail(e)
+        per_account.append(row)
+    acct0 = accts[0] if isinstance(accts[0], dict) else {}
+    return {"ok": True, "accounts": len(accts),
+            "account_keys": sorted([str(k) for k in acct0.keys()]),
+            "per_account": per_account}
 
 
 @app.post("/api/snaptrade/assign")

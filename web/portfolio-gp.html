@@ -18224,6 +18224,10 @@ End with the sleeve block at this account's real market value so I can push it t
     try {
       const r = await (await window.dgaFetch('/api/snaptrade/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
       if (!r.ok) alert('Sync failed: ' + (r.detail||''));
+      else if ((r.errors||[]).length) {
+        alert('Synced ' + (r.synced||[]).length + ' account(s), but ' + r.errors.length + ' failed:\n\n' +
+              r.errors.map(function(e){ return '• ' + e.account_id + ': ' + e.error; }).join('\n'));
+      }
     } catch (e) { alert('Sync failed: ' + (e.message||e)); }
     if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
     loadSnapTrade();
