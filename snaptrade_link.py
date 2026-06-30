@@ -191,8 +191,12 @@ def get_account_activities(user_id: str, user_secret: str, account_id: str,
     r = _client().transactions_and_reporting.get_activities(**kw)
     body = _to_dict(r.body)
     if isinstance(body, dict):
-        return body.get("data") or body.get("activities") or []
-    return body or []
+        items = body.get("data") or body.get("activities") or []
+    else:
+        items = body or []
+    # Coerce each element to a plain dict — the SDK may hand back schema objects,
+    # which would otherwise be silently dropped downstream.
+    return [_to_dict(x) for x in items]
 
 
 def list_accounts(user_id: str, user_secret: str):

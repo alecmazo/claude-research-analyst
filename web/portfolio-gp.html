@@ -18470,13 +18470,22 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await (await window.dgaFetch('/api/snaptrade/activities')).json();
       const sum = d.summary || {};
       const acts = d.activities || [];
+      const synced = s.synced || [];
+      const errs = s.errors || [];
+      const totalPulled = synced.reduce(function(t,x){ return t + (x.activities||0); }, 0);
       let h = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;">'
         + '<span><strong>'+(sum.buy_count||0)+'</strong> buys · <span style="color:#16a34a;">'+_snapMoney(sum.buy_value)+'</span></span>'
         + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+_snapMoney(sum.sell_value)+'</span></span>'
         + '<span>Net external flow: <strong>'+_snapMoney(sum.net_external_flow)+'</strong></span>'
-        + '<span style="color:#94a3b8;">'+(d.count||0)+' activities · '+(d.year||'')+'</span></div>';
+        + '<span style="color:#94a3b8;">'+(d.count||0)+' in '+(d.year||'')+' · '+totalPulled+' pulled ('+(s.start_date||'')+'→'+(s.end_date||'')+')</span></div>';
+      if (errs.length) {
+        h += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px;margin-bottom:10px;font-size:11px;color:#b91c1c;">'
+          + '<strong>'+errs.length+' account(s) errored:</strong><br>'
+          + errs.map(function(e){ return '• '+_gfEsc(e.account_id||'?')+': '+_gfEsc(e.error||''); }).join('<br>') + '</div>';
+      }
       if (!acts.length) {
-        h += '<div style="color:#94a3b8;font-size:12px;">No activity returned. If accounts are freshly connected, SnapTrade may still be backfilling transactions.</div>';
+        h += '<div style="color:#94a3b8;font-size:12px;">No activity in '+(d.year||'this year')+'. Pulled '+totalPulled+' total rows across the requested window. '
+          + 'If 0 pulled and no errors above, SnapTrade returned nothing for this window (may still be backfilling, or the trades predate '+(s.start_date||'Jan 1')+').</div>';
       } else {
         h += '<div style="max-height:360px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
           + '<thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e2e8f0;">'
