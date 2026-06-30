@@ -19252,25 +19252,33 @@ def _quarterly_activity_context(fund_ids: list[str] | None, year: int) -> str:
         return ("(No YTD attribution on file for these funds. Upload each managed "
                 "account's YTD Positions + Activity CSVs so the letter can cite real trades.)")
     bought = [(tk, e, e["start_sh"] < 1e-6) for tk, e in agg.items() if e["bought_sh"] > 1e-6]
-    sold   = [(tk, e, e["end_sh"]   < 1e-6) for tk, e in agg.items() if e["sold_sh"]   > 1e-6]
+    exited = [(tk, e) for tk, e in agg.items() if e["sold_sh"] > 1e-6 and e["end_sh"] < 1e-6]
+    trimmed = [(tk, e) for tk, e in agg.items() if e["sold_sh"] > 1e-6 and e["end_sh"] >= 1e-6]
     winners = sorted(((tk, e["gain"]) for tk, e in agg.items()), key=lambda x: -x[1])
-    lines = [f"YTD TRADES & ATTRIBUTION ({year}) — from uploaded Fidelity CSVs, {funds_with_data} fund(s):"]
+    lines = [f"YTD TRADES & ATTRIBUTION ({year}) — authoritative, from uploaded Fidelity CSVs, {funds_with_data} fund(s).",
+             "This is the COMPLETE record of what we did this year. Cover every name below."]
+    # Exits FIRST and in FULL (never truncate — these are the 'why did we sell' names).
+    if exited:
+        lines.append("  POSITIONS FULLY EXITED this year (sold out — no longer held):")
+        for tk, e in sorted(exited, key=lambda x: -x[1]["proceeds"]):
+            lines.append(f"    {tk:<7} sold {e['sold_sh']:.2f} sh for ~${e['proceeds']:,.0f}; realized YTD P&L ${e['gain']:+,.0f}")
+    if trimmed:
+        lines.append("  POSITIONS TRIMMED (partial sales, still held):")
+        for tk, e in sorted(trimmed, key=lambda x: -x[1]["proceeds"]):
+            lines.append(f"    {tk:<7} sold {e['sold_sh']:.2f} sh for ~${e['proceeds']:,.0f}; still hold ${e['end_val']:,.0f}; YTD P&L ${e['gain']:+,.0f}")
     if bought:
-        lines.append("  Bought / added:")
-        for tk, e, new in sorted(bought, key=lambda x: -x[1]["buy_cost"])[:15]:
-            lines.append(f"    {tk:<7} +{e['bought_sh']:.2f} sh  ~${e['buy_cost']:,.0f}  "
-                         f"{'[NEW position]' if new else '[added]'}  (now ${e['end_val']:,.0f})")
-    if sold:
-        lines.append("  Sold / trimmed:")
-        for tk, e, full in sorted(sold, key=lambda x: -x[1]["proceeds"])[:15]:
-            lines.append(f"    {tk:<7} -{e['sold_sh']:.2f} sh  ~${e['proceeds']:,.0f} proceeds  "
-                         f"{'[FULL EXIT]' if full else '[trim]'}  (YTD P&L ${e['gain']:+,.0f})")
+        lines.append("  BOUGHT / ADDED:")
+        for tk, e, new in sorted(bought, key=lambda x: -x[1]["buy_cost"])[:20]:
+            lines.append(f"    {tk:<7} bought {e['bought_sh']:.2f} sh for ~${e['buy_cost']:,.0f}  "
+                         f"{'[NEW position]' if new else '[added to existing]'}  (now ${e['end_val']:,.0f})")
     if winners:
         top = winners[:5]
         bot = [w for w in winners if w[1] < 0][-5:]
         lines.append("  Top YTD contributors: " + ", ".join(f"{tk} ${g:+,.0f}" for tk, g in top))
         if bot:
             lines.append("  Top detractors: " + ", ".join(f"{tk} ${g:+,.0f}" for tk, g in sorted(bot, key=lambda x: x[1])))
+    if not (exited or trimmed or bought):
+        lines.append("  (No buys or sells recorded YTD — if that's wrong, re-run this fund's YTD with its Activity CSV.)")
     return "\n".join(lines)
 
 
@@ -19374,10 +19382,18 @@ _QLETTER_FUND_SYSTEM = (
     "You are the GP of DGA Capital writing the section of a quarter-end letter for ONE "
     "specific account/fund. Voice: plain-spoken, confident, first-person plural, a notch "
     "informal. This section is seen by the holder(s) of THIS fund only.\n\n"
-    "GROUND EVERY NUMBER with the tools (get_ytd_attribution for this book's returns, "
-    "read_saved_report for each name's thesis, compute for math). The trade list in the "
-    "prompt is the ground truth of what we did in this sleeve — explain the WHY behind "
-    "the notable buys and sells. Never invent a trade or number.\n\n"
+    "AUTHORITATIVE TRADE RECORD: the 'YTD TRADES & ATTRIBUTION' block in the prompt is the "
+    "COMPLETE, authoritative list of what we bought, trimmed, and SOLD this year. It "
+    "includes positions we fully EXITED that are no longer in current holdings. Do NOT "
+    "rely on get_ytd_attribution alone for trades — that reflects current holdings and will "
+    "MISS exited names. Trust the prompt's trade list for what we sold.\n\n"
+    "MANDATORY COVERAGE: under '### What we did here', you MUST address EVERY fully-exited "
+    "position and EVERY trim by name, each with its realized YTD P&L and a SPECIFIC reason "
+    "we sold (thesis played out, valuation full, better use of capital, broken thesis, risk "
+    "management, etc.). Pull each sold name's saved thesis via read_saved_report to ground "
+    "the reason; if no report exists, reason from the numbers and say so briefly. Then cover "
+    "the notable buys/adds the same way. Do not skip exits — they are the most important part.\n\n"
+    "Use read_saved_report for theses and compute for any math. Never invent a trade or number.\n\n"
     "Write markdown with these headers, in order:\n"
     "### What we did here\n"
     "### How it's positioned\n"
@@ -19454,8 +19470,11 @@ async def research_quarterly_letter_fund_section(req: Request, background_tasks:
     question = (
         f"Write the {year} quarter-end letter section for '{fund_name}'.\n\n"
         f"{pos_ctx}\n\n{act_ctx}\n\nSCOPE: these holdings are the COMPLETE book for this "
-        f"section — analyze only '{fund_name}'. Use get_ytd_attribution, read_saved_report "
-        f"per name, and compute. Follow your section structure exactly."
+        f"section — analyze only '{fund_name}'. The 'YTD TRADES & ATTRIBUTION' block above is "
+        f"the authoritative record of every buy, trim, and EXIT — you MUST address each "
+        f"exited and trimmed name by name with its realized P&L and the reason we sold "
+        f"(read_saved_report for the thesis). Use compute for math. Follow your section "
+        f"structure exactly."
     )
     job_id = _qletter_kick("QLFUND", f"Queued · {fund_name}", question,
                            _QLETTER_FUND_SYSTEM, background_tasks, claims,
