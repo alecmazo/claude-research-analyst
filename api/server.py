@@ -25012,6 +25012,27 @@ def _ensure_snaptrade_tables():
             # Migration: per-account hide so unwanted accounts (e.g. empty IRAs)
             # can be dismissed from the list WITHOUT removing the whole connection.
             cur.execute("ALTER TABLE snaptrade_accounts ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE")
+            # Transaction history (buys/sells/flows) — the basis for YTD trade
+            # lists and external-cash-flow-aware return reconstruction.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS snaptrade_activities (
+                    activity_id      TEXT PRIMARY KEY,
+                    account_id       TEXT,
+                    trade_date       DATE,
+                    settlement_date  DATE,
+                    type             TEXT,
+                    symbol           TEXT,
+                    description      TEXT,
+                    units            NUMERIC,
+                    price            NUMERIC,
+                    amount           NUMERIC,
+                    currency         TEXT,
+                    fee              NUMERIC,
+                    raw_json         JSONB,
+                    synced_at        TIMESTAMPTZ DEFAULT now()
+                )""")
+            cur.execute("CREATE INDEX IF NOT EXISTS snaptrade_activities_acct_idx "
+                        "ON snaptrade_activities(account_id, trade_date)")
             conn.commit()
     except Exception as e:
         print(f"[snaptrade] ensure tables failed: {e!s:.150}", flush=True)
@@ -25259,6 +25280,69 @@ def _snaptrade_recompute_fund(cur, fund_id: str) -> int:
     return _snaptrade_write_lots(cur, fund_id, poss)
 
 
+def _snaptrade_activity_symbol(a: dict):
+    """Ticker from a SnapTrade activity (equity `symbol` or `option_symbol`)."""
+    node = a.get("symbol")
+    if isinstance(node, dict):
+        for k in ("raw_symbol", "symbol"):
+            v = node.get(k)
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict):
+                for k2 in ("raw_symbol", "symbol"):
+                    if isinstance(v.get(k2), str):
+                        return v[k2]
+    if isinstance(node, str):
+        return node
+    opt = a.get("option_symbol")
+    if isinstance(opt, dict):
+        return opt.get("ticker") or opt.get("raw_symbol")
+    return None
+
+
+def _snaptrade_num(v):
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _snaptrade_parse_activity(a: dict) -> dict | None:
+    """Normalize one SnapTrade UniversalActivity → flat row for snaptrade_activities."""
+    if not isinstance(a, dict):
+        return None
+    aid = a.get("id") or a.get("activity_id")
+    if not aid:
+        return None
+    cur = a.get("currency")
+    if isinstance(cur, dict):
+        cur = cur.get("code")
+    acct = a.get("account")
+    acct_id = acct.get("id") if isinstance(acct, dict) else acct
+    return {
+        "activity_id":     str(aid),
+        "account_id":      str(acct_id) if acct_id else None,
+        "trade_date":      (a.get("trade_date") or "")[:10] or None,
+        "settlement_date": (a.get("settlement_date") or "")[:10] or None,
+        "type":            (a.get("type") or "").upper() or None,
+        "symbol":          _snaptrade_activity_symbol(a),
+        "description":     a.get("description"),
+        "units":           _snaptrade_num(a.get("units")),
+        "price":           _snaptrade_num(a.get("price")),
+        "amount":          _snaptrade_num(a.get("amount")),
+        "currency":        cur,
+        "fee":             _snaptrade_num(a.get("fee")),
+    }
+
+
+# Activity-type buckets for YTD math.
+_SNAP_BUY_TYPES   = {"BUY", "REINVESTMENT", "DRIP"}
+_SNAP_SELL_TYPES  = {"SELL"}
+# External cash flows (move money in/out of the account; not performance).
+_SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
+                     "TRANSFER_IN", "TRANSFER_OUT", "FUNDING"}
+
+
 def _snaptrade_holdings_items(body):
     if isinstance(body, dict):
         return body.get("accounts") or body.get("account_holdings") or []
@@ -25409,6 +25493,237 @@ async def snaptrade_sync(request: Request):
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(502, f"SnapTrade sync failed: {_snaptrade_error_detail(e)}")
+
+
+@app.post("/api/snaptrade/activities/sync")
+async def snaptrade_activities_sync(request: Request):
+    """GP-only: pull transaction history (YTD by default) for every connected
+    account into snaptrade_activities. Body (optional): {start_date, end_date}
+    as YYYY-MM-DD. Idempotent — upserts by SnapTrade activity id."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    import snaptrade_link as _st
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    year  = datetime.utcnow().year
+    start = (body or {}).get("start_date") or f"{year}-01-01"
+    end   = (body or {}).get("end_date")   or datetime.utcnow().date().isoformat()
+    _ensure_snaptrade_tables()
+    uid, secret = _snaptrade_ensure_user()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active'")
+        acct_ids = [r[0] for r in cur.fetchall()]
+    out, errors = [], []
+    for acct_id in acct_ids:
+        try:
+            acts = _st.get_account_activities(uid, secret, acct_id, start, end)
+        except Exception as e:
+            errors.append({"account_id": acct_id, "error": _snaptrade_error_detail(e)})
+            continue
+        n = 0
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for a in (acts or []):
+                p = _snaptrade_parse_activity(a)
+                if not p:
+                    continue
+                p["account_id"] = p["account_id"] or acct_id
+                cur.execute("""
+                    INSERT INTO snaptrade_activities
+                        (activity_id, account_id, trade_date, settlement_date, type, symbol,
+                         description, units, price, amount, currency, fee, raw_json, synced_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
+                    ON CONFLICT (activity_id) DO UPDATE SET
+                        account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
+                        settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
+                        symbol=EXCLUDED.symbol, description=EXCLUDED.description,
+                        units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
+                        currency=EXCLUDED.currency, fee=EXCLUDED.fee,
+                        raw_json=EXCLUDED.raw_json, synced_at=now()
+                """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
+                      p["type"], p["symbol"], p["description"], p["units"], p["price"],
+                      p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
+                n += 1
+            conn.commit()
+        out.append({"account_id": acct_id, "activities": n})
+    return {"ok": True, "start_date": start, "end_date": end, "synced": out, "errors": errors}
+
+
+@app.get("/api/snaptrade/activities")
+def snaptrade_activities_list(request: Request, fund_id: str = None, year: int = None):
+    """GP-only: YTD activity feed joined to fund assignment, with buy/sell/flow
+    aggregates. Optional ?fund_id= and ?year= (defaults to current year)."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "activities": [], "summary": {}}
+    _ensure_snaptrade_tables()
+    yr = int(year) if year else datetime.utcnow().year
+    sql = """SELECT a.activity_id, a.account_id, a.trade_date, a.type, a.symbol,
+                    a.description, a.units, a.price, a.amount, a.fee,
+                    sa.fund_id, sa.account_name, sa.brokerage_name
+               FROM snaptrade_activities a
+               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+              WHERE EXTRACT(YEAR FROM a.trade_date) = %s"""
+    params = [yr]
+    if fund_id:
+        sql += " AND sa.fund_id = %s"
+        params.append(fund_id)
+    sql += " ORDER BY a.trade_date DESC, a.activity_id"
+    acts = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute(sql, params)
+        for r in cur.fetchall():
+            acts.append({
+                "activity_id": r["activity_id"], "account_id": r["account_id"],
+                "fund_id": str(r["fund_id"]) if r["fund_id"] else None,
+                "account_name": r["account_name"], "brokerage": r["brokerage_name"],
+                "trade_date": r["trade_date"].isoformat() if r["trade_date"] else None,
+                "type": r["type"], "symbol": r["symbol"], "description": r["description"],
+                "units": float(r["units"]) if r["units"] is not None else None,
+                "price": float(r["price"]) if r["price"] is not None else None,
+                "amount": float(r["amount"]) if r["amount"] is not None else None,
+                "fee": float(r["fee"]) if r["fee"] is not None else None,
+            })
+    # Aggregates
+    buy_val = sell_val = net_flow = 0.0
+    buy_n = sell_n = 0
+    by_symbol = {}
+    for a in acts:
+        t = a["type"] or ""
+        gross = (a["units"] or 0) * (a["price"] or 0)
+        if t in _SNAP_BUY_TYPES:
+            buy_val += gross; buy_n += 1
+            by_symbol.setdefault(a["symbol"], {"buy_units": 0.0, "sell_units": 0.0})["buy_units"] += (a["units"] or 0)
+        elif t in _SNAP_SELL_TYPES:
+            sell_val += gross; sell_n += 1
+            by_symbol.setdefault(a["symbol"], {"buy_units": 0.0, "sell_units": 0.0})["sell_units"] += (a["units"] or 0)
+        elif t in _SNAP_FLOW_TYPES:
+            net_flow += (a["amount"] or 0)
+    return {"ok": True, "year": yr, "count": len(acts), "activities": acts,
+            "summary": {"buy_count": buy_n, "buy_value": round(buy_val, 2),
+                        "sell_count": sell_n, "sell_value": round(sell_val, 2),
+                        "net_external_flow": round(net_flow, 2),
+                        "by_symbol": by_symbol}}
+
+
+def _snaptrade_fund_holdings(cur, fund_id: str) -> dict:
+    """Aggregate current holdings (qty + last price) per symbol across every active
+    account assigned to fund_id. `cur` must be a RealDictCursor."""
+    cur.execute("SELECT holdings_json FROM snaptrade_accounts WHERE status='active' AND fund_id=%s",
+                (fund_id,))
+    agg = {}
+    for r in cur.fetchall():
+        hj = r["holdings_json"]
+        if isinstance(hj, str):
+            try: hj = json.loads(hj)
+            except Exception: hj = []
+        for p in (hj or []):
+            sym = (p.get("symbol") or "").strip()
+            if not sym or sym == "—":
+                continue
+            q = _snaptrade_num(p.get("quantity")) or 0.0
+            e = agg.setdefault(sym, {"qty": 0.0, "price": _snaptrade_num(p.get("price")),
+                                     "asset_class": p.get("asset_class"), "name": p.get("name")})
+            e["qty"] += q
+            if e["price"] is None:
+                e["price"] = _snaptrade_num(p.get("price"))
+    return agg
+
+
+@app.get("/api/snaptrade/ytd-reconstruct")
+def snaptrade_ytd_reconstruct(request: Request, fund_id: str, year: int = None):
+    """GP-only DIAGNOSTIC: reconstruct a fund's Jan-1 equity value by rewinding YTD
+    trades, price it from price_history, and compare a reconstructed YTD price-return
+    to the CSV's official figure — to decide whether SnapTrade can drive a CSV-free
+    YTD. Equity-only: ignores cash, dividends, and intra-period flow timing (noted)."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    _ensure_snaptrade_tables()
+    yr   = int(year) if year else datetime.utcnow().year
+    jan1 = f"{yr}-01-01"
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        holdings = _snaptrade_fund_holdings(cur, fund_id)
+        if not holdings:
+            return {"ok": True, "fund_id": fund_id, "note": "No SnapTrade holdings assigned to this fund."}
+        # External cash flows YTD (contributions/withdrawals/transfers).
+        net_units, buy_gross, sell_gross, net_flow = {}, 0.0, 0.0, 0.0
+        cur.execute("""
+            SELECT a.type, COALESCE(SUM(a.amount),0) AS amt
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.fund_id = %s AND a.trade_date >= %s
+             GROUP BY a.type
+        """, (fund_id, jan1))
+        for fr in cur.fetchall():
+            if (fr["type"] or "") in _SNAP_FLOW_TYPES:
+                net_flow += float(fr["amt"] or 0)
+        # Net YTD units + gross trade value per symbol (buy +, sell −).
+        cur.execute("""
+            SELECT a.symbol, a.type,
+                   COALESCE(SUM(a.units), 0)          AS units,
+                   COALESCE(SUM(a.units * a.price), 0) AS gross
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.fund_id = %s AND a.trade_date >= %s
+             GROUP BY a.symbol, a.type
+        """, (fund_id, jan1))
+        for r in cur.fetchall():
+            t, sym = (r["type"] or ""), r["symbol"]
+            u, g = float(r["units"] or 0), float(r["gross"] or 0)
+            if t in _SNAP_BUY_TYPES:
+                net_units[sym] = net_units.get(sym, 0.0) + u; buy_gross += g
+            elif t in _SNAP_SELL_TYPES:
+                net_units[sym] = net_units.get(sym, 0.0) - u; sell_gross += g
+
+        rows, jan1_equity, now_equity, priced = [], 0.0, 0.0, True
+        for sym, h in holdings.items():
+            if h.get("asset_class") == "cash":
+                continue
+            now_qty = h["qty"]; now_px = h["price"] or 0.0
+            now_equity += now_qty * now_px
+            jan1_qty = now_qty - net_units.get(sym, 0.0)
+            try: _sync_price_history(sym)
+            except Exception: pass
+            cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s ORDER BY d DESC LIMIT 1",
+                        (sym, jan1))
+            pr = cur.fetchone()
+            jp = float(pr["close"]) if pr and pr["close"] is not None else None
+            if jp is None:
+                priced = False
+            else:
+                jan1_equity += jan1_qty * jp
+            rows.append({"symbol": sym, "now_qty": round(now_qty, 4),
+                         "jan1_qty": round(jan1_qty, 4), "jan1_close": jp,
+                         "now_price": now_px, "net_ytd_units": round(net_units.get(sym, 0.0), 4)})
+        # CSV official YTD for comparison
+        csv_ytd = None
+        try:
+            cur.execute("SELECT ytd_pct FROM managed_account_ytd_cache WHERE fund_id=%s", (fund_id,))
+            cr = cur.fetchone()
+            if cr and cr["ytd_pct"] is not None:
+                csv_ytd = float(cr["ytd_pct"])
+        except Exception:
+            pass
+
+    net_invested = buy_gross - sell_gross          # net cash deployed into securities YTD
+    price_gain   = now_equity - jan1_equity - net_invested
+    recon_pct    = (price_gain / jan1_equity * 100.0) if jan1_equity else None
+    return {
+        "ok": True, "fund_id": fund_id, "year": yr,
+        "fully_priced": priced,
+        "jan1_equity": round(jan1_equity, 2), "now_equity": round(now_equity, 2),
+        "net_securities_invested_ytd": round(net_invested, 2),
+        "net_external_flow_ytd": round(net_flow, 2),
+        "reconstructed_ytd_price_pct": round(recon_pct, 2) if recon_pct is not None else None,
+        "csv_ytd_pct": csv_ytd,
+        "diff_vs_csv": (round(recon_pct - csv_ytd, 2) if (recon_pct is not None and csv_ytd is not None) else None),
+        "caveats": "Equity-only: excludes cash, dividends/interest, and intra-period flow timing. "
+                   "CSV YTD is a total time-weighted return, so a few-point gap is expected.",
+        "holdings_rewound": sorted(rows, key=lambda x: -(x["now_qty"] * (x["now_price"] or 0))),
+    }
 
 
 @app.get("/api/snaptrade/accounts")

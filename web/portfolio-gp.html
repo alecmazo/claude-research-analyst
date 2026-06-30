@@ -4535,6 +4535,8 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-title">🔗 Linked Accounts · Fidelity (SnapTrade)</span>
         <span class="panel-badge" id="snaptrade-badge" style="background:#f1f5f9;color:#64748b;">…</span>
         <span style="flex:1"></span>
+        <button id="snaptrade-activity" type="button" class="tab-btn" style="margin-right:6px;">📊 YTD Activity</button>
+        <button id="snaptrade-ytdtest" type="button" class="tab-btn" style="margin-right:6px;">🧮 YTD Test</button>
         <button id="snaptrade-debug" type="button" class="tab-btn" style="margin-right:6px;">🐞 Diagnose</button>
         <button id="snaptrade-sync" type="button" class="tab-btn" style="margin-right:6px;">↻ Sync</button>
         <button id="snaptrade-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
@@ -18337,9 +18339,84 @@ End with the sleeve block at this account's real market value so I can push it t
       document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
     } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Diagnose failed: '+_gfEsc(e.message||String(e))+'</span>'; }
   }
+  function _snapMoney(v){ return (v<0?'-':'')+'$'+Math.abs(v||0).toLocaleString(undefined,{maximumFractionDigits:0}); }
+  async function dgaSnapActivity(){
+    const body = document.getElementById('snaptrade-body');
+    const btn = document.getElementById('snaptrade-activity');
+    if (btn) { btn.disabled = true; btn.textContent = '📊 Syncing…'; }
+    if (body) body.innerHTML = '<span style="color:#64748b;">Pulling YTD transaction history from SnapTrade…</span>';
+    try {
+      const s = await (await window.dgaFetch('/api/snaptrade/activities/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!s.ok) throw new Error(s.detail || 'sync failed');
+      const d = await (await window.dgaFetch('/api/snaptrade/activities')).json();
+      const sum = d.summary || {};
+      const acts = d.activities || [];
+      let h = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;">'
+        + '<span><strong>'+(sum.buy_count||0)+'</strong> buys · <span style="color:#16a34a;">'+_snapMoney(sum.buy_value)+'</span></span>'
+        + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+_snapMoney(sum.sell_value)+'</span></span>'
+        + '<span>Net external flow: <strong>'+_snapMoney(sum.net_external_flow)+'</strong></span>'
+        + '<span style="color:#94a3b8;">'+(d.count||0)+' activities · '+(d.year||'')+'</span></div>';
+      if (!acts.length) {
+        h += '<div style="color:#94a3b8;font-size:12px;">No activity returned. If accounts are freshly connected, SnapTrade may still be backfilling transactions.</div>';
+      } else {
+        h += '<div style="max-height:360px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+          + '<thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e2e8f0;">'
+          + '<th style="padding:4px 6px;">Date</th><th>Type</th><th>Symbol</th><th style="text-align:right;">Units</th><th style="text-align:right;">Price</th><th style="text-align:right;">Amount</th><th>Account</th></tr></thead><tbody>';
+        acts.slice(0,300).forEach(function(a){
+          const c = a.type==='BUY'?'#16a34a':(a.type==='SELL'?'#dc2626':'#475569');
+          h += '<tr style="border-bottom:1px solid #f1f5f9;">'
+            + '<td style="padding:3px 6px;color:#94a3b8;">'+_gfEsc(a.trade_date||'')+'</td>'
+            + '<td style="font-weight:700;color:'+c+';">'+_gfEsc(a.type||'')+'</td>'
+            + '<td style="font-weight:700;">'+_gfEsc(a.symbol||'—')+'</td>'
+            + '<td style="text-align:right;">'+(a.units!=null?Number(a.units).toLocaleString(undefined,{maximumFractionDigits:4}):'')+'</td>'
+            + '<td style="text-align:right;">'+(a.price!=null?'$'+Number(a.price).toFixed(2):'')+'</td>'
+            + '<td style="text-align:right;">'+(a.amount!=null?_snapMoney(a.amount):'')+'</td>'
+            + '<td style="color:#94a3b8;">'+_gfEsc(a.account_name||'')+'</td></tr>';
+        });
+        h += '</tbody></table></div>';
+      }
+      h += '<button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+      if (body) body.innerHTML = h;
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Activity sync failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+    if (btn) { btn.disabled = false; btn.textContent = '📊 YTD Activity'; }
+  }
+  async function dgaSnapYtdTest(){
+    const body = document.getElementById('snaptrade-body');
+    if (body) body.innerHTML = '<span style="color:#64748b;">Reconstructing Jan-1 values from trades + price history…</span>';
+    try {
+      const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
+      const accts = ad.accounts || [];
+      const mAccts = ad.managed_accounts || [];
+      const nameByFund = {}; mAccts.forEach(function(m){ nameByFund[m.fund_id] = m.short_name||m.name; });
+      const fundIds = Array.from(new Set(accts.filter(function(a){return a.fund_id;}).map(function(a){return a.fund_id;})));
+      if (!fundIds.length) { if (body) body.innerHTML = '<span style="color:#94a3b8;">No accounts assigned to a fund yet — assign one, then run the test.</span>'; return; }
+      let h = '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">Equity-only reconstructed YTD vs. the CSV’s official figure. A few-point gap is expected (cash/dividends/timing).</div>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e2e8f0;">'
+        + '<th style="padding:4px 6px;">Fund</th><th style="text-align:right;">Jan-1 equity</th><th style="text-align:right;">Now equity</th><th style="text-align:right;">Recon YTD %</th><th style="text-align:right;">CSV YTD %</th><th style="text-align:right;">Diff</th><th>Priced?</th></tr></thead><tbody>';
+      for (const fid of fundIds) {
+        const r = await (await window.dgaFetch('/api/snaptrade/ytd-reconstruct?fund_id='+encodeURIComponent(fid))).json();
+        const diff = r.diff_vs_csv;
+        const dColor = diff==null?'#94a3b8':(Math.abs(diff)<=3?'#16a34a':(Math.abs(diff)<=8?'#d97706':'#dc2626'));
+        h += '<tr style="border-bottom:1px solid #f1f5f9;">'
+          + '<td style="padding:3px 6px;font-weight:700;">'+_gfEsc(nameByFund[fid]||fid)+'</td>'
+          + '<td style="text-align:right;">'+(r.jan1_equity!=null?_snapMoney(r.jan1_equity):'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.now_equity!=null?_snapMoney(r.now_equity):'—')+'</td>'
+          + '<td style="text-align:right;font-weight:700;">'+(r.reconstructed_ytd_price_pct!=null?r.reconstructed_ytd_price_pct.toFixed(2)+'%':'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.csv_ytd_pct!=null?r.csv_ytd_pct.toFixed(2)+'%':'—')+'</td>'
+          + '<td style="text-align:right;font-weight:700;color:'+dColor+';">'+(diff!=null?(diff>=0?'+':'')+diff.toFixed(2):'—')+'</td>'
+          + '<td>'+(r.fully_priced?'✓':'<span style="color:#d97706;">partial</span>')+'</td></tr>';
+      }
+      h += '</tbody></table><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+      if (body) body.innerHTML = h;
+      document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+    } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">YTD test failed: '+_gfEsc(e.message||String(e))+'</span>'; }
+  }
   document.getElementById('snaptrade-connect')?.addEventListener('click', dgaSnapConnect);
   document.getElementById('snaptrade-sync')?.addEventListener('click', dgaSnapSync);
   document.getElementById('snaptrade-debug')?.addEventListener('click', dgaSnapDebug);
+  document.getElementById('snaptrade-activity')?.addEventListener('click', dgaSnapActivity);
+  document.getElementById('snaptrade-ytdtest')?.addEventListener('click', dgaSnapYtdTest);
 
   async function dgaPlaidConnect(){
     const body = document.getElementById('plaid-body');

@@ -175,6 +175,26 @@ def get_balances(user_id: str, user_secret: str, account_id: str):
     return _to_dict(r.body)
 
 
+def get_account_activities(user_id: str, user_secret: str, account_id: str,
+                           start_date: str | None = None, end_date: str | None = None):
+    """Transaction history for ONE account in [start_date, end_date] (YYYY-MM-DD).
+
+    Returns BUY / SELL / DIVIDEND / CONTRIBUTION / WITHDRAWAL / INTEREST / FEE /
+    TRANSFER activities — what the position/balance endpoints do NOT give. This is
+    the basis for YTD trade lists and external-cash-flow-aware return math.
+    """
+    kw = {"user_id": str(user_id), "user_secret": user_secret, "accounts": str(account_id)}
+    if start_date:
+        kw["start_date"] = start_date
+    if end_date:
+        kw["end_date"] = end_date
+    r = _client().transactions_and_reporting.get_activities(**kw)
+    body = _to_dict(r.body)
+    if isinstance(body, dict):
+        return body.get("data") or body.get("activities") or []
+    return body or []
+
+
 def list_accounts(user_id: str, user_secret: str):
     r = _client().account_information.list_user_accounts(
         user_id=str(user_id), user_secret=user_secret)
