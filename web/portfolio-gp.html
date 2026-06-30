@@ -18185,8 +18185,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#94a3b8;font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
             <span style="flex:1;"></span>
-            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:#64748b;margin-right:6px;">Ignore</button>
-            ${a.connection_id?`<button class="tab-btn" data-snap-remove="${_gfEsc(a.connection_id)}" style="color:#dc2626;">Remove</button>`:''}
+            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:#64748b;">Ignore</button>
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
             <span>Assign to:</span>
@@ -18206,7 +18205,17 @@ End with the sleeve block at this account's real market value so I can push it t
            </div>`).join('')}
         </div>`;
       }
-      body.querySelectorAll('[data-snap-remove]').forEach(b => b.addEventListener('click', () => dgaSnapRemove(b.getAttribute('data-snap-remove'))));
+      // One "Remove connection" button per distinct brokerage connection.
+      // (A SnapTrade connection holds MANY accounts; removing it drops them ALL.)
+      const conns = {};
+      accounts.forEach(a => { if (a.connection_id) { (conns[a.connection_id] = conns[a.connection_id] || {brokerage:a.brokerage, n:0}).n++; } });
+      const connIds = Object.keys(conns);
+      if (connIds.length) {
+        body.innerHTML += `<div style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:8px;">
+          ${connIds.map(cid => `<button class="tab-btn" data-snap-remove="${_gfEsc(cid)}" data-snap-remove-brk="${_gfEsc(conns[cid].brokerage||'this brokerage')}" data-snap-remove-n="${conns[cid].n}" style="color:#dc2626;font-size:11px;">Remove ${_gfEsc(conns[cid].brokerage||'connection')} connection (${conns[cid].n} account${conns[cid].n===1?'':'s'})</button>`).join(' ')}
+        </div>`;
+      }
+      body.querySelectorAll('[data-snap-remove]').forEach(b => b.addEventListener('click', () => dgaSnapRemove(b.getAttribute('data-snap-remove'), b.getAttribute('data-snap-remove-brk'), parseInt(b.getAttribute('data-snap-remove-n'),10)||0)));
       body.querySelectorAll('[data-snap-assign]').forEach(s => s.addEventListener('change', () => dgaSnapAssign(s.getAttribute('data-snap-assign'), s.value)));
       body.querySelectorAll('[data-snap-hide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-hide'), true)));
       body.querySelectorAll('[data-snap-unhide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-unhide'), false)));
@@ -18262,8 +18271,10 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (e) { alert((hidden?'Ignore':'Restore')+' failed: ' + (e.message||e)); return; }
     loadSnapTrade();
   }
-  async function dgaSnapRemove(connectionId){
-    if (!confirm('Disconnect this brokerage connection and delete its stored holdings?')) return;
+  async function dgaSnapRemove(connectionId, brokerage, n){
+    const brk = brokerage || 'this brokerage';
+    const cnt = n || 0;
+    if (!confirm('Remove the entire ' + brk + ' connection?\n\nThis disconnects the brokerage and deletes ALL ' + (cnt? cnt+' ' : '') + 'account' + (cnt===1?'':'s') + ' under it (plus their fund assignments). To hide just one account, use “Ignore” instead.\n\nThis cannot be undone — you would have to reconnect and re-assign every account.')) return;
     try { await window.dgaFetch('/api/snaptrade/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ connection_id: connectionId }) }); } catch (e) {}
     loadSnapTrade();
   }
