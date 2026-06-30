@@ -103,11 +103,53 @@ def login_url(user_id: str, user_secret: str, custom_redirect: str = "",
 
 
 def get_account_holdings(user_id: str, user_secret: str, account_id: str):
-    """Holdings for ONE account — {account, balances, positions, total_value, …}.
-    Replaces the deprecated get_all_user_holdings ('endpoint no longer available')."""
-    r = _client().account_information.get_user_holdings(
-        account_id=str(account_id), user_id=str(user_id), user_secret=user_secret)
-    return _to_dict(r.body)
+    """Holdings for ONE account — {positions, total_value}.
+
+    Built from the GRANULAR per-account endpoints. Both the combined
+    get_all_user_holdings AND the per-account get_user_holdings now return
+    'This endpoint is no longer available for your account' — SnapTrade has
+    moved accounts onto get_user_account_positions / get_user_account_balance.
+    """
+    ai = _client().account_information
+    uid, sec, aid = str(user_id), user_secret, str(account_id)
+
+    positions = _to_dict(
+        ai.get_user_account_positions(account_id=aid, user_id=uid, user_secret=sec).body
+    ) or []
+    if isinstance(positions, dict):
+        positions = positions.get("positions") or positions.get("data") or []
+
+    # total_value = cash (from balances) + market value of positions.
+    pos_mv = 0.0
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        units, price = p.get("units"), p.get("price")
+        try:
+            if units is not None and price is not None:
+                pos_mv += float(units) * float(price)
+        except Exception:
+            pass
+
+    cash = 0.0
+    try:
+        balances = _to_dict(
+            ai.get_user_account_balance(account_id=aid, user_id=uid, user_secret=sec).body
+        ) or []
+        if isinstance(balances, dict):
+            balances = balances.get("balances") or balances.get("data") or [balances]
+        for b in balances:
+            if not isinstance(b, dict):
+                continue
+            c = b.get("cash")
+            if isinstance(c, dict):
+                c = c.get("amount") or c.get("value")
+            if c is not None:
+                cash += float(c)
+    except Exception:
+        balances = None
+
+    return {"positions": positions, "total_value": (pos_mv + cash) or None}
 
 
 def list_accounts(user_id: str, user_secret: str):
