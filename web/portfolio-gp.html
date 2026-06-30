@@ -18478,10 +18478,23 @@ End with the sleeve block at this account's real market value so I can push it t
         + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+_snapMoney(sum.sell_value)+'</span></span>'
         + '<span>Net external flow: <strong>'+_snapMoney(sum.net_external_flow)+'</strong></span>'
         + '<span style="color:#94a3b8;">'+(d.count||0)+' in '+(d.year||'')+' · '+totalPulled+' pulled ('+(s.start_date||'')+'→'+(s.end_date||'')+')</span></div>';
+      const gated = errs.some(function(e){ return /no longer available/i.test(e.error||''); });
       if (errs.length) {
         h += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px;margin-bottom:10px;font-size:11px;color:#b91c1c;">'
-          + '<strong>'+errs.length+' account(s) errored:</strong><br>'
-          + errs.map(function(e){ return '• '+_gfEsc(e.account_id||'?')+': '+_gfEsc(e.error||''); }).join('<br>') + '</div>';
+          + '<strong>'+errs.length+' account(s) errored:</strong> '+_gfEsc(errs[0].error||'')
+          + (gated ? '<br><span style="color:#92400e;">↳ This is SnapTrade access-gating (same as the old holdings endpoint). Probing for an alternative method…</span>' : '') + '</div>';
+      }
+      if (gated) {
+        try {
+          const pr = await (await window.dgaFetch('/api/snaptrade/activities-probe')).json();
+          h += '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;margin-bottom:10px;font-size:10.5px;">'
+            + '<strong>Transaction methods in SDK:</strong> '+_gfEsc((pr.methods_found||[]).join(', ')||'none')+'<br><br>'
+            + (pr.results||[]).map(function(r){
+                return '<div style="margin-bottom:5px;">'+(r.ok?'✅':'❌')+' <strong>'+_gfEsc(r.method)+'</strong> (shape '+r.shape+'): '
+                  + (r.ok ? ('count='+r.count+' · '+_gfEsc(String(r.sample||'').slice(0,300))) : _gfEsc(r.error||'')) + '</div>';
+              }).join('')
+            + '</div>';
+        } catch(e) {}
       }
       if (!acts.length) {
         h += '<div style="color:#94a3b8;font-size:12px;">No activity in '+(d.year||'this year')+'. Pulled '+totalPulled+' total rows across the requested window. '

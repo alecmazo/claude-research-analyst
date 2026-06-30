@@ -25789,6 +25789,29 @@ async def snaptrade_activities_sync(request: Request):
     return {"ok": True, "start_date": start, "end_date": end, "synced": out, "errors": errors}
 
 
+@app.get("/api/snaptrade/activities-probe")
+def snaptrade_activities_probe(request: Request):
+    """GP-only diagnostic: which transaction/activity SDK methods exist and what
+    each returns for the first account — to find a non-gated path."""
+    _plaid_require_gp(request)
+    import snaptrade_link as _st
+    uid, secret = _snaptrade_ensure_user()
+    accts = _st.list_accounts(uid, secret)
+    if isinstance(accts, dict):
+        accts = accts.get("accounts") or accts.get("data") or []
+    if not accts:
+        return {"ok": True, "note": "No accounts."}
+    aid = (accts[0] or {}).get("id")
+    year = datetime.utcnow().year
+    try:
+        rep = _st.probe_activity_methods(uid, secret, aid,
+                                         start_date=f"{year}-01-01",
+                                         end_date=datetime.utcnow().date().isoformat())
+    except Exception as e:
+        raise HTTPException(502, f"probe failed: {_snaptrade_error_detail(e)}")
+    return {"ok": True, "account_id": aid, **rep}
+
+
 @app.get("/api/snaptrade/activities")
 def snaptrade_activities_list(request: Request, fund_id: str = None, year: int = None):
     """GP-only: YTD activity feed joined to fund assignment, with buy/sell/flow

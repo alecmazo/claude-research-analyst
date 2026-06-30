@@ -199,6 +199,57 @@ def get_account_activities(user_id: str, user_secret: str, account_id: str,
     return [_to_dict(x) for x in items]
 
 
+def probe_activity_methods(user_id: str, user_secret: str, account_id: str,
+                           start_date: str | None = None, end_date: str | None = None):
+    """Diagnostic: enumerate every SDK method that looks transaction/activity-related
+    across all API groups, try calling each for ONE account, and report what works.
+    Used to find a non-gated path after get_activities returned 'no longer available'."""
+    client = _client()
+    uid, sec, aid = str(user_id), user_secret, str(account_id)
+    groups = ("transactions_and_reporting", "account_information")
+    found, results = [], []
+    for gname in groups:
+        grp = getattr(client, gname, None)
+        if grp is None:
+            continue
+        for mname in dir(grp):
+            if mname.startswith("_"):
+                continue
+            low = mname.lower()
+            if "activit" not in low and "transaction" not in low:
+                continue
+            full = f"{gname}.{mname}"
+            found.append(full)
+            fn = getattr(grp, mname)
+            # Try the two common call shapes; stop at the first that doesn't raise.
+            attempts = [
+                {"account_id": aid, "user_id": uid, "user_secret": sec},
+                {"accounts": aid, "user_id": uid, "user_secret": sec},
+            ]
+            for ai, kw in enumerate(attempts):
+                if start_date: kw = {**kw, "start_date": start_date}
+                if end_date:   kw = {**kw, "end_date": end_date}
+                try:
+                    r = fn(**kw)
+                    body = _to_dict(getattr(r, "body", r))
+                    n = len(body) if isinstance(body, (list, dict)) else None
+                    sample = str(body)[:600]
+                    results.append({"method": full, "shape": ai, "ok": True,
+                                    "count": n, "sample": sample})
+                    break
+                except TypeError as e:
+                    # wrong kwargs for this shape — try the next shape
+                    if ai == len(attempts) - 1:
+                        results.append({"method": full, "shape": ai, "ok": False,
+                                        "error": f"TypeError: {e!s:.140}"})
+                    continue
+                except Exception as e:
+                    results.append({"method": full, "shape": ai, "ok": False,
+                                    "error": f"{type(e).__name__}: {e!s:.160}"})
+                    break
+    return {"methods_found": found, "results": results}
+
+
 def list_accounts(user_id: str, user_secret: str):
     r = _client().account_information.list_user_accounts(
         user_id=str(user_id), user_secret=user_secret)
