@@ -19694,6 +19694,70 @@ async def lp_quarterly_letter_read(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/quarterly-letter/{letter_id}/notify")
+def quarterly_letter_notify(letter_id: str, request: Request):
+    """GP-only: email LPs (those with real holdings) a notification + portal link.
+    Sends a notification only — the letter content stays behind login."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    _ensure_quarterly_letters_table()
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("SELECT title, period, year FROM quarterly_letters WHERE id=%s", (letter_id,))
+        L = cur.fetchone()
+    if not L:
+        raise HTTPException(404, "Letter not found.")
+    period = L["period"] or (f"YTD {L['year']}" if L.get("year") else "the latest quarter")
+    portal = os.environ.get("LP_PORTAL_URL", "https://portfolio.dgacapital.com").rstrip("/")
+    from_addr = os.environ.get("LETTER_EMAIL_FROM", "DGA Capital <onboarding@resend.dev>")
+    try:
+        users = auth_v2_mod.list_users()
+    except Exception as e:
+        raise HTTPException(502, f"Could not list LP users: {e!s:.140}")
+    from email.message import EmailMessage as _EmailMessage
+    sent, skipped, errors = [], [], []
+    for u in (users or []):
+        if u.get("role") != "lp":
+            continue
+        email = (u.get("email") or "").strip()
+        if not email:
+            continue
+        pseudo = {"role": "lp",
+                  "managed_account_ids": u.get("managed_account_ids") or [],
+                  "fund_memberships": u.get("fund_memberships") or {}}
+        if not _lp_fund_ids_for_claims(pseudo):
+            skipped.append(email)          # no holdings → skip
+            continue
+        name = (u.get("name") or "").split(" ")[0] or "there"
+        msg = _EmailMessage()
+        msg["Subject"] = f"Your DGA Capital {period} letter is ready"
+        msg["From"] = from_addr
+        msg["To"] = email
+        msg.set_content(
+            f"Hi {name},\n\nYour DGA Capital {period} letter is now available in your "
+            f"investor portal — a note from your GP plus commentary on your holdings.\n\n"
+            f"Read it here: {portal}\n\n— DGA Capital")
+        msg.add_alternative(
+            f"<p>Hi {name},</p><p>Your DGA Capital <strong>{period}</strong> letter is now "
+            f"available in your investor portal — a note from your GP plus commentary on your "
+            f"holdings.</p><p><a href=\"{portal}\" style=\"background:#5BB8D4;color:#0A1628;"
+            f"font-weight:700;padding:10px 18px;border-radius:8px;text-decoration:none;\">"
+            f"Read your letter →</a></p><p style=\"color:#64748b;font-size:12px;\">— DGA Capital</p>",
+            subtype="html")
+        try:
+            res = analyst.send_portfolio_email(msg)
+            if res and res.get("ok") is False:
+                errors.append({"email": email, "error": str(res.get("error"))[:140]})
+            else:
+                sent.append(email)
+        except Exception as e:
+            errors.append({"email": email, "error": f"{e!s:.140}"})
+    print(f"🗒️ [qletter] notify {letter_id}: sent={len(sent)} skipped={len(skipped)} errors={len(errors)}", flush=True)
+    return {"ok": True, "sent": len(sent), "skipped": len(skipped), "errors": errors}
+
+
 @app.get("/api/research/strategist/reviews")
 def strategist_reviews_list(request: Request):
     """List saved Portfolio Strategist committee reviews (newest first)."""
