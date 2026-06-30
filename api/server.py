@@ -19204,6 +19204,244 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
             "positions": positions, "fund_name": fund_name, "model": _AGENTIC_MODEL}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Quarterly Letter — narrative LP/colleague memo built on the Strategist engine.
+#  Phase 2: generate a draft from real YTD performance + SnapTrade activity +
+#  saved research theses. The GP edits it and adds a manual note; drafts persist.
+# ─────────────────────────────────────────────────────────────────────────────
+def _quarterly_activity_context(fund_ids: list[str] | None, year: int) -> str:
+    """Text block of YTD buys/sells/exits/flows from snaptrade_activities, so the
+    letter can speak to what we actually DID — not just current weights."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return "(No transaction history available — SnapTrade activities not synced.)"
+    jan1 = f"{year}-01-01"
+    clause, params = "", [jan1]
+    if fund_ids:
+        clause = " AND sa.fund_id = ANY(%s)"
+        params.append([str(f) for f in fund_ids])
+    buys, sells = {}, {}
+    held = set()
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT a.symbol, a.type,
+                       COALESCE(SUM(a.units),0) AS units,
+                       COALESCE(SUM(a.units*a.price),0) AS gross,
+                       MIN(a.trade_date) AS first_d, MAX(a.trade_date) AS last_d
+                  FROM snaptrade_activities a
+                  JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+                 WHERE a.trade_date >= %s {clause} AND a.type IN ('BUY','SELL')
+                 GROUP BY a.symbol, a.type
+            """, params)
+            for r in cur.fetchall():
+                d = buys if r["type"] == "BUY" else sells
+                d[r["symbol"]] = {"units": float(r["units"] or 0), "gross": float(r["gross"] or 0),
+                                  "first": str(r["first_d"]), "last": str(r["last_d"])}
+            # which of these are still held (to tell adds from exits)
+            cur.execute(f"""
+                SELECT DISTINCT sa.fund_id FROM snaptrade_accounts sa
+                 WHERE sa.status='active'{(' AND sa.fund_id = ANY(%s)' if fund_ids else '')}
+            """, ([str(f) for f in fund_ids],) if fund_ids else ())
+            held_fids = [str(r["fund_id"]) for r in cur.fetchall() if r["fund_id"]]
+            for fid in held_fids:
+                for sym in _snaptrade_fund_holdings(cur, fid):
+                    held.add(sym)
+    except Exception as e:
+        return f"(Activity lookup failed: {e!s:.120})"
+    if not buys and not sells:
+        return "(No YTD trades found in SnapTrade activity. Sync '📊 YTD Activity' first.)"
+    def _top(d, n=12):
+        return sorted(d.items(), key=lambda kv: -kv[1]["gross"])[:n]
+    lines = [f"YTD TRADE ACTIVITY ({year}) — from SnapTrade:"]
+    if buys:
+        lines.append("  Bought (gross $ deployed):")
+        for sym, v in _top(buys):
+            lines.append(f"    {sym:<7} ~${v['gross']:,.0f}  ({v['units']:.2f} units, {v['first']}→{v['last']})")
+    if sells:
+        lines.append("  Sold (gross $):")
+        for sym, v in _top(sells):
+            tag = "" if sym in held else "  [FULL EXIT — no longer held]"
+            lines.append(f"    {sym:<7} ~${v['gross']:,.0f}  ({v['units']:.2f} units, {v['first']}→{v['last']}){tag}")
+    return "\n".join(lines)
+
+
+_QUARTERLY_LETTER_SYSTEM = (
+    "You are the GP of DGA Capital writing a candid quarter-end letter to colleagues "
+    "and LPs. Voice: plain-spoken, confident, first-person plural ('we'), a notch "
+    "informal — like a smart note to partners, NOT a stiff compliance document. "
+    "Short paragraphs. No hype, no filler.\n\n"
+    "GROUND EVERY NUMBER with the tools (get_ytd_attribution for returns, compute for "
+    "math, read_saved_report for each name's thesis, get_recent_news/web_search for "
+    "catalysts). The trade list in the prompt is the ground truth of what we did this "
+    "year — explain the WHY behind the notable buys and sells using each name's saved "
+    "thesis and how it fits the book. Never invent a trade or a number.\n\n"
+    "Write the letter in markdown with EXACTLY these section headers, in order "
+    "(do NOT add a personal note — the GP inserts that separately):\n"
+    "## The quarter in brief\n"
+    "## What we sold — and why\n"
+    "## What we bought — and why\n"
+    "## How the book is positioned now\n"
+    "## Where we see value from here\n"
+    "## Why the portfolio is built this way\n\n"
+    "In the last section, explain the LOGIC of the composition — the role each sleeve "
+    "plays, why the concentrations are deliberate, and the trajectory we're steering "
+    "toward. Be specific to the holdings, not generic. Internal commentary, not "
+    "investment advice."
+)
+
+
+@app.post("/api/research/quarterly-letter")
+async def research_quarterly_letter(req: Request, background_tasks: BackgroundTasks):
+    """GP-only: generate a quarter-end letter draft. Body: {fund_ids?: [...], year?}.
+    Empty fund_ids → every fund with SnapTrade holdings. Returns {ok, job_id};
+    poll GET /api/research/agentic/{job_id} (answer = letter markdown)."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    year = int((body or {}).get("year") or datetime.utcnow().year)
+    fund_ids = [str(f) for f in ((body or {}).get("fund_ids") or []) if f]
+    # Default scope: every fund that has SnapTrade holdings assigned.
+    if not fund_ids and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL")
+                fund_ids = [str(r[0]) for r in cur.fetchall()]
+        except Exception:
+            pass
+    if not fund_ids:
+        return JSONResponse({"ok": False, "error": "No funds with SnapTrade holdings to write about. Assign accounts first."}, status_code=400)
+
+    positions = _combine_fund_positions(fund_ids) if len(fund_ids) > 1 else _load_fund_positions(fund_ids[0])
+    if not positions:
+        return JSONResponse({"ok": False, "error": "No live positions for the selected funds."}, status_code=400)
+    positions = positions[:60]
+    names = [(_fund_name_lookup(f) or f) for f in fund_ids]
+    book_label = names[0] if len(names) == 1 else (", ".join(names[:6]) + ("…" if len(names) > 6 else ""))
+
+    pos_ctx = _build_strategist_context(positions, book_label)
+    act_ctx = _quarterly_activity_context(fund_ids, year)
+    question = (
+        f"Write DGA Capital's {year} quarter-end letter for this book.\n\n"
+        f"{pos_ctx}\n\n{act_ctx}\n\n"
+        f"SCOPE: the holdings above are the complete book ({book_label}). Use "
+        f"get_ytd_attribution for the real YTD return, read_saved_report for each "
+        f"name's thesis to explain the buys/sells, and compute for any math. Follow "
+        f"the section structure in your instructions exactly."
+    )
+    _strat_tools = [t for t in _AGENTIC_TOOLS
+                    if t.get("name") not in ("list_portfolios", "get_portfolio_holdings")]
+    import uuid as _uuid
+    job_id = "QLETTER_" + _uuid.uuid4().hex[:12]
+    _agentic_jobs[job_id] = {"stage": "queued", "status": "running",
+                              "label": "Queued · quarterly letter", "started_at": time.time(),
+                              "updated_at": time.time(), "question": question, "steps": 0,
+                              "tool_calls": [], "cost_usd": 0.0, "mode": "quarterly_letter",
+                              "fund_ids": fund_ids, "year": year, "book_label": book_label,
+                              "generated_by": claims.get("email") or "gp"}
+    background_tasks.add_task(_run_agentic_analysis, job_id, question, _QUARTERLY_LETTER_SYSTEM, _strat_tools)
+    print(f"🗒️ [qletter] queued {job_id} funds={len(fund_ids)} year={year}", flush=True)
+    return {"ok": True, "job_id": job_id, "fund_ids": fund_ids, "book_label": book_label,
+            "year": year, "model": _AGENTIC_MODEL}
+
+
+def _ensure_quarterly_letters_table() -> None:
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS quarterly_letters (
+                    id              TEXT PRIMARY KEY,
+                    title           TEXT,
+                    period          TEXT,
+                    scope_fund_ids  JSONB,
+                    manual_note     TEXT,
+                    body_md         TEXT,
+                    status          TEXT DEFAULT 'draft',
+                    generated_by    TEXT,
+                    created_at      TIMESTAMPTZ DEFAULT now(),
+                    updated_at      TIMESTAMPTZ DEFAULT now()
+                )""")
+            conn.commit()
+    except Exception as e:
+        print(f"[qletter] ensure table failed: {e!s:.150}", flush=True)
+
+
+@app.post("/api/quarterly-letter/save")
+async def quarterly_letter_save(request: Request):
+    """GP-only: create/update a quarterly letter draft. Body: {id?, title, period,
+    scope_fund_ids, manual_note, body_md, status}."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    body = await request.json()
+    _ensure_quarterly_letters_table()
+    import uuid as _uuid
+    lid = (body or {}).get("id") or _uuid.uuid4().hex
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO quarterly_letters
+                (id, title, period, scope_fund_ids, manual_note, body_md, status, generated_by, updated_at)
+            VALUES (%s,%s,%s,%s::jsonb,%s,%s,%s,%s, now())
+            ON CONFLICT (id) DO UPDATE SET
+                title=EXCLUDED.title, period=EXCLUDED.period, scope_fund_ids=EXCLUDED.scope_fund_ids,
+                manual_note=EXCLUDED.manual_note, body_md=EXCLUDED.body_md, status=EXCLUDED.status,
+                updated_at=now()
+        """, (lid, (body or {}).get("title"), (body or {}).get("period"),
+              json.dumps((body or {}).get("scope_fund_ids") or []),
+              (body or {}).get("manual_note"), (body or {}).get("body_md"),
+              (body or {}).get("status") or "draft",
+              claims.get("email") or "gp"))
+        conn.commit()
+    return {"ok": True, "id": lid}
+
+
+@app.get("/api/quarterly-letter/list")
+def quarterly_letter_list(request: Request):
+    """GP-only: saved quarterly letters, newest first."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "letters": []}
+    _ensure_quarterly_letters_table()
+    out = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("SELECT id, title, period, status, updated_at FROM quarterly_letters ORDER BY updated_at DESC")
+        for r in cur.fetchall():
+            out.append({"id": r["id"], "title": r["title"], "period": r["period"],
+                        "status": r["status"],
+                        "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None})
+    return {"ok": True, "letters": out}
+
+
+@app.get("/api/quarterly-letter/{letter_id}")
+def quarterly_letter_get(letter_id: str, request: Request):
+    """GP-only: one saved quarterly letter (full body + note)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    _ensure_quarterly_letters_table()
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("SELECT * FROM quarterly_letters WHERE id=%s", (letter_id,))
+        r = cur.fetchone()
+    if not r:
+        raise HTTPException(404, "Letter not found.")
+    return {"ok": True, "letter": {
+        "id": r["id"], "title": r["title"], "period": r["period"],
+        "scope_fund_ids": r["scope_fund_ids"] or [], "manual_note": r["manual_note"],
+        "body_md": r["body_md"], "status": r["status"],
+        "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
+
+
 @app.get("/api/research/strategist/reviews")
 def strategist_reviews_list(request: Request):
     """List saved Portfolio Strategist committee reviews (newest first)."""
