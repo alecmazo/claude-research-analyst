@@ -19210,58 +19210,67 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
 #  saved research theses. The GP edits it and adds a manual note; drafts persist.
 # ─────────────────────────────────────────────────────────────────────────────
 def _quarterly_activity_context(fund_ids: list[str] | None, year: int) -> str:
-    """Text block of YTD buys/sells/exits/flows from snaptrade_activities, so the
-    letter can speak to what we actually DID — not just current weights."""
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        return "(No transaction history available — SnapTrade activities not synced.)"
-    jan1 = f"{year}-01-01"
-    clause, params = "", [jan1]
-    if fund_ids:
-        clause = " AND sa.fund_id = ANY(%s)"
-        params.append([str(f) for f in fund_ids])
-    buys, sells = {}, {}
-    held = set()
+    """Text block of YTD buys/sells/exits + realized gains, built from the stored
+    transaction-aware ATTRIBUTION (managed_account_ytd_cache.result_json) — i.e. the
+    authoritative Fidelity Activity-CSV parse, not the gated SnapTrade API. Aggregates
+    per ticker across the funds in scope."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")) or not fund_ids:
+        return "(No YTD attribution available — upload each account's YTD CSVs.)"
+    agg, funds_with_data = {}, 0
+    FIELDS = ("sold_sh", "proceeds", "bought_sh", "buy_cost", "reinv",
+              "div", "end_val", "end_sh", "start_sh", "gain")
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute(f"""
-                SELECT a.symbol, a.type,
-                       COALESCE(SUM(a.units),0) AS units,
-                       COALESCE(SUM(a.units*a.price),0) AS gross,
-                       MIN(a.trade_date) AS first_d, MAX(a.trade_date) AS last_d
-                  FROM snaptrade_activities a
-                  JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
-                 WHERE a.trade_date >= %s {clause} AND a.type IN ('BUY','SELL')
-                 GROUP BY a.symbol, a.type
-            """, params)
+            cur.execute("SELECT fund_id, result_json FROM managed_account_ytd_cache WHERE fund_id = ANY(%s)",
+                        ([str(f) for f in fund_ids],))
             for r in cur.fetchall():
-                d = buys if r["type"] == "BUY" else sells
-                d[r["symbol"]] = {"units": float(r["units"] or 0), "gross": float(r["gross"] or 0),
-                                  "first": str(r["first_d"]), "last": str(r["last_d"])}
-            # which of these are still held (to tell adds from exits)
-            cur.execute(f"""
-                SELECT DISTINCT sa.fund_id FROM snaptrade_accounts sa
-                 WHERE sa.status='active'{(' AND sa.fund_id = ANY(%s)' if fund_ids else '')}
-            """, ([str(f) for f in fund_ids],) if fund_ids else ())
-            held_fids = [str(r["fund_id"]) for r in cur.fetchall() if r["fund_id"]]
-            for fid in held_fids:
-                for sym in _snaptrade_fund_holdings(cur, fid):
-                    held.add(sym)
+                rj = r["result_json"]
+                if isinstance(rj, str):
+                    try: rj = json.loads(rj)
+                    except Exception: rj = {}
+                attr = (rj or {}).get("attribution") or []
+                if attr:
+                    funds_with_data += 1
+                for a in attr:
+                    tk = (a.get("ticker") or "").upper().strip()
+                    if not tk:
+                        continue
+                    e = agg.setdefault(tk, {k: 0.0 for k in FIELDS})
+                    e["sold_sh"]   += a.get("total_sold_shares")   or 0
+                    e["proceeds"]  += a.get("total_sell_proceeds") or 0
+                    e["bought_sh"] += a.get("total_bought_shares") or 0
+                    e["buy_cost"]  += a.get("total_buy_cost")      or 0
+                    e["reinv"]     += a.get("reinvestment_cost")   or 0
+                    e["div"]       += a.get("dividends_cash")      or 0
+                    e["end_val"]   += a.get("end_value")           or 0
+                    e["end_sh"]    += a.get("end_shares")          or 0
+                    e["start_sh"]  += a.get("start_shares")        or 0
+                    e["gain"]      += a.get("dollar_gain")         or 0
     except Exception as e:
-        return f"(Activity lookup failed: {e!s:.120})"
-    if not buys and not sells:
-        return "(No YTD trades found in SnapTrade activity. Sync '📊 YTD Activity' first.)"
-    def _top(d, n=12):
-        return sorted(d.items(), key=lambda kv: -kv[1]["gross"])[:n]
-    lines = [f"YTD TRADE ACTIVITY ({year}) — from SnapTrade:"]
-    if buys:
-        lines.append("  Bought (gross $ deployed):")
-        for sym, v in _top(buys):
-            lines.append(f"    {sym:<7} ~${v['gross']:,.0f}  ({v['units']:.2f} units, {v['first']}→{v['last']})")
-    if sells:
-        lines.append("  Sold (gross $):")
-        for sym, v in _top(sells):
-            tag = "" if sym in held else "  [FULL EXIT — no longer held]"
-            lines.append(f"    {sym:<7} ~${v['gross']:,.0f}  ({v['units']:.2f} units, {v['first']}→{v['last']}){tag}")
+        return f"(Attribution lookup failed: {e!s:.120})"
+    if not agg:
+        return ("(No YTD attribution on file for these funds. Upload each managed "
+                "account's YTD Positions + Activity CSVs so the letter can cite real trades.)")
+    bought = [(tk, e, e["start_sh"] < 1e-6) for tk, e in agg.items() if e["bought_sh"] > 1e-6]
+    sold   = [(tk, e, e["end_sh"]   < 1e-6) for tk, e in agg.items() if e["sold_sh"]   > 1e-6]
+    winners = sorted(((tk, e["gain"]) for tk, e in agg.items()), key=lambda x: -x[1])
+    lines = [f"YTD TRADES & ATTRIBUTION ({year}) — from uploaded Fidelity CSVs, {funds_with_data} fund(s):"]
+    if bought:
+        lines.append("  Bought / added:")
+        for tk, e, new in sorted(bought, key=lambda x: -x[1]["buy_cost"])[:15]:
+            lines.append(f"    {tk:<7} +{e['bought_sh']:.2f} sh  ~${e['buy_cost']:,.0f}  "
+                         f"{'[NEW position]' if new else '[added]'}  (now ${e['end_val']:,.0f})")
+    if sold:
+        lines.append("  Sold / trimmed:")
+        for tk, e, full in sorted(sold, key=lambda x: -x[1]["proceeds"])[:15]:
+            lines.append(f"    {tk:<7} -{e['sold_sh']:.2f} sh  ~${e['proceeds']:,.0f} proceeds  "
+                         f"{'[FULL EXIT]' if full else '[trim]'}  (YTD P&L ${e['gain']:+,.0f})")
+    if winners:
+        top = winners[:5]
+        bot = [w for w in winners if w[1] < 0][-5:]
+        lines.append("  Top YTD contributors: " + ", ".join(f"{tk} ${g:+,.0f}" for tk, g in top))
+        if bot:
+            lines.append("  Top detractors: " + ", ".join(f"{tk} ${g:+,.0f}" for tk, g in sorted(bot, key=lambda x: x[1])))
     return "\n".join(lines)
 
 
