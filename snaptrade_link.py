@@ -159,6 +159,22 @@ def get_account_holdings(user_id: str, user_secret: str, account_id: str):
     return {"positions": positions, "total_value": (pos_mv + cash) or None}
 
 
+def get_option_holdings(user_id: str, user_secret: str, account_id: str):
+    """Option positions for ONE account (separate endpoint from equity positions).
+    The deprecated combined get_user_holdings used to return these as
+    `option_positions`; get_user_account_positions does NOT include them."""
+    r = _client().options.list_option_holdings(
+        user_id=str(user_id), user_secret=user_secret, account_id=str(account_id))
+    return _to_dict(r.body)
+
+
+def get_balances(user_id: str, user_secret: str, account_id: str):
+    """Raw per-currency balances for ONE account."""
+    r = _client().account_information.get_user_account_balance(
+        account_id=str(account_id), user_id=str(user_id), user_secret=user_secret)
+    return _to_dict(r.body)
+
+
 def list_accounts(user_id: str, user_secret: str):
     r = _client().account_information.list_user_accounts(
         user_id=str(user_id), user_secret=user_secret)

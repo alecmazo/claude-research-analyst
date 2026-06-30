@@ -25284,6 +25284,20 @@ async def snaptrade_debug(request: Request):
             row["total_value"] = ah.get("total_value") if isinstance(ah, dict) else None
         except Exception as e:
             row["error"] = _snaptrade_error_detail(e)
+        # Deep-probe any account that came back empty: what's REALLY in it?
+        if row.get("positions_count") == 0 and not row.get("error"):
+            try:
+                opts = _st.get_option_holdings(uid, secret, aid)
+                if isinstance(opts, dict):
+                    opts = opts.get("option_positions") or opts.get("data") or []
+                row["option_holdings_count"] = len(opts) if isinstance(opts, list) else None
+                row["first_option"] = str(opts[0])[:1500] if opts else None
+            except Exception as e:
+                row["option_error"] = _snaptrade_error_detail(e)
+            try:
+                row["raw_balances"] = str(_st.get_balances(uid, secret, aid))[:1500]
+            except Exception as e:
+                row["balance_error"] = _snaptrade_error_detail(e)
         per_account.append(row)
     acct0 = accts[0] if isinstance(accts[0], dict) else {}
     return {"ok": True, "accounts": len(accts),
