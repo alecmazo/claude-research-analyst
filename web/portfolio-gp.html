@@ -4432,18 +4432,26 @@ End with the sleeve block at this account's real market value so I can push it t
         <label style="font-size:11px;color:#64748b;margin-right:6px;">Year</label>
         <input id="ql-year" type="number" min="2020" max="2099"
                style="width:78px;height:30px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;margin-right:8px;">
-        <button id="ql-generate" type="button" class="tab-btn" style="margin-right:6px;">✨ Generate draft</button>
         <button id="ql-save" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">💾 Save draft</button>
       </header>
       <div style="padding:16px 18px;">
-        <div id="ql-status" style="font-size:12px;color:#64748b;margin-bottom:10px;">Covers every fund/account with linked SnapTrade holdings. Generate pulls real YTD performance + trades, then you edit and add your note.</div>
-        <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">Note from you — manual, appears at the top, never AI-written</label>
+        <div id="ql-status" style="font-size:12px;color:#64748b;margin-bottom:14px;">A <strong>shared firm-wide intro</strong> + your <strong>note</strong> go to every LP. Each <strong>fund section</strong> is seen only by that fund/account's holders. Generate each piece, edit, then Save.</div>
+
+        <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">① Note from you — manual, shared, never AI-written</label>
         <textarea id="ql-note" rows="3" placeholder="A few words to your partners / LPs…"
-                  style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:10px;font-size:13px;line-height:1.5;resize:vertical;margin-bottom:14px;"></textarea>
-        <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">Letter body — generated, edit freely (markdown)</label>
-        <textarea id="ql-body" rows="20" placeholder="Click ✨ Generate draft to produce the YTD narrative, then edit here…"
-                  style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:12px;font-size:13px;line-height:1.6;resize:vertical;font-family:inherit;"></textarea>
-        <div style="margin-top:12px;">
+                  style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:10px;font-size:13px;line-height:1.5;resize:vertical;margin-bottom:16px;"></textarea>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+          <label style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;">② Shared intro — firm-wide, every LP sees this</label>
+          <button id="ql-gen-intro" type="button" class="tab-btn" style="font-size:11px;height:26px;">✨ Generate intro</button>
+        </div>
+        <textarea id="ql-intro" rows="8" placeholder="Generate the firm-wide market/strategy opening, then edit…"
+                  style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:12px;font-size:13px;line-height:1.6;resize:vertical;font-family:inherit;margin-bottom:16px;"></textarea>
+
+        <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:6px;">③ Per-fund sections — each LP sees only the funds they hold</label>
+        <div id="ql-funds" style="font-size:12px;color:#94a3b8;">Loading funds…</div>
+
+        <div style="margin-top:16px;">
           <div style="font-size:10px;font-weight:800;letter-spacing:1px;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Saved drafts</div>
           <div id="ql-saved" style="font-size:12px;color:#94a3b8;">—</div>
         </div>
@@ -17654,67 +17662,116 @@ End with the sleeve block at this account's real market value so I can push it t
     _initQuarterlyLetter();
   }
 
-  // ── 🗒️ Quarterly Letter composer ─────────────────────────────────────────
+  // ── 🗒️ Quarterly Letter composer (shared intro + per-fund sections) ───────
   let _qlCurrentId = null;
   let _qlInit = false;
+  let _qlFunds = [];          // [{fund_id, name, short_name, fund_type, has_positions, has_attribution}]
+  function _qlYear() { return parseInt(document.getElementById('ql-year')?.value, 10) || new Date().getFullYear(); }
   function _initQuarterlyLetter() {
     const yr = document.getElementById('ql-year');
     if (yr && !yr.value) yr.value = new Date().getFullYear();
     if (_qlInit) { _qlRenderSaved(); return; }
     _qlInit = true;
-    document.getElementById('ql-generate')?.addEventListener('click', _qlGenerate);
+    document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
     document.getElementById('ql-save')?.addEventListener('click', _qlSave);
+    _qlLoadFunds();
     _qlRenderSaved();
   }
-  async function _qlGenerate() {
-    const btn = document.getElementById('ql-generate');
+  // Shared poller: runs an agentic job to completion, returns its answer markdown.
+  async function _qlPoll(jobId, statusEl, label) {
+    let tries = 0;
+    while (tries < 120) {
+      await new Promise(res => setTimeout(res, 3000));
+      tries++;
+      let j;
+      try { j = await (await window.dgaFetch('/api/research/agentic/' + jobId)).json(); } catch(e) { continue; }
+      if (statusEl) statusEl.textContent = label + ': ' + (j.label || 'working…') + '  ·  $' + (j.cost_usd||0).toFixed(2);
+      if (j.status === 'done' && j.result) return j.result.answer || '';
+      if (j.status === 'error') throw new Error(j.error || j.label || 'generation failed');
+    }
+    throw new Error('timed out — try again');
+  }
+  async function _qlGenIntro() {
+    const btn = document.getElementById('ql-gen-intro');
     const status = document.getElementById('ql-status');
-    const bodyEl = document.getElementById('ql-body');
-    const year = parseInt(document.getElementById('ql-year')?.value, 10) || new Date().getFullYear();
-    if (bodyEl && bodyEl.value.trim() && !confirm('Replace the current letter body with a fresh draft?')) return;
+    const intro = document.getElementById('ql-intro');
+    if (intro && intro.value.trim() && !confirm('Replace the shared intro with a fresh draft?')) return;
     if (btn) { btn.disabled = true; btn.textContent = '✨ Generating…'; }
     try {
-      const r = await (await window.dgaFetch('/api/research/quarterly-letter', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ year }) })).json();
+      const r = await (await window.dgaFetch('/api/research/quarterly-letter/intro', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ year: _qlYear() }) })).json();
       if (!r.ok || !r.job_id) throw new Error(r.error || r.detail || 'could not start');
-      if (status) status.textContent = 'Reviewing ' + (r.book_label || 'the book') + '… this runs the full analysis and can take a minute.';
-      // Poll the agentic job
-      const jobId = r.job_id;
-      let done = false, tries = 0;
-      while (!done && tries < 120) {
-        await new Promise(res => setTimeout(res, 3000));
-        tries++;
-        let j;
-        try { j = await (await window.dgaFetch('/api/research/agentic/' + jobId)).json(); } catch(e) { continue; }
-        if (status) status.textContent = (j.label || 'Working…') + '  ·  $' + (j.cost_usd||0).toFixed(2);
-        if (j.status === 'done' && j.result) {
-          if (bodyEl) bodyEl.value = j.result.answer || '';
-          if (status) status.textContent = '✓ Draft ready — edit it, add your note, then Save draft.';
-          done = true;
-        } else if (j.status === 'error') {
-          throw new Error(j.error || j.label || 'generation failed');
-        }
-      }
-      if (!done) throw new Error('timed out — try again');
-    } catch (e) {
-      if (status) status.textContent = '❌ ' + (e.message || e);
-    }
-    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate draft'; }
+      const md = await _qlPoll(r.job_id, status, 'Intro');
+      if (intro) intro.value = md;
+      if (status) status.textContent = '✓ Intro ready — edit freely.';
+    } catch (e) { if (status) status.textContent = '❌ intro: ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate intro'; }
+  }
+  async function _qlGenFund(fid, name) {
+    const status = document.getElementById('ql-status');
+    const ta = document.getElementById('ql-fund-' + fid);
+    const btn = document.getElementById('ql-genbtn-' + fid);
+    if (ta && ta.value.trim() && !confirm('Replace the ' + name + ' section with a fresh draft?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '✨ …'; }
+    try {
+      const r = await (await window.dgaFetch('/api/research/quarterly-letter/fund-section', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fund_id: fid, year: _qlYear() }) })).json();
+      if (!r.ok || !r.job_id) throw new Error(r.error || r.detail || 'could not start');
+      const md = await _qlPoll(r.job_id, status, name);
+      if (ta) ta.value = md;
+      if (status) status.textContent = '✓ ' + name + ' section ready.';
+    } catch (e) { if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e); }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; }
+  }
+  async function _qlLoadFunds() {
+    const wrap = document.getElementById('ql-funds');
+    if (!wrap) return;
+    try {
+      const d = await (await window.dgaFetch('/api/quarterly-letter/funds')).json();
+      _qlFunds = (d.funds || []).filter(function(f){ return f.has_positions; });
+      if (!_qlFunds.length) { wrap.innerHTML = '<span style="color:#94a3b8;">No funds with live positions yet.</span>'; return; }
+      wrap.innerHTML = _qlFunds.map(function(f){
+        const tag = f.fund_type === 'lp_fund' ? 'LP fund (shared by all its LPs)' : 'managed account';
+        const attr = f.has_attribution ? '' : ' <span style="color:#d97706;">· no YTD CSV on file</span>';
+        return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+          + '<span style="font-weight:700;color:#0A1628;">'+_gfEsc(f.short_name||f.name)+'</span>'
+          + '<span style="font-size:10px;color:#94a3b8;">'+tag+attr+'</span>'
+          + '<span style="flex:1;"></span>'
+          + '<button id="ql-genbtn-'+_gfEsc(f.fund_id)+'" type="button" class="tab-btn" style="font-size:11px;height:26px;" data-ql-fund="'+_gfEsc(f.fund_id)+'" data-ql-name="'+_gfEsc(f.short_name||f.name)+'">✨ Generate</button>'
+          + '</div>'
+          + '<textarea id="ql-fund-'+_gfEsc(f.fund_id)+'" rows="6" placeholder="Generate this fund’s section, then edit…" style="width:100%;border:1px solid var(--panel-edge);border-radius:6px;padding:10px;font-size:12.5px;line-height:1.55;resize:vertical;font-family:inherit;"></textarea>'
+          + '</div>';
+      }).join('');
+      wrap.querySelectorAll('[data-ql-fund]').forEach(function(b){
+        b.addEventListener('click', function(){ _qlGenFund(b.getAttribute('data-ql-fund'), b.getAttribute('data-ql-name')); });
+      });
+    } catch (e) { wrap.innerHTML = '<span style="color:#94a3b8;">Could not load funds.</span>'; }
+  }
+  function _qlCollectSections() {
+    const out = {};
+    _qlFunds.forEach(function(f){
+      const ta = document.getElementById('ql-fund-' + f.fund_id);
+      const v = ta ? ta.value.trim() : '';
+      if (v) out[f.fund_id] = { md: v, name: f.short_name || f.name };
+    });
+    return out;
   }
   async function _qlSave() {
     const btn = document.getElementById('ql-save');
     const status = document.getElementById('ql-status');
-    const year = parseInt(document.getElementById('ql-year')?.value, 10) || new Date().getFullYear();
+    const year = _qlYear();
     const note = document.getElementById('ql-note')?.value || '';
-    const body = document.getElementById('ql-body')?.value || '';
-    if (!note.trim() && !body.trim()) { if (status) status.textContent = 'Nothing to save yet.'; return; }
+    const intro = document.getElementById('ql-intro')?.value || '';
+    const sections = _qlCollectSections();
+    if (!note.trim() && !intro.trim() && !Object.keys(sections).length) { if (status) status.textContent = 'Nothing to save yet.'; return; }
     if (btn) { btn.disabled = true; btn.textContent = '💾 Saving…'; }
     try {
-      const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year,
-                        manual_note: note, body_md: body, status: 'draft' };
+      const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year, year: year,
+                        manual_note: note, shared_intro_md: intro, fund_sections: sections,
+                        scope_fund_ids: Object.keys(sections), status: 'draft' };
       const r = await (await window.dgaFetch('/api/quarterly-letter/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
       if (!r.ok) throw new Error(r.detail || 'save failed');
       _qlCurrentId = r.id;
-      if (status) status.textContent = '✓ Saved.';
+      if (status) status.textContent = '✓ Saved (' + Object.keys(sections).length + ' fund section(s)).';
       _qlRenderSaved();
     } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
     if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft'; }
@@ -17739,8 +17796,14 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await (await window.dgaFetch('/api/quarterly-letter/' + encodeURIComponent(id))).json();
       const l = d.letter; if (!l) return;
       _qlCurrentId = l.id;
+      const yr = document.getElementById('ql-year'); if (yr && l.year) yr.value = l.year;
       const note = document.getElementById('ql-note'); if (note) note.value = l.manual_note || '';
-      const body = document.getElementById('ql-body'); if (body) body.value = l.body_md || '';
+      const intro = document.getElementById('ql-intro'); if (intro) intro.value = l.shared_intro_md || l.body_md || '';
+      const secs = l.fund_sections || {};
+      Object.keys(secs).forEach(function(fid){
+        const ta = document.getElementById('ql-fund-' + fid);
+        if (ta) ta.value = (secs[fid] && secs[fid].md) || '';
+      });
       const status = document.getElementById('ql-status'); if (status) status.textContent = 'Loaded "' + (l.title||l.id) + '".';
     } catch (e) {}
   }

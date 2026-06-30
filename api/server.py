@@ -19357,6 +19357,141 @@ async def research_quarterly_letter(req: Request, background_tasks: BackgroundTa
             "year": year, "model": _AGENTIC_MODEL}
 
 
+# ── Per-fund model: shared firm-wide intro + one section per fund ─────────────
+_QLETTER_INTRO_SYSTEM = (
+    "You are the GP of DGA Capital writing the OPENING of a quarter-end letter to "
+    "LPs and colleagues. Voice: plain-spoken, confident, first-person plural ('we'), "
+    "a notch informal. This intro is SHARED by every LP, so keep it firm-wide and "
+    "macro — do NOT discuss individual account holdings (those get their own per-fund "
+    "sections later).\n\n"
+    "Ground YTD figures with the tools (get_ytd_attribution, compute). Cover, in 3-5 "
+    "short paragraphs under the header '## The quarter in brief': how markets and our "
+    "overall book did this year, the themes that drove it, our general stance, and what "
+    "we're watching. No per-name detail, no hype. Internal commentary, not advice."
+)
+
+_QLETTER_FUND_SYSTEM = (
+    "You are the GP of DGA Capital writing the section of a quarter-end letter for ONE "
+    "specific account/fund. Voice: plain-spoken, confident, first-person plural, a notch "
+    "informal. This section is seen by the holder(s) of THIS fund only.\n\n"
+    "GROUND EVERY NUMBER with the tools (get_ytd_attribution for this book's returns, "
+    "read_saved_report for each name's thesis, compute for math). The trade list in the "
+    "prompt is the ground truth of what we did in this sleeve — explain the WHY behind "
+    "the notable buys and sells. Never invent a trade or number.\n\n"
+    "Write markdown with these headers, in order:\n"
+    "### What we did here\n"
+    "### How it's positioned\n"
+    "### Why it's built this way\n\n"
+    "Be specific to THIS fund's actual holdings and trades. In the last section explain "
+    "the logic of the composition — the role each major position plays and the trajectory "
+    "we're steering toward. Internal commentary, not investment advice."
+)
+
+
+def _qletter_kick(job_prefix: str, label: str, question: str, system: str,
+                  background_tasks, claims, meta: dict) -> str:
+    """Queue a quarterly-letter agentic job (shared by intro + fund-section)."""
+    _strat_tools = [t for t in _AGENTIC_TOOLS
+                    if t.get("name") not in ("list_portfolios", "get_portfolio_holdings")]
+    import uuid as _uuid
+    job_id = f"{job_prefix}_" + _uuid.uuid4().hex[:12]
+    _agentic_jobs[job_id] = {"stage": "queued", "status": "running", "label": label,
+                             "started_at": time.time(), "updated_at": time.time(),
+                             "question": question, "steps": 0, "tool_calls": [], "cost_usd": 0.0,
+                             "mode": "quarterly_letter",
+                             "generated_by": claims.get("email") or "gp", **meta}
+    background_tasks.add_task(_run_agentic_analysis, job_id, question, system, _strat_tools)
+    return job_id
+
+
+@app.post("/api/research/quarterly-letter/intro")
+async def research_quarterly_letter_intro(req: Request, background_tasks: BackgroundTasks):
+    """GP-only: generate the SHARED firm-wide intro. Body: {year?}. Poll the job."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try: body = await req.json()
+    except Exception: body = {}
+    year = int((body or {}).get("year") or datetime.utcnow().year)
+    fund_ids = []
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL")
+                fund_ids = [str(r[0]) for r in cur.fetchall()]
+        except Exception:
+            pass
+    positions = _combine_fund_positions(fund_ids) if len(fund_ids) > 1 else (_load_fund_positions(fund_ids[0]) if fund_ids else [])
+    pos_ctx = _build_strategist_context(positions[:60], "whole book") if positions else "(No live positions.)"
+    question = (
+        f"Write the SHARED opening of DGA Capital's {year} quarter-end letter (firm-wide, "
+        f"macro — no per-account detail).\n\n{pos_ctx}\n\nUse get_ytd_attribution for the "
+        f"real whole-book YTD return and compute for any math. Follow your section structure."
+    )
+    job_id = _qletter_kick("QLINTRO", "Queued · letter intro", question,
+                           _QLETTER_INTRO_SYSTEM, background_tasks, claims, {"year": year})
+    return {"ok": True, "job_id": job_id, "year": year, "model": _AGENTIC_MODEL}
+
+
+@app.post("/api/research/quarterly-letter/fund-section")
+async def research_quarterly_letter_fund_section(req: Request, background_tasks: BackgroundTasks):
+    """GP-only: generate ONE fund's section. Body: {fund_id, year?}. Poll the job."""
+    claims = _claims_or_401(req)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try: body = await req.json()
+    except Exception: body = {}
+    fund_id = str((body or {}).get("fund_id") or "").strip()
+    if not fund_id:
+        return JSONResponse({"ok": False, "error": "fund_id required"}, status_code=400)
+    year = int((body or {}).get("year") or datetime.utcnow().year)
+    positions = _load_fund_positions(fund_id)
+    fund_name = _fund_name_lookup(fund_id) or fund_id
+    if not positions:
+        return JSONResponse({"ok": False, "error": f"No live positions for {fund_name}."}, status_code=400)
+    pos_ctx = _build_strategist_context(positions[:60], fund_name)
+    act_ctx = _quarterly_activity_context([fund_id], year)
+    question = (
+        f"Write the {year} quarter-end letter section for '{fund_name}'.\n\n"
+        f"{pos_ctx}\n\n{act_ctx}\n\nSCOPE: these holdings are the COMPLETE book for this "
+        f"section — analyze only '{fund_name}'. Use get_ytd_attribution, read_saved_report "
+        f"per name, and compute. Follow your section structure exactly."
+    )
+    job_id = _qletter_kick("QLFUND", f"Queued · {fund_name}", question,
+                           _QLETTER_FUND_SYSTEM, background_tasks, claims,
+                           {"year": year, "fund_id": fund_id, "fund_name": fund_name})
+    return {"ok": True, "job_id": job_id, "fund_id": fund_id, "fund_name": fund_name,
+            "year": year, "model": _AGENTIC_MODEL}
+
+
+@app.get("/api/quarterly-letter/funds")
+def quarterly_letter_funds(request: Request):
+    """GP-only: funds to write sections for — managed accounts + LP funds, flagged
+    by whether they have live positions and YTD attribution on file."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "funds": []}
+    out = []
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("""SELECT id, name, short_name, fund_type
+                         FROM funds WHERE status != 'closed'
+                          AND fund_type IN ('managed_account','lp_fund')
+                        ORDER BY fund_type, short_name""")
+        funds = cur.fetchall()
+        cur.execute("SELECT DISTINCT fund_id FROM tax_lots WHERE closed_at IS NULL")
+        with_pos = {str(r["fund_id"]) for r in cur.fetchall()}
+        cur.execute("SELECT fund_id FROM managed_account_ytd_cache")
+        with_attr = {str(r["fund_id"]) for r in cur.fetchall()}
+    for f in funds:
+        fid = str(f["id"])
+        out.append({"fund_id": fid, "name": f["name"], "short_name": f["short_name"],
+                    "fund_type": f["fund_type"], "has_positions": fid in with_pos,
+                    "has_attribution": fid in with_attr})
+    return {"ok": True, "funds": out}
+
+
 def _ensure_quarterly_letters_table() -> None:
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -19375,6 +19510,11 @@ def _ensure_quarterly_letters_table() -> None:
                     created_at      TIMESTAMPTZ DEFAULT now(),
                     updated_at      TIMESTAMPTZ DEFAULT now()
                 )""")
+            # Per-fund model: a firm-wide shared intro + one section per fund,
+            # assembled per LP at view time. (body_md kept for legacy drafts.)
+            cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS shared_intro_md TEXT")
+            cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS fund_sections JSONB")
+            cur.execute("ALTER TABLE quarterly_letters ADD COLUMN IF NOT EXISTS year INTEGER")
             conn.commit()
     except Exception as e:
         print(f"[qletter] ensure table failed: {e!s:.150}", flush=True)
@@ -19396,15 +19536,20 @@ async def quarterly_letter_save(request: Request):
     with _fund_conn() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO quarterly_letters
-                (id, title, period, scope_fund_ids, manual_note, body_md, status, generated_by, updated_at)
-            VALUES (%s,%s,%s,%s::jsonb,%s,%s,%s,%s, now())
+                (id, title, period, year, scope_fund_ids, manual_note, shared_intro_md,
+                 fund_sections, body_md, status, generated_by, updated_at)
+            VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s::jsonb,%s,%s,%s, now())
             ON CONFLICT (id) DO UPDATE SET
-                title=EXCLUDED.title, period=EXCLUDED.period, scope_fund_ids=EXCLUDED.scope_fund_ids,
-                manual_note=EXCLUDED.manual_note, body_md=EXCLUDED.body_md, status=EXCLUDED.status,
-                updated_at=now()
+                title=EXCLUDED.title, period=EXCLUDED.period, year=EXCLUDED.year,
+                scope_fund_ids=EXCLUDED.scope_fund_ids, manual_note=EXCLUDED.manual_note,
+                shared_intro_md=EXCLUDED.shared_intro_md, fund_sections=EXCLUDED.fund_sections,
+                body_md=EXCLUDED.body_md, status=EXCLUDED.status, updated_at=now()
         """, (lid, (body or {}).get("title"), (body or {}).get("period"),
+              (body or {}).get("year"),
               json.dumps((body or {}).get("scope_fund_ids") or []),
-              (body or {}).get("manual_note"), (body or {}).get("body_md"),
+              (body or {}).get("manual_note"), (body or {}).get("shared_intro_md"),
+              json.dumps((body or {}).get("fund_sections") or {}),
+              (body or {}).get("body_md"),
               (body or {}).get("status") or "draft",
               claims.get("email") or "gp"))
         conn.commit()
@@ -19445,8 +19590,9 @@ def quarterly_letter_get(letter_id: str, request: Request):
     if not r:
         raise HTTPException(404, "Letter not found.")
     return {"ok": True, "letter": {
-        "id": r["id"], "title": r["title"], "period": r["period"],
+        "id": r["id"], "title": r["title"], "period": r["period"], "year": r.get("year"),
         "scope_fund_ids": r["scope_fund_ids"] or [], "manual_note": r["manual_note"],
+        "shared_intro_md": r.get("shared_intro_md"), "fund_sections": r.get("fund_sections") or {},
         "body_md": r["body_md"], "status": r["status"],
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
 
