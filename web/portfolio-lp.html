@@ -2375,19 +2375,21 @@
     if (!L) return;
     const hasContent = (L.manual_note||'').trim() || (L.shared_intro_md||'').trim() || (L.sections||[]).length;
     if (!hasContent) return;
-    let h = '<div class="hero-card" style="margin-bottom:18px;">'
-      + '<div class="hero-eyebrow">DGA Capital · ' + esc(L.period || ('Letter ' + (L.year||''))) + '</div>'
-      + '<div class="hero-title" style="margin-bottom:4px;">' + esc(L.title || 'Quarterly Letter') + '</div>';
+    // Render on a white "paper" card so the long-form letter is fully readable
+    // (the dark hero-card theme washes out body text).
+    let h = '<div style="background:#fff;border-radius:14px;padding:28px 32px;margin-bottom:18px;box-shadow:0 2px 14px rgba(0,0,0,0.12);">'
+      + '<div style="font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#5BB8D4;">DGA Capital · ' + esc(L.period || ('Letter ' + (L.year||''))) + '</div>'
+      + '<div style="font-size:24px;font-weight:800;color:#0A1628;margin:4px 0 16px;">' + esc(L.title || 'Quarterly Letter') + '</div>';
     if ((L.manual_note||'').trim()) {
-      h += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:12px 14px;margin:12px 0;font-size:13.5px;line-height:1.6;color:#1e293b;font-style:italic;">' + _qlMd(L.manual_note) + '</div>';
+      h += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:14px 16px;margin:14px 0;font-size:14px;line-height:1.65;color:#1e293b;font-style:italic;">' + _qlMd(L.manual_note) + '</div>';
     }
     if ((L.shared_intro_md||'').trim()) {
-      h += '<div style="font-size:13.5px;line-height:1.65;color:#1e293b;">' + _qlMd(L.shared_intro_md) + '</div>';
+      h += '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(L.shared_intro_md) + '</div>';
     }
     (L.sections||[]).forEach(function(s){
-      h += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">'
-        + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:6px;">' + esc(s.name) + '</div>'
-        + '<div style="font-size:13.5px;line-height:1.65;color:#1e293b;">' + _qlMd(s.md) + '</div></div>';
+      h += '<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e2e8f0;">'
+        + '<div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:8px;">' + esc(s.name) + '</div>'
+        + '<div style="font-size:14px;line-height:1.7;color:#1e293b;">' + _qlMd(s.md) + '</div></div>';
     });
     h += '</div>';
     wrap.innerHTML = h;
