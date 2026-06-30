@@ -19597,6 +19597,65 @@ def quarterly_letter_get(letter_id: str, request: Request):
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
 
 
+def _lp_fund_ids_for_claims(claims) -> list[str]:
+    """Resolve which fund_ids a user holds — GP/admin see all writable funds; an LP
+    sees their managed accounts (matched by name/short_name) + LP fund stakes (by name).
+    Mirrors the lp_me_positions mapping."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    ids = []
+    with _fund_conn() as conn, conn.cursor() as cur:
+        if claims.get("role") in ("gp", "admin"):
+            cur.execute("SELECT id FROM funds WHERE status != 'closed' "
+                        "AND fund_type IN ('managed_account','lp_fund')")
+            return [str(r[0]) for r in cur.fetchall()]
+        acct_ids   = [a.upper() for a in (claims.get("managed_account_ids") or [])]
+        fund_names = [n.lower() for n in (claims.get("fund_memberships") or {}).keys()]
+        if acct_ids:
+            cur.execute("SELECT id FROM funds WHERE fund_type='managed_account' "
+                        "AND (UPPER(short_name)=ANY(%s) OR UPPER(name)=ANY(%s))", (acct_ids, acct_ids))
+            ids += [str(r[0]) for r in cur.fetchall()]
+        if fund_names:
+            cur.execute("SELECT id FROM funds WHERE fund_type='lp_fund' AND LOWER(name)=ANY(%s)", (fund_names,))
+            ids += [str(r[0]) for r in cur.fetchall()]
+    return ids
+
+
+@app.get("/api/lp/quarterly-letter")
+def lp_quarterly_letter(request: Request):
+    """The latest PUBLISHED quarterly letter, assembled for THIS user: the shared
+    note + intro, plus only the fund sections for funds they hold. GP/admin see all
+    sections. Returns {ok, letter} or {ok, letter: null} if none published."""
+    claims = _claims_or_401(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": True, "letter": None}
+    _ensure_quarterly_letters_table()
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("SELECT * FROM quarterly_letters WHERE status='published' ORDER BY updated_at DESC LIMIT 1")
+        r = cur.fetchone()
+    if not r:
+        return {"ok": True, "letter": None}
+    secs = r.get("fund_sections") or {}
+    if isinstance(secs, str):
+        try: secs = json.loads(secs)
+        except Exception: secs = {}
+    my_fids = set(_lp_fund_ids_for_claims(claims))
+    is_priv = claims.get("role") in ("gp", "admin")
+    sections = []
+    for fid, v in secs.items():
+        if not (is_priv or fid in my_fids):
+            continue
+        if not isinstance(v, dict) or not (v.get("md") or "").strip():
+            continue
+        sections.append({"fund_id": fid, "name": v.get("name") or fid, "md": v.get("md")})
+    sections.sort(key=lambda s: (s["name"] or "").lower())
+    return {"ok": True, "letter": {
+        "title": r["title"], "period": r["period"], "year": r.get("year"),
+        "manual_note": r["manual_note"], "shared_intro_md": r.get("shared_intro_md") or r.get("body_md"),
+        "sections": sections,
+        "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}}
+
+
 @app.get("/api/research/strategist/reviews")
 def strategist_reviews_list(request: Request):
     """List saved Portfolio Strategist committee reviews (newest first)."""

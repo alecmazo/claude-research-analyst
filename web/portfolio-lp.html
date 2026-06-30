@@ -624,6 +624,9 @@
       <div id="lp-hero-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top:18px;"></div>
     </div>
 
+    <!-- Quarterly Letter (shown only when a letter is published for this LP) -->
+    <div id="lp-quarterly-letter" style="display:none;"></div>
+
     <!-- Per-fund + per-account cards -->
     <div id="lp-holdings"></div>
   </section>
@@ -2348,8 +2351,52 @@
     }
   })();
 
+  // ── Quarterly Letter (per-LP assembled) ─────────────────────────
+  function _qlMd(text) {
+    const LINK = 'color:#5BB8D4;text-decoration:underline;font-weight:600;';
+    return String(text || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<div style="font-size:12px;font-weight:800;color:#5BB8D4;letter-spacing:.6px;margin:14px 0 4px;text-transform:uppercase;">$1</div>')
+      .replace(/^## (.+)$/gm,  '<div style="font-size:15px;font-weight:800;color:#1e293b;margin:16px 0 6px;">$1</div>')
+      .replace(/^# (.+)$/gm,   '<div style="font-size:16px;font-weight:800;color:#1e293b;margin:16px 0 6px;">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,   '<em>$1</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="'+LINK+'">$1</a>')
+      .replace(/^- (.+)$/gm,   '<div style="padding:2px 0 2px 12px;border-left:2px solid #5BB8D4;margin:3px 0;">$1</div>')
+      .replace(/\n{2,}/g,      '<div style="height:9px;"></div>')
+      .replace(/\n/g,          ' ');
+  }
+  async function loadQuarterlyLetter() {
+    const wrap = document.getElementById('lp-quarterly-letter');
+    if (!wrap) return;
+    let L;
+    try { L = (await (await window.dgaFetch('/api/lp/quarterly-letter')).json()).letter; }
+    catch (e) { return; }
+    if (!L) return;
+    const hasContent = (L.manual_note||'').trim() || (L.shared_intro_md||'').trim() || (L.sections||[]).length;
+    if (!hasContent) return;
+    let h = '<div class="hero-card" style="margin-bottom:18px;">'
+      + '<div class="hero-eyebrow">DGA Capital · ' + esc(L.period || ('Letter ' + (L.year||''))) + '</div>'
+      + '<div class="hero-title" style="margin-bottom:4px;">' + esc(L.title || 'Quarterly Letter') + '</div>';
+    if ((L.manual_note||'').trim()) {
+      h += '<div style="background:#f8fafc;border-left:3px solid #5BB8D4;border-radius:6px;padding:12px 14px;margin:12px 0;font-size:13.5px;line-height:1.6;color:#1e293b;font-style:italic;">' + _qlMd(L.manual_note) + '</div>';
+    }
+    if ((L.shared_intro_md||'').trim()) {
+      h += '<div style="font-size:13.5px;line-height:1.65;color:#1e293b;">' + _qlMd(L.shared_intro_md) + '</div>';
+    }
+    (L.sections||[]).forEach(function(s){
+      h += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">'
+        + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#5BB8D4;margin-bottom:6px;">' + esc(s.name) + '</div>'
+        + '<div style="font-size:13.5px;line-height:1.65;color:#1e293b;">' + _qlMd(s.md) + '</div></div>';
+    });
+    h += '</div>';
+    wrap.innerHTML = h;
+    wrap.style.display = 'block';
+  }
+
   // ── Init ─────────────────────────────────────────────────────
   loadOverview();
+  loadQuarterlyLetter();
   loadIndices();
   loadFundPositions();
   loadFundActivity();

@@ -4432,7 +4432,8 @@ End with the sleeve block at this account's real market value so I can push it t
         <label style="font-size:11px;color:#64748b;margin-right:6px;">Year</label>
         <input id="ql-year" type="number" min="2020" max="2099"
                style="width:78px;height:30px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;margin-right:8px;">
-        <button id="ql-save" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">💾 Save draft</button>
+        <button id="ql-save" type="button" class="tab-btn" style="margin-right:6px;">💾 Save draft</button>
+        <button id="ql-publish" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">📢 Publish to LPs</button>
       </header>
       <div style="padding:16px 18px;">
         <div id="ql-status" style="font-size:12px;color:#64748b;margin-bottom:14px;">A <strong>shared firm-wide intro</strong> + your <strong>note</strong> go to every LP. Each <strong>fund section</strong> is seen only by that fund/account's holders. Generate each piece, edit, then Save.</div>
@@ -17673,7 +17674,11 @@ End with the sleeve block at this account's real market value so I can push it t
     if (_qlInit) { _qlRenderSaved(); return; }
     _qlInit = true;
     document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
-    document.getElementById('ql-save')?.addEventListener('click', _qlSave);
+    document.getElementById('ql-save')?.addEventListener('click', function(){ _qlSave('draft'); });
+    document.getElementById('ql-publish')?.addEventListener('click', function(){
+      if (!confirm('Publish this letter to LPs? Each LP will see the shared note + intro and only the sections for funds they hold.')) return;
+      _qlSave('published');
+    });
     _qlLoadFunds();
     _qlRenderSaved();
   }
@@ -17755,26 +17760,30 @@ End with the sleeve block at this account's real market value so I can push it t
     });
     return out;
   }
-  async function _qlSave() {
-    const btn = document.getElementById('ql-save');
+  async function _qlSave(statusVal) {
+    statusVal = statusVal || 'draft';
+    const btn = document.getElementById(statusVal === 'published' ? 'ql-publish' : 'ql-save');
     const status = document.getElementById('ql-status');
     const year = _qlYear();
     const note = document.getElementById('ql-note')?.value || '';
     const intro = document.getElementById('ql-intro')?.value || '';
     const sections = _qlCollectSections();
     if (!note.trim() && !intro.trim() && !Object.keys(sections).length) { if (status) status.textContent = 'Nothing to save yet.'; return; }
-    if (btn) { btn.disabled = true; btn.textContent = '💾 Saving…'; }
+    const origLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = statusVal === 'published' ? '📢 Publishing…' : '💾 Saving…'; }
     try {
       const payload = { id: _qlCurrentId, title: 'Quarterly Letter ' + year, period: 'YTD ' + year, year: year,
                         manual_note: note, shared_intro_md: intro, fund_sections: sections,
-                        scope_fund_ids: Object.keys(sections), status: 'draft' };
+                        scope_fund_ids: Object.keys(sections), status: statusVal };
       const r = await (await window.dgaFetch('/api/quarterly-letter/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
       if (!r.ok) throw new Error(r.detail || 'save failed');
       _qlCurrentId = r.id;
-      if (status) status.textContent = '✓ Saved (' + Object.keys(sections).length + ' fund section(s)).';
+      if (status) status.textContent = statusVal === 'published'
+        ? '📢 Published — LPs now see the note, intro, and their fund sections.'
+        : '✓ Saved (' + Object.keys(sections).length + ' fund section(s)).';
       _qlRenderSaved();
     } catch (e) { if (status) status.textContent = '❌ ' + (e.message || e); }
-    if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft'; }
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
   }
   async function _qlRenderSaved() {
     const el = document.getElementById('ql-saved');
