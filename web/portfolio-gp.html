@@ -1171,7 +1171,7 @@
   .fid-tbl thead th.fid-sort-asc::after  { content: ' ↑'; color: #5BB8D4; }
   .fid-tbl tbody tr { border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background .07s; }
   .fid-tbl tbody tr:hover { background: #f8fafc; }
-  .fid-tbl tbody td { padding: 13px 16px; text-align: right; vertical-align: middle; white-space: nowrap; }
+  .fid-tbl tbody td { padding: 7px 16px; text-align: right; vertical-align: middle; white-space: nowrap; }
   .fid-tbl tbody td:first-child { text-align: left; padding-left: 24px; }
   .fid-tbl-ticker { font-size: 13px; font-weight: 700; color: var(--text-primary); letter-spacing: 0.2px; }
   .fid-tbl-co  { font-size: 12px; color: #94a3b8; margin-top: 2px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1181,7 +1181,7 @@
   .fid-tbl-up   { color: #16a34a !important; }
   .fid-tbl-dn   { color: #dc2626 !important; }
   .fid-tbl-total-row td {
-    padding: 13px 16px; font-size: 14px; font-weight: 700; color: var(--text-primary);
+    padding: 9px 16px; font-size: 14px; font-weight: 700; color: var(--text-primary);
     text-align: right; background: #f9fafb; border-top: 2px solid #e2e8f0;
     position: sticky; bottom: 0;
   }
@@ -2998,9 +2998,11 @@
         <thead>
           <tr>
             <th data-sort="symbol">Symbol</th>
-            <th data-sort="price" style="min-width:100px;">Last price</th>
-            <th data-sort="day"   style="min-width:120px;">Today's gain/loss</th>
-            <th data-sort="total" style="min-width:120px;">Total gain/loss</th>
+            <th data-sort="price"    style="min-width:100px;">Last price</th>
+            <th data-sort="day"      style="min-width:100px;">Today's $</th>
+            <th data-sort="daypct"   style="min-width:80px;">Today's %</th>
+            <th data-sort="total"    style="min-width:110px;">Total $</th>
+            <th data-sort="totalpct" style="min-width:80px;">Total %</th>
             <th data-sort="value" class="fid-sort-desc" style="min-width:110px;">Current value</th>
             <th data-sort="pct"   style="min-width:80px;">% of acct</th>
             <th data-sort="qty"   style="min-width:90px;">Quantity</th>
@@ -3008,7 +3010,7 @@
           </tr>
         </thead>
         <tbody id="fid-pos-tbody">
-          <tr><td colspan="8" style="text-align:center;padding:48px;color:#94a3b8;font-size:13px;">Loading positions…</td></tr>
+          <tr><td colspan="10" style="text-align:center;padding:48px;color:#94a3b8;font-size:13px;">Loading positions…</td></tr>
         </tbody>
       </table>
     </div>
@@ -12020,7 +12022,7 @@ End with the sleeve block at this account's real market value so I can push it t
     const tbody = document.getElementById('fid-pos-tbody');
     if (!tbody) return;
     if (!positions || !positions.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:48px;color:#94a3b8;">No positions.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:48px;color:#94a3b8;">No positions.</td></tr>';
       return;
     }
     // Sort
@@ -12029,7 +12031,9 @@ End with the sleeve block at this account's real market value so I can push it t
       if (_fidSortCol === 'symbol') { return _fidSortDir * ((a.symbol||'') < (b.symbol||'') ? 1 : -1); }
       if (_fidSortCol === 'price')  { av = a.last_price||0;         bv = b.last_price||0; }
       else if (_fidSortCol === 'day')   { av = (a.day_change_abs||0)*(a.total_qty||a.quantity||0); bv = (b.day_change_abs||0)*(b.total_qty||b.quantity||0); }
+      else if (_fidSortCol === 'daypct')   { av = a.day_change_pct||0; bv = b.day_change_pct||0; }
       else if (_fidSortCol === 'total') { av = a.unrealized_gain||0; bv = b.unrealized_gain||0; }
+      else if (_fidSortCol === 'totalpct') { av = a.unrealized_gain_pct||0; bv = b.unrealized_gain_pct||0; }
       else if (_fidSortCol === 'value') { av = a.market_value||0;    bv = b.market_value||0; }
       else if (_fidSortCol === 'pct')   { av = a.market_value||0; bv = b.market_value||0; } // sort by value = sort by % within same account
       else if (_fidSortCol === 'qty')   { av = a.total_qty||a.quantity||0; bv = b.total_qty||b.quantity||0; }
@@ -12062,14 +12066,15 @@ End with the sleeve block at this account's real market value so I can push it t
         ? '<div class="fid-tbl-sub ' + (p.day_change_abs>=0?'fid-tbl-up':'fid-tbl-dn') + '">' + (p.day_change_abs>=0?'+':'-') + '$' + Math.abs(p.day_change_abs).toFixed(2) + '/sh</div>' : '';
       const dayAbs = p.day_change_abs != null && qty != null ? p.day_change_abs * qty : null;
       const dayPct = p.day_change_pct;
-      const dayCell = dayAbs != null
-        ? '<div class="fid-tbl-main" style="color:' + _clr(dayAbs) + ';">' + (dayAbs>=0?'+':'') + fmtUSDFull(dayAbs) + '</div>'
-          + (dayPct!=null ? '<div class="fid-tbl-sub" style="color:' + _clr(dayPct) + ';">' + (dayPct>=0?'+':'') + dayPct.toFixed(2) + '%</div>' : '')
-        : '<span style="color:#94a3b8;">—</span>';
-      const gainCell = p.unrealized_gain != null
-        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain) + ';">' + (p.unrealized_gain>=0?'+':'') + fmtUSDFull(p.unrealized_gain) + '</div>'
-          + (p.unrealized_gain_pct!=null ? '<div class="fid-tbl-sub" style="color:' + _clr(p.unrealized_gain_pct) + ';">' + (p.unrealized_gain_pct>=0?'+':'') + p.unrealized_gain_pct.toFixed(2) + '%</div>' : '')
-        : '<span style="color:#94a3b8;">—</span>';
+      const _na = '<span style="color:#94a3b8;">—</span>';
+      const dayAbsCell = dayAbs != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(dayAbs) + ';">' + (dayAbs>=0?'+':'') + fmtUSDFull(dayAbs) + '</div>' : _na;
+      const dayPctCell = dayPct != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(dayPct) + ';">' + (dayPct>=0?'+':'') + dayPct.toFixed(2) + '%</div>' : _na;
+      const gainAbsCell = p.unrealized_gain != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain) + ';">' + (p.unrealized_gain>=0?'+':'') + fmtUSDFull(p.unrealized_gain) + '</div>' : _na;
+      const gainPctCell = p.unrealized_gain_pct != null
+        ? '<div class="fid-tbl-main" style="color:' + _clr(p.unrealized_gain_pct) + ';">' + (p.unrealized_gain_pct>=0?'+':'') + p.unrealized_gain_pct.toFixed(2) + '%</div>' : _na;
       const cbCell = p.avg_cost
         ? '<div class="fid-tbl-main">$' + Number(p.avg_cost).toFixed(2) + '/sh</div>'
           + (p.cost_basis ? '<div class="fid-tbl-sub">' + fmtUSDFull(p.cost_basis) + ' total</div>' : '')
@@ -12081,8 +12086,10 @@ End with the sleeve block at this account's real market value so I can push it t
       html += '<tr data-ticker="' + _esc(p.symbol) + '">'
         + '<td><div class="fid-tbl-ticker">' + _esc(p.symbol) + '</div><div class="fid-tbl-co">' + _esc(p.name||p.symbol) + '</div></td>'
         + '<td><div class="fid-tbl-main">' + px + '</div>' + pxSub + '</td>'
-        + '<td>' + dayCell + '</td>'
-        + '<td>' + gainCell + '</td>'
+        + '<td>' + dayAbsCell + '</td>'
+        + '<td>' + dayPctCell + '</td>'
+        + '<td>' + gainAbsCell + '</td>'
+        + '<td>' + gainPctCell + '</td>'
         + '<td><div class="fid-tbl-main">' + (mv!=null ? fmtUSD(mv) : '—') + '</div></td>'
         + '<td><div class="fid-tbl-main">' + (wt!=null ? wt.toFixed(2)+'%' : '—') + '</div></td>'
         + '<td><div class="fid-tbl-main">' + qtyFmt + '</div></td>'
@@ -12090,12 +12097,16 @@ End with the sleeve block at this account's real market value so I can push it t
         + '</tr>';
     });
 
-    // Totals footer
+    // Totals footer — aggregate %: gain ÷ (value − gain) = ÷ cost basis
+    const totDayPct  = (totVal - totDay)  > 0 ? totDay  / (totVal - totDay)  * 100 : null;
+    const totGainPct = (totVal - totGain) > 0 ? totGain / (totVal - totGain) * 100 : null;
     html += '<tr class="fid-tbl-total-row">'
       + '<td>Account total</td>'
       + '<td></td>'
       + '<td><div style="color:' + _clr(totDay) + ';font-weight:700;">' + (totDay>=0?'+':'') + fmtUSDFull(totDay) + '</div></td>'
+      + '<td>' + (totDayPct!=null ? '<div style="color:' + _clr(totDayPct) + ';font-weight:700;">' + (totDayPct>=0?'+':'') + totDayPct.toFixed(2) + '%</div>' : '') + '</td>'
       + '<td>' + (hasGain ? '<div style="color:' + _clr(totGain) + ';font-weight:700;">' + (totGain>=0?'+':'') + fmtUSDFull(totGain) + '</div>' : '—') + '</td>'
+      + '<td>' + (hasGain && totGainPct!=null ? '<div style="color:' + _clr(totGainPct) + ';font-weight:700;">' + (totGainPct>=0?'+':'') + totGainPct.toFixed(2) + '%</div>' : '') + '</td>'
       + '<td><strong>' + fmtUSD(totVal) + '</strong></td>'
       + '<td>100%</td><td></td><td></td></tr>';
 
