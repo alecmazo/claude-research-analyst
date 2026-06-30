@@ -9718,6 +9718,8 @@ analyst._start_tracker_snapshot_worker()
 _DEFAULT_AUTOMATION: dict = {
     "daily_brief":  {"enabled": True,  "hour": 8, "minute": 0},
     "market_pulse": {"enabled": True,  "hour": 8, "minute": 15},
+    # Pre-market pull of SnapTrade (Fidelity) holdings → tax_lots. Opt-in.
+    "snaptrade_sync": {"enabled": False, "hour": 6, "minute": 0},
 }
 
 def _get_automation_settings() -> dict:
@@ -9752,7 +9754,7 @@ def get_automation_settings_endpoint():
 async def save_automation_settings_endpoint(request: Request):
     body = await request.json()
     current = _get_automation_settings()
-    for job in ("daily_brief", "market_pulse"):
+    for job in ("daily_brief", "market_pulse", "snaptrade_sync"):
         if job in body and isinstance(body[job], dict):
             patch = body[job]
             if "enabled" in patch:
@@ -9853,6 +9855,41 @@ def _auto_market_pulse_worker() -> None:
             _t2.sleep(3600)
 
 threading.Thread(target=_auto_market_pulse_worker, daemon=True, name="pulse-scheduler").start()
+
+
+# ── Auto-sync SnapTrade (Fidelity) holdings pre-market (time from automation.settings)
+def _auto_snaptrade_sync_worker() -> None:
+    """Daemon: pulls SnapTrade holdings → tax_lots daily at the configured Pacific
+    time. Opt-in (disabled by default); runs the same logic as the ↻ Sync button."""
+    import time as _time
+    while True:
+        try:
+            cfg = _get_automation_settings().get("snaptrade_sync", _DEFAULT_AUTOMATION["snaptrade_sync"])
+            if not cfg.get("enabled", False):
+                _time.sleep(3600)
+                continue
+            h, m = cfg["hour"], cfg["minute"]
+            wait_secs = _secs_until(h, m)
+            print(f"[snaptrade-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+            _time.sleep(wait_secs)
+            cfg2 = _get_automation_settings().get("snaptrade_sync", {})
+            if not cfg2.get("enabled", False):
+                print("[snaptrade-scheduler] disabled after wake — skipping")
+                continue
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                print("[snaptrade-scheduler] no database — skipping")
+                continue
+            print(f"[snaptrade-scheduler] {h:02d}:{m:02d} Pacific — syncing SnapTrade holdings…")
+            res = _snaptrade_run_sync()
+            print(f"[snaptrade-scheduler] synced {len(res.get('synced',[]))} account(s), "
+                  f"pushed {len(res.get('lots_written',[]))} fund(s); "
+                  f"{len(res.get('errors',[]))} error(s)")
+        except Exception as _e:
+            import time as _t2
+            print(f"[snaptrade-scheduler] error (retrying in 1h): {_e}")
+            _t2.sleep(3600)
+
+threading.Thread(target=_auto_snaptrade_sync_worker, daemon=True, name="snaptrade-scheduler").start()
 
 
 # ---------------------------------------------------------------------------
@@ -25276,22 +25313,14 @@ async def snaptrade_connect(request: Request):
     return {"ok": True, "redirect_uri": url}
 
 
-@app.post("/api/snaptrade/sync")
-async def snaptrade_sync(request: Request):
-    """GP-only: pull holdings for all connected accounts and upsert them. Read-only;
-    preserves each account's managed-account assignment (fund_id)."""
-    _plaid_require_gp(request)
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        raise HTTPException(503, "Database not available.")
+def _snaptrade_run_sync() -> dict:
+    """Pull holdings for all connected accounts, upsert them, and push assigned
+    accounts' holdings into tax_lots. Request-free so both the /sync endpoint and
+    the daily scheduler can call it. Preserves each account's fund_id assignment.
+    Raises on a fatal accounts-fetch failure; per-account issues go in errors[]."""
     import snaptrade_link as _st
-    try:
-        uid, secret = _snaptrade_ensure_user()
-        accts = _st.list_accounts(uid, secret)
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        raise HTTPException(502, f"SnapTrade accounts failed: {_snaptrade_error_detail(e)}")
+    uid, secret = _snaptrade_ensure_user()
+    accts = _st.list_accounts(uid, secret)
     if isinstance(accts, dict):
         accts = accts.get("accounts") or accts.get("data") or []
     _ensure_snaptrade_tables()
@@ -25364,6 +25393,22 @@ async def snaptrade_sync(request: Request):
         errors.append({"stage": "tax_lots", "error": _snaptrade_error_detail(e)})
 
     return {"ok": True, "synced": out, "errors": errors, "lots_written": lots_written}
+
+
+@app.post("/api/snaptrade/sync")
+async def snaptrade_sync(request: Request):
+    """GP-only: pull holdings for all connected accounts and upsert them. Read-only;
+    preserves each account's managed-account assignment (fund_id)."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    try:
+        return _snaptrade_run_sync()
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(502, f"SnapTrade sync failed: {_snaptrade_error_detail(e)}")
 
 
 @app.get("/api/snaptrade/accounts")

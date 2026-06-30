@@ -4796,6 +4796,20 @@ End with the sleeve block at this account's real market value so I can push it t
             <span class="auto-next" id="auto-pulse-next">—</span>
           </div>
 
+          <!-- SnapTrade Sync row -->
+          <div class="auto-row">
+            <div class="auto-label">
+              <strong>🔗 SnapTrade Sync</strong>
+              <span>Pulls Fidelity holdings into Positions &amp; live NAV (pre-market)</span>
+            </div>
+            <label class="auto-toggle" title="Enable / disable">
+              <input type="checkbox" id="auto-snap-enabled">
+              <span class="auto-slider"></span>
+            </label>
+            <input type="time" id="auto-snap-time" class="auto-time-input" value="06:00">
+            <span class="auto-next" id="auto-snap-next">—</span>
+          </div>
+
           <!-- Save button -->
           <div style="margin-top:14px; display:flex; align-items:center; gap:12px;">
             <button id="auto-save-btn" class="tab-btn">Save Schedule</button>
@@ -15689,6 +15703,15 @@ End with the sleeve block at this account's real market value so I can push it t
       if ($pulseOn) $pulseOn.checked = pulseCfg.enabled !== false;
       if ($pulseT)  $pulseT.value = _fmtTime(pulseCfg.hour ?? 8, pulseCfg.minute ?? 15);
       if ($pulseNxt) $pulseNxt.textContent = _fmtNext(pulseCfg);
+
+      // SnapTrade Sync (opt-in: defaults off)
+      const snapCfg = s.snaptrade_sync || {};
+      const $snapOn  = document.getElementById('auto-snap-enabled');
+      const $snapT   = document.getElementById('auto-snap-time');
+      const $snapNxt = document.getElementById('auto-snap-next');
+      if ($snapOn) $snapOn.checked = snapCfg.enabled === true;
+      if ($snapT)  $snapT.value = _fmtTime(snapCfg.hour ?? 6, snapCfg.minute ?? 0);
+      if ($snapNxt) $snapNxt.textContent = _fmtNext(snapCfg);
     } catch(e) { console.warn('[automation]', e); }
   }
 
@@ -15713,6 +15736,7 @@ End with the sleeve block at this account's real market value so I can push it t
 
     const briefTime  = (document.getElementById('auto-brief-time')?.value  || '08:00').split(':');
     const pulseTime  = (document.getElementById('auto-pulse-time')?.value  || '08:15').split(':');
+    const snapTime   = (document.getElementById('auto-snap-time')?.value   || '06:00').split(':');
 
     const body = {
       daily_brief: {
@@ -15724,6 +15748,11 @@ End with the sleeve block at this account's real market value so I can push it t
         enabled: document.getElementById('auto-pulse-enabled')?.checked ?? true,
         hour:    parseInt(pulseTime[0], 10),
         minute:  parseInt(pulseTime[1], 10),
+      },
+      snaptrade_sync: {
+        enabled: document.getElementById('auto-snap-enabled')?.checked ?? false,
+        hour:    parseInt(snapTime[0], 10),
+        minute:  parseInt(snapTime[1], 10),
       },
     };
 
@@ -15738,8 +15767,10 @@ End with the sleeve block at this account's real market value so I can push it t
       // Refresh next-run labels from server response
       const $briefNxt = document.getElementById('auto-brief-next');
       const $pulseNxt = document.getElementById('auto-pulse-next');
+      const $snapNxt  = document.getElementById('auto-snap-next');
       if ($briefNxt) $briefNxt.textContent = _fmtNext(s.daily_brief  || {});
       if ($pulseNxt) $pulseNxt.textContent = _fmtNext(s.market_pulse || {});
+      if ($snapNxt)  $snapNxt.textContent  = _fmtNext(s.snaptrade_sync || {});
       if ($msg) { $msg.textContent = '✅ Saved'; setTimeout(() => { if($msg) $msg.textContent=''; }, 3000); }
     } catch(e) {
       if ($msg) $msg.textContent = '❌ ' + e.message;
