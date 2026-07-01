@@ -25763,6 +25763,59 @@ def _snaptrade_ensure_user():
     return uid, secret
 
 
+def _snaptrade_user_invalid(err: str) -> bool:
+    """True when SnapTrade rejects our stored user — code 1083 'Invalid userID
+    or userSecret'. Happens after a key swap: users are scoped to a clientId,
+    so a user registered under the old (free) client is invalid under the new
+    production client."""
+    low = (err or "").lower()
+    return "1083" in low or "invalid userid" in low or "invalid usersecret" in low
+
+
+def _snaptrade_reset_stale_user() -> None:
+    """Purge the stored SnapTrade user + account rows so _snaptrade_ensure_user
+    re-registers under the CURRENT client id. Saves each account's fund
+    assignment (keyed by mask+name — account ids change with the client) to
+    kv so the first sync after re-linking restores it automatically."""
+    import snaptrade_link as _st
+    import secure_store as _sec
+    with _fund_conn() as conn, conn.cursor() as cur:
+        # Back up assignments before wiping.
+        backup = {}
+        try:
+            cur.execute("SELECT account_mask, account_name, fund_id FROM snaptrade_accounts "
+                        "WHERE fund_id IS NOT NULL")
+            for mask, name, fid in cur.fetchall():
+                backup[f"{mask or ''}|{(name or '').strip().lower()}"] = str(fid)
+        except Exception:
+            pass
+        if backup:
+            try:
+                _kv_put("snaptrade.assignment_backup", backup)
+            except Exception:
+                pass
+        # Best-effort delete of the old user at SnapTrade (fails under the new
+        # client id — that's fine, it belongs to the old one).
+        try:
+            cur.execute("SELECT user_id, user_secret_enc FROM snaptrade_user ORDER BY created_at LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                try:
+                    _st.delete_user(row[0])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Wipe user + per-client data. Activities/balances reference old
+        # account ids that can never sync again under the new client.
+        cur.execute("DELETE FROM snaptrade_user")
+        cur.execute("DELETE FROM snaptrade_accounts")
+        cur.execute("DELETE FROM snaptrade_activities")
+        cur.execute("DELETE FROM snaptrade_balances")
+        conn.commit()
+    print("[snaptrade] stale user reset — re-register under current client id", flush=True)
+
+
 def _snaptrade_mask(num) -> str | None:
     if not num:
         return None
@@ -26425,7 +26478,18 @@ async def snaptrade_connect(request: Request):
     broker = os.environ.get("SNAPTRADE_BROKER", "").strip()
     try:
         uid, secret = _snaptrade_ensure_user()
-        url = _st.login_url(uid, secret, custom_redirect=redirect, broker=broker, connection_type="read")
+        try:
+            url = _st.login_url(uid, secret, custom_redirect=redirect, broker=broker, connection_type="read")
+        except Exception as e:
+            # Key swap: the stored user belongs to the previous clientId (1083).
+            # Self-heal — back up assignments, mint a fresh user under the new
+            # client, and retry once. The user just re-links Fidelity.
+            if not _snaptrade_user_invalid(_snaptrade_error_detail(e)):
+                raise
+            print("[snaptrade] connect: stored user invalid under current client — resetting", flush=True)
+            _snaptrade_reset_stale_user()
+            uid, secret = _snaptrade_ensure_user()
+            url = _st.login_url(uid, secret, custom_redirect=redirect, broker=broker, connection_type="read")
     except HTTPException:
         raise
     except Exception as e:
@@ -26535,6 +26599,22 @@ def _snaptrade_run_sync() -> dict:
             """, (norm["account_id"], norm["connection_id"], norm["brokerage"],
                   norm["account_name"], norm["account_mask"], norm["total_value"],
                   json.dumps(norm["positions"], default=str)))
+            # After a key-swap reset, account ids change — restore the saved
+            # fund assignment by mask+name so the user doesn't have to re-pick.
+            # Consumed one key at a time so it never fights a manual unassign.
+            try:
+                backup = _kv_get("snaptrade.assignment_backup") or {}
+                bkey = f"{norm.get('account_mask') or ''}|{(norm.get('account_name') or '').strip().lower()}"
+                if backup.get(bkey):
+                    cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() "
+                                "WHERE account_id=%s AND fund_id IS NULL",
+                                (backup[bkey], norm["account_id"]))
+                    if cur.rowcount:
+                        print(f"[snaptrade] restored assignment {bkey} → {backup[bkey]}", flush=True)
+                    backup.pop(bkey, None)
+                    _kv_put("snaptrade.assignment_backup", backup)
+            except Exception:
+                pass
             conn.commit()
         acct_norm[norm["account_id"]] = norm["positions"]
         out.append({"account_id": norm["account_id"], "account_name": norm["account_name"],
@@ -26623,7 +26703,13 @@ async def snaptrade_sync(request: Request):
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        raise HTTPException(502, f"SnapTrade sync failed: {_snaptrade_error_detail(e)}")
+        detail = _snaptrade_error_detail(e)
+        if _snaptrade_user_invalid(detail):
+            raise HTTPException(502,
+                "SnapTrade key changed: the stored user belongs to the previous client id. "
+                "Click “+ Connect Fidelity” to re-link — it resets automatically and your "
+                "account assignments are restored on the next sync.")
+        raise HTTPException(502, f"SnapTrade sync failed: {detail}")
 
 
 @app.post("/api/snaptrade/refresh")
