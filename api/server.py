@@ -206,6 +206,34 @@ _col_exists_cache: dict = {}   # { "table.column": bool }
 _user_resp_cache: dict = {}   # { key_tuple: (payload, fetched_at) }
 _USER_RESP_TTL   = 25         # seconds
 
+
+def _request_json_sync(request):
+    """Parse the JSON body from a SYNC (threadpool) endpoint.
+
+    Part of the async→def sweep (ui336): endpoints doing blocking work
+    (psycopg2, yfinance, SnapTrade, Anthropic) were `async def`, which froze
+    the whole event loop — every concurrent request — for the duration. As
+    sync `def` they run in the threadpool, but can't `await request.json()`;
+    anyio.from_thread runs the coroutine on the event loop from the worker.
+    Returns {} on an empty/invalid body, matching the try/except-{} pattern
+    the call sites used.
+    """
+    import anyio
+    try:
+        return anyio.from_thread.run(request.json)
+    except Exception:
+        return {}
+
+
+def _request_body_sync(request):
+    """Raw body bytes from a SYNC (threadpool) endpoint — see _request_json_sync."""
+    import anyio
+    try:
+        return anyio.from_thread.run(request.body)
+    except Exception:
+        return b""
+
+
 def _user_cache_get(key: tuple):
     hit = _user_resp_cache.get(key)
     if not hit: return None
@@ -1240,8 +1268,12 @@ async def auth_middleware(request: Request, call_next):
         if claims:
             # Refresh fund/account assignments from live user record so GP
             # changes take effect immediately without requiring LP re-login.
+            # Usually served from the 15s overlay cache; the periodic refill
+            # does DB I/O, so run it in a worker thread — never on the loop.
             try:
-                fresh = _av2.find_user_by_lp_id(claims.get("lp_id", ""))
+                import anyio as _anyio
+                fresh = await _anyio.to_thread.run_sync(
+                    _av2.find_user_by_lp_id, claims.get("lp_id", ""))
                 if fresh:
                     claims = {
                         **claims,
@@ -1693,7 +1725,7 @@ class ManualAnnualReturnRequest(BaseModel):
 
 
 @app.post("/api/v2/gp/fund/{fund_id}/manual-return")
-async def set_manual_annual_return(fund_id: str, body: ManualAnnualReturnRequest, request: Request):
+def set_manual_annual_return(fund_id: str, body: ManualAnnualReturnRequest, request: Request):
     """GP-only: set or delete a manual annual return override for one year.
 
     Body: { year: 2022, return_pct: -13.61 }
@@ -1727,7 +1759,7 @@ async def set_manual_annual_return(fund_id: str, body: ManualAnnualReturnRequest
 
 
 @app.get("/api/fund/{fund_id}/settings")
-async def fund_get_settings(fund_id: str, request: Request):
+def fund_get_settings(fund_id: str, request: Request):
     """Return GP-configured display settings (benchmark, period). Readable by LP + GP."""
     claims = getattr(request.state, "auth_claims", None)
     if not claims:
@@ -1759,7 +1791,7 @@ async def fund_get_settings(fund_id: str, request: Request):
 
 
 @app.post("/api/v2/gp/fund/{fund_id}/settings")
-async def fund_save_settings(fund_id: str, request: Request, body: FundSettingsRequest):
+def fund_save_settings(fund_id: str, request: Request, body: FundSettingsRequest):
     """GP-only: save display settings (benchmark, period) for a fund."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
@@ -4597,7 +4629,7 @@ def _bulk_reanalyze_worker(bulk_id: str, tickers: list[str]) -> None:
 
 
 @app.post("/api/reports/reanalyze-all")
-async def start_reanalyze_all(request: Request):
+def start_reanalyze_all(request: Request):
     """Kick off a bulk re-analysis of saved reports.
 
     Behaviour:
@@ -4622,7 +4654,7 @@ async def start_reanalyze_all(request: Request):
     try:
         ct = request.headers.get("content-type", "")
         if "application/json" in ct:
-            body = await request.json()
+            body = _request_json_sync(request)
             if isinstance(body, dict) and isinstance(body.get("tickers"), list):
                 body_tickers = [
                     str(t).strip().upper() for t in body["tickers"]
@@ -8392,7 +8424,7 @@ def list_strategies():
 
 
 @app.post("/api/portfolio", response_model=PortfolioJobStatus)
-async def start_portfolio(
+def start_portfolio(
     background_tasks: BackgroundTasks,
     strategy: str = Form("current"),
     generate_gamma: bool = Form(False),
@@ -8412,7 +8444,7 @@ async def start_portfolio(
         raise HTTPException(status_code=422, detail="File must be .csv or .xlsx")
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
-        content = await file.read()
+        content = file.file.read()
         tmp.write(content)
         tmp.close()
         try:
@@ -8619,8 +8651,8 @@ def get_market_scan_tickers():
     return {"tickers": _get_market_scan_tickers()}
 
 @app.post("/api/scan/market-tickers")
-async def add_market_scan_ticker(request: Request):
-    body = await request.json()
+def add_market_scan_ticker(request: Request):
+    body = _request_json_sync(request)
     tk = (body.get("ticker") or "").strip().upper().rstrip("*")
     if not tk:
         raise HTTPException(status_code=422, detail="ticker required")
@@ -9416,7 +9448,7 @@ def get_tracker_live_detail(snapshot_id: str | None = None):
 
 
 @app.post("/api/track/live/ytd")
-async def compute_live_ytd_unified(
+def compute_live_ytd_unified(
     positions_file:     UploadFile = File(...),
     activity_file:      UploadFile = File(...),
     begin_value:        float | None = Form(None),
@@ -9437,13 +9469,13 @@ async def compute_live_ytd_unified(
     """
 
     try:
-        pos_content    = await positions_file.read()
+        pos_content    = positions_file.file.read()
         positions_text = pos_content.decode("utf-8", errors="replace")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not read positions file: {exc}")
 
     try:
-        act_content   = await activity_file.read()
+        act_content   = activity_file.file.read()
         activity_text = act_content.decode("utf-8", errors="replace")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not read activity file: {exc}")
@@ -9451,7 +9483,7 @@ async def compute_live_ytd_unified(
     monthly_perf_text: str | None = None
     if monthly_perf_file and monthly_perf_file.filename:
         try:
-            mp_content        = await monthly_perf_file.read()
+            mp_content        = monthly_perf_file.file.read()
             monthly_perf_text = mp_content.decode("utf-8", errors="replace")
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"Could not read monthly performance file: {exc}")
@@ -9903,8 +9935,8 @@ def get_automation_settings_endpoint():
     return settings
 
 @app.post("/api/automation/settings")
-async def save_automation_settings_endpoint(request: Request):
-    body = await request.json()
+def save_automation_settings_endpoint(request: Request):
+    body = _request_json_sync(request)
     current = _get_automation_settings()
     for job in ("daily_brief", "market_pulse", "snaptrade_sync"):
         if job in body and isinstance(body[job], dict):
@@ -10076,6 +10108,97 @@ try:
 except ImportError:
     _PSYCOPG2_OK = False
 
+# ── Connection pool ──────────────────────────────────────────────────────────
+# _fund_conn() used to do psycopg2.connect() per call (217 call sites — a full
+# TCP+TLS handshake to Railway Postgres each time, ~50-150ms). The pool makes
+# checkout ~free. _PooledConn keeps the EXACT semantics call sites rely on:
+# conn.close() (or GC of the proxy) releases back to the pool; `with conn:`
+# still commits/rollbacks without releasing, matching psycopg2.
+_FUND_POOL = None
+_FUND_POOL_LOCK = threading.Lock()
+
+
+def _get_fund_pool():
+    global _FUND_POOL
+    if _FUND_POOL is None:
+        with _FUND_POOL_LOCK:
+            if _FUND_POOL is None:
+                from psycopg2 import pool as _pgpool
+                _FUND_POOL = _pgpool.ThreadedConnectionPool(
+                    1, 10, os.environ["DATABASE_URL"],
+                    keepalives=1, keepalives_idle=30,
+                    keepalives_interval=10, keepalives_count=3)
+    return _FUND_POOL
+
+
+class _PooledConn:
+    """Proxy over a pooled psycopg2 connection.
+
+    close() returns the connection to the pool (after rolling back any open
+    transaction and resetting autocommit) instead of really closing it, so
+    every existing call site — explicit conn.close(), try/finally, and the
+    many `with _fund_conn() as conn` blocks that rely on GC — keeps working
+    unchanged. __del__ releases too, matching the old close-on-GC behavior.
+    """
+    __slots__ = ("_conn", "_released")
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_released", False)
+
+    def close(self):
+        if self._released:
+            return
+        object.__setattr__(self, "_released", True)
+        pool = _FUND_POOL
+        try:
+            if pool is None or self._conn.closed:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                if pool is not None:
+                    try:
+                        pool.putconn(self._conn, close=True)
+                    except Exception:
+                        pass
+                return
+            try:
+                if not self._conn.autocommit:
+                    self._conn.rollback()
+                self._conn.autocommit = False
+            except Exception:
+                pool.putconn(self._conn, close=True)
+                return
+            pool.putconn(self._conn)
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        # psycopg2 semantics: commit/rollback but do NOT close — several call
+        # sites keep using the conn after a `with conn:` block.
+        return self._conn.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 def _fund_conn():
     if not _PSYCOPG2_OK:
         raise HTTPException(status_code=503, detail="psycopg2 not installed")
@@ -10088,6 +10211,25 @@ def _fund_conn():
         _apply_self_migrations()
     except Exception:
         pass
+    # Pooled path with a liveness probe (a server-closed idle conn is retried
+    # once); any pool failure falls back to a direct connect — never worse
+    # than the old behavior.
+    try:
+        pool = _get_fund_pool()
+        for _attempt in (1, 2):
+            raw = pool.getconn()
+            try:
+                with raw.cursor() as _c:
+                    _c.execute("SELECT 1")
+                raw.rollback()
+                return _PooledConn(raw)
+            except Exception:
+                try:
+                    pool.putconn(raw, close=True)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[db-pool] falling back to direct connect: {e!s:.120}", flush=True)
     try:
         return psycopg2.connect(url)
     except Exception as e:
@@ -10894,7 +11036,7 @@ def _resolve_fund_id(cur, fund_id: str = None) -> str:
 
 
 @app.get("/api/fund/diagnostic")
-async def fund_diagnostic(request: Request):
+def fund_diagnostic(request: Request):
     """Diagnostic — returns raw fund table state and migration status.
     Used to debug list/create issues."""
     _require_fund_token(request)
@@ -10948,7 +11090,7 @@ async def fund_diagnostic(request: Request):
 
 
 @app.get("/api/fund/list")
-async def fund_list(request: Request, fund_type: str = None):
+def fund_list(request: Request, fund_type: str = None):
     """Return a lightweight summary of funds in the DB, optionally filtered
     by fund_type ('lp_fund' | 'managed_account').
     Used by the multi-fund selector UI to show all funds before drilling in.
@@ -11261,7 +11403,7 @@ class YtdCacheSaveRequest(BaseModel):
 
 
 @app.put("/api/fund/account/{fund_id}/ytd-cache")
-async def save_account_ytd_cache(fund_id: str, body: YtdCacheSaveRequest, request: Request):
+def save_account_ytd_cache(fund_id: str, body: YtdCacheSaveRequest, request: Request):
     """Persist the latest YTD result for a managed account in the DB.
 
     Called by the frontend after a successful YTD calculation so the result
@@ -11291,7 +11433,7 @@ async def save_account_ytd_cache(fund_id: str, body: YtdCacheSaveRequest, reques
 
 
 @app.get("/api/fund/account/{fund_id}/ytd-cache")
-async def get_account_ytd_cache(fund_id: str, request: Request):
+def get_account_ytd_cache(fund_id: str, request: Request):
     """Return the persisted YTD result for a managed account, augmented with
     the real beginning-of-year balance and YTD cash flows pulled directly
     from account_balance_history.data_json — the source-of-truth uploaded
@@ -11372,7 +11514,7 @@ async def get_account_ytd_cache(fund_id: str, request: Request):
 
 
 @app.post("/api/fund/auth")
-async def fund_auth_endpoint(body: FundAuthRequest):
+def fund_auth_endpoint(body: FundAuthRequest):
     """Exchange the fund password for a fund-specific access token.
     Requires the main app token (handled by middleware) + correct FUND_PASSWORD."""
     if not hmac.compare_digest(body.password.strip(), _fund_password()):
@@ -11501,7 +11643,7 @@ def fund_lps(request: Request, fund_id: str = None):
 
 
 @app.get("/api/fund/positions")
-async def fund_positions(request: Request, fund_id: str = None):
+def fund_positions(request: Request, fund_id: str = None):
     _require_fund_token(request)
     # 25s response cache, keyed by fund_id (positions are the same for any
     # caller — they're fund-scoped, not user-scoped).
@@ -11692,7 +11834,7 @@ def _is_cash_ticker(sym: str) -> bool:
 # ── Runtime ticker alias/ignore management ────────────────────────────────────
 
 @app.get("/api/v2/admin/ticker-map")
-async def get_ticker_map(request: Request):
+def get_ticker_map(request: Request):
     """Return current alias + ignore dictionaries. GP-only."""
     _require_fund_token(request)
     return {
@@ -11711,7 +11853,7 @@ class TickerIgnoreRequest(BaseModel):
     reason: str = "user_added"
 
 @app.post("/api/v2/admin/ticker-map/alias")
-async def add_ticker_alias(body: TickerAliasRequest, request: Request):
+def add_ticker_alias(body: TickerAliasRequest, request: Request):
     """Add a runtime alias (e.g. BRKB → BRK-B). Persists for the life of the process."""
     _require_fund_token(request)
     src = body.source.strip().upper()
@@ -11725,7 +11867,7 @@ async def add_ticker_alias(body: TickerAliasRequest, request: Request):
     return {"ok": True, "alias": {src: tgt}}
 
 @app.post("/api/v2/admin/ticker-map/ignore")
-async def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
+def add_ticker_ignore(body: TickerIgnoreRequest, request: Request):
     """Add a ticker to the ignore list (portfolio names, phantom rows, etc.)."""
     _require_fund_token(request)
     sym = body.ticker.strip().upper()
@@ -12045,7 +12187,7 @@ def _send_via_gmail_with_attachment(
 
 
 @app.get("/api/v2/gp/email-diag")
-async def email_diag(request: Request):
+def email_diag(request: Request):
     """Diagnose email transport — checks Resend API key, verified domains, and SMTP config.
     Returns a full diagnostic report so we know exactly what to fix."""
     claims = getattr(request.state, "auth_claims", None)
@@ -12142,7 +12284,7 @@ async def email_diag(request: Request):
 
 
 @app.post("/api/v2/gp/email-test")
-async def email_test_send(request: Request):
+def email_test_send(request: Request):
     """Send a quick test email to verify Resend is working end-to-end.
     Body: { "to": "user@example.com" }   (required)
     Returns the raw result from _send_simple_email so the caller sees
@@ -12151,7 +12293,7 @@ async def email_test_send(request: Request):
     if not claims or claims.get("role") not in ("gp", "admin"):
         raise HTTPException(status_code=403, detail="GP access required")
     try:
-        body_raw = await request.body()
+        body_raw = _request_body_sync(request)
         body_json = json.loads(body_raw) if body_raw else {}
     except Exception:
         body_json = {}
@@ -12189,7 +12331,7 @@ async def email_test_send(request: Request):
 
 
 @app.get("/api/v2/gp/fund/{fund_id}/rebalance")
-async def get_account_rebalance(fund_id: str, request: Request):
+def get_account_rebalance(fund_id: str, request: Request):
     """Return the persisted rebalance result for a managed account."""
     _require_fund_token(request)
     result = _kv_get(f"rebalance.account.{fund_id}")
@@ -12199,7 +12341,7 @@ async def get_account_rebalance(fund_id: str, request: Request):
 
 
 @app.post("/api/v2/gp/fund/{fund_id}/rebalance")
-async def run_account_rebalance(fund_id: str, request: Request):
+def run_account_rebalance(fund_id: str, request: Request):
     """Run a fresh portfolio rebalance for a managed account and persist results."""
     claims = getattr(request.state, "auth_claims", None)
     if not claims or claims.get("role") not in ("gp", "admin"):
@@ -12378,7 +12520,7 @@ async def run_account_rebalance(fund_id: str, request: Request):
 
 
 @app.post("/api/v2/gp/fund/{fund_id}/rebalance/email")
-async def email_account_rebalance(fund_id: str, request: Request):
+def email_account_rebalance(fund_id: str, request: Request):
     """Email the rebalance summary for a managed account to a specified address."""
     claims = getattr(request.state, "auth_claims", None)
     if not claims or claims.get("role") not in ("gp", "admin"):
@@ -12392,7 +12534,7 @@ async def email_account_rebalance(fund_id: str, request: Request):
     # Determine recipient — prefer explicitly provided address from request body
     to_addr = ""
     try:
-        body_raw = await request.body()
+        body_raw = _request_body_sync(request)
         if body_raw:
             body_json = json.loads(body_raw)
             to_addr = (body_json.get("to") or "").strip()
@@ -12497,7 +12639,7 @@ async def email_account_rebalance(fund_id: str, request: Request):
 
 
 @app.get("/api/fund/activity")
-async def fund_activity(request: Request, fund_id: str = None):
+def fund_activity(request: Request, fund_id: str = None):
     _require_fund_token(request)
     conn = _fund_conn()
     try:
@@ -12529,7 +12671,7 @@ async def fund_activity(request: Request, fund_id: str = None):
 
 
 @app.get("/api/fund/waterfall")
-async def fund_waterfall(request: Request, fund_id: str = None):
+def fund_waterfall(request: Request, fund_id: str = None):
     """GP carry / LP waterfall — high-watermark model.
 
     Carry model:
@@ -12801,7 +12943,7 @@ def _seed_coa_for_fund(cur, fund_id: str) -> None:
 
 
 @app.post("/api/fund/admin/create")
-async def fund_admin_create(request: Request, body: CreateFundRequest):
+def fund_admin_create(request: Request, body: CreateFundRequest):
     """Create a new fund + seed its chart of accounts.
     Idempotent on short_name — re-calling with the same short_name updates
     the fund name but does not touch the CoA."""
@@ -12904,7 +13046,7 @@ async def fund_admin_create(request: Request, body: CreateFundRequest):
 
 
 @app.post("/api/fund/import-positions")
-async def fund_import_positions(
+def fund_import_positions(
     request: Request,
     fund_id: str = Form(None),
     file: UploadFile = File(...),
@@ -12923,7 +13065,7 @@ async def fund_import_positions(
      5. Insert new tax_lots pointing at that transaction
     """
     _require_fund_token(request)
-    raw = await file.read()
+    raw = file.file.read()
     # Handle both CSV and XLSX uploads
     if (file.filename or '').lower().endswith(('.xlsx', '.xls')):
         if not _OPENPYXL_OK:
@@ -13056,7 +13198,7 @@ async def fund_import_positions(
 
 
 @app.post("/api/fund/import-captable")
-async def fund_import_captable(
+def fund_import_captable(
     request: Request,
     fund_id: str = Form(None),
     file: UploadFile = File(...),
@@ -13070,7 +13212,7 @@ async def fund_import_captable(
     New commitments supersede the previous commitment for each LP.
     """
     _require_fund_token(request)
-    raw  = await file.read()
+    raw  = file.file.read()
     rows, economics, fund_estab_year = _parse_captable(raw, file.filename or '')
     if not rows:
         raise HTTPException(400, "No valid LP rows found in file. "
@@ -13378,7 +13520,7 @@ def _parse_annual_nav(content: bytes, filename: str) -> list:
 
 
 @app.post("/api/fund/import-annual-nav")
-async def fund_import_annual_nav(
+def fund_import_annual_nav(
     request: Request,
     fund_id: str = Form(None),
     file: UploadFile = File(...),
@@ -13393,7 +13535,7 @@ async def fund_import_annual_nav(
     safely overwrites all four destinations.
     """
     _require_fund_token(request)
-    raw       = await file.read()
+    raw       = file.file.read()
     nav_rows  = _parse_annual_nav(raw, file.filename or '')
     lp_rows, economics, fund_estab_year = _parse_captable(raw, file.filename or '')
 
@@ -13700,13 +13842,13 @@ def _account_overview_from_balance(records: list) -> dict | None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/fund/{fund_id}/import-balance-history")
-async def fund_import_balance_history(
+def fund_import_balance_history(
     fund_id: str,
     request: Request,
     file: UploadFile = File(...),
 ):
     _require_fund_token(request)
-    raw = await file.read()
+    raw = file.file.read()
     text = raw.decode('utf-8', errors='replace')
     records = _parse_balance_history_csv(text)
     if not records:
@@ -13770,7 +13912,7 @@ async def fund_import_balance_history(
 
 
 @app.get("/api/fund/{fund_id}/balance-history")
-async def fund_balance_history(fund_id: str, request: Request):
+def fund_balance_history(fund_id: str, request: Request):
     # GPs and LPs (viewing their own accounts) are both allowed.
     claims = getattr(request.state, 'auth_claims', None)
     if not claims:
@@ -13909,7 +14051,7 @@ async def fund_balance_history(fund_id: str, request: Request):
 # overlays the SPY benchmark series, and persists everything to the cache.
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/fund/account/{fund_id}/ytd-run")
-async def fund_account_ytd_run(
+def fund_account_ytd_run(
     fund_id: str,
     request: Request,
     positions_file:    UploadFile     = File(...),
@@ -13923,15 +14065,15 @@ async def fund_account_ytd_run(
     _require_fund_token(request)
 
     try:
-        pos_text = (await positions_file.read()).decode("utf-8", errors="replace")
-        act_text = (await activity_file.read()).decode("utf-8", errors="replace")
+        pos_text = (positions_file.file.read()).decode("utf-8", errors="replace")
+        act_text = (activity_file.file.read()).decode("utf-8", errors="replace")
     except Exception as exc:
         raise HTTPException(422, f"Could not read Fidelity files: {exc}")
 
     mp_text = None
     if monthly_perf_file and monthly_perf_file.filename:
         try:
-            mp_text = (await monthly_perf_file.read()).decode("utf-8", errors="replace")
+            mp_text = (monthly_perf_file.file.read()).decode("utf-8", errors="replace")
         except Exception as exc:
             raise HTTPException(422, f"Could not read monthly performance file: {exc}")
 
@@ -13979,10 +14121,16 @@ async def fund_account_ytd_run(
     except Exception:
         result["spy_monthly"] = None
 
-    # Persist into managed_account_ytd_cache
+    # Persist into managed_account_ytd_cache.
+    # Headline metric is ALWAYS TWRR when available — the balance-CSV import
+    # and the SnapTrade rebuild both write TWRR, and this path used to write
+    # Modified Dietz, so the same ytd_pct field silently flipped definition
+    # depending on which writer ran last.
     nav     = result.get("end_value") or result.get("end_nav") or 0.0
-    ytd_pct = (result.get("md_return_pct") or result.get("ytd_pct")
-               or result.get("modified_dietz") or 0.0)
+    ytd_pct = (result.get("twrr_return_pct")
+               if result.get("twrr_return_pct") is not None
+               else (result.get("md_return_pct") or result.get("ytd_pct")
+                     or result.get("modified_dietz") or 0.0))
     import json as _json
     conn = _fund_conn()
     try:
@@ -14175,7 +14323,7 @@ def _safe_delete(cur, sql: str, params: tuple) -> None:
 
 
 @app.delete("/api/fund/admin/delete")
-async def fund_admin_delete(request: Request, fund_id: str):
+def fund_admin_delete(request: Request, fund_id: str):
     """Permanently delete a fund and ALL its associated data.
 
     Requires the x-delete-password header to match the FUND_DELETE_PASSWORD
@@ -14285,7 +14433,7 @@ async def fund_admin_delete(request: Request, fund_id: str):
 # ---------------------------------------------------------------------------
 
 @app.delete("/api/v2/gp/fund/{fund_id}/purge")
-async def fund_purge(fund_id: str, request: Request):
+def fund_purge(fund_id: str, request: Request):
     """Permanently purge a fund + all child rows. GP JWT required. No backup kept."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
@@ -14336,7 +14484,7 @@ async def fund_purge(fund_id: str, request: Request):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/fund/account/{fund_id}/set-ytd-baseline")
-async def set_ytd_baseline(
+def set_ytd_baseline(
     fund_id:  str,
     request:  Request,
     year:     int    = Form(...),
@@ -14392,7 +14540,7 @@ async def set_ytd_baseline(
 
 
 @app.get("/api/fund/account/{fund_id}/ytd-baseline")
-async def get_ytd_baseline(
+def get_ytd_baseline(
     fund_id: str,
     request: Request,
     year:    int | None = None,
@@ -14450,7 +14598,7 @@ async def get_ytd_baseline(
 
 
 @app.post("/api/fund/merge-balance-history")
-async def merge_balance_history(
+def merge_balance_history(
     request: Request,
     file1: UploadFile = File(...),
     file2: UploadFile = File(...),
@@ -14458,8 +14606,8 @@ async def merge_balance_history(
     """Parse two Fidelity Investment Income & Balance Detail CSVs and return
     a merged CSV where overlapping months are summed field-by-field."""
     _require_fund_token(request)
-    t1 = (await file1.read()).decode("utf-8", errors="replace")
-    t2 = (await file2.read()).decode("utf-8", errors="replace")
+    t1 = (file1.file.read()).decode("utf-8", errors="replace")
+    t2 = (file2.file.read()).decode("utf-8", errors="replace")
     r1 = _parse_balance_history_csv(t1)
     r2 = _parse_balance_history_csv(t2)
     if not r1 and not r2:
@@ -14510,7 +14658,7 @@ async def merge_balance_history(
 # ---------------------------------------------------------------------------
 
 @app.get("/api/fund/export-excel")
-async def fund_export_excel(request: Request, fund_id: str = None):
+def fund_export_excel(request: Request, fund_id: str = None):
     """Generate a comprehensive Excel workbook for the fund and return it
     as a downloadable .xlsx file.
 
@@ -15202,7 +15350,7 @@ async def fund_export_excel(request: Request, fund_id: str = None):
 
 
 @app.get("/api/fund/export-pdf")
-async def fund_export_pdf(request: Request, fund_id: str = None):
+def fund_export_pdf(request: Request, fund_id: str = None):
     """Generate a PDF report for the fund and return it as a downloadable file.
 
     Uses reportlab for layout. Falls back with a 400 if reportlab is missing.
@@ -15971,7 +16119,7 @@ def _quarter_end_date(quarter: str) -> str:
 
 
 @app.get("/api/v2/gp/fund/{fund_id}/quarterly-report-data")
-async def gp_quarterly_report_data(
+def gp_quarterly_report_data(
     request: Request,
     fund_id: str,
     quarter: str = None,
@@ -15980,7 +16128,32 @@ async def gp_quarterly_report_data(
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP access required")
+    return _quarterly_report_data_impl(fund_id, quarter)
 
+
+@app.get("/api/v2/lp/fund/{fund_id}/quarterly-report-data")
+def lp_quarterly_report_data(request: Request, fund_id: str, quarter: str = None):
+    """LP-scoped: the same report payload, restricted to funds/accounts the
+    LP owns. The LP portal's Reports tab used to call the GP-only endpoint,
+    silently got a 403, and rendered 'not yet available' forever."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        conn = _fund_conn()
+        try:
+            with conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                fid = str(_resolve_fund_id(cur, fund_id))
+        finally:
+            conn.close()
+        fm = claims.get("fund_memberships") or {}
+        allowed = {str(k) for k in (fm.keys() if isinstance(fm, dict) else fm)}
+        allowed.update(str(x) for x in (claims.get("managed_account_ids") or []))
+        if fid not in allowed:
+            raise HTTPException(403, "You don't have access to this fund")
+        fund_id = fid
+    return _quarterly_report_data_impl(fund_id, quarter)
+
+
+def _quarterly_report_data_impl(fund_id: str, quarter: str = None):
     quarter = (quarter or "").strip() or _current_quarter_label()
 
     conn = _fund_conn()
@@ -16688,7 +16861,7 @@ class QuarterlyReportSendRequest(BaseModel):
 
 
 @app.post("/api/v2/gp/quarterly-report/send")
-async def gp_quarterly_report_send(
+def gp_quarterly_report_send(
     request: Request,
     body: QuarterlyReportSendRequest,
 ):
@@ -17494,7 +17667,7 @@ def _fund_name_lookup(fund_id: str | None) -> str | None:
 
 
 @app.post("/api/memos/from-podcast/{job_key}")
-async def create_memo_from_podcast(job_key: str, request: Request):
+def create_memo_from_podcast(job_key: str, request: Request):
     """Generate a DGA Capital memo PDF from a saved podcast script.
 
     Body: { assigned_fund_id?: uuid, gp_memo?: str }
@@ -17506,7 +17679,7 @@ async def create_memo_from_podcast(job_key: str, request: Request):
     _ensure_dga_memos_table()
 
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     assigned_fund_id = (body or {}).get("assigned_fund_id") or None
@@ -17716,7 +17889,7 @@ def download_memo_pdf(memo_id: str, request: Request):
 
 
 @app.post("/api/memos/{memo_id}/email")
-async def email_memo(memo_id: str, request: Request):
+def email_memo(memo_id: str, request: Request):
     """Send a memo PDF via email.
     Body: { mode: 'ad_hoc'|'lp_list', to_addr?, subject?, body_html? }
     mode='lp_list' sends one email per active LP in the assigned fund.
@@ -17725,7 +17898,7 @@ async def email_memo(memo_id: str, request: Request):
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     mode      = (body or {}).get("mode") or "ad_hoc"
@@ -17801,14 +17974,14 @@ async def email_memo(memo_id: str, request: Request):
 
 
 @app.patch("/api/memos/{memo_id}")
-async def update_memo(memo_id: str, request: Request):
+def update_memo(memo_id: str, request: Request):
     """Update assigned_fund_id and/or gp_memo. Regenerates the PDF so the new
     fund name + memo text appear inside the document."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     new_fund = (body or {}).get("assigned_fund_id")  # may be None or "" to clear
@@ -19017,14 +19190,14 @@ def _run_agentic_analysis(job_id: str, question: str,
 
 
 @app.post("/api/research/agentic")
-async def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
+def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
     """Kick off an agentic research run. Body: {question: str}.
     Returns {ok, job_id}; poll GET /api/research/agentic/{job_id}."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     question = ((body or {}).get("question") or "").strip()
@@ -19157,7 +19330,7 @@ def _synthesize_lp_memo(source_text: str, fund_name: str | None = None) -> str:
 
 
 @app.post("/api/memos/from-analysis")
-async def memo_from_analysis(request: Request):
+def memo_from_analysis(request: Request):
     """Option D handoff — turn an AI Analyst / Strategist answer into a DGA
     Capital LP memo PDF, saved to the Memos tab. Body: {question, answer,
     title?, assigned_fund_id?, gp_memo?, lp_memo?}. When lp_memo (default True),
@@ -19168,7 +19341,7 @@ async def memo_from_analysis(request: Request):
         raise HTTPException(403, "GP only")
     _ensure_dga_memos_table()
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     question = ((body or {}).get("question") or "").strip()
@@ -19365,7 +19538,7 @@ _STRATEGIST_SYSTEM = (
 
 
 @app.post("/api/research/portfolio-strategist")
-async def research_portfolio_strategist(req: Request, background_tasks: BackgroundTasks):
+def research_portfolio_strategist(req: Request, background_tasks: BackgroundTasks):
     """Kick off an agentic whole-portfolio analysis. Body one of:
       {fund_id: "..."}                      → one fund's live book, OR
       {fund_ids: ["...","..."]}             → SEVERAL accounts COMBINED into one
@@ -19378,7 +19551,7 @@ async def research_portfolio_strategist(req: Request, background_tasks: Backgrou
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     fund_id  = (body or {}).get("fund_id") or None
@@ -19551,7 +19724,7 @@ _QUARTERLY_LETTER_SYSTEM = (
 
 
 @app.post("/api/research/quarterly-letter")
-async def research_quarterly_letter(req: Request, background_tasks: BackgroundTasks):
+def research_quarterly_letter(req: Request, background_tasks: BackgroundTasks):
     """GP-only: generate a quarter-end letter draft. Body: {fund_ids?: [...], year?}.
     Empty fund_ids → every fund with SnapTrade holdings. Returns {ok, job_id};
     poll GET /api/research/agentic/{job_id} (answer = letter markdown)."""
@@ -19559,7 +19732,7 @@ async def research_quarterly_letter(req: Request, background_tasks: BackgroundTa
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     year = int((body or {}).get("year") or datetime.utcnow().year)
@@ -19664,12 +19837,12 @@ def _qletter_kick(job_prefix: str, label: str, question: str, system: str,
 
 
 @app.post("/api/research/quarterly-letter/intro")
-async def research_quarterly_letter_intro(req: Request, background_tasks: BackgroundTasks):
+def research_quarterly_letter_intro(req: Request, background_tasks: BackgroundTasks):
     """GP-only: generate the SHARED firm-wide intro. Body: {year?}. Poll the job."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
-    try: body = await req.json()
+    try: body = _request_json_sync(req)
     except Exception: body = {}
     year = int((body or {}).get("year") or datetime.utcnow().year)
     fund_ids = []
@@ -19693,12 +19866,12 @@ async def research_quarterly_letter_intro(req: Request, background_tasks: Backgr
 
 
 @app.post("/api/research/quarterly-letter/fund-section")
-async def research_quarterly_letter_fund_section(req: Request, background_tasks: BackgroundTasks):
+def research_quarterly_letter_fund_section(req: Request, background_tasks: BackgroundTasks):
     """GP-only: generate ONE fund's section. Body: {fund_id, year?}. Poll the job."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
-    try: body = await req.json()
+    try: body = _request_json_sync(req)
     except Exception: body = {}
     fund_id = str((body or {}).get("fund_id") or "").strip()
     if not fund_id:
@@ -19796,7 +19969,7 @@ def _ensure_quarterly_letters_table() -> None:
 
 
 @app.post("/api/quarterly-letter/save")
-async def quarterly_letter_save(request: Request):
+def quarterly_letter_save(request: Request):
     """GP-only: create/update a quarterly letter draft. Body: {id?, title, period,
     scope_fund_ids, manual_note, body_md, status}."""
     claims = _claims_or_401(request)
@@ -19804,7 +19977,7 @@ async def quarterly_letter_save(request: Request):
         raise HTTPException(403, "GP only")
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     _ensure_quarterly_letters_table()
     import uuid as _uuid
     lid = (body or {}).get("id") or _uuid.uuid4().hex
@@ -19957,12 +20130,12 @@ def lp_quarterly_letter(request: Request):
 
 
 @app.post("/api/lp/quarterly-letter/read")
-async def lp_quarterly_letter_read(request: Request):
+def lp_quarterly_letter_read(request: Request):
     """Mark the current published letter read for THIS user. Body: {letter_id}."""
     claims = _claims_or_401(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return {"ok": True}
-    body = await request.json()
+    body = _request_json_sync(request)
     lid = (body or {}).get("letter_id")
     lp_key = str(claims.get("lp_id") or claims.get("email") or "")
     if not lid or not lp_key:
@@ -20069,14 +20242,14 @@ def _qletter_publish(letter_id: str, fund_ids: list[str] | None) -> dict:
 
 
 @app.post("/api/quarterly-letter/{letter_id}/publish-fund")
-async def quarterly_letter_publish_fund(letter_id: str, request: Request):
+def quarterly_letter_publish_fund(letter_id: str, request: Request):
     """GP-only: publish ONE fund's section to its LP(s). Body: {fund_id}."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     fund_id = str((body or {}).get("fund_id") or "").strip()
     if not fund_id:
         raise HTTPException(400, "fund_id required")
@@ -21430,13 +21603,13 @@ def _search_call_chunks(ticker: str, query: str, k: int = 6) -> list[dict]:
 
 # ── Transcript endpoints ───────────────────────────────────────────────
 @app.post("/api/transcripts/youtube")
-async def transcripts_youtube_ingest(req: Request, background_tasks: BackgroundTasks):
+def transcripts_youtube_ingest(req: Request, background_tasks: BackgroundTasks):
     """Ingest a YouTube transcript. Body: {url, person?}. Returns {job_id}."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     url = ((body or {}).get("url") or "").strip()
@@ -21539,7 +21712,7 @@ def transcripts_delete(transcript_id: str, request: Request):
 
 
 @app.post("/api/transcripts/calls/sync")
-async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
+def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks):
     """Build/refresh the earnings-call RAG index. Body: {tickers?, max_quarters?}.
     If tickers omitted, uses every ticker in Saved Reports."""
     claims = _claims_or_401(req)
@@ -21554,7 +21727,7 @@ async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks
         except Exception:
             return JSONResponse({"ok": False, "error": "Grok/xAI key not configured on server."}, status_code=400)
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
@@ -21580,7 +21753,7 @@ async def transcripts_calls_sync(req: Request, background_tasks: BackgroundTasks
 
 
 @app.post("/api/transcripts/calls/backfill")
-async def transcripts_calls_backfill(req: Request, background_tasks: BackgroundTasks):
+def transcripts_calls_backfill(req: Request, background_tasks: BackgroundTasks):
     """Bulk-index HISTORICAL earnings calls from the Hugging Face dataset
     (multi-quarter depth), or restore from the Dropbox backup. Body:
     {tickers?, years_back?, restore_from_dropbox?}. Polls the same job endpoint
@@ -21589,7 +21762,7 @@ async def transcripts_calls_backfill(req: Request, background_tasks: BackgroundT
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     restore = bool((body or {}).get("restore_from_dropbox"))
@@ -21852,7 +22025,7 @@ def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
 
 
 @app.post("/api/financials/sync")
-async def financials_sync(req: Request, background_tasks: BackgroundTasks):
+def financials_sync(req: Request, background_tasks: BackgroundTasks):
     """Build/refresh the structured financials store from SEC EDGAR XBRL.
     Body: {tickers?, years_back?}. If tickers omitted, uses Saved Reports."""
     claims = _claims_or_401(req)
@@ -21864,7 +22037,7 @@ async def financials_sync(req: Request, background_tasks: BackgroundTasks):
     except Exception:
         return JSONResponse({"ok": False, "error": "SEC_USER_AGENT not configured on server."}, status_code=400)
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     years_back = max(1, min(int((body or {}).get("years_back") or 10), 20))
@@ -21992,6 +22165,46 @@ def _wheel_rank_key(row: dict, side_key: str, yield_field: str):
     return (-1, 0)
 
 
+def _snaptrade_short_options_map() -> dict:
+    """{UNDERLYING: {"short_calls": contracts, "short_puts": contracts}} from
+    linked SnapTrade accounts' option positions (holdings_json rows with
+    asset_class='option', negative units = written). Lets the wheel scan see
+    calls/puts ALREADY written — without this it recommends selling calls
+    against shares that are already covered."""
+    out: dict = {}
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return out
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT holdings_json FROM snaptrade_accounts WHERE status='active'")
+            for r in cur.fetchall():
+                hj = r["holdings_json"]
+                if isinstance(hj, str):
+                    try:
+                        hj = json.loads(hj)
+                    except Exception:
+                        hj = []
+                for p in (hj or []):
+                    if not isinstance(p, dict) or p.get("asset_class") != "option":
+                        continue
+                    u = (p.get("underlying") or "").strip().upper()
+                    try:
+                        q = float(p.get("quantity"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not u or q >= 0:   # long options aren't wheel inventory
+                        continue
+                    txt = f"{p.get('symbol') or ''} {p.get('name') or ''}".upper()
+                    e = out.setdefault(u, {"short_calls": 0.0, "short_puts": 0.0})
+                    if "PUT" in txt or re.search(r"\sP[\d.]", txt):
+                        e["short_puts"] += -q
+                    else:
+                        e["short_calls"] += -q
+    except Exception as e:
+        print(f"[options] short-options map failed: {e!s:.120}", flush=True)
+    return out
+
+
 def _run_options_scan(job_id: str, universe: list, held_set: list,
                       delta_max: float) -> None:
     """Background worker. Scans each name for BOTH covered calls and cash-secured
@@ -22001,6 +22214,7 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
     import options_engine as _opt
     held = set(held_set)
     share_counts = _held_share_counts()   # {symbol: total shares} for premium $ sizing
+    short_map = _snaptrade_short_options_map()   # calls/puts already written
 
     def _set(**kw):
         _options_scan_jobs[job_id] = {**(_options_scan_jobs.get(job_id) or {}), **kw,
@@ -22022,6 +22236,12 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
                 r = {"ticker": tk, "ok": False, "error": "no result"}
             r["held"] = tk in held
             r["shares_held"] = share_counts.get(tk) or 0
+            so = short_map.get(tk) or {}
+            r["short_calls"] = so.get("short_calls") or 0
+            r["short_puts"]  = so.get("short_puts") or 0
+            _sh = r["shares_held"]
+            # Fully covered = every 100-share block already has a written call.
+            r["fully_covered"] = bool(_sh and r["short_calls"] * 100 >= _sh)
             rows.append(r)
 
         def _has(r, k):
@@ -22032,7 +22252,10 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
         # now), the rest are forward-looking (a call you'd sell once you own it).
         cc_rows = [r for r in rows if _has(r, "covered_calls")]
         csp_rows = [r for r in rows if _has(r, "cash_secured_puts")]
+        # Held-and-uncovered first (actionable now); names whose shares are
+        # already fully covered by written calls rank below them.
         cc_rows.sort(key=lambda r: (1 if r.get("held") else 0,
+                                    0 if r.get("fully_covered") else 1,
                                     _wheel_rank_key(r, "covered_calls",
                                                     "static_return_annualized")), reverse=True)
         csp_rows.sort(key=lambda r: _wheel_rank_key(r, "cash_secured_puts",
@@ -22052,7 +22275,7 @@ def _run_options_scan(job_id: str, universe: list, held_set: list,
 
 
 @app.post("/api/options/scan")
-async def options_scan(req: Request, background_tasks: BackgroundTasks):
+def options_scan(req: Request, background_tasks: BackgroundTasks):
     """Queue a wheel scan. Body: {delta_max?, tickers?}. With no tickers, sweeps
     the union of holdings + watchlist + saved-report names. Covered calls are
     limited to held names; cash-secured puts span the whole universe."""
@@ -22060,7 +22283,7 @@ async def options_scan(req: Request, background_tasks: BackgroundTasks):
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     body = body or {}
@@ -22321,7 +22544,7 @@ def _run_market_sync(job_id: str, universe: list) -> None:
 
 
 @app.post("/api/market/sync")
-async def market_sync(req: Request, background_tasks: BackgroundTasks):
+def market_sync(req: Request, background_tasks: BackgroundTasks):
     """Refresh the persistent market-data store (quotes + sectors + targets).
     Body: {tickers?}. With no tickers, syncs holdings + watchlist + saved
     reports (capped)."""
@@ -22329,7 +22552,7 @@ async def market_sync(req: Request, background_tasks: BackgroundTasks):
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     body = body or {}
@@ -24010,7 +24233,7 @@ def podcast_get_speed_config():
 
 
 @app.post("/api/podcast/speed-config")
-async def podcast_set_speed_config(req: Request):
+def podcast_set_speed_config(req: Request):
     """Persist UI edits to the voice-speed table.
 
     Body: { intensity: {calm,normal,heated: float}, speaker: {alec,rock,claudia: float} }
@@ -24018,7 +24241,7 @@ async def podcast_set_speed_config(req: Request):
     """
     import podcast_engine as pe
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     pe.apply_speed_overrides(
@@ -24118,14 +24341,14 @@ def podcast_get_voice_config():
 
 
 @app.post("/api/podcast/voice-config")
-async def podcast_set_voice_config(req: Request):
+def podcast_set_voice_config(req: Request):
     """Persist UI edits to the cast voice assignments.
 
     Body: { voices: { opus: 'onyx', rock: 'fable', claudia: 'nova' } }
     """
     import podcast_engine as pe
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     pe.apply_voice_overrides(voices=(body or {}).get("voices"))
@@ -24163,7 +24386,7 @@ def podcast_get_disclaimer_config():
 
 
 @app.post("/api/podcast/disclaimer-config")
-async def podcast_set_disclaimer_config(request: Request):
+def podcast_set_disclaimer_config(request: Request):
     """Update the compliance disclaimer used at every audio generation.
 
     Body fields (all optional — omitted fields keep their current value):
@@ -24176,7 +24399,7 @@ async def podcast_set_disclaimer_config(request: Request):
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     import podcast_engine as pe
@@ -24503,7 +24726,7 @@ def _run_roundup_generation(tickers: list[str]) -> None:
 # FastAPI's /api/podcast/{ticker}/script catchall was matching 'roundup'
 # as a literal ticker string, breaking the multi-ticker flow.
 @app.post("/api/podcast-roundup/script")
-async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTasks):
+def podcast_generate_roundup(req: Request, background_tasks: BackgroundTasks):
     """Kick off a multi-ticker Roundup script.
 
     Body: { "tickers": ["NVDA","INTC","MSFT"] }   (2-4 tickers; all must have
@@ -24513,7 +24736,7 @@ async def podcast_generate_roundup(req: Request, background_tasks: BackgroundTas
     GET /api/podcast/{ROUNDUP_NVDA,INTC,MSFT}/script-status.
     """
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     tickers = [t.upper().strip() for t in (body or {}).get("tickers", []) if t and t.strip()]
@@ -24633,7 +24856,7 @@ def _run_portfolio_roundup_generation(tickers: list[str], positions: list[dict] 
 # URL — the /api/podcast/{ticker}/script catchall was eating 'portfolio-roundup'
 # as a literal ticker string. See sibling comment on /api/podcast-roundup/script.
 @app.post("/api/podcast-portfolio-roundup/upload")
-async def podcast_portfolio_roundup_upload(
+def podcast_portfolio_roundup_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     sleeve_name: str = Form(""),
@@ -24653,7 +24876,7 @@ async def podcast_portfolio_roundup_upload(
         raise HTTPException(status_code=422, detail="File must be .csv / .tsv / .xlsx")
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
-        content = await file.read()
+        content = file.file.read()
         tmp.write(content); tmp.close()
         try:
             records = analyst.load_portfolio_file(tmp.name)
@@ -24821,7 +25044,7 @@ async def podcast_portfolio_roundup_upload(
 
 
 @app.post("/api/podcast-portfolio-roundup/script")
-async def podcast_generate_portfolio_roundup(req: Request, background_tasks: BackgroundTasks):
+def podcast_generate_portfolio_roundup(req: Request, background_tasks: BackgroundTasks):
     """Portfolio Roundup — PM-style review of a 5-20 ticker book.
 
     Body:
@@ -24834,7 +25057,7 @@ async def podcast_generate_portfolio_roundup(req: Request, background_tasks: Bac
       GET /api/podcast/{key}/script-status
     """
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     tickers = [t.upper().strip() for t in (body or {}).get("tickers", []) if t and t.strip()]
@@ -24920,7 +25143,7 @@ def podcast_list_scripts():
 
 
 @app.patch("/api/podcast/{ticker}/title")
-async def podcast_rename(ticker: str, req: Request, format: str = "debate"):
+def podcast_rename(ticker: str, req: Request, format: str = "debate"):
     """Rename a saved episode's title.
 
     Body: {"title": "New Title String"}
@@ -24931,7 +25154,7 @@ async def podcast_rename(ticker: str, req: Request, format: str = "debate"):
     """
     tk = ticker.upper().strip()
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         body = {}
     new_title = (body or {}).get("title", "")
@@ -25072,7 +25295,7 @@ def podcast_delete(ticker: str, format: str = "debate", what: str = "all"):
 
 
 @app.put("/api/podcast/{ticker}/script")
-async def podcast_update_script(ticker: str, req: Request):
+def podcast_update_script(ticker: str, req: Request):
     """Save a user-edited podcast script. Replaces the cached script_json
     so the next audio generation uses the edited dialogue (no Claude spend).
 
@@ -25087,7 +25310,7 @@ async def podcast_update_script(ticker: str, req: Request):
     import podcast_engine
     tk = ticker.upper().strip()
     try:
-        body = await req.json()
+        body = _request_json_sync(req)
     except Exception:
         return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
     script = (body or {}).get("script") if isinstance(body, dict) and "script" in body else body
@@ -25366,7 +25589,7 @@ def _mfa_verify(lp_id, code) -> bool:
 
 
 @app.get("/api/auth/v2/mfa/status")
-async def mfa_status(request: Request):
+def mfa_status(request: Request):
     claims = _claims_or_401(request)
     import secure_store as _sec
     row = _mfa_get(claims.get("lp_id"))
@@ -25376,7 +25599,7 @@ async def mfa_status(request: Request):
 
 
 @app.post("/api/auth/v2/mfa/setup")
-async def mfa_setup(request: Request):
+def mfa_setup(request: Request):
     """Generate a new TOTP secret (pending — not enabled until verified). Returns
     the otpauth URI, a QR data-URI, and the secret for manual entry."""
     claims = _claims_or_401(request)
@@ -25408,11 +25631,11 @@ async def mfa_setup(request: Request):
 
 
 @app.post("/api/auth/v2/mfa/enable")
-async def mfa_enable(request: Request):
+def mfa_enable(request: Request):
     """Confirm a code against the pending secret, enable 2FA, return recovery codes."""
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id")
-    body = await request.json()
+    body = _request_json_sync(request)
     code = (body or {}).get("code", "")
     row = _mfa_get(lp_id)
     if not row or not row.get("totp_secret_enc"):
@@ -25431,10 +25654,10 @@ async def mfa_enable(request: Request):
 
 
 @app.post("/api/auth/v2/mfa/disable")
-async def mfa_disable(request: Request):
+def mfa_disable(request: Request):
     """Disable 2FA. Requires the account password (so a hijacked session can't)."""
     claims = _claims_or_401(request)
-    body = await request.json()
+    body = _request_json_sync(request)
     if not auth_v2_mod.login(claims.get("email", ""), (body or {}).get("password", "")):
         raise HTTPException(401, "Password incorrect.")
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
@@ -25655,7 +25878,7 @@ def _plaid_accounts_summary(accounts: list) -> list:
 
 
 @app.get("/api/plaid/status")
-async def plaid_status(request: Request):
+def plaid_status(request: Request):
     """GP-only: is Plaid configured + how many institutions are connected."""
     _plaid_require_gp(request)
     import plaid_client as _plaid
@@ -25674,7 +25897,7 @@ async def plaid_status(request: Request):
 
 
 @app.post("/api/plaid/link-token")
-async def plaid_link_token(request: Request):
+def plaid_link_token(request: Request):
     """GP-only: mint a short-lived Link token for the Investments product."""
     claims = _plaid_require_gp(request)
     import plaid_client as _plaid
@@ -25736,13 +25959,13 @@ def _plaid_ingest_public_token(public_token: str) -> dict:
 
 
 @app.post("/api/plaid/exchange")
-async def plaid_exchange(request: Request):
+def plaid_exchange(request: Request):
     """GP-only: exchange a public_token, encrypt the access_token, store it, and
     pull the first holdings snapshot. The access_token never leaves the server."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     public_token = (body or {}).get("public_token", "")
     if not public_token:
         raise HTTPException(400, "public_token required")
@@ -25753,7 +25976,7 @@ async def plaid_exchange(request: Request):
 
 
 @app.get("/api/plaid/items")
-async def plaid_items(request: Request):
+def plaid_items(request: Request):
     """GP-only: connected institutions + masked accounts. No tokens returned."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
@@ -25778,13 +26001,13 @@ async def plaid_items(request: Request):
 
 
 @app.post("/api/plaid/sync")
-async def plaid_sync(request: Request):
+def plaid_sync(request: Request):
     """GP-only: refresh holdings for one item (or all). Decrypts the token in
     memory only, re-pulls, and stores the new snapshot."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     only = (body or {}).get("item_id")
     import plaid_client as _plaid
     import secure_store as _sec
@@ -25816,12 +26039,12 @@ async def plaid_sync(request: Request):
 
 
 @app.post("/api/plaid/remove")
-async def plaid_remove(request: Request):
+def plaid_remove(request: Request):
     """GP-only: disconnect an institution at Plaid and purge its stored data."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     item_id = (body or {}).get("item_id")
     if not item_id:
         raise HTTPException(400, "item_id required")
@@ -25843,7 +26066,7 @@ async def plaid_remove(request: Request):
 
 
 @app.get("/api/plaid/holdings")
-async def plaid_holdings(request: Request):
+def plaid_holdings(request: Request):
     """GP-only: normalized positions from each linked institution's stored holdings
     snapshot (READ-only transform of holdings_json). Does NOT read or write tax_lots,
     so the manual CSV path is unaffected. Optional ?item_id= to scope to one."""
@@ -25874,14 +26097,14 @@ async def plaid_holdings(request: Request):
 
 
 @app.post("/api/plaid/assign")
-async def plaid_assign(request: Request):
+def plaid_assign(request: Request):
     """GP-only: link (or unlink) a Plaid connection to a managed account. This only
     sets plaid_items.fund_id — it never writes holdings into tax_lots or the CSV
     tables, so manual uploads keep working untouched. Pass fund_id=null to unlink."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     item_id = (body or {}).get("item_id")
     fund_id = (body or {}).get("fund_id") or None
     if not item_id:
@@ -26206,32 +26429,24 @@ def _snaptrade_normalize_options(raw) -> list:
 
 
 def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
-    """Make SnapTrade the LIVE position source for one fund: close ALL existing
-    open tax_lots for the fund (CSV- or SnapTrade-sourced), then insert fresh
-    open lots from `positions` (the normalized SnapTrade holdings).
+    """Make SnapTrade the LIVE position source for one fund.
+
+    DIFF-BASED (ui336): if the desired positions match the fund's open lots
+    (same symbols, quantities, per-unit costs), this is a NO-OP — no lots
+    rewritten, no adjustment transaction. The old behavior closed ALL open
+    lots and reinserted with acquired_at=NOW() on every daily sync, which
+    (a) reset every position's first-acquired date each morning and
+    (b) accrued one ledger adjustment per fund per day. When positions DID
+    change, the rewrite still happens, but each surviving symbol carries its
+    earliest previous acquired_at forward.
 
     Mirrors the YTD-CSV positions-sync path (close open → adjustment txn →
     transaction_lines → tax_lots), so the Positions panel + live NAV reflect
-    Fidelity. Does NOT touch managed_account_ytd_cache / account_balance_history,
-    so the YTD return + all-time chart stay CSV-driven. `cur` must be a
-    RealDictCursor. Returns the number of lots written.
+    Fidelity. Does NOT touch managed_account_ytd_cache / account_balance_history.
+    `cur` must be a RealDictCursor. Returns the number of open lots.
 
-    Passing positions=[] just closes the fund's open lots (used on unassign).
+    Passing positions=[] closes the fund's open lots (used on unassign).
     """
-    _seed_coa_for_fund(cur, fund_id)
-    cur.execute("""SELECT code, id FROM accounts
-                    WHERE fund_id=%s AND code IN ('1020','1030','1100','3000')""", (fund_id,))
-    acct_map = {r["code"]: str(r["id"]) for r in cur.fetchall()}
-    sec_acct = acct_map.get("1100")
-    mm_acct  = acct_map.get("1030") or acct_map.get("1020")
-    cap_acct = acct_map.get("3000")
-    if not (sec_acct and cap_acct):
-        raise RuntimeError(f"fund {fund_id} missing chart-of-accounts (1100/3000)")
-
-    # Close existing open lots so re-syncing never double-counts.
-    cur.execute("UPDATE tax_lots SET closed_at=NOW() WHERE fund_id=%s AND closed_at IS NULL",
-                (fund_id,))
-
     # Keep only real, positive-quantity rows with a symbol. Option positions are
     # valuation-only (often short/negative, priced per-contract) — tax_lots is
     # share-based, matching the manual CSV import which never carried options.
@@ -26245,6 +26460,52 @@ def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
         if not sym or sym == "—" or qty <= 0 or p.get("asset_class") == "option":
             continue
         rows.append((p, sym, qty))
+
+    # Existing open lots, aggregated per symbol.
+    cur.execute("""
+        SELECT s.symbol, SUM(t.quantity) AS qty,
+               SUM(t.quantity * t.cost_basis_per_unit) AS cost,
+               MIN(t.acquired_at) AS first_acquired
+          FROM tax_lots t JOIN securities s ON s.id = t.security_id
+         WHERE t.fund_id = %s AND t.closed_at IS NULL
+         GROUP BY s.symbol
+    """, (fund_id,))
+    existing = {}
+    acquired_map = {}
+    for r in cur.fetchall():
+        q = float(r["qty"] or 0)
+        pu = (float(r["cost"] or 0) / q) if q else 0.0
+        existing[r["symbol"]] = (q, pu)
+        acquired_map[r["symbol"]] = r["first_acquired"]
+
+    def _per_unit(p):
+        try:
+            v = p.get("cost_basis_per_unit")
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    desired = {sym: (qty, _per_unit(p)) for p, sym, qty in rows}
+    unchanged = (set(desired) == set(existing) and all(
+        abs(desired[s][0] - existing[s][0]) < 1e-4
+        and abs(desired[s][1] - existing[s][1]) < 0.01
+        for s in desired))
+    if unchanged:
+        return len(rows)
+
+    _seed_coa_for_fund(cur, fund_id)
+    cur.execute("""SELECT code, id FROM accounts
+                    WHERE fund_id=%s AND code IN ('1020','1030','1100','3000')""", (fund_id,))
+    acct_map = {r["code"]: str(r["id"]) for r in cur.fetchall()}
+    sec_acct = acct_map.get("1100")
+    mm_acct  = acct_map.get("1030") or acct_map.get("1020")
+    cap_acct = acct_map.get("3000")
+    if not (sec_acct and cap_acct):
+        raise RuntimeError(f"fund {fund_id} missing chart-of-accounts (1100/3000)")
+
+    # Close existing open lots so re-syncing never double-counts.
+    cur.execute("UPDATE tax_lots SET closed_at=NOW() WHERE fund_id=%s AND closed_at IS NULL",
+                (fund_id,))
     if not rows:
         return 0
 
@@ -26291,8 +26552,8 @@ def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
         cur.execute("""INSERT INTO tax_lots
                          (fund_id, security_id, acquired_at, quantity,
                           cost_basis_per_unit, open_transaction_id)
-                       VALUES (%s,%s,NOW(),%s,%s,%s)""",
-                    (fund_id, sec_ids[sym], qty, per_unit, txn_id))
+                       VALUES (%s,%s,COALESCE(%s, NOW()),%s,%s,%s)""",
+                    (fund_id, sec_ids[sym], acquired_map.get(sym), qty, per_unit, txn_id))
     if total_cost > 0:
         cur.execute("""INSERT INTO transaction_lines
                          (transaction_id, line_number, account_id, credit)
@@ -26705,7 +26966,7 @@ def _snaptrade_holdings_items(body):
 
 
 @app.get("/api/snaptrade/status")
-async def snaptrade_status(request: Request):
+def snaptrade_status(request: Request):
     _plaid_require_gp(request)
     import snaptrade_link as _st
     import secure_store as _sec
@@ -26723,7 +26984,7 @@ async def snaptrade_status(request: Request):
 
 
 @app.post("/api/snaptrade/connect")
-async def snaptrade_connect(request: Request):
+def snaptrade_connect(request: Request):
     """GP-only: register the SnapTrade user (if needed) and return a Connection
     Portal URL (read-only). Open it in a new tab to link Fidelity."""
     _plaid_require_gp(request)
@@ -26964,7 +27225,7 @@ def _snaptrade_run_sync() -> dict:
 
 
 @app.post("/api/snaptrade/sync")
-async def snaptrade_sync(request: Request):
+def snaptrade_sync(request: Request):
     """GP-only: pull holdings for all connected accounts and upsert them. Read-only;
     preserves each account's managed-account assignment (fund_id)."""
     _plaid_require_gp(request)
@@ -26986,7 +27247,7 @@ async def snaptrade_sync(request: Request):
 
 
 @app.post("/api/snaptrade/refresh")
-async def snaptrade_refresh(request: Request):
+def snaptrade_refresh(request: Request):
     """GP-only: ask SnapTrade to RE-PULL Fidelity now (our ↻ Sync only reads
     SnapTrade's cache; this forces SnapTrade to fetch fresh from the brokerage).
     Async on SnapTrade's side — sync again ~30-60s later. May be rate-limited on
@@ -27015,7 +27276,7 @@ async def snaptrade_refresh(request: Request):
 
 
 @app.post("/api/snaptrade/activities/sync")
-async def snaptrade_activities_sync(request: Request):
+def snaptrade_activities_sync(request: Request):
     """GP-only: pull transaction history (YTD by default) for every connected
     account into snaptrade_activities. Body (optional): {start_date, end_date}
     as YYYY-MM-DD. Idempotent — upserts by SnapTrade activity id."""
@@ -27024,7 +27285,7 @@ async def snaptrade_activities_sync(request: Request):
         raise HTTPException(503, "Database not available.")
     import snaptrade_link as _st
     try:
-        body = await request.json()
+        body = _request_json_sync(request)
     except Exception:
         body = {}
     year  = datetime.utcnow().year
@@ -27238,7 +27499,7 @@ def snaptrade_ytd_reconstruct(request: Request, fund_id: str, year: int = None):
 
 
 @app.get("/api/snaptrade/accounts")
-async def snaptrade_accounts(request: Request):
+def snaptrade_accounts(request: Request):
     """GP-only: stored SnapTrade accounts + normalized positions + managed accounts
     for the assign dropdown. No secrets returned."""
     _plaid_require_gp(request)
@@ -27269,7 +27530,7 @@ async def snaptrade_accounts(request: Request):
 
 
 @app.get("/api/snaptrade/debug")
-async def snaptrade_debug(request: Request):
+def snaptrade_debug(request: Request):
     """GP-only diagnostic: the raw holdings shape for the first connected account,
     so we can tell whether positions are genuinely empty (SnapTrade still pulling /
     test-key gating) vs a parsing issue. Truncated; no secrets returned."""
@@ -27323,7 +27584,7 @@ async def snaptrade_debug(request: Request):
 
 
 @app.post("/api/snaptrade/assign")
-async def snaptrade_assign(request: Request):
+def snaptrade_assign(request: Request):
     """GP-only: link (or unlink) a SnapTrade account to a managed account, then
     rewrite the affected fund(s)' live tax_lots so the Positions panel + live NAV
     update immediately (SnapTrade is the live position source for linked funds).
@@ -27331,7 +27592,7 @@ async def snaptrade_assign(request: Request):
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     account_id = (body or {}).get("account_id")
     fund_id = (body or {}).get("fund_id") or None
     if not account_id:
@@ -27365,14 +27626,14 @@ async def snaptrade_assign(request: Request):
 
 
 @app.post("/api/snaptrade/hide")
-async def snaptrade_hide(request: Request):
+def snaptrade_hide(request: Request):
     """GP-only: hide (or unhide) a single SnapTrade account from the list without
     touching the brokerage connection. Body: {account_id, hidden}. Hidden accounts
     stay hidden across syncs; unlike Remove, this never drops the connection."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     account_id = (body or {}).get("account_id")
     hidden = bool((body or {}).get("hidden", True))
     if not account_id:
@@ -27388,13 +27649,13 @@ async def snaptrade_hide(request: Request):
 
 
 @app.post("/api/snaptrade/remove")
-async def snaptrade_remove(request: Request):
+def snaptrade_remove(request: Request):
     """GP-only: disconnect a brokerage connection at SnapTrade and purge its
     accounts. Body: {connection_id}."""
     _plaid_require_gp(request)
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         raise HTTPException(503, "Database not available.")
-    body = await request.json()
+    body = _request_json_sync(request)
     connection_id = (body or {}).get("connection_id")
     if not connection_id:
         raise HTTPException(400, "connection_id required")
@@ -27625,7 +27886,7 @@ def _railway_metrics() -> dict:
 
 
 @app.get("/api/admin/railway-usage")
-async def railway_usage(request: Request):
+def railway_usage(request: Request):
     """GP-only: live container resource snapshot + estimated Railway cost,
     plus in-memory store sizes (proof the janitor is keeping memory bounded)."""
     claims = _claims_or_401(request)
