@@ -267,6 +267,15 @@ def remove_connection(user_id: str, user_secret: str, authorization_id: str) -> 
         authorization_id=str(authorization_id), user_id=str(user_id), user_secret=user_secret)
 
 
+def refresh_connection(user_id: str, user_secret: str, authorization_id: str):
+    """Ask SnapTrade to RE-PULL the brokerage now (holdings often refresh only
+    ~once/day on their side). Async on SnapTrade's end — new data lands seconds→
+    minutes later, so sync again after. May be rate-limited on the free tier."""
+    r = _client().connections.refresh_brokerage_authorization(
+        authorization_id=str(authorization_id), user_id=str(user_id), user_secret=user_secret)
+    return _to_dict(r.body)
+
+
 def _to_dict(body):
     """SDK bodies are schema objects; coerce to plain JSON-able structures."""
     if body is None:

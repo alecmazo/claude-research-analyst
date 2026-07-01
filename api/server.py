@@ -26143,6 +26143,35 @@ async def snaptrade_sync(request: Request):
         raise HTTPException(502, f"SnapTrade sync failed: {_snaptrade_error_detail(e)}")
 
 
+@app.post("/api/snaptrade/refresh")
+async def snaptrade_refresh(request: Request):
+    """GP-only: ask SnapTrade to RE-PULL Fidelity now (our ↻ Sync only reads
+    SnapTrade's cache; this forces SnapTrade to fetch fresh from the brokerage).
+    Async on SnapTrade's side — sync again ~30-60s later. May be rate-limited on
+    the free tier."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    import snaptrade_link as _st
+    uid, secret = _snaptrade_ensure_user()
+    _ensure_snaptrade_tables()
+    with _fund_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT connection_id FROM snaptrade_accounts "
+                    "WHERE status='active' AND connection_id IS NOT NULL")
+        conn_ids = [r[0] for r in cur.fetchall()]
+    if not conn_ids:
+        return {"ok": True, "refreshed": 0, "note": "No connections to refresh."}
+    refreshed, errors = [], []
+    for cid in conn_ids:
+        try:
+            _st.refresh_connection(uid, secret, cid)
+            refreshed.append(cid)
+        except Exception as e:
+            errors.append({"connection_id": cid, "error": _snaptrade_error_detail(e)})
+    print(f"⟳ [snaptrade] refresh: {len(refreshed)} ok, {len(errors)} err", flush=True)
+    return {"ok": True, "refreshed": len(refreshed), "errors": errors}
+
+
 @app.post("/api/snaptrade/activities/sync")
 async def snaptrade_activities_sync(request: Request):
     """GP-only: pull transaction history (YTD by default) for every connected

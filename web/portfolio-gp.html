@@ -4575,6 +4575,7 @@ End with the sleeve block at this account's real market value so I can push it t
         <button id="snaptrade-activity" type="button" class="tab-btn" style="margin-right:6px;">📊 YTD Activity</button>
         <button id="snaptrade-ytdtest" type="button" class="tab-btn" style="margin-right:6px;">🧮 YTD Test</button>
         <button id="snaptrade-debug" type="button" class="tab-btn" style="margin-right:6px;">🐞 Diagnose</button>
+        <button id="snaptrade-refresh" type="button" class="tab-btn" style="margin-right:6px;" title="Force SnapTrade to re-pull Fidelity now, then sync">⟳ Force refresh</button>
         <button id="snaptrade-sync" type="button" class="tab-btn" style="margin-right:6px;">↻ Sync</button>
         <button id="snaptrade-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
       </header>
@@ -18727,8 +18728,35 @@ End with the sleeve block at this account's real market value so I can push it t
       document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
     } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">YTD test failed: '+_gfEsc(e.message||String(e))+'</span>'; }
   }
+  async function dgaSnapForceRefresh(){
+    const btn = document.getElementById('snaptrade-refresh');
+    const body = document.getElementById('snaptrade-body');
+    if (btn) { btn.disabled = true; btn.textContent = '⟳ Refreshing…'; }
+    if (body) body.innerHTML = '<span style="color:#64748b;">Asking SnapTrade to re-pull Fidelity…</span>';
+    try {
+      const r = await (await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      if (!r.ok) throw new Error(r.detail || 'refresh failed');
+      if ((r.errors||[]).length) {
+        if (body) body.innerHTML = '<div style="color:#dc2626;font-size:12px;">SnapTrade refused the refresh (' + _gfEsc(r.errors[0].error||'') + ').<br><br>On the free tier this is often rate-limited — this is the case where production access would help. It may still refresh on SnapTrade’s own overnight schedule.</div><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+        document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+        if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; }
+        return;
+      }
+      // Refresh is async on SnapTrade's side — poll-sync a few times.
+      let secs = 50;
+      const tick = setInterval(function(){
+        secs -= 5;
+        if (body) body.innerHTML = '<span style="color:#64748b;">SnapTrade is re-pulling Fidelity (refreshed ' + r.refreshed + ' connection). Auto-syncing in ' + Math.max(secs,0) + 's…</span>';
+        if (secs <= 0) { clearInterval(tick); if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; } dgaSnapSync(); }
+      }, 5000);
+    } catch (e) {
+      if (body) body.innerHTML = '<span style="color:#dc2626;">Force refresh failed: ' + _gfEsc(e.message||String(e)) + '</span>';
+      if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; }
+    }
+  }
   document.getElementById('snaptrade-connect')?.addEventListener('click', dgaSnapConnect);
   document.getElementById('snaptrade-sync')?.addEventListener('click', dgaSnapSync);
+  document.getElementById('snaptrade-refresh')?.addEventListener('click', dgaSnapForceRefresh);
   document.getElementById('snaptrade-debug')?.addEventListener('click', dgaSnapDebug);
   document.getElementById('snaptrade-activity')?.addEventListener('click', dgaSnapActivity);
   document.getElementById('snaptrade-ytdtest')?.addEventListener('click', dgaSnapYtdTest);
