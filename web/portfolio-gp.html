@@ -18737,8 +18737,17 @@ End with the sleeve block at this account's real market value so I can push it t
       const r = await (await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
       if (!r.ok) throw new Error(r.detail || 'refresh failed');
       if ((r.errors||[]).length) {
-        if (body) body.innerHTML = '<div style="color:#dc2626;font-size:12px;">SnapTrade refused the refresh (' + _gfEsc(r.errors[0].error||'') + ').<br><br>On the free tier this is often rate-limited — this is the case where production access would help. It may still refresh on SnapTrade’s own overnight schedule.</div><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
-        document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+        const emsg = (r.errors[0].error||'');
+        const realtime = /1141|real-time|already return|not enabled/i.test(emsg);
+        if (realtime) {
+          // SnapTrade says the data is already real-time — no manual refresh exists.
+          // Best we can do is re-read the live endpoint (normal sync).
+          if (body) body.innerHTML = '<span style="color:#64748b;">SnapTrade reports your holdings endpoint is already real-time (no manual refresh available). Re-reading it now…<br><span style="color:#94a3b8;font-size:11px;">If a position is still missing, it’s Fidelity not yet propagating the trade to SnapTrade — that resolves on Fidelity’s cycle; production would not change it.</span></span>';
+          setTimeout(dgaSnapSync, 1200);
+        } else {
+          if (body) body.innerHTML = '<div style="color:#dc2626;font-size:12px;">SnapTrade refused the refresh: ' + _gfEsc(emsg) + '</div><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
+          document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
+        }
         if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; }
         return;
       }
