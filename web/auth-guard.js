@@ -45,12 +45,22 @@
   }
 
   // Wrapped fetch that auto-includes the v2 token. Use everywhere.
+  // On a 401 from any /api/* call the session is dead (expired 12h TTL or
+  // revoked) — clear the stored token and bounce to the login page instead
+  // of leaving every widget in a silent permanent-error state.
   window.dgaFetch = function (path, opts) {
     opts = opts || {};
     opts.headers = Object.assign({}, opts.headers || {}, {
       'x-auth-v2-token': localStorage.getItem(TOKEN_KEY) || '',
     });
-    return fetch(path, opts);
+    return fetch(path, opts).then(function (r) {
+      if (r.status === 401 && String(path).indexOf('/api/') === 0) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        window.location.replace('/');
+      }
+      return r;
+    });
   };
 
   // Hydrate the cached user record while we wait for /me to confirm

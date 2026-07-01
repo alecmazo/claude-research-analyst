@@ -222,6 +222,10 @@
 
     <div id="login-error"></div>
 
+    <div style="margin-top:10px; text-align:center; font-size:11px; color:rgba(255,255,255,0.55);">
+      Forgot password? Contact your fund administrator.
+    </div>
+
     <div id="login-hint">
       GP &amp; LP login · <strong>portfolio.dgacapital.com</strong>
     </div>
@@ -312,7 +316,12 @@
         return;
       }
       if (!r.ok) {
-        $err.textContent = `Server error (${r.status}) — try again.`;
+        // Surface the server's own message (e.g. 429 "Too many attempts —
+        // wait 15 minutes") instead of a generic status code.
+        let detail = '';
+        try { detail = (await r.json()).detail || ''; } catch (_) {}
+        $err.textContent = detail || `Server error (${r.status}) — try again.`;
+        shake();
         return;
       }
 

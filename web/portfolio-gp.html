@@ -21,6 +21,7 @@
     --panel:      #FFFFFF;    /* card / panel background */
     --panel-bg:   #FFFFFF;
     --panel-edge: #e2e8f0;    /* border colour */
+    --surface:    #FFFFFF;    /* JS-rendered card background (dark-aware) */
     --blue:       #5BB8D4;    /* DGA brand blue */
     --blue-light: #84CCE3;    /* gradient highlight */
     --blue-dark:  #3E9AB8;    /* gradient low */
@@ -44,6 +45,24 @@
   }
   .tabular { font-variant-numeric: tabular-nums; }
   .mono { font-family: "SF Mono", Menlo, Courier, monospace; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Amber "stale" chip on quotes served from the store fallback (as_of set) */
+  .q-stale {
+    display: inline-block; font-size: 8.5px; font-weight: 800; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--warn-700, #92400e);
+    background: var(--warn-50, #fffbeb); border: 1px solid var(--warn-500, #d97706);
+    border-radius: 4px; padding: 0 4px; vertical-align: middle; line-height: 1.5;
+  }
+  /* Settings tab: light visual grouping headers */
+  .settings-group-head {
+    grid-column: 1 / -1;
+    margin: 6px 0 12px; padding-top: 4px;
+    font-size: 11px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--text-tertiary, #94a3b8);
+    border-bottom: 1px solid var(--panel-edge);
+    padding-bottom: 6px;
+  }
+  .settings-group-head:not(:first-child) { margin-top: 10px; }
 
   /* ── TOP NAV BAR ─────────────────────────────────────────────── */
   .topbar {
@@ -2499,6 +2518,10 @@
     --bg-elevated:  #18223a;
     --bg-subtle:    #0f1729;
 
+    /* Legacy inline-style vars used by JS-rendered panels */
+    --surface:    var(--bg-elevated);
+    --panel-edge: #1f2c47;
+
     --border-subtle:  #1f2c47;
     --border-default: #2a3a5a;
     --border-strong:  #3d527a;
@@ -3046,6 +3069,15 @@
 
   <!-- ─── CENTER COLUMN ─────────────────────────────────────── -->
   <section class="col-center">
+
+    <!-- 🩺 Data Health — freshness of SnapTrade / quotes / schedulers -->
+    <section class="panel" data-wid="data-health" style="margin-bottom:12px;">
+      <header class="panel-head">
+        <span class="panel-title">🩺 Data Health</span>
+        <span class="panel-badge" id="dh-badge">…</span>
+      </header>
+      <div id="dh-body" style="padding:8px 14px;font-size:11.5px;color:var(--text-secondary);">Checking…</div>
+    </section>
 
     <!-- Daily Pulse — X-sourced live market pulse (replaces the old Daily Brief) -->
     <section class="panel" data-wid="daily-brief" style="overflow:visible;">
@@ -4213,10 +4245,10 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </div>
 
-      <!-- ③ Merge Accounts -->
+      <!-- ② Merge Accounts -->
       <div class="acd-upload-group" style="border-top:1px solid var(--panel-edge);margin-top:0;">
         <div class="acd-upload-group-label">
-          <span class="acd-upload-group-num">3</span>
+          <span class="acd-upload-group-num">2</span>
           Merge Two Account Histories
           <span class="acd-upload-group-sub">Combine Balance &amp; Income Detail CSVs from two accounts into one file</span>
         </div>
@@ -4252,17 +4284,17 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </div>
 
-      <!-- ④ Set YTD Baseline -->
+      <!-- ③ Set YTD Baseline -->
       <div class="acd-upload-group" id="acd-baseline-group" style="border-top:1px solid var(--panel-edge);margin-top:0;">
         <div class="acd-upload-group-label">
-          <span class="acd-upload-group-num">4</span>
+          <span class="acd-upload-group-num">3</span>
           Set as YTD Baseline
           <span class="acd-upload-group-sub">Save the Jan 1 starting balance so future uploads auto-fill it</span>
         </div>
         <div style="padding:0 20px 16px;display:flex;flex-direction:column;gap:10px;">
           <!-- Summary row: filled after a YTD run completes -->
-          <div id="acd-baseline-summary" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 14px;">
-            <div style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Last YTD Run Summary</div>
+          <div id="acd-baseline-summary" style="display:none;background:var(--info-50,#f0f9ff);border:1px solid var(--info-500,#bae6fd);border-radius:8px;padding:12px 14px;">
+            <div style="font-size:11px;font-weight:700;color:var(--info-500,#0369a1);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Last YTD Run Summary</div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12px;">
               <div><span style="color:var(--mid);font-size:10px;">Jan 1 Balance</span><br><strong id="acd-bl-jan1">—</strong></div>
               <div><span style="color:var(--mid);font-size:10px;">Transfer Events</span><br><strong id="acd-bl-transfers">—</strong></div>
@@ -4280,18 +4312,18 @@ End with the sleeve block at this account's real market value so I can push it t
               <div style="font-size:10px;font-weight:700;color:var(--mid);text-transform:uppercase;margin-bottom:3px;">Year</div>
               <input id="acd-bl-year" type="number" value="" min="2020" max="2099"
                 oninput="_blCheckEnable()"
-                style="width:72px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:13px;color:#1e293b;background:white;outline:none;">
+                style="width:72px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:13px;color:var(--text-primary,#1e293b);background:var(--surface,#fff);outline:none;">
             </div>
             <div>
               <div style="font-size:10px;font-weight:700;color:var(--mid);text-transform:uppercase;margin-bottom:3px;">Jan 1 Balance ($)</div>
               <input id="acd-bl-jan1-input" type="number" step="0.01" min="0" placeholder="e.g. 2365676.89"
                 oninput="_blCheckEnable()"
-                style="width:160px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:13px;color:#1e293b;background:white;outline:none;">
+                style="width:160px;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:13px;color:var(--text-primary,#1e293b);background:var(--surface,#fff);outline:none;">
             </div>
             <div style="flex:1;min-width:140px;">
               <div style="font-size:10px;font-weight:700;color:var(--mid);text-transform:uppercase;margin-bottom:3px;">Notes (optional)</div>
               <input id="acd-bl-notes" type="text" placeholder="e.g. Post-merge baseline"
-                style="width:100%;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 10px;font-size:12px;color:#1e293b;background:white;outline:none;box-sizing:border-box;">
+                style="width:100%;height:32px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 10px;font-size:12px;color:var(--text-primary,#1e293b);background:var(--surface,#fff);outline:none;box-sizing:border-box;">
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;">
@@ -4445,12 +4477,14 @@ End with the sleeve block at this account's real market value so I can push it t
         <label style="font-size:11px;color:#64748b;margin-right:6px;">Year</label>
         <input id="ql-year" type="number" min="2020" max="2099"
                style="width:78px;height:30px;border:1px solid var(--panel-edge);border-radius:6px;padding:0 8px;font-size:12px;margin-right:8px;">
+        <button id="ql-gen-all" type="button" class="tab-btn" style="margin-right:6px;">✨ Generate all fund sections</button>
         <button id="ql-preview" type="button" class="tab-btn" style="margin-right:6px;">👁 Preview</button>
         <button id="ql-save" type="button" class="tab-btn" style="margin-right:6px;">💾 Save draft</button>
         <button id="ql-publish" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">📢 Publish to all LPs</button>
       </header>
       <div style="padding:16px 18px;">
         <div id="ql-status" style="font-size:12px;color:#64748b;margin-bottom:14px;">A <strong>shared firm-wide intro</strong> + your <strong>note</strong> go to every LP. Each <strong>fund section</strong> is seen only by that fund/account's holders. Generate each piece, edit, then Save.</div>
+        <div id="ql-fresh-warn" style="display:none;margin-bottom:14px;background:var(--warn-50,#fffbeb);border:1px solid var(--warn-500,#d97706);border-radius:6px;padding:9px 12px;font-size:11.5px;color:var(--warn-700,#92400e);line-height:1.5;"></div>
 
         <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">① Note from you — manual, shared, never AI-written</label>
         <textarea id="ql-note" rows="3" placeholder="A few words to your partners / LPs…"
@@ -4560,24 +4594,8 @@ End with the sleeve block at this account's real market value so I can push it t
 <div id="tab-settings" class="tab-panel">
   <div class="wide-shell">
 
-    <!-- 🚂 Railway cost & memory — live container metrics + estimated monthly bill -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">🚂 Railway Cost &amp; Memory</span>
-        <span class="panel-badge" id="rw-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
-        <span style="flex:1"></span>
-        <button id="rw-refresh" type="button" class="tab-btn">↻ Refresh</button>
-      </header>
-      <div style="padding:16px 18px;">
-        <div id="rw-body" style="font-size:12px;color:#475569;">Loading live usage…</div>
-        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
-          Estimated from this container's live cgroup usage × Railway's published per-unit prices
-          (memory $10/GB·mo, vCPU $20/vCPU·mo). Egress &amp; volume not metered here.
-          Override rates with <code>RAILWAY_PRICE_MEM_GB_MONTH</code> / <code>RAILWAY_PRICE_VCPU_MONTH</code> /
-          <code>RAILWAY_BASE_FEE_MONTH</code> / <code>RAILWAY_INCLUDED_CREDIT</code> env vars to match your plan.
-        </div>
-      </div>
-    </section>
+
+    <h3 class="settings-group-head">Data Connections</h3>
 
     <!-- 🔗 Linked accounts — SnapTrade (Fidelity holdings) -->
     <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
@@ -4621,6 +4639,8 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </div>
     </section>
+
+    <h3 class="settings-group-head">Publishing</h3>
 
     <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
     <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
@@ -4708,7 +4728,20 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
+
+      <!-- Archived Reports -->
+      <section class="panel" data-collapsible="1" data-expanded="1" style="margin-bottom:18px;">
+        <header class="panel-head">
+          <span class="panel-title">Archived Reports</span>
+          <span class="panel-badge" id="archived-count">—</span>
+          <button id="restore-all-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">↩ Restore All</button>
+        </header>
+        <div id="archived-list" style="padding:10px 14px;font-size:12px;color:var(--dim);">Loading…</div>
+      </section>
+
     <div class="wide-grid-2">
+
+      <h3 class="settings-group-head">Security</h3>
 
       <!-- 🔐 Two-Factor Authentication (TOTP) -->
       <section class="panel" data-collapsible="1">
@@ -4750,6 +4783,177 @@ End with the sleeve block at this account's real market value so I can push it t
           <div style="font-size:10px;color:var(--dim);letter-spacing:0.5px;" id="build-info">—</div>
         </div>
       </section>
+
+
+
+
+      <h3 class="settings-group-head">Users</h3>
+
+      <!-- LP User Management -->
+      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">LP User Management</span>
+          <span class="panel-badge" id="lp-count-badge">—</span>
+          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
+        </header>
+        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
+              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;">
+              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
+              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
+            </div>
+          </div>
+        </div>
+        <div id="lp-roster" class="tab-loading">Loading…</div>
+      </section>
+
+      <!-- Admin User Management -->
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">Admin User Management</span>
+          <span class="panel-badge" style="background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);">GOD MODE</span>
+          <button id="admin-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add Admin</button>
+        </header>
+        <div id="admin-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(201,168,76,0.04);">
+          <div style="font-size:10px;font-weight:800;color:#c9a84c;letter-spacing:1px;margin-bottom:6px;">NEW ADMIN ACCOUNT</div>
+          <div style="font-size:10px;color:var(--dim);margin-bottom:10px;">Admin users have full access to both the GP and LP dashboards. Use for testing or trusted advisors.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="admin-new-name" type="text" class="settings-input" placeholder="e.g. Test Admin" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <input id="admin-new-email" type="email" class="settings-input" placeholder="admin@example.com" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">PASSWORD</div>
+              <input id="admin-new-pw" type="text" class="settings-input" placeholder="Password (≥6 chars)" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;">
+              <button id="admin-new-save-btn" class="tab-btn" style="width:100%;height:34px;background:linear-gradient(135deg,#c9a84c,#a88a3a);color:#0A1628;border:none;">Create Admin</button>
+              <div id="admin-new-msg" style="font-size:10px;min-height:14px;"></div>
+            </div>
+            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-top:4px;">
+              <input type="checkbox" id="admin-new-demo" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
+              <label for="admin-new-demo" style="font-size:11px;color:var(--dim);cursor:pointer;">
+                <strong>Demo Mode</strong> — anonymises LP identities; read-only access to admin write operations
+              </label>
+            </div>
+          </div>
+        </div>
+        <div id="admin-roster" style="padding:12px 14px;font-size:11px;color:var(--dim);">Loading…</div>
+      </section>
+
+      <!-- Create Fund / Managed Account -->
+      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+        <header class="panel-head">
+          <span class="panel-title">Fund Administration</span>
+          <span class="panel-badge">GP ONLY</span>
+        </header>
+        <div style="padding:14px;">
+
+          <!-- ── Rename existing fund / account ── -->
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Rename Fund / Account</div>
+          <div style="display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(120px,1fr) auto;gap:10px;align-items:end;margin-bottom:18px;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SELECT</div>
+              <select id="rn-fund" class="settings-input" style="width:100%;">
+                <option value="">— choose fund or account —</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="rn-name" type="text" class="settings-input" placeholder="New full name" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <input id="rn-short" type="text" class="settings-input" placeholder="CODE" style="width:100%;text-transform:uppercase;" maxlength="12">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button id="rn-save-btn" class="tab-btn" style="width:100%;height:34px;">Rename</button>
+              <div id="rn-msg" style="font-size:11px;min-height:16px;"></div>
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid var(--panel-edge);margin-bottom:14px;">
+
+          <!-- ── Create new fund / account ── -->
+          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Create New Fund / Account</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:10px;">Use the Fund tab to set NAV and view LP detail after creation.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
+              <input id="cf-name" type="text" class="settings-input" placeholder="e.g. DGA Capital Fund IV, LP" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <input id="cf-short" type="text" class="settings-input" placeholder="DGAF-IV" style="width:100%;text-transform:uppercase;" maxlength="12">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">TYPE</div>
+              <select id="cf-type" class="settings-input" style="width:100%;">
+                <option value="lp_fund">LP Fund</option>
+                <option value="managed_account">Managed Account</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INCEPTION DATE</div>
+              <input id="cf-inception" type="date" class="settings-input" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">MGMT FEE %</div>
+              <input id="cf-mgmt" type="number" class="settings-input" value="1.5" step="0.1" min="0" max="5" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">CARRY %</div>
+              <input id="cf-carry" type="number" class="settings-input" value="20" step="1" min="0" max="50" style="width:100%;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">HURDLE %</div>
+              <input id="cf-hurdle" type="number" class="settings-input" value="8" step="0.5" min="0" max="20" style="width:100%;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button id="cf-create-btn" class="tab-btn" style="width:100%;height:34px;">Create</button>
+              <div id="cf-msg" style="font-size:11px;min-height:16px;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <h3 class="settings-group-head">System</h3>
+
+    <!-- 🚂 Railway cost & memory — live container metrics + estimated monthly bill -->
+    <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+      <header class="panel-head">
+        <span class="panel-title">🚂 Railway Cost &amp; Memory</span>
+        <span class="panel-badge" id="rw-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
+        <span style="flex:1"></span>
+        <button id="rw-refresh" type="button" class="tab-btn">↻ Refresh</button>
+      </header>
+      <div style="padding:16px 18px;">
+        <div id="rw-body" style="font-size:12px;color:#475569;">Loading live usage…</div>
+        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
+          Estimated from this container's live cgroup usage × Railway's published per-unit prices
+          (memory $10/GB·mo, vCPU $20/vCPU·mo). Egress &amp; volume not metered here.
+          Override rates with <code>RAILWAY_PRICE_MEM_GB_MONTH</code> / <code>RAILWAY_PRICE_VCPU_MONTH</code> /
+          <code>RAILWAY_BASE_FEE_MONTH</code> / <code>RAILWAY_INCLUDED_CREDIT</code> env vars to match your plan.
+        </div>
+      </div>
+    </section>
 
       <!-- Email Diagnostics -->
       <section class="panel" data-collapsible="1">
@@ -4876,85 +5080,6 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </section>
 
-      <!-- Archived Reports -->
-      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
-        <header class="panel-head">
-          <span class="panel-title">Archived Reports</span>
-          <span class="panel-badge" id="archived-count">—</span>
-          <button id="restore-all-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">↩ Restore All</button>
-        </header>
-        <div id="archived-list" style="padding:10px 14px;font-size:12px;color:var(--dim);">Loading…</div>
-      </section>
-
-      <!-- LP User Management -->
-      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
-        <header class="panel-head">
-          <span class="panel-title">LP User Management</span>
-          <span class="panel-badge" id="lp-count-badge">—</span>
-          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
-        </header>
-        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
-              <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
-              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
-            </div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
-              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
-            </div>
-          </div>
-        </div>
-        <div id="lp-roster" class="tab-loading">Loading…</div>
-      </section>
-
-      <!-- Admin User Management -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
-        <header class="panel-head">
-          <span class="panel-title">Admin User Management</span>
-          <span class="panel-badge" style="background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);">GOD MODE</span>
-          <button id="admin-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add Admin</button>
-        </header>
-        <div id="admin-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(201,168,76,0.04);">
-          <div style="font-size:10px;font-weight:800;color:#c9a84c;letter-spacing:1px;margin-bottom:6px;">NEW ADMIN ACCOUNT</div>
-          <div style="font-size:10px;color:var(--dim);margin-bottom:10px;">Admin users have full access to both the GP and LP dashboards. Use for testing or trusted advisors.</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="admin-new-name" type="text" class="settings-input" placeholder="e.g. Test Admin" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
-              <input id="admin-new-email" type="email" class="settings-input" placeholder="admin@example.com" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">PASSWORD</div>
-              <input id="admin-new-pw" type="text" class="settings-input" placeholder="Password (≥6 chars)" style="width:100%;">
-            </div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <button id="admin-new-save-btn" class="tab-btn" style="width:100%;height:34px;background:linear-gradient(135deg,#c9a84c,#a88a3a);color:#0A1628;border:none;">Create Admin</button>
-              <div id="admin-new-msg" style="font-size:10px;min-height:14px;"></div>
-            </div>
-            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-top:4px;">
-              <input type="checkbox" id="admin-new-demo" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
-              <label for="admin-new-demo" style="font-size:11px;color:var(--dim);cursor:pointer;">
-                <strong>Demo Mode</strong> — anonymises LP identities; read-only access to admin write operations
-              </label>
-            </div>
-          </div>
-        </div>
-        <div id="admin-roster" style="padding:12px 14px;font-size:11px;color:var(--dim);">Loading…</div>
-      </section>
-
       <!-- System Info — app version + service health (was buried) -->
       <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
         <header class="panel-head">
@@ -4974,7 +5099,7 @@ End with the sleeve block at this account's real market value so I can push it t
           </button>
           <span style="font-size:11.5px;color:var(--text-tertiary);">Replay the first-run onboarding any time.</span>
         </div>
-        <div style="border-top:1px solid var(--border-subtle);padding:12px 14px;">
+        <div id="model-check-row" style="border-top:1px solid var(--border-subtle);padding:12px 14px;">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button id="model-check-btn" class="tab-btn">🤖 Check AI Analyst model</button>
             <span style="font-size:11.5px;color:var(--text-tertiary);">Verify the configured <code>AGENTIC_MODEL</code> is live (lists models + pings it).</span>
@@ -4983,81 +5108,6 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </section>
 
-      <!-- Create Fund / Managed Account -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
-        <header class="panel-head">
-          <span class="panel-title">Fund Administration</span>
-          <span class="panel-badge">GP ONLY</span>
-        </header>
-        <div style="padding:14px;">
-
-          <!-- ── Rename existing fund / account ── -->
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Rename Fund / Account</div>
-          <div style="display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(120px,1fr) auto;gap:10px;align-items:end;margin-bottom:18px;">
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SELECT</div>
-              <select id="rn-fund" class="settings-input" style="width:100%;">
-                <option value="">— choose fund or account —</option>
-              </select>
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="rn-name" type="text" class="settings-input" placeholder="New full name" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
-              <input id="rn-short" type="text" class="settings-input" placeholder="CODE" style="width:100%;text-transform:uppercase;" maxlength="12">
-            </div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button id="rn-save-btn" class="tab-btn" style="width:100%;height:34px;">Rename</button>
-              <div id="rn-msg" style="font-size:11px;min-height:16px;"></div>
-            </div>
-          </div>
-
-          <hr style="border:none;border-top:1px solid var(--panel-edge);margin-bottom:14px;">
-
-          <!-- ── Create new fund / account ── -->
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Create New Fund / Account</div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:10px;">Use the Fund tab to set NAV and view LP detail after creation.</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="cf-name" type="text" class="settings-input" placeholder="e.g. DGA Capital Fund IV, LP" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
-              <input id="cf-short" type="text" class="settings-input" placeholder="DGAF-IV" style="width:100%;text-transform:uppercase;" maxlength="12">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">TYPE</div>
-              <select id="cf-type" class="settings-input" style="width:100%;">
-                <option value="lp_fund">LP Fund</option>
-                <option value="managed_account">Managed Account</option>
-              </select>
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INCEPTION DATE</div>
-              <input id="cf-inception" type="date" class="settings-input" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">MGMT FEE %</div>
-              <input id="cf-mgmt" type="number" class="settings-input" value="1.5" step="0.1" min="0" max="5" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">CARRY %</div>
-              <input id="cf-carry" type="number" class="settings-input" value="20" step="1" min="0" max="50" style="width:100%;">
-            </div>
-            <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">HURDLE %</div>
-              <input id="cf-hurdle" type="number" class="settings-input" value="8" step="0.5" min="0" max="20" style="width:100%;">
-            </div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button id="cf-create-btn" class="tab-btn" style="width:100%;height:34px;">Create</button>
-              <div id="cf-msg" style="font-size:11px;min-height:16px;"></div>
-            </div>
-          </div>
-        </div>
-      </section>
 
     </div>
   </div>
@@ -5090,13 +5140,15 @@ End with the sleeve block at this account's real market value so I can push it t
     if (Math.abs(n) >= 1e3) return '$' + (n/1e3).toFixed(0) + 'K';
     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
-  // Full dollar formatting — never abbreviates (used in positions gain/loss columns)
-  const fmtUSDFull = (v) => {
+  // Full dollar formatting — never abbreviates (used in positions gain/loss columns).
+  // Optional dp = decimal places (default 2; pass 0 for whole-dollar panel totals).
+  const fmtUSDFull = (v, dp) => {
     if (v == null || isNaN(v)) return '—';
+    const d = (dp == null) ? 2 : dp;
     const n = Number(v);
     const abs = Math.abs(n);
     const sign = n < 0 ? '-' : '';
-    return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   };
   const cssClass = (v) => v == null ? 'nc' : (v >= 0 ? 'up' : 'dn');
   // All timestamps displayed in Pacific Time (US West Coast).
@@ -5119,6 +5171,52 @@ End with the sleeve block at this account's real market value so I can push it t
     return (d && !isNaN(d)) ? d.toLocaleString('en-US',
       { ..._PT, month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
   };
+
+  // ── Debug-only UI gating (?debug=1 shows diagnostic buttons) ───
+  const DEBUG_UI = new URLSearchParams(location.search).has('debug');
+
+  // ── Reusable destructive-action confirm modal ──────────────────
+  // dgaConfirm({title, message, confirmLabel, danger}) -> Promise<boolean>.
+  // Styled like the memo modals; Esc / backdrop / Cancel resolve false.
+  function dgaConfirm(opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      document.getElementById('dga-confirm-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'dga-confirm-modal';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      const danger = opts.danger !== false;
+      overlay.innerHTML =
+        '<div style="background:var(--surface,#fff);border-radius:10px;max-width:460px;width:92%;padding:22px 24px;box-shadow:0 18px 48px rgba(0,0,0,0.3);">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
+        +   '<span style="font-size:17px;">' + (danger ? '⚠️' : 'ℹ️') + '</span>'
+        +   '<h3 style="margin:0;font-size:14.5px;color:var(--text-primary);">' + _cfEsc(opts.title || 'Are you sure?') + '</h3>'
+        + '</div>'
+        + '<div style="font-size:12.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:18px;white-space:pre-line;">' + _cfEsc(opts.message || '') + '</div>'
+        + '<div style="display:flex;gap:10px;justify-content:flex-end;">'
+        +   '<button data-cf="cancel" type="button" style="background:var(--surface,#fff);border:1px solid var(--panel-edge,#cbd5e1);color:var(--text-secondary);padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Cancel</button>'
+        +   '<button data-cf="ok" type="button" style="background:' + (danger ? '#dc2626' : '#0A1628') + ';border:1px solid ' + (danger ? '#b91c1c' : '#0A1628') + ';color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">'
+        +     _cfEsc(opts.confirmLabel || (danger ? 'Delete' : 'Confirm')) + '</button>'
+        + '</div></div>';
+      function done(v) {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) done(false); });
+      overlay.querySelector('[data-cf="cancel"]').addEventListener('click', function () { done(false); });
+      overlay.querySelector('[data-cf="ok"]').addEventListener('click', function () { done(true); });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-cf="ok"]').focus();
+    });
+  }
+  function _cfEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  window.dgaConfirm = dgaConfirm;
 
   // ── Simple markdown → HTML ───────────────────────────────────
   function renderMd(el, md) {
@@ -5235,6 +5333,10 @@ End with the sleeve block at this account's real market value so I can push it t
     financials: () => _initFinancialsTab(),
   };
 
+  // Per-tab last-load timestamps: loaders run on first visit AND re-run
+  // automatically when the tab is revisited after its data has gone stale.
+  const TAB_STALE_MS = 5 * 60 * 1000;
+  const _tabLoadedAt = {};
   function showTab(name) {
     document.querySelectorAll('.topbar-link[data-tab]').forEach(l => {
       l.classList.toggle('active', l.dataset.tab === name);
@@ -5242,7 +5344,13 @@ End with the sleeve block at this account's real market value so I can push it t
     document.querySelectorAll('.tab-panel').forEach(p => {
       p.classList.toggle('active', p.id === 'tab-' + name);
     });
-    if (TAB_LOADERS[name]) { TAB_LOADERS[name](); delete TAB_LOADERS[name]; }
+    if (TAB_LOADERS[name]) {
+      const last = _tabLoadedAt[name] || 0;
+      if (Date.now() - last >= TAB_STALE_MS) {
+        _tabLoadedAt[name] = Date.now();
+        TAB_LOADERS[name]();
+      }
+    }
   }
   document.querySelectorAll('.topbar-link[data-tab]').forEach(l => {
     l.addEventListener('click', () => showTab(l.dataset.tab));
@@ -5308,9 +5416,6 @@ End with the sleeve block at this account's real market value so I can push it t
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     } catch (e) { return iso; }
   }
-  function _optMoney(n) {
-    return (n == null || isNaN(n)) ? '' : '$' + Math.round(n).toLocaleString();
-  }
   function _optBucketCell(c, kind, sharesHeld) {
     if (!c) return '<td style="color:#cbd5e1;text-align:center;">—</td>';
     const yld = kind === 'cc' ? c.static_return_annualized : c.yield_on_cash_annualized;
@@ -5324,7 +5429,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (kind === 'cc' && sharesHeld && sharesHeld >= 100 && c.premium) {
       const contracts = Math.floor(sharesHeld / 100);
       const income = contracts * c.premium * 100;
-      incomeLine = `<div style="font-size:10.5px;color:#16a34a;font-weight:800;margin-top:3px;" title="${contracts} contracts (${(contracts*100).toLocaleString()} shares) × $${c.premium} premium">💰 ${_optMoney(income)} · ${contracts} contract${contracts !== 1 ? 's' : ''}</div>`;
+      incomeLine = `<div style="font-size:10.5px;color:#16a34a;font-weight:800;margin-top:3px;" title="${contracts} contracts (${(contracts*100).toLocaleString()} shares) × $${c.premium} premium">💰 ${fmtUSDFull(income, 0)} · ${contracts} contract${contracts !== 1 ? 's' : ''}</div>`;
     }
     return `<td style="font-variant-numeric:tabular-nums;">
       <div style="font-weight:700;">$${c.strike} · ${dateLbl}<span style="font-weight:400;color:#94a3b8;font-size:10px;"> (${c.dte}d)</span></div>
@@ -5373,7 +5478,7 @@ End with the sleeve block at this account's real market value so I can push it t
     const totBanner = (tot.weekly || tot.monthly || tot.quarterly)
       ? '<div style="padding:9px 13px;margin-bottom:10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;color:#166534;">'
         + '💰 <strong>Premium on your full holdings</strong> if you write every covered call below — '
-        + 'weekly <strong>' + _optMoney(tot.weekly) + '</strong> · monthly <strong>' + _optMoney(tot.monthly) + '</strong> · quarterly <strong>' + _optMoney(tot.quarterly) + '</strong>'
+        + 'weekly <strong>' + fmtUSDFull(tot.weekly, 0) + '</strong> · monthly <strong>' + fmtUSDFull(tot.monthly, 0) + '</strong> · quarterly <strong>' + fmtUSDFull(tot.quarterly, 0) + '</strong>'
         + '<span style="color:#15803d;opacity:0.7;"> (max contracts = shares ÷ 100, across all accounts)</span>'
         + '</div>'
       : '';
@@ -5412,6 +5517,32 @@ End with the sleeve block at this account's real market value so I can push it t
   // ══════════════════════════════════════════════════════════════
 
   // ── Index ribbon ────────────────────────────────────────────────
+  // Track the last successful refresh so a failing/backgrounded feed shows a
+  // "stale" chip instead of silently freezing yesterday's prices.
+  let _idxLastOk = null;
+  const IDX_STALE_MS = 5 * 60 * 1000;
+  function _idxStaleChip() {
+    const wrap = document.querySelector('.ribbon-wrap');
+    if (!wrap) return;
+    let chip = document.getElementById('idx-stale-chip');
+    const stale = _idxLastOk == null || (Date.now() - _idxLastOk) > IDX_STALE_MS;
+    if (!stale) { if (chip) chip.remove(); return; }
+    const asOf = _idxLastOk
+      ? new Date(_idxLastOk).toLocaleTimeString('en-US', { ..._PT, hour: '2-digit', minute: '2-digit' })
+      : null;
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'idx-stale-chip';
+      chip.style.cssText = 'position:absolute;top:4px;right:8px;display:inline-flex;align-items:center;gap:5px;'
+        + 'font-size:9.5px;font-weight:700;color:var(--warn-700,#92400e);background:var(--warn-50,#fffbeb);'
+        + 'border:1px solid var(--warn-500,#d97706);border-radius:9px;padding:1px 8px;z-index:5;pointer-events:none;';
+      wrap.style.position = 'relative';
+      wrap.appendChild(chip);
+    }
+    chip.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:var(--warn-500,#d97706);display:inline-block;"></span>'
+      + (asOf ? ('stale ' + _cfEsc(asOf)) : 'quotes unavailable');
+    chip.title = asOf ? ('Index quotes last refreshed ' + asOf + ' PT') : 'Index quotes have not loaded yet';
+  }
   async function loadIndices() {
     try {
       const r = await window.dgaFetch('/api/market/indices');
@@ -5427,9 +5558,23 @@ End with the sleeve block at this account's real market value so I can push it t
           </div>
         </div>
       `).join('');
+      _idxLastOk = Date.now();
     } catch (e) {
       console.warn('[indices]', e);
     }
+    _idxStaleChip();
+  }
+
+  // ── Quote staleness chip ────────────────────────────────────────
+  // /api/quotes rows carry `as_of` when the price is a stale store fallback
+  // (live source unavailable). Render a small amber chip so the user knows.
+  function _quoteStaleChip(q) {
+    if (!q || !q.as_of) return '';
+    const d = _parseServerDate(q.as_of);
+    const when = (d && !isNaN(d))
+      ? d.toLocaleString('en-US', { ..._PT, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : String(q.as_of);
+    return ' <span class="q-stale" title="Store fallback price — as of ' + _cfEsc(when) + ' PT">stale</span>';
   }
 
   // ── Watchlist ───────────────────────────────────────────────────
@@ -5460,7 +5605,7 @@ End with the sleeve block at this account's real market value so I can push it t
       return `
         <div class="wl-row" data-ticker="${tk}">
           <div>
-            <div class="wl-tk">${tk}</div>
+            <div class="wl-tk">${tk}${_quoteStaleChip(q)}</div>
           </div>
           <div class="wl-right">
             <div class="wl-px">${q.price != null ? '$' + fmtPx(q.price) : '—'}</div>
@@ -7923,7 +8068,7 @@ End with the sleeve block at this account's real market value so I can push it t
             })() +
           '</td>' +
           '<td class="rep-num">' +
-            '<div style="color:var(--text-primary); font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + '</div>' +
+            '<div style="color:var(--text-primary); font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + _quoteStaleChip(q) + '</div>' +
             '<div class="' + cssClass(pct) + '" style="font-size:10px;">' + fmtPct(pct) + '</div>' +
           '</td>' +
           '<td class="rep-num" data-sort-val="' + sortVal + '">' +
@@ -12337,7 +12482,7 @@ End with the sleeve block at this account's real market value so I can push it t
             e.stopPropagation();
             const fid  = btn.dataset.purgeFund;
             const name = btn.dataset.purgeName;
-            if (!confirm(`Permanently delete "${name}" and ALL its data?\n\nThis cannot be undone.`)) return;
+            if (!(await dgaConfirm({ title: 'Delete fund', message: `Permanently delete "${name}" and ALL its data?\n\nThis cannot be undone.`, confirmLabel: 'Delete fund' }))) return;
             btn.textContent = '…'; btn.disabled = true;
             try {
               const r = await window.dgaFetch(`/api/v2/gp/fund/${encodeURIComponent(fid)}/purge`, { method: 'DELETE' });
@@ -12990,9 +13135,41 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!linked.length) {
         badge.textContent = 'NOT LINKED';
         status.textContent = 'No Fidelity account is linked to this managed account yet.';
-        note.textContent = 'Link it in Settings → SnapTrade (assign the Fidelity account to this account). ' +
-                           'Positions, activity and balances then import automatically — the CSVs below stay as a manual backup.';
         btn.style.display = 'none';
+        // Inline assign: offer any unassigned (visible) SnapTrade accounts right
+        // here instead of sending the user to Settings.
+        const unassigned = (d.accounts || []).filter(a => !a.hidden && !a.fund_id);
+        if (unassigned.length) {
+          note.innerHTML = 'Assign a linked Fidelity account to this managed account: '
+            + '<select id="acd-snap-assign-sel" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);color:var(--text-primary);margin:0 6px;">'
+            + unassigned.map(a => '<option value="' + _gfEsc(a.account_id) + '">'
+                + _gfEsc((a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || ''))
+                + (a.total_value != null ? ' · ' + _gfEsc(fmtUSDFull(a.total_value, 0)) : '') + '</option>').join('')
+            + '</select>'
+            + '<button id="acd-snap-assign-btn" class="tab-btn sm" style="font-size:10px;">Assign</button>'
+            + '<span id="acd-snap-assign-msg" style="margin-left:6px;font-size:10.5px;"></span>';
+          const aBtn = document.getElementById('acd-snap-assign-btn');
+          aBtn?.addEventListener('click', async () => {
+            const sel = document.getElementById('acd-snap-assign-sel');
+            const msg = document.getElementById('acd-snap-assign-msg');
+            if (!sel || !sel.value) return;
+            aBtn.disabled = true; aBtn.textContent = 'Assigning…';
+            try {
+              const rr = await window.dgaFetch('/api/snaptrade/assign', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ account_id: sel.value, fund_id: fundId }) });
+              const dd = await rr.json().catch(() => ({}));
+              if (!rr.ok || !dd.ok) throw new Error(dd.detail || rr.status);
+              loadAcctSnapStrip(fundId);
+              loadAcctPositions(fundId);
+            } catch (e) {
+              if (msg) { msg.style.color = 'var(--red,#dc2626)'; msg.textContent = 'Assign failed: ' + (e.message || e); }
+              aBtn.disabled = false; aBtn.textContent = 'Assign';
+            }
+          });
+        } else {
+          note.textContent = 'Link it in Settings → SnapTrade (assign the Fidelity account to this account). ' +
+                             'Positions, activity and balances then import automatically — the CSVs below stay as a manual backup.';
+        }
         return;
       }
       btn.style.display = '';
@@ -13007,7 +13184,7 @@ End with the sleeve block at this account's real market value so I can push it t
       badge.textContent = fresh ? 'AUTO' : 'STALE';
       const names = linked.map(a => (a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || '')).join(' + ');
       const tot = linked.reduce((s, a) => s + (a.total_value || 0), 0);
-      status.innerHTML = 'Linked to <strong>' + _gfEsc(names) + '</strong> · ' + _plaidMoney(tot) +
+      status.innerHTML = 'Linked to <strong>' + _gfEsc(names) + '</strong> · ' + fmtUSDFull(tot, 0) +
                          ' · last synced <strong>' + _gfEsc(ago) + '</strong>';
       note.textContent = 'Positions, activity and balances import automatically (daily via Automation Schedule, or on demand here). ' +
                          'The CSV uploads below remain a manual backup and always take precedence for the months they cover.';
@@ -13669,7 +13846,6 @@ End with the sleeve block at this account's real market value so I can push it t
     ctx.restore();
 
     const fmtM = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-    const fmtUSDLocal = v => '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
 
     canvas.onmousemove = (e) => {
       const rect = canvas.getBoundingClientRect();
@@ -13685,11 +13861,11 @@ End with the sleeve block at this account's real market value so I can push it t
       } else {
         const retColor = p.return_pct >= 0 ? '#4ade80' : '#f87171';
         html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Return</span><span style="font-weight:700;color:${retColor};">${fmtM(p.return_pct || 0)}</span></div>`;
-        if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Ending Balance</span><span>${fmtUSDLocal(p.end_balance)}</span></div>`;
-        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:var(--mid);">If Not Invested</span><span style="color:var(--mid);">${fmtUSDLocal(p.cash_only_balance)}</span></div>`;
+        if (p.end_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Ending Balance</span><span>${fmtUSDFull(p.end_balance, 0)}</span></div>`;
+        if (p.cash_only_balance) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span style="color:var(--mid);">If Not Invested</span><span style="color:var(--mid);">${fmtUSDFull(p.cash_only_balance, 0)}</span></div>`;
         const netDep = (p.deposits || 0) - (p.withdrawals || 0);
-        if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDLocal(Math.abs(netDep))}</span></div>`;
-        if (p.dividends) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Dividends</span><span style="color:#c9a84c;">${fmtUSDLocal(p.dividends)}</span></div>`;
+        if (netDep !== 0) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Net Deposits</span><span style="color:${netDep>=0?'#4ade80':'#f87171'};">${netDep>=0?'+':'-'}${fmtUSDFull(Math.abs(netDep), 0)}</span></div>`;
+        if (p.dividends) html += `<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;"><span>Dividends</span><span style="color:#c9a84c;">${fmtUSDFull(p.dividends, 0)}</span></div>`;
       }
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
@@ -14987,15 +15163,30 @@ End with the sleeve block at this account's real market value so I can push it t
   // ══════════════════════════════════════════════════════════════
   // SETTINGS TAB
   // ══════════════════════════════════════════════════════════════
+  // One loader for EVERY Settings panel. Re-invoked on each click of the
+  // Settings topbar link, but each panel skips if it loaded <60s ago so
+  // repeated clicks don't refetch everything.
+  const _settingsPanelAt = {};
+  function _settingsPanel(key, fn) {
+    const now = Date.now();
+    if (_settingsPanelAt[key] && (now - _settingsPanelAt[key]) < 60_000) return;
+    _settingsPanelAt[key] = now;
+    try { fn(); } catch (e) { console.warn('[settings:' + key + ']', e); }
+  }
   async function loadSettingsTab() {
-    loadLPRoster();
-    loadBuildInfo();
-    loadAutomationSettings();
-    _wireEmailDiag();
-    loadRenameDropdown();
-    loadDisclaimerConfig();
-    loadRssFeedPanel();
-    loadSystemInfoPanel();
+    _settingsPanel('lp-roster',   loadLPRoster);
+    _settingsPanel('build-info',  loadBuildInfo);
+    _settingsPanel('automation',  loadAutomationSettings);
+    _settingsPanel('email-diag',  _wireEmailDiag);
+    _settingsPanel('rename',      loadRenameDropdown);
+    _settingsPanel('disclaimer',  loadDisclaimerConfig);
+    _settingsPanel('rss',         loadRssFeedPanel);
+    _settingsPanel('system-info', loadSystemInfoPanel);
+    _settingsPanel('archived',    loadArchivedReports);
+    _settingsPanel('railway',     loadRailwayUsage);
+    _settingsPanel('snaptrade',   loadSnapTrade);
+    _settingsPanel('plaid',       loadPlaid);
+    _settingsPanel('mfa',         loadMfa);
   }
 
   // ── 🖥 System Info: surfaces app build + backend/DB health ──
@@ -16059,7 +16250,7 @@ End with the sleeve block at this account's real market value so I can push it t
         btn.addEventListener('click', async () => {
           const lpId = btn.dataset.adminDelete;
           const name = btn.dataset.adminName;
-          if (!confirm(`Remove admin account for "${name}"?\n\nThis cannot be undone.`)) return;
+          if (!(await dgaConfirm({ title: 'Remove admin account', message: `Remove admin account for "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Remove admin' }))) return;
           try {
             const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
             if (!r.ok) {
@@ -16110,7 +16301,7 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   async function _deleteUser(lpId, name) {
-    if (!confirm(`Remove admin account for "${name}"?\n\nThis cannot be undone.`)) return;
+    if (!(await dgaConfirm({ title: 'Remove admin account', message: `Remove admin account for "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Remove admin' }))) return;
     try {
       const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
       if (!r.ok) {
@@ -16288,7 +16479,7 @@ End with the sleeve block at this account's real market value so I can push it t
         btn.addEventListener('click', async () => {
           const lpId = btn.dataset.lpDelete;
           const name = btn.dataset.lpName;
-          if (!confirm(`Remove LP account for "${name}"?\n\nThis will permanently delete their login. Their commitment data in the fund remains. This cannot be undone.`)) return;
+          if (!(await dgaConfirm({ title: 'Remove LP account', message: `Remove LP account for "${name}"?\n\nThis will permanently delete their login. Their commitment data in the fund remains. This cannot be undone.`, confirmLabel: 'Remove LP' }))) return;
           try {
             const r = await window.dgaFetch('/api/auth/v2/user/' + encodeURIComponent(lpId), { method: 'DELETE' });
             if (!r.ok) {
@@ -16792,8 +16983,8 @@ End with the sleeve block at this account's real market value so I can push it t
       } catch (e) { /* swallow */ }
     }
     _refreshScanCostBadge();
-    // Refresh every 5 min while the user has the page open
-    setInterval(_refreshScanCostBadge, 5 * 60 * 1000);
+    // Refresh every 5 min while the user has the page open (skipped when hidden)
+    setInterval(function() { if (document.hidden) return; _refreshScanCostBadge(); }, 5 * 60 * 1000);
 
     // Generic scan kicker — used by both Active and "scan all" paths
     async function _startScan(threshold, label) {
@@ -17773,6 +17964,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (_qlInit) { _qlRenderSaved(); return; }
     _qlInit = true;
     document.getElementById('ql-gen-intro')?.addEventListener('click', _qlGenIntro);
+    document.getElementById('ql-gen-all')?.addEventListener('click', _qlGenAll);
     document.getElementById('ql-preview')?.addEventListener('click', _qlPreview);
     document.getElementById('ql-save')?.addEventListener('click', function(){ _qlSave('draft'); });
     document.getElementById('ql-publish')?.addEventListener('click', _qlPublishAll);
@@ -17808,20 +18000,81 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (e) { if (status) status.textContent = '❌ intro: ' + (e.message || e); }
     if (btn) { btn.disabled = false; btn.textContent = '✨ Generate intro'; }
   }
-  async function _qlGenFund(fid, name) {
+  async function _qlGenFund(fid, name, opts) {
+    opts = opts || {};
     const status = document.getElementById('ql-status');
     const ta = document.getElementById('ql-fund-' + fid);
     const btn = document.getElementById('ql-genbtn-' + fid);
-    if (ta && ta.value.trim() && !confirm('Replace the ' + name + ' section with a fresh draft?')) return;
+    if (!opts.force && ta && ta.value.trim() && !confirm('Replace the ' + name + ' section with a fresh draft?')) return;
     if (btn) { btn.disabled = true; btn.textContent = '✨ …'; }
     try {
       const r = await (await window.dgaFetch('/api/research/quarterly-letter/fund-section', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fund_id: fid, year: _qlYear() }) })).json();
       if (!r.ok || !r.job_id) throw new Error(r.error || r.detail || 'could not start');
-      const md = await _qlPoll(r.job_id, status, name);
+      const md = await _qlPoll(r.job_id, status, opts.progressLabel || name);
       if (ta) ta.value = md;
       if (status) status.textContent = '✓ ' + name + ' section ready.';
-    } catch (e) { if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e); }
+    } catch (e) {
+      if (status) status.textContent = '❌ ' + name + ': ' + (e.message || e);
+      if (opts.rethrow) { if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; } throw e; }
+    }
     if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; }
+  }
+  // Generate every fund's section sequentially with progress text in the
+  // header button + status line. Skips nothing — overwrites after ONE confirm.
+  async function _qlGenAll() {
+    const btn = document.getElementById('ql-gen-all');
+    const status = document.getElementById('ql-status');
+    if (!_qlFunds.length) { if (status) status.textContent = 'No funds with live positions yet.'; return; }
+    const hasContent = _qlFunds.some(function(f){
+      const ta = document.getElementById('ql-fund-' + f.fund_id);
+      return ta && ta.value.trim();
+    });
+    if (hasContent && !confirm('Some fund sections already have text. Regenerate ALL sections and replace them?')) return;
+    if (btn) btn.disabled = true;
+    let done = 0, failed = 0;
+    for (let i = 0; i < _qlFunds.length; i++) {
+      const f = _qlFunds[i];
+      const name = f.short_name || f.name;
+      if (btn) btn.textContent = '✨ ' + (i + 1) + '/' + _qlFunds.length + ' — ' + name + '…';
+      try {
+        await _qlGenFund(f.fund_id, name, { force: true, rethrow: true,
+          progressLabel: '(' + (i + 1) + '/' + _qlFunds.length + ') ' + name });
+        done++;
+      } catch (e) { failed++; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate all fund sections'; }
+    if (status) status.textContent = '✓ Generated ' + done + '/' + _qlFunds.length + ' fund section(s)'
+      + (failed ? ' · ' + failed + ' failed — see above.' : '. Review, edit, then Save/Publish.');
+  }
+  // Non-blocking freshness check before publish: flags funds whose YTD cache
+  // has estimated flows or hasn't been updated in >48h.
+  async function _qlFreshnessWarn(fundIds) {
+    const warnEl = document.getElementById('ql-fresh-warn');
+    if (!warnEl) return;
+    warnEl.style.display = 'none';
+    const staleNames = [];
+    for (const fid of (fundIds || [])) {
+      try {
+        const r = await window.dgaFetch('/api/fund/account/' + encodeURIComponent(fid) + '/ytd-cache');
+        if (!r.ok) continue;
+        const c = await r.json();
+        let flowsEst = !!c.flows_estimated;
+        try {
+          const rj = c.result_json ? (typeof c.result_json === 'string' ? JSON.parse(c.result_json) : c.result_json) : null;
+          if (rj && rj.flows_estimated) flowsEst = true;
+        } catch (e) {}
+        const upd = c.updated_at ? _parseServerDate(c.updated_at) : null;
+        const oldCache = !upd || isNaN(upd) || (Date.now() - upd.getTime()) > 48 * 3600 * 1000;
+        if (flowsEst || oldCache) {
+          const f = _qlFunds.find(function(x){ return x.fund_id === fid; });
+          staleNames.push((f && (f.short_name || f.name)) || fid);
+        }
+      } catch (e) { /* health check only — never blocks publish */ }
+    }
+    if (staleNames.length) {
+      warnEl.innerHTML = '⚠ <strong>' + _gfEsc(staleNames.join(', ')) + '</strong>: some balance months are estimated / data may be stale — sync SnapTrade before publishing.';
+      warnEl.style.display = '';
+    }
   }
   async function _qlLoadFunds() {
     const wrap = document.getElementById('ql-funds');
@@ -17943,6 +18196,8 @@ End with the sleeve block at this account's real market value so I can push it t
   async function _qlPublishAll() {
     const btn = document.getElementById('ql-publish');
     const status = document.getElementById('ql-status');
+    // Freshness warning (non-blocking) — covers every fund with a filled section.
+    try { await _qlFreshnessWarn(Object.keys(_qlCollectSections())); } catch (e) {}
     if (!confirm('Publish ALL filled fund sections to every holding LP (and email them)?')) return;
     if (btn) { btn.disabled = true; btn.textContent = '📢 Publishing…'; }
     try {
@@ -17960,6 +18215,8 @@ End with the sleeve block at this account's real market value so I can push it t
     const btn = document.getElementById('ql-pubbtn-' + fid);
     const ta = document.getElementById('ql-fund-' + fid);
     if (!ta || !ta.value.trim()) { if (status) status.textContent = 'Generate ' + name + '’s section before publishing it.'; return; }
+    // Freshness warning (non-blocking) for this fund's balance data.
+    try { await _qlFreshnessWarn([fid]); } catch (e) {}
     if (!confirm('Publish the ' + name + ' section to its LP(s) and email them?')) return;
     if (btn) { btn.disabled = true; btn.textContent = '📢 …'; }
     try {
@@ -18148,7 +18405,7 @@ End with the sleeve block at this account's real market value so I can push it t
       list.querySelectorAll('[data-memo-email]').forEach(b => b.onclick = () =>
         _openMemoEmailModal(b.dataset.memoEmail, b.dataset.fund, b.dataset.title));
       list.querySelectorAll('[data-memo-delete]').forEach(b => b.onclick = async () => {
-        if (!confirm('Delete this memo permanently?')) return;
+        if (!(await dgaConfirm({ title: 'Delete memo', message: 'Delete this memo permanently?', confirmLabel: 'Delete memo' }))) return;
         const r = await window.dgaFetch('/api/memos/' + b.dataset.memoDelete, { method:'DELETE' });
         if (r.ok) _renderMemosList(); else alert('Delete failed');
       });
@@ -18331,6 +18588,75 @@ End with the sleeve block at this account's real market value so I can push it t
     }
   });
 
+  // ── 🩺 Data Health card (home tab) ───────────────────────────
+  // One unauthenticated /api/health/data fetch: SnapTrade + market-quote
+  // freshness and the three scheduler last-runs. Green <24h & ok, amber
+  // stale, red failed. Refreshes every 10 min (visibility-gated).
+  function _dhAgo(sec) {
+    if (sec == null || isNaN(sec)) return 'never';
+    const s = Math.max(0, Math.round(sec));
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+    if (s < 172800) return (s / 3600).toFixed(s < 36000 ? 1 : 0).replace(/\.0$/, '') + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+  }
+  function _dhRow(label, state, text, detail) {
+    const col = state === 'ok' ? 'var(--green,#16a34a)'
+              : state === 'bad' ? 'var(--red,#dc2626)'
+              : 'var(--amber,#d97706)';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--panel-edge,#f1f5f9);"'
+      + (detail ? ' title="' + _cfEsc(detail) + '"' : '') + '>'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';flex-shrink:0;display:inline-block;"></span>'
+      + '<span style="flex:1;color:var(--text-primary);font-weight:600;">' + _cfEsc(label) + '</span>'
+      + '<span style="color:var(--text-secondary);font-variant-numeric:tabular-nums;">' + _cfEsc(text) + '</span>'
+      + '</div>';
+  }
+  async function loadDataHealth() {
+    const body = document.getElementById('dh-body');
+    const badge = document.getElementById('dh-badge');
+    if (!body) return;
+    try {
+      const r = await window.dgaFetch('/api/health/data');
+      if (!r.ok) throw new Error('health ' + r.status);
+      const d = await r.json();
+      const DAY = 24 * 3600;
+      const rows = [];
+      const ageState = (s) => (s == null ? 'warn' : (s < DAY ? 'ok' : 'warn'));
+      rows.push(_dhRow('SnapTrade holdings', ageState(d.snaptrade_age_s), _dhAgo(d.snaptrade_age_s)));
+      rows.push(_dhRow('Market quotes', ageState(d.market_quotes_age_s), _dhAgo(d.market_quotes_age_s)));
+      const schedLabels = { daily_brief: 'Daily Pulse', market_pulse: 'Market Pulse scan', snaptrade_sync: 'SnapTrade sync' };
+      const scheds = d.schedulers || {};
+      Object.keys(schedLabels).forEach(function (job) {
+        const s = scheds[job] || {};
+        const ts = s.last_ts ? _parseServerDate(s.last_ts) : null;
+        const ageS = (ts && !isNaN(ts)) ? (Date.now() - ts.getTime()) / 1000 : null;
+        const state = s.ok === false ? 'bad' : (s.ok && ageS != null && ageS < DAY ? 'ok' : 'warn');
+        const text = (s.ok === false ? 'failed · ' : '') + _dhAgo(ageS);
+        rows.push(_dhRow(schedLabels[job], state, text, s.detail || (s.ok === false ? 'Last run failed' : '')));
+      });
+      body.innerHTML = rows.join('');
+      if (badge) {
+        const degraded = d.status !== 'ok';
+        badge.textContent = degraded ? 'DEGRADED' : 'OK';
+        badge.style.background = degraded ? '#fef3c7' : '#dcfce7';
+        badge.style.color = degraded ? '#92400e' : '#166534';
+        badge.title = (d.issues || []).join(' · ');
+      }
+    } catch (e) {
+      if (badge) { badge.textContent = '?'; badge.style.background = '#fee2e2'; badge.style.color = '#b91c1c'; }
+      body.innerHTML = '<span style="color:var(--text-tertiary);">Could not reach /api/health/data.</span>';
+    }
+  }
+  loadDataHealth();
+  setInterval(function () { if (document.hidden) return; loadDataHealth(); }, 10 * 60 * 1000);
+
+  // ── Debug-only tooling: hidden unless ?debug=1 ────────────────
+  if (!DEBUG_UI) {
+    ['snaptrade-ytdtest', 'snaptrade-debug', 'model-check-row'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+
   // ── Init ─────────────────────────────────────────────────────
   loadIndices();
   loadWatchlist();
@@ -18378,14 +18704,13 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   document.getElementById('restore-all-btn')?.addEventListener('click', async () => {
-    if (!confirm('Restore all archived reports to Saved Reports?')) return;
+    if (!(await dgaConfirm({ title: 'Restore all archived reports', message: 'Restore all archived reports to Saved Reports?', confirmLabel: 'Restore all', danger: false }))) return;
     await window.dgaFetch('/api/reports/restore-all', { method: 'POST' });
     loadArchivedReports();
     loadReports();
   });
 
   // ── Railway cost & memory tracker (Settings) ──────────────────────────────
-  function _rwMoney(v){ return (v==null)?'—':('$'+Number(v).toFixed(2)); }
   function _rwDur(s){
     if(!s&&s!==0) return '—';
     const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
@@ -18405,31 +18730,31 @@ End with the sleeve block at this account's real market value so I can push it t
         badge.style.color = d.on_railway?'#166534':'#64748b'; }
       const memPct = m.mem_pct!=null ? Math.min(100, m.mem_pct) : null;
       const barColor = memPct==null?'#cbd5e1':(memPct>85?'#dc2626':memPct>65?'#d97706':'#2563eb');
-      const card=(label,val,sub)=>`<div style="flex:1;min-width:120px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:11px 13px;">
-          <div style="font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:#94a3b8;">${label}</div>
-          <div style="font-size:21px;font-weight:800;color:#0A1628;margin-top:3px;line-height:1;">${val}</div>
-          ${sub?`<div style="font-size:10px;color:#64748b;margin-top:4px;">${sub}</div>`:''}
+      const card=(label,val,sub)=>`<div style="flex:1;min-width:120px;background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:11px 13px;">
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:var(--text-tertiary);">${label}</div>
+          <div style="font-size:21px;font-weight:800;color:var(--text-primary);margin-top:3px;line-height:1;">${val}</div>
+          ${sub?`<div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">${sub}</div>`:''}
         </div>`;
-      const row=(k,v,strong)=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f9;${strong?'font-weight:800;color:#0A1628;':'color:#475569;'}">
+      const row=(k,v,strong)=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--panel-edge,#f1f5f9);${strong?'font-weight:800;color:var(--text-primary);':'color:var(--text-secondary);'}">
           <span>${k}</span><span style="font-variant-numeric:tabular-nums;">${v}</span></div>`;
       body.innerHTML = `
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-          ${card('Projected this month', _rwMoney(c.projected_month), `≈ ${_rwMoney(c.per_day)}/day`)}
-          ${card('Month-to-date', _rwMoney(c.month_to_date), `${c.pct_elapsed!=null?c.pct_elapsed+'% of month · day '+c.day_of_month+'/'+c.days_in_month:''}`)}
-          ${card('Remaining', _rwMoney(c.remaining_month), `${c.days_in_month&&c.day_of_month?(c.days_in_month-c.day_of_month)+' days left':''}`)}
+          ${card('Projected this month', fmtUSDFull(c.projected_month), `≈ ${fmtUSDFull(c.per_day)}/day`)}
+          ${card('Month-to-date', fmtUSDFull(c.month_to_date), `${c.pct_elapsed!=null?c.pct_elapsed+'% of month · day '+c.day_of_month+'/'+c.days_in_month:''}`)}
+          ${card('Remaining', fmtUSDFull(c.remaining_month), `${c.days_in_month&&c.day_of_month?(c.days_in_month-c.day_of_month)+' days left':''}`)}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
           <div>
-            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Cost breakdown · est.</div>
-            ${row('Memory · '+(mem.billed_gb!=null?mem.billed_gb.toFixed(2)+' GB avg × $'+(d.prices?.mem_gb_month||10):'—'), _rwMoney(c.memory_month))}
-            ${row('CPU · '+(m.avg_vcpu!=null?m.avg_vcpu.toFixed(3)+' vCPU × $'+(d.prices?.vcpu_month||20):'—'), _rwMoney(c.cpu_month))}
-            ${(c.base_month? row('Base plan', _rwMoney(c.base_month)) : '')}
-            ${(c.included_credit? row('Included credit', '−'+_rwMoney(c.included_credit)) : '')}
-            ${row('Projected total / month', _rwMoney(c.projected_month), true)}
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:7px;">Cost breakdown · est.</div>
+            ${row('Memory · '+(mem.billed_gb!=null?mem.billed_gb.toFixed(2)+' GB avg × $'+(d.prices?.mem_gb_month||10):'—'), fmtUSDFull(c.memory_month))}
+            ${row('CPU · '+(m.avg_vcpu!=null?m.avg_vcpu.toFixed(3)+' vCPU × $'+(d.prices?.vcpu_month||20):'—'), fmtUSDFull(c.cpu_month))}
+            ${(c.base_month? row('Base plan', fmtUSDFull(c.base_month)) : '')}
+            ${(c.included_credit? row('Included credit', '−'+fmtUSDFull(c.included_credit)) : '')}
+            ${row('Projected total / month', fmtUSDFull(c.projected_month), true)}
           </div>
           <div>
-            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;margin-bottom:7px;">Live container</div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:#475569;margin-bottom:3px;">
+            <div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:7px;">Live container</div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">
               <span>Memory (now)</span><span style="font-variant-numeric:tabular-nums;">${m.mem_current_gb!=null?m.mem_current_gb.toFixed(2)+' GB':'—'}${m.mem_limit_gb?' / '+m.mem_limit_gb+' GB':''}${memPct!=null?'  ('+memPct+'%)':''}</span>
             </div>
             <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden;margin-bottom:6px;">
@@ -18442,7 +18767,7 @@ End with the sleeve block at this account's real market value so I can push it t
             ${env.service?row('Service / region', (env.service||'—')+(env.region?' · '+env.region:'')):''}
           </div>
         </div>
-        <div style="margin-top:14px;padding:10px 12px;background:#f0f9ff;border:1px solid #e0f2fe;border-radius:7px;font-size:10.5px;color:#475569;line-height:1.55;">
+        <div style="margin-top:14px;padding:10px 12px;background:#f0f9ff;border:1px solid #e0f2fe;border-radius:7px;font-size:10.5px;color:var(--text-secondary);line-height:1.55;">
           <strong style="color:#0369a1;">Memory hygiene:</strong>
           ${mh.job_entries||0} active job entries + ${mh.cache_entries||0} cache entries in RAM.
           Janitor caps job stores to ${mh.job_cap} most-recent + reclaims heap to the OS every ${Math.round((mh.sweep_interval_s||600)/60)} min
@@ -18454,7 +18779,7 @@ End with the sleeve block at this account's real market value so I can push it t
           ${act.last_activity_ago_s!=null?`Last request ${act.last_activity_ago_s<90?act.last_activity_ago_s+'s':Math.round(act.last_activity_ago_s/60)+'m'} ago.`:''}
         </div>`;
     }catch(e){
-      body.innerHTML = '<span style="color:#94a3b8;">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';
+      body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load Railway usage'+(e&&e.message?' ('+e.message+')':'')+'.</span>';
     }
   }
   document.getElementById('rw-refresh')?.addEventListener('click', loadRailwayUsage);
@@ -18493,7 +18818,6 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (e) { /* leave the user on the page */ }
     function cleanUrl(){ try { window.history.replaceState({}, '', window.location.pathname); } catch (_) {} }
   }
-  const _plaidMoney = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
   async function loadPlaid(){
     const body = document.getElementById('plaid-body');
     const badge = document.getElementById('plaid-badge');
@@ -18514,7 +18838,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const items = id.items || [];
       const mAccts = id.managed_accounts || [];
       if (!items.length) {
-        body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>';
+        body.innerHTML = '<span style="color:var(--text-secondary);">No accounts linked yet. Click <strong>+ Connect Fidelity</strong> to link your brokerage.</span>';
         return;
       }
       // Normalized positions (read-only; never touches the manual CSV path).
@@ -18528,45 +18852,45 @@ End with the sleeve block at this account's real market value so I can push it t
       body.innerHTML = items.map(it => {
         const accts = (it.accounts || []).map(a =>
           `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11.5px;">
-             <span style="color:#475569;">${_gfEsc(a.name || 'Account')} <span style="color:#94a3b8;">••${_gfEsc(a.mask || '')}</span></span>
-             <span style="font-weight:700;color:#0A1628;">${_plaidMoney(a.value)}</span></div>`).join('');
+             <span style="color:var(--text-secondary);">${_gfEsc(a.name || 'Account')} <span style="color:var(--text-tertiary);">••${_gfEsc(a.mask || '')}</span></span>
+             <span style="font-weight:700;color:var(--text-primary);">${fmtUSDFull(a.value, 0)}</span></div>`).join('');
         const h = posByItem[it.item_id];
         const positions = (h && h.positions || []);
         const posRows = positions.map(p =>
           `<tr style="font-size:11px;">
-             <td style="padding:2px 6px 2px 0;font-weight:700;color:#0A1628;">${_gfEsc(p.symbol || '—')}</td>
-             <td style="padding:2px 6px;color:#94a3b8;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name || '')}</td>
-             <td style="padding:2px 6px;text-align:right;color:#475569;">${p.quantity != null ? Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}) : '—'}</td>
-             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:#0A1628;">${_plaidMoney(p.market_value)}</td>
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:var(--text-primary);">${_gfEsc(p.symbol || '—')}</td>
+             <td style="padding:2px 6px;color:var(--text-tertiary);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name || '')}</td>
+             <td style="padding:2px 6px;text-align:right;color:var(--text-secondary);">${p.quantity != null ? Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}) : '—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:var(--text-primary);">${fmtUSDFull(p.market_value, 0)}</td>
            </tr>`).join('');
         const posBlock = positions.length
-          ? `<div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:8px;">
-               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#64748b;margin-bottom:4px;">
+          ? `<div style="margin-top:8px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-secondary);margin-bottom:4px;">
                  <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
-                 <span>Total <strong style="color:#0A1628;">${_plaidMoney(h.total_value)}</strong></span>
+                 <span>Total <strong style="color:var(--text-primary);">${fmtUSDFull(h.total_value, 0)}</strong></span>
                </div>
                <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
              </div>`
           : '';
-        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
+        return `<div style="border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:10px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(it.institution || 'Fidelity')}</span>
+            <span style="font-weight:800;color:var(--text-primary);font-size:13px;">${_gfEsc(it.institution || 'Fidelity')}</span>
             <span style="flex:1;"></span>
             <button class="tab-btn" data-plaid-sync="${_gfEsc(it.item_id)}">↻ Sync</button>
             <button class="tab-btn" data-plaid-remove="${_gfEsc(it.item_id)}" style="color:#dc2626;">Remove</button>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--text-secondary);">
             <span>Assign to:</span>
-            <select data-plaid-assign="${_gfEsc(it.item_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(it.fund_id)}</select>
+            <select data-plaid-assign="${_gfEsc(it.item_id)}" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);">${acctOptions(it.fund_id)}</select>
           </div>
           ${accts}${posBlock}
-          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'} · holdings shown read-only; manual CSV uploads unaffected</div>
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Last synced ${it.last_synced_at ? _gfEsc(String(it.last_synced_at).slice(0,16).replace('T',' ')) : '—'} · holdings shown read-only; manual CSV uploads unaffected</div>
         </div>`;
       }).join('');
       body.querySelectorAll('[data-plaid-sync]').forEach(b => b.addEventListener('click', () => dgaPlaidSync(b.getAttribute('data-plaid-sync'))));
       body.querySelectorAll('[data-plaid-remove]').forEach(b => b.addEventListener('click', () => dgaPlaidRemove(b.getAttribute('data-plaid-remove'))));
       body.querySelectorAll('[data-plaid-assign]').forEach(s => s.addEventListener('change', () => dgaPlaidAssign(s.getAttribute('data-plaid-assign'), s.value)));
-    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load linked accounts.</span>'; }
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load linked accounts.</span>'; }
   }
   async function dgaPlaidAssign(itemId, fundId){
     try {
@@ -18598,7 +18922,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
       const accounts = ad.accounts || [];
       const mAccts = ad.managed_accounts || [];
-      if (!accounts.length) { body.innerHTML = '<span style="color:#64748b;">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
+      if (!accounts.length) { body.innerHTML = '<span style="color:var(--text-secondary);">No accounts linked yet. Click <strong>+ Connect Fidelity</strong>, finish in the new tab, then <strong>↻ Sync</strong>.</span>'; return; }
       const acctOptions = (sel) => ['<option value="">— Not assigned —</option>']
         .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc((m.short_name||m.name)+(m.fund_type==='lp_fund'?' (Fund)':''))}</option>`)).join('');
       const visibleAccts = accounts.filter(a => !a.hidden);
@@ -18612,50 +18936,50 @@ End with the sleeve block at this account's real market value so I can push it t
         const ago = mins < 60 ? (mins + 'm ago') : (mins < 1440 ? (Math.floor(mins/60) + 'h ' + (mins%60) + 'm ago') : (Math.floor(mins/1440) + 'd ago'));
         const col = mins < 120 ? '#16a34a' : (mins < 1440 ? '#d97706' : '#dc2626');
         const when = new Date(_maxSync).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
-        freshHtml = '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748b;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9;">'
+        freshHtml = '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
           + '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';display:inline-block;"></span>'
-          + '<span>Holdings last synced <strong style="color:' + col + ';">' + ago + '</strong> <span style="color:#94a3b8;">(' + _gfEsc(when) + ')</span></span>'
+          + '<span>Holdings last synced <strong style="color:' + col + ';">' + ago + '</strong> <span style="color:var(--text-tertiary);">(' + _gfEsc(when) + ')</span></span>'
           + (mins >= 1440 ? '<span style="color:#dc2626;">· stale — click ↻ Sync</span>' : '') + '</div>';
       }
       body.innerHTML = freshHtml + visibleAccts.map(a => {
         const positions = a.positions || [];
         const posRows = positions.map(p =>
           `<tr style="font-size:11px;">
-             <td style="padding:2px 6px 2px 0;font-weight:700;color:#0A1628;">${_gfEsc(p.symbol||'—')}</td>
-             <td style="padding:2px 6px;color:#94a3b8;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name||'')}</td>
-             <td style="padding:2px 6px;text-align:right;color:#475569;">${p.quantity!=null?Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}):'—'}</td>
-             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:#0A1628;">${_plaidMoney(p.market_value)}</td>
+             <td style="padding:2px 6px 2px 0;font-weight:700;color:var(--text-primary);">${_gfEsc(p.symbol||'—')}</td>
+             <td style="padding:2px 6px;color:var(--text-tertiary);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_gfEsc(p.name||'')}</td>
+             <td style="padding:2px 6px;text-align:right;color:var(--text-secondary);">${p.quantity!=null?Number(p.quantity).toLocaleString(undefined,{maximumFractionDigits:4}):'—'}</td>
+             <td style="padding:2px 0 2px 6px;text-align:right;font-weight:700;color:var(--text-primary);">${fmtUSDFull(p.market_value, 0)}</td>
            </tr>`).join('');
         const posBlock = positions.length
-          ? `<div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:8px;">
-               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#64748b;margin-bottom:4px;">
+          ? `<div style="margin-top:8px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
+               <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-secondary);margin-bottom:4px;">
                  <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${positions.length} Holding${positions.length===1?'':'s'}</span>
-                 <span>Total <strong style="color:#0A1628;">${_plaidMoney(a.total_value)}</strong></span>
+                 <span>Total <strong style="color:var(--text-primary);">${fmtUSDFull(a.total_value, 0)}</strong></span>
                </div>
                <div style="max-height:220px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;">${posRows}</table></div>
              </div>`
-          : '<div style="font-size:11px;color:#94a3b8;margin-top:6px;">No positions returned yet — click ↻ Sync once the connection finishes.</div>';
-        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
+          : '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px;">No positions returned yet — click ↻ Sync once the connection finishes.</div>';
+        return `<div style="border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;padding:12px;margin-bottom:10px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="font-weight:800;color:#0A1628;font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#94a3b8;font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
+            <span style="font-weight:800;color:var(--text-primary);font-size:13px;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:var(--text-tertiary);font-weight:600;">••${_gfEsc(a.account_mask||'')}</span></span>
             <span style="flex:1;"></span>
-            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:#64748b;">Ignore</button>
+            <button class="tab-btn" data-snap-hide="${_gfEsc(a.account_id)}" style="color:var(--text-secondary);">Ignore</button>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:#64748b;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--text-secondary);">
             <span>Assign to:</span>
-            <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(a.fund_id)}</select>
+            <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;background:var(--surface,#fff);">${acctOptions(a.fund_id)}</select>
           </div>
           ${posBlock}
-          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · read-only auto-import (positions + activity + balances); manual CSV uploads stay as backup</div>
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · read-only auto-import (positions + activity + balances); manual CSV uploads stay as backup</div>
         </div>`;
       }).join('');
-      if (!visibleAccts.length) body.innerHTML = freshHtml + '<div style="font-size:11px;color:#94a3b8;">All linked accounts are ignored. Restore one below.</div>';
+      if (!visibleAccts.length) body.innerHTML = freshHtml + '<div style="font-size:11px;color:var(--text-tertiary);">All linked accounts are ignored. Restore one below.</div>';
       if (hiddenAccts.length) {
-        body.innerHTML += `<div style="margin-top:6px;font-size:11px;color:#94a3b8;">
+        body.innerHTML += `<div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">
           <div style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${hiddenAccts.length} Ignored</div>
           ${hiddenAccts.map(a => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
-             <span style="flex:1;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:#cbd5e1;">••${_gfEsc(a.account_mask||'')}</span></span>
-             <button class="tab-btn" data-snap-unhide="${_gfEsc(a.account_id)}" style="color:#0A1628;">Restore</button>
+             <span style="flex:1;">${_gfEsc(a.account_name||a.brokerage||'Account')} <span style="color:var(--text-quaternary,#cbd5e1);">••${_gfEsc(a.account_mask||'')}</span></span>
+             <button class="tab-btn" data-snap-unhide="${_gfEsc(a.account_id)}" style="color:var(--text-primary);">Restore</button>
            </div>`).join('')}
         </div>`;
       }
@@ -18665,7 +18989,7 @@ End with the sleeve block at this account's real market value so I can push it t
       accounts.forEach(a => { if (a.connection_id) { (conns[a.connection_id] = conns[a.connection_id] || {brokerage:a.brokerage, n:0}).n++; } });
       const connIds = Object.keys(conns);
       if (connIds.length) {
-        body.innerHTML += `<div style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:8px;">
+        body.innerHTML += `<div style="margin-top:10px;border-top:1px solid var(--panel-edge,#f1f5f9);padding-top:8px;">
           ${connIds.map(cid => `<button class="tab-btn" data-snap-remove="${_gfEsc(cid)}" data-snap-remove-brk="${_gfEsc(conns[cid].brokerage||'this brokerage')}" data-snap-remove-n="${conns[cid].n}" style="color:#dc2626;font-size:11px;">Remove ${_gfEsc(conns[cid].brokerage||'connection')} connection (${conns[cid].n} account${conns[cid].n===1?'':'s'})</button>`).join(' ')}
         </div>`;
       }
@@ -18673,7 +18997,7 @@ End with the sleeve block at this account's real market value so I can push it t
       body.querySelectorAll('[data-snap-assign]').forEach(s => s.addEventListener('change', () => dgaSnapAssign(s.getAttribute('data-snap-assign'), s.value)));
       body.querySelectorAll('[data-snap-hide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-hide'), true)));
       body.querySelectorAll('[data-snap-unhide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-unhide'), false)));
-    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load SnapTrade accounts.</span>'; }
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load SnapTrade accounts.</span>'; }
   }
   async function dgaSnapConnect(){
     const btn = document.getElementById('snaptrade-connect');
@@ -18683,7 +19007,7 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!d.ok || !d.redirect_uri) { alert(d.detail || 'Could not start SnapTrade connection.'); return; }
       window.open(d.redirect_uri, '_blank');
       const body = document.getElementById('snaptrade-body');
-      if (body) body.innerHTML = '<span style="color:#64748b;">Finish linking Fidelity in the new tab, then click <strong>↻ Sync</strong> to pull holdings.</span>';
+      if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Finish linking Fidelity in the new tab, then click <strong>↻ Sync</strong> to pull holdings.</span>';
       let tries = 0;
       const iv = setInterval(async () => {
         tries++;
@@ -18734,25 +19058,24 @@ End with the sleeve block at this account's real market value so I can push it t
   async function dgaSnapRemove(connectionId, brokerage, n){
     const brk = brokerage || 'this brokerage';
     const cnt = n || 0;
-    if (!confirm('Remove the entire ' + brk + ' connection?\n\nThis disconnects the brokerage and deletes ALL ' + (cnt? cnt+' ' : '') + 'account' + (cnt===1?'':'s') + ' under it (plus their fund assignments). To hide just one account, use “Ignore” instead.\n\nThis cannot be undone — you would have to reconnect and re-assign every account.')) return;
+    if (!(await dgaConfirm({ title: 'Remove ' + brk + ' connection', message: 'Remove the entire ' + brk + ' connection?\n\nThis disconnects the brokerage and deletes ALL ' + (cnt? cnt+' ' : '') + 'account' + (cnt===1?'':'s') + ' under it (plus their fund assignments). To hide just one account, use “Ignore” instead.\n\nThis cannot be undone — you would have to reconnect and re-assign every account.', confirmLabel: 'Remove connection' }))) return;
     try { await window.dgaFetch('/api/snaptrade/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ connection_id: connectionId }) }); } catch (e) {}
     loadSnapTrade();
   }
   async function dgaSnapDebug(){
     const body = document.getElementById('snaptrade-body');
-    if (body) body.innerHTML = '<span style="color:#64748b;">Reading raw SnapTrade response…</span>';
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Reading raw SnapTrade response…</span>';
     try {
       const d = await (await window.dgaFetch('/api/snaptrade/debug')).json();
-      if (body) body.innerHTML = '<pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;max-height:380px;overflow:auto;">'+_gfEsc(JSON.stringify(d,null,2))+'</pre><button class="tab-btn" id="snaptrade-back" style="margin-top:8px;">← Back</button>';
+      if (body) body.innerHTML = '<pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-word;background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;padding:10px;max-height:380px;overflow:auto;">'+_gfEsc(JSON.stringify(d,null,2))+'</pre><button class="tab-btn" id="snaptrade-back" style="margin-top:8px;">← Back</button>';
       document.getElementById('snaptrade-back')?.addEventListener('click', loadSnapTrade);
     } catch (e) { if (body) body.innerHTML = '<span style="color:#dc2626;">Diagnose failed: '+_gfEsc(e.message||String(e))+'</span>'; }
   }
-  function _snapMoney(v){ return (v<0?'-':'')+'$'+Math.abs(v||0).toLocaleString(undefined,{maximumFractionDigits:0}); }
   async function dgaSnapActivity(){
     const body = document.getElementById('snaptrade-body');
     const btn = document.getElementById('snaptrade-activity');
     if (btn) { btn.disabled = true; btn.textContent = '📊 Syncing…'; }
-    if (body) body.innerHTML = '<span style="color:#64748b;">Pulling YTD transaction history from SnapTrade…</span>';
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Pulling YTD transaction history from SnapTrade…</span>';
     try {
       const s = await (await window.dgaFetch('/api/snaptrade/activities/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
       if (!s.ok) throw new Error(s.detail || 'sync failed');
@@ -18763,10 +19086,10 @@ End with the sleeve block at this account's real market value so I can push it t
       const errs = s.errors || [];
       const totalPulled = synced.reduce(function(t,x){ return t + (x.activities||0); }, 0);
       let h = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;">'
-        + '<span><strong>'+(sum.buy_count||0)+'</strong> buys · <span style="color:#16a34a;">'+_snapMoney(sum.buy_value)+'</span></span>'
-        + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+_snapMoney(sum.sell_value)+'</span></span>'
-        + '<span>Net external flow: <strong>'+_snapMoney(sum.net_external_flow)+'</strong></span>'
-        + '<span style="color:#94a3b8;">'+(d.count||0)+' in '+(d.year||'')+' · '+totalPulled+' pulled ('+(s.start_date||'')+'→'+(s.end_date||'')+')</span></div>';
+        + '<span><strong>'+(sum.buy_count||0)+'</strong> buys · <span style="color:#16a34a;">'+fmtUSDFull(sum.buy_value, 0)+'</span></span>'
+        + '<span><strong>'+(sum.sell_count||0)+'</strong> sells · <span style="color:#dc2626;">'+fmtUSDFull(sum.sell_value, 0)+'</span></span>'
+        + '<span>Net external flow: <strong>'+fmtUSDFull(sum.net_external_flow, 0)+'</strong></span>'
+        + '<span style="color:var(--text-tertiary);">'+(d.count||0)+' in '+(d.year||'')+' · '+totalPulled+' pulled ('+(s.start_date||'')+'→'+(s.end_date||'')+')</span></div>';
       const gated = errs.some(function(e){ return /no longer available/i.test(e.error||''); });
       if (errs.length) {
         h += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px;margin-bottom:10px;font-size:11px;color:#b91c1c;">'
@@ -18776,7 +19099,7 @@ End with the sleeve block at this account's real market value so I can push it t
       if (gated) {
         try {
           const pr = await (await window.dgaFetch('/api/snaptrade/activities-probe')).json();
-          h += '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;margin-bottom:10px;font-size:10.5px;">'
+          h += '<div style="background:var(--bg-subtle,#f8fafc);border:1px solid var(--panel-edge,#e2e8f0);border-radius:6px;padding:10px;margin-bottom:10px;font-size:10.5px;">'
             + '<strong>Transaction methods in SDK:</strong> '+_gfEsc((pr.methods_found||[]).join(', ')||'none')+'<br><br>'
             + (pr.results||[]).map(function(r){
                 return '<div style="margin-bottom:5px;">'+(r.ok?'✅':'❌')+' <strong>'+_gfEsc(r.method)+'</strong> (shape '+r.shape+'): '
@@ -18786,22 +19109,22 @@ End with the sleeve block at this account's real market value so I can push it t
         } catch(e) {}
       }
       if (!acts.length) {
-        h += '<div style="color:#94a3b8;font-size:12px;">No activity in '+(d.year||'this year')+'. Pulled '+totalPulled+' total rows across the requested window. '
+        h += '<div style="color:var(--text-tertiary);font-size:12px;">No activity in '+(d.year||'this year')+'. Pulled '+totalPulled+' total rows across the requested window. '
           + 'If 0 pulled and no errors above, SnapTrade returned nothing for this window (may still be backfilling, or the trades predate '+(s.start_date||'Jan 1')+').</div>';
       } else {
         h += '<div style="max-height:360px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
-          + '<thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e2e8f0;">'
-          + '<th style="padding:4px 6px;">Date</th><th>Type</th><th>Symbol</th><th style="text-align:right;">Units</th><th style="text-align:right;">Price</th><th style="text-align:right;">Amount</th><th>Account</th></tr></thead><tbody>';
+          + '<thead><tr style="text-align:left;color:var(--text-secondary);border-bottom:1px solid var(--panel-edge,#e2e8f0);">'
+          + '<th style="padding:4px 6px;">Date</th><th>Type</th><th>Symbol</th><th class="num">Units</th><th class="num">Price</th><th class="num">Amount</th><th>Account</th></tr></thead><tbody>';
         acts.slice(0,300).forEach(function(a){
           const c = a.type==='BUY'?'#16a34a':(a.type==='SELL'?'#dc2626':'#475569');
-          h += '<tr style="border-bottom:1px solid #f1f5f9;">'
-            + '<td style="padding:3px 6px;color:#94a3b8;">'+_gfEsc(a.trade_date||'')+'</td>'
+          h += '<tr style="border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
+            + '<td style="padding:3px 6px;color:var(--text-tertiary);">'+_gfEsc(a.trade_date||'')+'</td>'
             + '<td style="font-weight:700;color:'+c+';">'+_gfEsc(a.type||'')+'</td>'
             + '<td style="font-weight:700;">'+_gfEsc(a.symbol||'—')+'</td>'
-            + '<td style="text-align:right;">'+(a.units!=null?Number(a.units).toLocaleString(undefined,{maximumFractionDigits:4}):'')+'</td>'
-            + '<td style="text-align:right;">'+(a.price!=null?'$'+Number(a.price).toFixed(2):'')+'</td>'
-            + '<td style="text-align:right;">'+(a.amount!=null?_snapMoney(a.amount):'')+'</td>'
-            + '<td style="color:#94a3b8;">'+_gfEsc(a.account_name||'')+'</td></tr>';
+            + '<td class="num">'+(a.units!=null?Number(a.units).toLocaleString(undefined,{maximumFractionDigits:4}):'')+'</td>'
+            + '<td class="num">'+(a.price!=null?'$'+Number(a.price).toFixed(2):'')+'</td>'
+            + '<td class="num">'+(a.amount!=null?fmtUSDFull(a.amount, 0):'')+'</td>'
+            + '<td style="color:var(--text-tertiary);">'+_gfEsc(a.account_name||'')+'</td></tr>';
         });
         h += '</tbody></table></div>';
       }
@@ -18813,25 +19136,25 @@ End with the sleeve block at this account's real market value so I can push it t
   }
   async function dgaSnapYtdTest(){
     const body = document.getElementById('snaptrade-body');
-    if (body) body.innerHTML = '<span style="color:#64748b;">Reconstructing Jan-1 values from trades + price history…</span>';
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Reconstructing Jan-1 values from trades + price history…</span>';
     try {
       const ad = await (await window.dgaFetch('/api/snaptrade/accounts')).json();
       const accts = ad.accounts || [];
       const mAccts = ad.managed_accounts || [];
       const nameByFund = {}; mAccts.forEach(function(m){ nameByFund[m.fund_id] = m.short_name||m.name; });
       const fundIds = Array.from(new Set(accts.filter(function(a){return a.fund_id;}).map(function(a){return a.fund_id;})));
-      if (!fundIds.length) { if (body) body.innerHTML = '<span style="color:#94a3b8;">No accounts assigned to a fund yet — assign one, then run the test.</span>'; return; }
-      let h = '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">Equity-only reconstructed YTD vs. the CSV’s official figure. A few-point gap is expected (cash/dividends/timing).</div>';
-      h += '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e2e8f0;">'
+      if (!fundIds.length) { if (body) body.innerHTML = '<span style="color:var(--text-tertiary);">No accounts assigned to a fund yet — assign one, then run the test.</span>'; return; }
+      let h = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">Equity-only reconstructed YTD vs. the CSV’s official figure. A few-point gap is expected (cash/dividends/timing).</div>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="text-align:left;color:var(--text-secondary);border-bottom:1px solid var(--panel-edge,#e2e8f0);">'
         + '<th style="padding:4px 6px;">Fund</th><th style="text-align:right;">Jan-1 equity</th><th style="text-align:right;">Now equity</th><th style="text-align:right;">Recon YTD %</th><th style="text-align:right;">CSV YTD %</th><th style="text-align:right;">Diff</th><th>Priced?</th></tr></thead><tbody>';
       for (const fid of fundIds) {
         const r = await (await window.dgaFetch('/api/snaptrade/ytd-reconstruct?fund_id='+encodeURIComponent(fid))).json();
         const diff = r.diff_vs_csv;
         const dColor = diff==null?'#94a3b8':(Math.abs(diff)<=3?'#16a34a':(Math.abs(diff)<=8?'#d97706':'#dc2626'));
-        h += '<tr style="border-bottom:1px solid #f1f5f9;">'
+        h += '<tr style="border-bottom:1px solid var(--panel-edge,#f1f5f9);">'
           + '<td style="padding:3px 6px;font-weight:700;">'+_gfEsc(nameByFund[fid]||fid)+'</td>'
-          + '<td style="text-align:right;">'+(r.jan1_equity!=null?_snapMoney(r.jan1_equity):'—')+'</td>'
-          + '<td style="text-align:right;">'+(r.now_equity!=null?_snapMoney(r.now_equity):'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.jan1_equity!=null?fmtUSDFull(r.jan1_equity, 0):'—')+'</td>'
+          + '<td style="text-align:right;">'+(r.now_equity!=null?fmtUSDFull(r.now_equity, 0):'—')+'</td>'
           + '<td style="text-align:right;font-weight:700;">'+(r.reconstructed_ytd_price_pct!=null?r.reconstructed_ytd_price_pct.toFixed(2)+'%':'—')+'</td>'
           + '<td style="text-align:right;">'+(r.csv_ytd_pct!=null?r.csv_ytd_pct.toFixed(2)+'%':'—')+'</td>'
           + '<td style="text-align:right;font-weight:700;color:'+dColor+';">'+(diff!=null?(diff>=0?'+':'')+diff.toFixed(2):'—')+'</td>'
@@ -18846,7 +19169,7 @@ End with the sleeve block at this account's real market value so I can push it t
     const btn = document.getElementById('snaptrade-refresh');
     const body = document.getElementById('snaptrade-body');
     if (btn) { btn.disabled = true; btn.textContent = '⟳ Refreshing…'; }
-    if (body) body.innerHTML = '<span style="color:#64748b;">Asking SnapTrade to re-pull Fidelity…</span>';
+    if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Asking SnapTrade to re-pull Fidelity…</span>';
     try {
       const r = await (await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
       if (!r.ok) throw new Error(r.detail || 'refresh failed');
@@ -18856,7 +19179,7 @@ End with the sleeve block at this account's real market value so I can push it t
         if (realtime) {
           // SnapTrade says the data is already real-time — no manual refresh exists.
           // Best we can do is re-read the live endpoint (normal sync).
-          if (body) body.innerHTML = '<span style="color:#64748b;">SnapTrade reports your holdings endpoint is already real-time (no manual refresh available). Re-reading it now…<br><span style="color:#94a3b8;font-size:11px;">If a position is still missing, it’s Fidelity not yet propagating the trade to SnapTrade — that resolves on Fidelity’s cycle; production would not change it.</span></span>';
+          if (body) body.innerHTML = '<span style="color:var(--text-secondary);">SnapTrade reports your holdings endpoint is already real-time (no manual refresh available). Re-reading it now…<br><span style="color:var(--text-tertiary);font-size:11px;">If a position is still missing, it’s Fidelity not yet propagating the trade to SnapTrade — that resolves on Fidelity’s cycle; production would not change it.</span></span>';
           setTimeout(dgaSnapSync, 1200);
         } else {
           if (body) body.innerHTML = '<div style="color:#dc2626;font-size:12px;">SnapTrade refused the refresh: ' + _gfEsc(emsg) + '</div><button class="tab-btn" id="snaptrade-back" style="margin-top:10px;">← Back</button>';
@@ -18869,7 +19192,7 @@ End with the sleeve block at this account's real market value so I can push it t
       let secs = 50;
       const tick = setInterval(function(){
         secs -= 5;
-        if (body) body.innerHTML = '<span style="color:#64748b;">SnapTrade is re-pulling Fidelity (refreshed ' + r.refreshed + ' connection). Auto-syncing in ' + Math.max(secs,0) + 's…</span>';
+        if (body) body.innerHTML = '<span style="color:var(--text-secondary);">SnapTrade is re-pulling Fidelity (refreshed ' + r.refreshed + ' connection). Auto-syncing in ' + Math.max(secs,0) + 's…</span>';
         if (secs <= 0) { clearInterval(tick); if (btn) { btn.disabled = false; btn.textContent = '⟳ Force refresh'; } dgaSnapSync(); }
       }, 5000);
     } catch (e) {
@@ -18895,7 +19218,7 @@ End with the sleeve block at this account's real market value so I can push it t
       window.Plaid.create({
         token: d.link_token,
         onSuccess: async (public_token) => {
-          if (body) body.innerHTML = '<span style="color:#64748b;">Linking… pulling first holdings snapshot.</span>';
+          if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Linking… pulling first holdings snapshot.</span>';
           await _plaidExchange(public_token);
         },
         onExit: (err) => { localStorage.removeItem(_PLAID_LT_KEY); if (err) loadPlaid(); },
@@ -18908,7 +19231,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (b) b.style.opacity = '1'; loadPlaid();
   }
   async function dgaPlaidRemove(itemId){
-    if (!confirm('Disconnect this institution and delete its stored data?')) return;
+    if (!(await dgaConfirm({ title: 'Disconnect institution', message: 'Disconnect this institution and delete its stored data?', confirmLabel: 'Disconnect' }))) return;
     try { await window.dgaFetch('/api/plaid/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }); } catch (e) {}
     loadPlaid();
   }
@@ -18938,27 +19261,27 @@ End with the sleeve block at this account's real market value so I can push it t
       }
       body.innerHTML = st.enabled
         ? `<span style="color:#166534;font-weight:700;">✓ Two-factor authentication is on.</span> You’ll enter a 6-digit code at login.
-           <span style="color:#94a3b8;">${st.recovery_remaining} recovery code(s) remaining.</span>`
+           <span style="color:var(--text-tertiary);">${st.recovery_remaining} recovery code(s) remaining.</span>`
         : 'Protect your login with an authenticator app (Google Authenticator, Authy, 1Password). Required by Plaid before linking accounts. Click <strong>Enable 2FA</strong> to set it up.';
-    } catch (e) { body.innerHTML = '<span style="color:#94a3b8;">Could not load 2FA status.</span>'; }
+    } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load 2FA status.</span>'; }
   }
   async function dgaMfaSetup(){
     const body = document.getElementById('mfa-body');
-    body.innerHTML = '<span style="color:#64748b;">Generating secret…</span>';
+    body.innerHTML = '<span style="color:var(--text-secondary);">Generating secret…</span>';
     let d;
     try { d = await (await window.dgaFetch('/api/auth/v2/mfa/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
     catch (e) { body.innerHTML = '<span style="color:#dc2626;">Setup failed.</span>'; return; }
     if (!d.ok) { body.innerHTML = '<span style="color:#dc2626;">' + (d.detail || 'Setup failed.') + '</span>'; return; }
     body.innerHTML = `
       <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
-        ${d.qr ? `<img src="${d.qr}" alt="QR" style="width:150px;height:150px;border:1px solid #e2e8f0;border-radius:8px;">` : ''}
+        ${d.qr ? `<img src="${d.qr}" alt="QR" style="width:150px;height:150px;border:1px solid var(--panel-edge,#e2e8f0);border-radius:8px;">` : ''}
         <div style="flex:1;min-width:200px;">
           <div style="margin-bottom:8px;">1. Scan the QR with your authenticator app, or enter this key manually:</div>
-          <code style="display:inline-block;background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:12px;word-break:break-all;">${_gfEsc(d.secret)}</code>
+          <code style="display:inline-block;background:var(--bg-subtle,#f1f5f9);padding:6px 10px;border-radius:6px;font-size:12px;word-break:break-all;">${_gfEsc(d.secret)}</code>
           <div style="margin:12px 0 6px;">2. Enter the 6-digit code it shows:</div>
           <div style="display:flex;gap:8px;">
             <input id="mfa-verify-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456"
-              style="width:120px;height:34px;border:1px solid #cbd5e1;border-radius:6px;text-align:center;letter-spacing:3px;font-size:15px;">
+              style="width:120px;height:34px;border:1px solid var(--panel-edge,#cbd5e1);border-radius:6px;text-align:center;letter-spacing:3px;font-size:15px;">
             <button id="mfa-verify-btn" class="btn-primary" style="height:34px;padding:0 14px;">Verify &amp; Enable</button>
           </div>
           <div id="mfa-verify-msg" style="font-size:11.5px;margin-top:6px;min-height:14px;"></div>
@@ -18986,33 +19309,69 @@ End with the sleeve block at this account's real market value so I can push it t
       <button id="mfa-done" class="tab-btn" style="margin-top:10px;">Done</button>`;
     document.getElementById('mfa-copy-codes').onclick = () => { navigator.clipboard?.writeText(d.recovery_codes.join('\n')); };
     document.getElementById('mfa-done').onclick = loadMfa;
-    loadMfa();   // refresh the badge/button to "ON"
+    // Do NOT call loadMfa() here — it rewrites #mfa-body and would hide the
+    // recovery codes the moment they render (they're shown exactly once).
+    // The badge flips to ON when the user clicks Done.
+    const _mfaBadge = document.getElementById('mfa-badge');
+    if (_mfaBadge) { _mfaBadge.textContent = 'ON'; _mfaBadge.style.background = '#dcfce7'; _mfaBadge.style.color = '#166534'; }
   }
-  async function dgaMfaDisable(){
-    const pw = prompt('Enter your account password to turn OFF two-factor authentication:');
-    if (!pw) return;
-    let d;
-    try { d = await (await window.dgaFetch('/api/auth/v2/mfa/disable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) })).json(); }
-    catch (e) { alert('Could not disable 2FA.'); return; }
-    if (!d.ok) { alert(d.detail || 'Password incorrect.'); return; }
-    loadMfa();
+  // Collects the password via an inline masked <input> in the MFA panel —
+  // never a plain-text prompt() (which echoes the password on screen).
+  function dgaMfaDisable(){
+    const body = document.getElementById('mfa-body');
+    if (!body) return;
+    body.innerHTML = `
+      <div style="margin-bottom:8px;color:var(--text-secondary);">Enter your account password to turn <strong>OFF</strong> two-factor authentication:</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input id="mfa-disable-pw" type="password" autocomplete="current-password" placeholder="Account password"
+          style="width:200px;height:34px;border:1px solid var(--panel-edge,#cbd5e1);border-radius:6px;padding:0 11px;font-size:12.5px;color:var(--text-primary);background:var(--surface,#fff);">
+        <button id="mfa-disable-go" class="tab-btn" style="height:34px;color:#dc2626;">Turn off 2FA</button>
+        <button id="mfa-disable-cancel" class="tab-btn" style="height:34px;">Cancel</button>
+      </div>
+      <div id="mfa-disable-msg" style="font-size:11.5px;margin-top:6px;min-height:14px;color:#dc2626;"></div>`;
+    const pwEl = document.getElementById('mfa-disable-pw');
+    const msg = document.getElementById('mfa-disable-msg');
+    async function go(){
+      const pw = (pwEl.value || '');
+      if (!pw) { msg.textContent = 'Enter your password.'; return; }
+      let d;
+      try { d = await (await window.dgaFetch('/api/auth/v2/mfa/disable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) })).json(); }
+      catch (e) { msg.textContent = 'Could not disable 2FA.'; return; }
+      if (!d.ok) { msg.textContent = d.detail || 'Password incorrect.'; return; }
+      loadMfa();
+    }
+    document.getElementById('mfa-disable-go').onclick = go;
+    document.getElementById('mfa-disable-cancel').onclick = loadMfa;
+    pwEl.addEventListener('keypress', e => { if (e.key === 'Enter') go(); });
+    pwEl.focus();
   }
 
   document.getElementById('plaid-connect')?.addEventListener('click', dgaPlaidConnect);
 
-  // Load archived list + Railway usage + linked accounts + 2FA when Settings tab is opened
+  // Refresh Settings panels when the Settings link is clicked. loadSettingsTab
+  // runs ALL panel loaders, each guarded by a 60s per-panel timestamp cache,
+  // so rapid re-clicks don't refetch anything.
   document.querySelectorAll('[data-tab="settings"]').forEach(el => {
-    el.addEventListener('click', () => { loadArchivedReports(); loadRailwayUsage(); loadSnapTrade(); loadPlaid(); loadMfa(); });
+    el.addEventListener('click', () => loadSettingsTab());
   });
 
   // If we returned from an OAuth institution (Fidelity), resume Plaid Link now.
   _plaidOAuthResume();
 
-  setInterval(loadIndices,          60_000);   // ribbon: every 60s
-  setInterval(loadWatchlist,        60_000);   // watchlist: every 60s
-  setInterval(loadTrendingTickers,  60_000);   // trending: every 60s
+  // All background polling is visibility-gated: a hidden tab makes ZERO
+  // requests (was ~4,300/day). On return to the foreground we kick one
+  // immediate refresh of the ribbon + watchlist so stale data clears fast.
+  const _visGated = (fn) => () => { if (document.hidden) return; fn(); };
+  setInterval(_visGated(loadIndices),          60_000);   // ribbon: every 60s
+  setInterval(_visGated(loadWatchlist),        60_000);   // watchlist: every 60s
+  setInterval(_visGated(loadTrendingTickers),  60_000);   // trending: every 60s
   // Market Pulse polling removed — see init block above.
-  setInterval(loadNewsForReports,  900_000);   // saved-report headlines: every 15 min
+  setInterval(_visGated(loadNewsForReports),  900_000);   // saved-report headlines: every 15 min
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    loadIndices();
+    loadWatchlist();
+  });
 
   // ── Dashboard drag-and-drop ──────────────────────────────────────
   (function _initDashboard() {
