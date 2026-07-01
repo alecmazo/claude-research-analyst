@@ -4142,11 +4142,24 @@ End with the sleeve block at this account's real market value so I can push it t
     <div id="acd-history"     style="margin-top:18px;"></div>
     <div id="acd-alltime" style="margin-top:18px;"></div>
 
-    <!-- ── Upload Panel ──────────────────────────────────────────────── -->
+    <!-- ── SnapTrade automatic import ───────────────────────────────── -->
+    <section class="panel" id="acd-snap-strip" style="margin-top:18px;display:none;">
+      <header class="panel-head">
+        <span class="panel-title">Automatic Import — SnapTrade (Fidelity)</span>
+        <span class="panel-badge" id="acd-snap-badge">—</span>
+      </header>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px 4px;">
+        <span id="acd-snap-status" style="font-size:11.5px;color:var(--text-secondary,#58616f);">…</span>
+        <button class="tab-btn sm" id="acd-snap-sync-btn" style="margin-left:auto;font-size:10px;">↻ Sync from Fidelity now</button>
+      </div>
+      <div id="acd-snap-note" style="font-size:10.5px;color:var(--text-secondary,#58616f);padding:2px 12px 10px;"></div>
+    </section>
+
+    <!-- ── Upload Panel (manual backup) ─────────────────────────────── -->
     <section class="panel" style="margin-top:18px;">
       <header class="panel-head">
-        <span class="panel-title">Data Uploads</span>
-        <span class="panel-badge">CSV</span>
+        <span class="panel-title">Manual Data Uploads</span>
+        <span class="panel-badge">CSV · backup</span>
       </header>
 
       <!-- ① Run — one button, splits YTD vs full-year automatically -->
@@ -12413,6 +12426,7 @@ End with the sleeve block at this account's real market value so I can push it t
         loadAcctPositions(fundId);
         loadAcctYtdSections(fundId);
         loadAllTimePerf(fundId);
+        loadAcctSnapStrip(fundId);
       } else {
         document.getElementById('lpd-title').textContent = (fundName || d.fund_name) + ' (' + d.short_name + ')';
         renderLpMeta(d);
@@ -12794,6 +12808,10 @@ End with the sleeve block at this account's real market value so I can push it t
     if (e.target.id === 'acd-run-btn') {
       runAccountAnalysis(e.target);
     }
+    // Managed-account — on-demand SnapTrade sync (automatic-import strip)
+    if (e.target.id === 'acd-snap-sync-btn') {
+      acdSnapSyncNow(e.target);
+    }
     // Merge CSVs & download
     if (e.target.id === 'acd-merge-btn') {
       const f1   = document.getElementById('acd-merge-f1').files[0];
@@ -12946,6 +12964,85 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (err) {
       stat.style.color = 'var(--red)';
       stat.textContent = '❌ ' + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  }
+
+  // ── SnapTrade auto-import strip (managed-account detail) ──────────────
+  // Shows which Fidelity account feeds this managed account automatically and
+  // offers an on-demand sync. Data still flows through the same stores the
+  // manual CSVs fill, so everything below (positions, YTD, charts) just reloads.
+  async function loadAcctSnapStrip(fundId) {
+    const strip = document.getElementById('acd-snap-strip');
+    if (!strip) return;
+    const badge = document.getElementById('acd-snap-badge');
+    const status = document.getElementById('acd-snap-status');
+    const note = document.getElementById('acd-snap-note');
+    const btn = document.getElementById('acd-snap-sync-btn');
+    strip.style.display = 'none';
+    try {
+      const r = await window.dgaFetch('/api/snaptrade/accounts');
+      if (!r.ok) return;   // non-GP or SnapTrade not configured — keep hidden
+      const d = await r.json();
+      const linked = (d.accounts || []).filter(a => a.fund_id === fundId && !a.hidden);
+      strip.style.display = '';
+      if (!linked.length) {
+        badge.textContent = 'NOT LINKED';
+        status.textContent = 'No Fidelity account is linked to this managed account yet.';
+        note.textContent = 'Link it in Settings → SnapTrade (assign the Fidelity account to this account). ' +
+                           'Positions, activity and balances then import automatically — the CSVs below stay as a manual backup.';
+        btn.style.display = 'none';
+        return;
+      }
+      btn.style.display = '';
+      let maxSync = null;
+      linked.forEach(a => { if (a.last_synced_at) { const t = Date.parse(a.last_synced_at); if (!isNaN(t) && (maxSync === null || t > maxSync)) maxSync = t; } });
+      let ago = '—', fresh = false;
+      if (maxSync !== null) {
+        const mins = Math.max(0, Math.round((Date.now() - maxSync) / 60000));
+        ago = mins < 60 ? (mins + 'm ago') : (mins < 1440 ? (Math.floor(mins/60) + 'h ago') : (Math.floor(mins/1440) + 'd ago'));
+        fresh = mins < 1440;
+      }
+      badge.textContent = fresh ? 'AUTO' : 'STALE';
+      const names = linked.map(a => (a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || '')).join(' + ');
+      const tot = linked.reduce((s, a) => s + (a.total_value || 0), 0);
+      status.innerHTML = 'Linked to <strong>' + _gfEsc(names) + '</strong> · ' + _plaidMoney(tot) +
+                         ' · last synced <strong>' + _gfEsc(ago) + '</strong>';
+      note.textContent = 'Positions, activity and balances import automatically (daily via Automation Schedule, or on demand here). ' +
+                         'The CSV uploads below remain a manual backup and always take precedence for the months they cover.';
+    } catch (e) { /* keep hidden */ }
+  }
+
+  async function acdSnapSyncNow(btn) {
+    if (!CURRENT_FUND_ID) return;
+    const note = document.getElementById('acd-snap-note');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = '↻ Syncing…';
+    try {
+      const r = await (await window.dgaFetch('/api/snaptrade/sync',
+        { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })).json();
+      if (!r.ok) throw new Error(r.detail || 'Sync failed');
+      const bh = (r.balance_history || []).find(h => h.fund_id === CURRENT_FUND_ID);
+      const acts = (r.activities || []).reduce((s, a) => s + (a.activities || 0), 0);
+      let msg = '✅ Synced.';
+      if (bh) {
+        msg += ' Balance history: ' + (bh.months_added || 0) + ' live month(s)';
+        if (bh.ytd_pct != null) msg += ' · YTD ' + (bh.ytd_pct >= 0 ? '+' : '') + Number(bh.ytd_pct).toFixed(2) + '%';
+        msg += bh.flows_estimated ? ' (flows estimated — no activity data yet).' : '.';
+      }
+      if (acts) msg += ' ' + acts + ' activities imported.';
+      const gated = (r.errors || []).find(e => /production key|gated/i.test(e.error || ''));
+      if (gated) msg += ' ⚠ Automatic activity import needs the SnapTrade pay-as-you-go production key.';
+      const otherErrs = (r.errors || []).filter(e => !/production key|gated/i.test(e.error || ''));
+      if (otherErrs.length) msg += ' ⚠ ' + otherErrs.length + ' issue(s) — see Settings → SnapTrade.';
+      if (note) note.textContent = msg;
+      loadAcctPositions(CURRENT_FUND_ID);
+      if (typeof loadAcctYtdSections === 'function') loadAcctYtdSections(CURRENT_FUND_ID);
+      loadAllTimePerf(CURRENT_FUND_ID);
+      loadAcctSnapStrip(CURRENT_FUND_ID);
+    } catch (e) {
+      if (note) note.textContent = '❌ ' + (e.message || e);
     } finally {
       btn.disabled = false; btn.textContent = orig;
     }
@@ -18549,7 +18646,7 @@ End with the sleeve block at this account's real market value so I can push it t
             <select data-snap-assign="${_gfEsc(a.account_id)}" style="font-size:11px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">${acctOptions(a.fund_id)}</select>
           </div>
           ${posBlock}
-          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · holdings read-only; manual CSV uploads unaffected</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · read-only auto-import (positions + activity + balances); manual CSV uploads stay as backup</div>
         </div>`;
       }).join('');
       if (!visibleAccts.length) body.innerHTML = freshHtml + '<div style="font-size:11px;color:#94a3b8;">All linked accounts are ignored. Restore one below.</div>';
@@ -18607,8 +18704,11 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!r.ok) alert('Sync failed: ' + (r.detail||''));
       else {
         const fundsPushed = (r.lots_written||[]).length;
+        const actsPulled  = (r.activities||[]).reduce(function(s,a){ return s + (a.activities||0); }, 0);
+        const histMonths  = (r.balance_history||[]).reduce(function(s,h){ return s + (h.months_added||0); }, 0);
         if ((r.errors||[]).length) {
-          alert('Synced ' + (r.synced||[]).length + ' account(s); pushed live positions to ' + fundsPushed + ' assigned fund(s).\n\n' + r.errors.length + ' issue(s):\n' +
+          alert('Synced ' + (r.synced||[]).length + ' account(s); pushed live positions to ' + fundsPushed + ' assigned fund(s); ' +
+                actsPulled + ' activities; ' + histMonths + ' live balance month(s).\n\n' + r.errors.length + ' issue(s):\n' +
                 r.errors.map(function(e){ return '• ' + (e.account_id||e.fund_id||e.stage||'?') + ': ' + e.error; }).join('\n'));
         }
       }

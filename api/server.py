@@ -9718,8 +9718,11 @@ analyst._start_tracker_snapshot_worker()
 _DEFAULT_AUTOMATION: dict = {
     "daily_brief":  {"enabled": True,  "hour": 8, "minute": 0},
     "market_pulse": {"enabled": True,  "hour": 8, "minute": 15},
-    # Pre-market pull of SnapTrade (Fidelity) holdings → tax_lots. Opt-in.
-    "snaptrade_sync": {"enabled": False, "hour": 6, "minute": 0},
+    # Pre-market pull of SnapTrade (Fidelity) holdings → tax_lots, plus daily
+    # balance snapshots, activity ingest and balance-history rebuild — the
+    # hands-off replacement for the manual CSV imports. On by default; a saved
+    # automation.settings override (the UI toggle) still wins.
+    "snaptrade_sync": {"enabled": True, "hour": 6, "minute": 0},
 }
 
 def _get_automation_settings() -> dict:
@@ -13521,6 +13524,25 @@ async def fund_import_balance_history(
                   SET nav = EXCLUDED.nav, ytd_pct = EXCLUDED.ytd_pct,
                       result_json = EXCLUDED.result_json, updated_at = now()
             """, (fid, nav, ytd_pct, json.dumps(result_json)))
+            # The CSV overwrite is authoritative — but if SnapTrade snapshots
+            # extend past the CSV's last month, re-append those live months now
+            # instead of waiting for the next sync. Best-effort behind a
+            # savepoint so a failure can't poison the import's transaction.
+            try:
+                cur.execute("SAVEPOINT snap_rebuild")
+                _bh = _snaptrade_rebuild_balance_history(cur, fid)
+                cur.execute("RELEASE SAVEPOINT snap_rebuild")
+                # Keep the success toast in step with what the page will render.
+                if _bh and _bh.get("ytd_pct") is not None:
+                    ytd_pct = float(_bh["ytd_pct"])
+                if _bh and _bh.get("nav"):
+                    nav = _bh["nav"]
+            except Exception as _e:
+                try:
+                    cur.execute("ROLLBACK TO SAVEPOINT snap_rebuild")
+                except Exception:
+                    pass
+                print(f"[snaptrade] post-CSV history rebuild skipped: {_e!s:.120}", flush=True)
         conn.commit()
     finally:
         conn.close()
@@ -13766,7 +13788,8 @@ async def fund_account_ytd_run(
             if _ex_row and _ex_row.get("result_json"):
                 _existing = (_ex_row["result_json"] if isinstance(_ex_row["result_json"], dict)
                              else _json.loads(_ex_row["result_json"]))
-            if _existing and _existing.get("source") == "balance_history_csv":
+            if _existing and _existing.get("source") in ("balance_history_csv",
+                                                         "balance_history_snaptrade"):
                 _AUTH = ("twrr_return_pct", "md_return_pct", "xirr_return_pct",
                          "begin_value", "end_value", "ytd_beg_balance",
                          "ytd_total_deposits", "ytd_total_withdrawals",
@@ -25681,6 +25704,18 @@ def _ensure_snaptrade_tables():
                 )""")
             cur.execute("CREATE INDEX IF NOT EXISTS snaptrade_activities_acct_idx "
                         "ON snaptrade_activities(account_id, trade_date)")
+            # Daily account-value snapshots — the raw series behind the automatic
+            # balance/returns path (one row per account per Pacific day; the daily
+            # scheduler upserts so re-syncs just refresh that day's value).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS snaptrade_balances (
+                    account_id   TEXT NOT NULL,
+                    d            DATE NOT NULL,
+                    total_value  NUMERIC(20,4),
+                    cash         NUMERIC(20,4),
+                    synced_at    TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (account_id, d)
+                )""")
             conn.commit()
     except Exception as e:
         print(f"[snaptrade] ensure tables failed: {e!s:.150}", flush=True)
@@ -25815,6 +25850,59 @@ def _snaptrade_normalize_account(ah: dict) -> dict:
     }
 
 
+def _snaptrade_normalize_options(raw) -> list:
+    """SnapTrade OptionsPosition list → normalized rows in the same shape as
+    _snaptrade_normalize_account's positions. Short contracts keep their negative
+    units (Alec sells covered calls / CSPs); market value uses the ×100 contract
+    multiplier. These rows are display/valuation-only — _snaptrade_write_lots
+    excludes asset_class='option' so tax_lots stays share-based like the CSV path."""
+    if isinstance(raw, dict):
+        raw = raw.get("option_positions") or raw.get("positions") or raw.get("data") or []
+    out = []
+    for p in (raw or []):
+        if not isinstance(p, dict):
+            continue
+        node = p.get("symbol")
+        occ, desc, under, otype, strike, expiry = None, None, None, None, None, None
+        seen = 0
+        while isinstance(node, dict) and seen < 6:
+            if not desc and node.get("description"):
+                desc = node.get("description")
+            occ    = occ    or node.get("ticker") or node.get("raw_symbol")
+            otype  = otype  or node.get("option_type")
+            strike = strike if strike is not None else node.get("strike_price")
+            expiry = expiry or node.get("expiration_date")
+            us = node.get("underlying_symbol")
+            if isinstance(us, dict):
+                under = under or us.get("symbol") or us.get("raw_symbol")
+            nxt = node.get("option_symbol") or node.get("symbol")
+            if isinstance(nxt, str):
+                occ = occ or nxt
+                break
+            node = nxt
+            seen += 1
+        units = _snaptrade_num(p.get("units"))
+        price = _snaptrade_num(p.get("price"))
+        mv = (units * price * 100.0) if (units is not None and price is not None) else None
+        avg = _snaptrade_num(p.get("average_purchase_price"))
+        label = occ
+        if not label and under and otype and strike is not None and expiry:
+            label = f"{under} {str(expiry)[:10]} {str(otype)[:1]}{strike}"
+        if not label:
+            continue
+        if not desc and under:
+            side = "short" if (units or 0) < 0 else "long"
+            desc = f"{under} {otype or 'option'} ({side})"
+        out.append({
+            "symbol": label, "name": desc, "asset_class": "option",
+            "underlying": under, "quantity": units, "price": price,
+            "market_value": mv,
+            "cost_basis": (units * avg * 100.0) if (units is not None and avg is not None) else None,
+            "cost_basis_per_unit": avg,
+        })
+    return out
+
+
 def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
     """Make SnapTrade the LIVE position source for one fund: close ALL existing
     open tax_lots for the fund (CSV- or SnapTrade-sourced), then insert fresh
@@ -25842,7 +25930,9 @@ def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
     cur.execute("UPDATE tax_lots SET closed_at=NOW() WHERE fund_id=%s AND closed_at IS NULL",
                 (fund_id,))
 
-    # Keep only real, positive-quantity rows with a symbol.
+    # Keep only real, positive-quantity rows with a symbol. Option positions are
+    # valuation-only (often short/negative, priced per-contract) — tax_lots is
+    # share-based, matching the manual CSV import which never carried options.
     rows = []
     for p in (positions or []):
         sym = (p.get("symbol") or "").strip()
@@ -25850,7 +25940,7 @@ def _snaptrade_write_lots(cur, fund_id: str, positions: list) -> int:
             qty = float(p.get("quantity"))
         except (TypeError, ValueError):
             qty = 0.0
-        if not sym or sym == "—" or qty <= 0:
+        if not sym or sym == "—" or qty <= 0 or p.get("asset_class") == "option":
             continue
         rows.append((p, sym, qty))
     if not rows:
@@ -25989,6 +26079,307 @@ _SNAP_SELL_TYPES  = {"SELL"}
 # External cash flows (move money in/out of the account; not performance).
 _SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
                      "TRANSFER_IN", "TRANSFER_OUT", "FUNDING"}
+# Income/expense buckets for the automatic monthly balance records.
+_SNAP_DIV_TYPES   = {"DIVIDEND", "CASH_DIVIDEND"}
+_SNAP_INT_TYPES   = {"INTEREST"}
+_SNAP_FEE_TYPES   = {"FEE", "MANAGEMENT_FEE", "ADMINISTRATIVE_FEE"}
+
+
+def _snaptrade_pacific_today():
+    """Civil date in the user's timezone — snapshot rows key on this so the
+    6:00-Pacific scheduler and a late-night manual sync land on the same day."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    except Exception:
+        return datetime.utcnow().date()
+
+
+def _snaptrade_plan_gated(err: str) -> bool:
+    """True when a SnapTrade error means the endpoint isn't on our plan (the
+    free key gates get_activities — the pay-as-you-go production key unlocks it)."""
+    low = (err or "").lower()
+    return ("no longer available" in low or "not available for your account" in low
+            or "upgrade" in low or "1020" in low)
+
+
+def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
+                                 start: str | None = None, end: str | None = None):
+    """Upsert transaction history into snaptrade_activities for the given
+    accounts. Window: explicit [start, end] when passed (manual endpoint);
+    otherwise per-account — Jan-1 backfill on first sync, then a rolling
+    35-day incremental. Returns (synced, errors); a plan-gated failure is
+    reported once with a production-key hint instead of per account."""
+    import snaptrade_link as _st
+    today = datetime.utcnow().date()
+    default_end = end or today.isoformat()
+    synced, errors = [], []
+    gated_reported = False
+    for acct_id in acct_ids:
+        if start:
+            a_start = start
+        else:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT max(trade_date) FROM snaptrade_activities WHERE account_id=%s",
+                            (acct_id,))
+                row = cur.fetchone()
+                last_td = row[0] if row else None
+            if not last_td:
+                a_start = f"{today.year}-01-01"
+            else:
+                # Rolling 35-day incremental, but never leave a gap: if the last
+                # stored activity is older than that (app was down / key was
+                # gated for a while), resume just before it instead.
+                base = today - timedelta(days=35)
+                if last_td < base:
+                    base = last_td - timedelta(days=3)
+                a_start = base.isoformat()
+        try:
+            acts = _st.get_account_activities(uid, secret, acct_id, a_start, default_end)
+        except Exception as e:
+            detail = _snaptrade_error_detail(e)
+            if _snaptrade_plan_gated(detail):
+                if not gated_reported:
+                    errors.append({"stage": "activities", "error":
+                        "SnapTrade transactions are gated on the free plan — add the "
+                        "pay-as-you-go production key (SNAPTRADE_CLIENT_ID / "
+                        "SNAPTRADE_CONSUMER_KEY) to unlock automatic activity import. "
+                        f"({detail[:120]})"})
+                    gated_reported = True
+            else:
+                errors.append({"account_id": acct_id, "stage": "activities", "error": detail})
+            continue
+        n = 0
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for a in (acts or []):
+                p = _snaptrade_parse_activity(a)
+                if not p:
+                    continue
+                p["account_id"] = p["account_id"] or acct_id
+                cur.execute("""
+                    INSERT INTO snaptrade_activities
+                        (activity_id, account_id, trade_date, settlement_date, type, symbol,
+                         description, units, price, amount, currency, fee, raw_json, synced_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
+                    ON CONFLICT (activity_id) DO UPDATE SET
+                        account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
+                        settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
+                        symbol=EXCLUDED.symbol, description=EXCLUDED.description,
+                        units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
+                        currency=EXCLUDED.currency, fee=EXCLUDED.fee,
+                        raw_json=EXCLUDED.raw_json, synced_at=now()
+                """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
+                      p["type"], p["symbol"], p["description"], p["units"], p["price"],
+                      p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
+                n += 1
+            conn.commit()
+        synced.append({"account_id": acct_id, "activities": n, "since": a_start})
+    return synced, errors
+
+
+def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
+    """Task-3 core: synthesize monthly balance records (same shape as the parsed
+    Balance & Income Detail CSV) from SnapTrade daily snapshots + activities, and
+    merge them into account_balance_history strictly AFTER the last CSV month.
+
+    CSV-imported months are never modified — re-importing the CSV stays the
+    authoritative backup and overwrites everything (the next sync re-appends the
+    live months). Each synthesized month uses the same Modified-Dietz formula as
+    the CSV parser, so chained TWRR matches Fidelity's methodology; when
+    activities are unavailable (free-plan gating) flows are zero and the row is
+    flagged estimated. Recomputes managed_account_ytd_cache from the merged
+    series, preserving any attribution overlay from a manual 3-file run.
+
+    Caveat (multi-account funds): an account linked mid-month first appears in
+    the summed daily series as a jump; unless the transfer-in shows up in
+    activities as a flow, that month's return is misstated — the row is at
+    least flagged `estimated` when activity coverage is missing.
+
+    `cur` must be a RealDictCursor. Returns a small summary dict, or None when
+    there is nothing to build.
+    """
+    import calendar as _cal
+    # Fresh deployments may not have SnapTrade tables yet — bail without
+    # erroring so callers' transactions (e.g. the CSV import) stay healthy.
+    cur.execute("SELECT to_regclass('snaptrade_accounts') AS t1, "
+                "to_regclass('snaptrade_balances') AS t2, "
+                "to_regclass('snaptrade_activities') AS t3")
+    reg = cur.fetchone()
+    if not (reg and reg.get("t1") and reg.get("t2") and reg.get("t3")):
+        return None
+    cur.execute("SELECT account_id FROM snaptrade_accounts "
+                "WHERE status='active' AND fund_id=%s", (fund_id,))
+    acct_ids = [r["account_id"] for r in cur.fetchall()]
+    if not acct_ids:
+        return None
+
+    cur.execute("SELECT data_json FROM account_balance_history WHERE fund_id=%s", (fund_id,))
+    row = cur.fetchone()
+    existing = []
+    if row and row.get("data_json"):
+        try:
+            existing = (row["data_json"] if isinstance(row["data_json"], list)
+                        else json.loads(row["data_json"]))
+        except Exception:
+            existing = []
+    csv_rows = sorted([r for r in existing if r.get("source") != "snaptrade"],
+                      key=lambda r: (r["year"], r["month"]))
+
+    # Fund-level daily value = sum across accounts, carrying each account's last
+    # known value forward over days it wasn't snapshotted.
+    cur.execute("SELECT account_id, d, total_value FROM snaptrade_balances "
+                "WHERE account_id = ANY(%s) ORDER BY d", (acct_ids,))
+    snaps = cur.fetchall()
+    if not snaps:
+        return None
+    per_acct = {}
+    for r in snaps:
+        per_acct.setdefault(r["account_id"], {})[r["d"]] = float(r["total_value"] or 0)
+    days = sorted({r["d"] for r in snaps})
+    by_day, last_val = {}, {}
+    for d in days:
+        for aid in acct_ids:
+            v = per_acct.get(aid, {}).get(d)
+            if v is not None:
+                last_val[aid] = v
+        by_day[d] = sum(last_val.values())
+
+    anchor_key = (csv_rows[-1]["year"], csv_rows[-1]["month"]) if csv_rows else None
+    month_keys = sorted({(d.year, d.month) for d in days
+                         if anchor_key is None or (d.year, d.month) > anchor_key})
+    if not month_keys:
+        return {"fund_id": str(fund_id), "months_added": 0,
+                "note": "CSV history already covers the latest snapshot month."}
+
+    # Month-level activity aggregates (empty when the plan gates get_activities).
+    cur.execute("""
+        SELECT date_trunc('month', trade_date)::date AS mo, type,
+               COALESCE(SUM(amount),0) AS amt, COALESCE(SUM(ABS(COALESCE(fee,0))),0) AS fees
+          FROM snaptrade_activities
+         WHERE account_id = ANY(%s) AND trade_date IS NOT NULL
+         GROUP BY 1, 2
+    """, (acct_ids,))
+    acts_by_month = {}
+    has_acts = False
+    for r in cur.fetchall():
+        has_acts = True
+        key = (r["mo"].year, r["mo"].month)
+        b = acts_by_month.setdefault(key, {"deposits": 0.0, "withdrawals": 0.0,
+                                           "dividends": 0.0, "interest": 0.0, "fees": 0.0})
+        t, amt = (r["type"] or ""), float(r["amt"] or 0)
+        b["fees"] += float(r["fees"] or 0)
+        if t in _SNAP_FLOW_TYPES:
+            if amt >= 0:
+                b["deposits"] += amt
+            else:
+                b["withdrawals"] += -amt
+        elif t in _SNAP_DIV_TYPES:
+            b["dividends"] += amt
+        elif t in _SNAP_INT_TYPES:
+            b["interest"] += amt
+        elif t in _SNAP_FEE_TYPES and float(r["fees"] or 0) == 0:
+            # FEE activities usually carry the charge in `amount`; only count it
+            # when the `fee` column (already summed above) didn't capture it.
+            b["fees"] += abs(amt)
+
+    synth = []
+    prev_end = float(csv_rows[-1]["end_balance"]) if csv_rows else None
+    for (y, m) in month_keys:
+        mdays = [d for d in days if d.year == y and d.month == m]
+        if not mdays:
+            continue
+        end_bal = by_day[mdays[-1]]
+        # Inception (no CSV history): month-open is the first snapshot we have.
+        beg_bal = prev_end if prev_end is not None else by_day[mdays[0]]
+        a = acts_by_month.get((y, m), {"deposits": 0.0, "withdrawals": 0.0,
+                                       "dividends": 0.0, "interest": 0.0, "fees": 0.0})
+        # A month is "estimated" when we have no activity rows for it — either
+        # genuinely no transactions, or coverage is missing (free-plan gating).
+        # Conservative per-month flag: a covered month with a big deposit and a
+        # gated month must not look equally trustworthy.
+        month_estimated = (y, m) not in acts_by_month
+        net_flow   = a["deposits"] - a["withdrawals"]
+        net_income = end_bal - beg_bal - net_flow
+        mkt_chg    = net_income - a["dividends"] - a["interest"] + a["fees"]
+        denom      = beg_bal + 0.5 * net_flow
+        if beg_bal == 0.0:
+            safe = net_flow if net_flow > 0 else (end_bal if end_bal > 0 else 0.0)
+            return_pct = round(net_income / safe * 100, 4) if safe else 0.0
+        elif denom != 0:
+            return_pct = round(net_income / denom * 100, 4)
+        else:
+            return_pct = 0.0
+        synth.append({
+            "year": y, "month": m, "label": f"{_cal.month_abbr[m]} {y}",
+            "beg_balance": round(beg_bal, 2), "end_balance": round(end_bal, 2),
+            "market_change": round(mkt_chg, 2),
+            "dividends": round(a["dividends"], 2), "interest": round(a["interest"], 2),
+            "deposits": round(a["deposits"], 2), "withdrawals": round(a["withdrawals"], 2),
+            "fees": round(a["fees"], 2), "return_pct": return_pct, "skip": False,
+            "source": "snaptrade", "estimated": month_estimated,
+        })
+        prev_end = end_bal
+
+    merged = csv_rows + synth
+    cur.execute("""
+        INSERT INTO account_balance_history (fund_id, data_json, updated_at)
+        VALUES (%s, %s, now())
+        ON CONFLICT (fund_id) DO UPDATE
+          SET data_json = EXCLUDED.data_json, updated_at = now()
+    """, (fund_id, json.dumps(merged)))
+
+    overview = _account_overview_from_balance(merged)
+    if not overview:
+        return {"fund_id": str(fund_id), "months_added": len(synth)}
+    overview["source"] = "balance_history_snaptrade"
+    overview["live_months"] = len(synth)
+    overview["flows_estimated"] = any(r.get("estimated") for r in synth)
+
+    # Preserve the manual 3-file run's attribution; refresh flows from live
+    # activities when we have them (the Account History panel reads .flows).
+    cur.execute("SELECT result_json FROM managed_account_ytd_cache WHERE fund_id=%s",
+                (fund_id,))
+    prev_row = cur.fetchone()
+    prev = None
+    if prev_row and prev_row.get("result_json"):
+        try:
+            prev = (prev_row["result_json"] if isinstance(prev_row["result_json"], dict)
+                    else json.loads(prev_row["result_json"]))
+        except Exception:
+            prev = None
+    if prev:
+        for k in ("attribution", "top_gainers", "top_losers"):
+            if prev.get(k) is not None:
+                overview[k] = prev[k]
+    if has_acts:
+        yr = overview.get("year") or datetime.utcnow().year
+        cur.execute("""
+            SELECT trade_date, type, symbol, amount FROM snaptrade_activities
+             WHERE account_id = ANY(%s) AND type = ANY(%s)
+               AND EXTRACT(YEAR FROM trade_date) = %s
+             ORDER BY trade_date DESC
+        """, (acct_ids, list(_SNAP_FLOW_TYPES), yr))
+        overview["flows"] = [
+            {"date": r["trade_date"].isoformat() if r["trade_date"] else None,
+             "action": (r["type"] or "").replace("_", " ").title(),
+             "symbol": r["symbol"],
+             "amount": float(r["amount"]) if r["amount"] is not None else None}
+            for r in cur.fetchall()]
+    elif prev and prev.get("flows") is not None:
+        overview["flows"] = prev["flows"]
+
+    nav     = overview.get("end_value") or 0.0
+    ytd_pct = overview.get("twrr_return_pct") or 0.0
+    cur.execute("""
+        INSERT INTO managed_account_ytd_cache (fund_id, nav, ytd_pct, result_json, updated_at)
+        VALUES (%s, %s, %s, %s, now())
+        ON CONFLICT (fund_id) DO UPDATE
+          SET nav = EXCLUDED.nav, ytd_pct = EXCLUDED.ytd_pct,
+              result_json = EXCLUDED.result_json, updated_at = now()
+    """, (fund_id, float(nav), float(ytd_pct), json.dumps(overview)))
+    return {"fund_id": str(fund_id), "months_added": len(synth),
+            "ytd_pct": ytd_pct, "nav": nav,
+            "flows_estimated": any(r.get("estimated") for r in synth)}
 
 
 def _snaptrade_holdings_items(body):
@@ -26082,6 +26473,54 @@ def _snaptrade_run_sync() -> dict:
         norm = _snaptrade_normalize_account(merged)
         if not norm.get("account_id"):
             norm["account_id"] = str(acct_id)
+        # Option positions (covered calls / CSPs) come from a separate endpoint —
+        # get_user_account_positions never includes them. Valuation-only: they
+        # join holdings_json + total_value but stay out of tax_lots.
+        opts = []
+        try:
+            opts = _snaptrade_normalize_options(_st.get_option_holdings(uid, secret, acct_id))
+        except Exception as e:
+            print(f"[snaptrade] options {acct_id}: {e!s:.140}", flush=True)
+        if opts:
+            norm["positions"] = list(norm["positions"]) + opts
+            norm["count"] = len(norm["positions"])
+            if isinstance(merged.get("total_value"), (int, float)):
+                # total_value was summed from equity positions + cash only —
+                # fold in option MV (negative for short contracts). When it fell
+                # back to the account's reported balance, options are already in.
+                opt_mv = sum((o.get("market_value") or 0.0) for o in opts)
+                norm["total_value"] = (norm["total_value"] or 0.0) + opt_mv
+        # Daily balance snapshot — the raw series for the automatic returns path.
+        # Prefer the brokerage-reported account total (includes short option
+        # liabilities, matching Fidelity's balance page); fall back to our sum.
+        snap_val = None
+        bal = acct.get("balance")
+        if isinstance(bal, dict):
+            tot = bal.get("total")
+            snap_val = tot.get("amount") if isinstance(tot, dict) else tot
+        if snap_val is None:
+            snap_val = norm["total_value"]
+        # Guard: a failed/initial pull can yield 0.0 (no positions, no balance).
+        # Writing that as a real snapshot would poison the month's Dietz return
+        # (-100% at a month boundary) — skip zero/negative totals entirely.
+        try:
+            if snap_val is not None and float(snap_val) <= 0:
+                snap_val = None
+        except (TypeError, ValueError):
+            snap_val = None
+        if snap_val is not None:
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO snaptrade_balances (account_id, d, total_value, synced_at)
+                        VALUES (%s, %s, %s, now())
+                        ON CONFLICT (account_id, d) DO UPDATE
+                          SET total_value = EXCLUDED.total_value, synced_at = now()
+                    """, (norm["account_id"], _snaptrade_pacific_today(), float(snap_val)))
+                    conn.commit()
+            except Exception as e:
+                errors.append({"account_id": norm["account_id"], "stage": "balance_snapshot",
+                               "error": _snaptrade_error_detail(e)})
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO snaptrade_accounts (account_id, connection_id, brokerage_name,
@@ -26124,7 +26563,51 @@ def _snaptrade_run_sync() -> dict:
         import traceback; traceback.print_exc()
         errors.append({"stage": "tax_lots", "error": _snaptrade_error_detail(e)})
 
-    return {"ok": True, "synced": out, "errors": errors, "lots_written": lots_written}
+    # ── Activities (automatic) — Jan-1 backfill on first sync, then 35-day
+    # incremental. Gated on the free plan; the ingester reports that once with
+    # a production-key hint instead of failing the sync.
+    activities = []
+    try:
+        activities, act_errors = _snaptrade_ingest_activities(uid, secret, list(acct_norm.keys()))
+        errors.extend(act_errors)
+    except Exception as e:
+        errors.append({"stage": "activities", "error": _snaptrade_error_detail(e)})
+
+    # ── Balance history (automatic) — synthesize monthly records after the last
+    # CSV month for every assigned managed account, then refresh its YTD cache.
+    balance_history = []
+    try:
+        # Prewarm the SPY benchmark cache (900s TTL) so the overview computed
+        # inside the transaction below never does network I/O while holding
+        # row locks — un-timed-out yfinance calls have hung endpoints before.
+        try:
+            get_spy_monthly_data()
+        except Exception:
+            pass
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
+                        "WHERE status='active' AND fund_id IS NOT NULL")
+            fids = [str(r["fund_id"]) for r in cur.fetchall()]
+            for fid in fids:
+                try:
+                    cur.execute("SAVEPOINT snap_bh")
+                    h = _snaptrade_rebuild_balance_history(cur, fid)
+                    cur.execute("RELEASE SAVEPOINT snap_bh")
+                    if h:
+                        balance_history.append(h)
+                except Exception as e:
+                    try:
+                        cur.execute("ROLLBACK TO SAVEPOINT snap_bh")
+                    except Exception:
+                        pass
+                    errors.append({"fund_id": fid, "stage": "balance_history",
+                                   "error": _snaptrade_error_detail(e)})
+            conn.commit()
+    except Exception as e:
+        errors.append({"stage": "balance_history", "error": _snaptrade_error_detail(e)})
+
+    return {"ok": True, "synced": out, "errors": errors, "lots_written": lots_written,
+            "activities": activities, "balance_history": balance_history}
 
 
 @app.post("/api/snaptrade/sync")
@@ -26193,38 +26676,7 @@ async def snaptrade_activities_sync(request: Request):
     with _fund_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active'")
         acct_ids = [r[0] for r in cur.fetchall()]
-    out, errors = [], []
-    for acct_id in acct_ids:
-        try:
-            acts = _st.get_account_activities(uid, secret, acct_id, start, end)
-        except Exception as e:
-            errors.append({"account_id": acct_id, "error": _snaptrade_error_detail(e)})
-            continue
-        n = 0
-        with _fund_conn() as conn, conn.cursor() as cur:
-            for a in (acts or []):
-                p = _snaptrade_parse_activity(a)
-                if not p:
-                    continue
-                p["account_id"] = p["account_id"] or acct_id
-                cur.execute("""
-                    INSERT INTO snaptrade_activities
-                        (activity_id, account_id, trade_date, settlement_date, type, symbol,
-                         description, units, price, amount, currency, fee, raw_json, synced_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
-                    ON CONFLICT (activity_id) DO UPDATE SET
-                        account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
-                        settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
-                        symbol=EXCLUDED.symbol, description=EXCLUDED.description,
-                        units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
-                        currency=EXCLUDED.currency, fee=EXCLUDED.fee,
-                        raw_json=EXCLUDED.raw_json, synced_at=now()
-                """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
-                      p["type"], p["symbol"], p["description"], p["units"], p["price"],
-                      p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
-                n += 1
-            conn.commit()
-        out.append({"account_id": acct_id, "activities": n})
+    out, errors = _snaptrade_ingest_activities(uid, secret, acct_ids, start, end)
     return {"ok": True, "start_date": start, "end_date": end, "synced": out, "errors": errors}
 
 
