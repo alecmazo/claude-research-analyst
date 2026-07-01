@@ -18506,7 +18506,21 @@ End with the sleeve block at this account's real market value so I can push it t
         .concat(mAccts.map(m => `<option value="${_gfEsc(m.fund_id)}"${m.fund_id===sel?' selected':''}>${_gfEsc((m.short_name||m.name)+(m.fund_type==='lp_fund'?' (Fund)':''))}</option>`)).join('');
       const visibleAccts = accounts.filter(a => !a.hidden);
       const hiddenAccts  = accounts.filter(a => a.hidden);
-      body.innerHTML = visibleAccts.map(a => {
+      // Freshness banner — most recent sync across accounts.
+      let _maxSync = null;
+      accounts.forEach(a => { if (a.last_synced_at) { const t = Date.parse(a.last_synced_at); if (!isNaN(t) && (_maxSync === null || t > _maxSync)) _maxSync = t; } });
+      let freshHtml = '';
+      if (_maxSync !== null) {
+        const mins = Math.max(0, Math.round((Date.now() - _maxSync) / 60000));
+        const ago = mins < 60 ? (mins + 'm ago') : (mins < 1440 ? (Math.floor(mins/60) + 'h ' + (mins%60) + 'm ago') : (Math.floor(mins/1440) + 'd ago'));
+        const col = mins < 120 ? '#16a34a' : (mins < 1440 ? '#d97706' : '#dc2626');
+        const when = new Date(_maxSync).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+        freshHtml = '<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748b;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9;">'
+          + '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';display:inline-block;"></span>'
+          + '<span>Holdings last synced <strong style="color:' + col + ';">' + ago + '</strong> <span style="color:#94a3b8;">(' + _gfEsc(when) + ')</span></span>'
+          + (mins >= 1440 ? '<span style="color:#dc2626;">· stale — click ↻ Sync</span>' : '') + '</div>';
+      }
+      body.innerHTML = freshHtml + visibleAccts.map(a => {
         const positions = a.positions || [];
         const posRows = positions.map(p =>
           `<tr style="font-size:11px;">
@@ -18538,7 +18552,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">${_gfEsc(a.brokerage||'')} · Last synced ${a.last_synced_at?_gfEsc(String(a.last_synced_at).slice(0,16).replace('T',' ')):'—'} · holdings read-only; manual CSV uploads unaffected</div>
         </div>`;
       }).join('');
-      if (!visibleAccts.length) body.innerHTML = '<div style="font-size:11px;color:#94a3b8;">All linked accounts are ignored. Restore one below.</div>';
+      if (!visibleAccts.length) body.innerHTML = freshHtml + '<div style="font-size:11px;color:#94a3b8;">All linked accounts are ignored. Restore one below.</div>';
       if (hiddenAccts.length) {
         body.innerHTML += `<div style="margin-top:6px;font-size:11px;color:#94a3b8;">
           <div style="font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${hiddenAccts.length} Ignored</div>
