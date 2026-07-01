@@ -9899,20 +9899,28 @@ def _automation_record_run(job: str, ok: bool, detail: str = "") -> None:
         pass
 
 
+_CATCHUP_DONE: dict = {}   # {job: pacific-date-str} — in-process once-a-day guard
+
+
 def _automation_needs_catchup(job: str, hour: int, minute: int) -> bool:
     """True when today's scheduled run was missed — e.g. a Railway deploy
     restarted the process across the run time (the sleep-until-target pattern
     has no memory). The worker then runs once immediately instead of silently
-    skipping the day."""
+    skipping the day. The in-process _CATCHUP_DONE guard means a failing
+    kv write (DB down) can't turn this into a run-the-job-every-loop cycle."""
     try:
+        now_p = _now_pacific()
+        today_key = now_p.date().isoformat()
+        if _CATCHUP_DONE.get(job) == today_key:
+            return False
+        if (now_p.hour, now_p.minute) < (int(hour), int(minute)):
+            return False   # scheduled time not reached yet — don't set the flag
+        _CATCHUP_DONE[job] = today_key   # one evaluation past the gate per day
         rec = _kv_get(f"automation.last_run.{job}") or {}
         last_day = (rec.get("ts") or "")[:10]
-        now_p = _now_pacific()
-        if (now_p.hour, now_p.minute) < (int(hour), int(minute)):
-            return False
         # last_run ts is UTC; a morning-Pacific run lands on the same UTC
         # calendar day, so a plain date compare is a safe once-a-day guard.
-        return last_day != now_p.date().isoformat()
+        return last_day != today_key
     except Exception:
         return False
 
