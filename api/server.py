@@ -1281,7 +1281,9 @@ async def _invalidate_cache_on_mutation(request: Request, call_next):
     having to wait for natural TTL expiry."""
     response = await call_next(request)
     try:
-        if (request.url.path.startswith("/api/")
+        path = request.url.path
+        if (path.startswith("/api/")
+                and not path.startswith("/api/auth/")   # logins don't change fund data
                 and request.method in ("POST", "PUT", "DELETE", "PATCH")
                 and 200 <= response.status_code < 400):
             _invalidate_user_cache(None)   # flush all — TTL is small
@@ -5223,6 +5225,62 @@ def build_version():
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/api/health/data")
+def health_data():
+    """Data-freshness health for uptime monitors + the GP Data Health card.
+    Exposes only booleans and ages (no account values) so it can stay
+    unauthenticated and be pinged by any free monitor. Old /health is a
+    static ok — useless for 'is my data silently stale?'."""
+    out = {"status": "ok", "timestamp": datetime.utcnow().isoformat(),
+           "db": False, "schedulers": {}, "snaptrade_age_s": None,
+           "market_quotes_age_s": None, "issues": []}
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        out["status"] = "degraded"
+        out["issues"].append("database not configured")
+        return out
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            out["db"] = True
+            try:
+                cur.execute("SELECT EXTRACT(EPOCH FROM (now() - max(last_synced_at))) "
+                            "FROM snaptrade_accounts WHERE status='active'")
+                r = cur.fetchone()
+                if r and r[0] is not None:
+                    out["snaptrade_age_s"] = int(float(r[0]))
+            except Exception:
+                pass
+            try:
+                cur.execute("SELECT EXTRACT(EPOCH FROM (now() - max(updated_at))) FROM market_quotes")
+                r = cur.fetchone()
+                if r and r[0] is not None:
+                    out["market_quotes_age_s"] = int(float(r[0]))
+            except Exception:
+                pass
+    except Exception as e:
+        out["status"] = "degraded"
+        out["issues"].append(f"db: {e!s:.120}")
+        return out
+    for job in ("daily_brief", "market_pulse", "snaptrade_sync"):
+        try:
+            rec = _kv_get(f"automation.last_run.{job}") or {}
+        except Exception:
+            rec = {}
+        out["schedulers"][job] = {"last_ts": rec.get("ts"), "ok": rec.get("ok")}
+        if rec and rec.get("ok") is False:
+            out["issues"].append(f"{job}: last run failed")
+    # SnapTrade data older than 36h with the daily sync enabled = silently stale.
+    try:
+        st_enabled = _get_automation_settings().get("snaptrade_sync", {}).get("enabled")
+        if st_enabled and out["snaptrade_age_s"] and out["snaptrade_age_s"] > 36 * 3600:
+            out["issues"].append("snaptrade holdings stale (>36h)")
+    except Exception:
+        pass
+    if out["issues"]:
+        out["status"] = "degraded"
+    return out
 
 
 @app.get("/api/diagnostics")
@@ -9796,6 +9854,37 @@ def _secs_until(hour: int, minute: int, pacific_offset=None) -> float:
         target += timedelta(days=1)
     return (target - now).total_seconds()
 
+def _automation_record_run(job: str, ok: bool, detail: str = "") -> None:
+    """Persist per-scheduler run status so the UI / health endpoint can show it.
+    The workers used to print() to Railway logs only — a dead thread or a
+    failing job was invisible (the 'next run' label is computed from settings,
+    not thread liveness)."""
+    try:
+        _kv_put(f"automation.last_run.{job}",
+                {"ts": datetime.utcnow().isoformat(), "ok": bool(ok),
+                 "detail": str(detail)[:400]})
+    except Exception:
+        pass
+
+
+def _automation_needs_catchup(job: str, hour: int, minute: int) -> bool:
+    """True when today's scheduled run was missed — e.g. a Railway deploy
+    restarted the process across the run time (the sleep-until-target pattern
+    has no memory). The worker then runs once immediately instead of silently
+    skipping the day."""
+    try:
+        rec = _kv_get(f"automation.last_run.{job}") or {}
+        last_day = (rec.get("ts") or "")[:10]
+        now_p = _now_pacific()
+        if (now_p.hour, now_p.minute) < (int(hour), int(minute)):
+            return False
+        # last_run ts is UTC; a morning-Pacific run lands on the same UTC
+        # calendar day, so a plain date compare is a safe once-a-day guard.
+        return last_day != now_p.date().isoformat()
+    except Exception:
+        return False
+
+
 @app.get("/api/automation/settings")
 def get_automation_settings_endpoint():
     settings = _get_automation_settings()
@@ -9807,6 +9896,10 @@ def get_automation_settings_endpoint():
             cfg["next_run_secs"] = round(secs)
         else:
             cfg["next_run_secs"] = None
+        try:
+            cfg["last_run"] = _kv_get(f"automation.last_run.{job}") or None
+        except Exception:
+            cfg["last_run"] = None
     return settings
 
 @app.post("/api/automation/settings")
@@ -9840,14 +9933,17 @@ def _auto_daily_brief_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            wait_secs = _secs_until(h, m)
-            print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
-            _time.sleep(wait_secs)
-            # Re-check enabled after waking (user may have disabled while sleeping)
-            cfg2 = _get_automation_settings().get("daily_brief", {})
-            if not cfg2.get("enabled", True):
-                print("[daily-brief-scheduler] disabled after wake — skipping")
-                continue
+            if _automation_needs_catchup("daily_brief", h, m):
+                print("[daily-brief-scheduler] missed today's run (deploy across run time?) — catching up now")
+            else:
+                wait_secs = _secs_until(h, m)
+                print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+                _time.sleep(wait_secs)
+                # Re-check enabled after waking (user may have disabled while sleeping)
+                cfg2 = _get_automation_settings().get("daily_brief", {})
+                if not cfg2.get("enabled", True):
+                    print("[daily-brief-scheduler] disabled after wake — skipping")
+                    continue
             print(f"[daily-brief-scheduler] {h:02d}:{m:02d} Pacific — running daily brief…")
             # Same call as the manual endpoint — includes the GP's book tickers
             # (the bare run_daily_brief() the worker used to make silently
@@ -9862,8 +9958,10 @@ def _auto_daily_brief_worker() -> None:
                     _kv_put("daily_brief.latest", data)
             except Exception as _e:
                 print(f"[daily-brief-scheduler] kv persist failed: {_e}")
+            _automation_record_run("daily_brief", True, "ok")
         except Exception as _e:
             print(f"[daily-brief-scheduler] error (retrying in 1h): {_e}")
+            _automation_record_run("daily_brief", False, str(_e))
             import time as _time2
             _time2.sleep(3600)
 
@@ -9881,13 +9979,16 @@ def _auto_market_pulse_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            wait_secs = _secs_until(h, m)
-            print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
-            _time.sleep(wait_secs)
-            cfg2 = _get_automation_settings().get("market_pulse", {})
-            if not cfg2.get("enabled", True):
-                print("[pulse-scheduler] disabled after wake — skipping")
-                continue
+            if _automation_needs_catchup("market_pulse", h, m):
+                print("[pulse-scheduler] missed today's run — catching up now")
+            else:
+                wait_secs = _secs_until(h, m)
+                print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+                _time.sleep(wait_secs)
+                cfg2 = _get_automation_settings().get("market_pulse", {})
+                if not cfg2.get("enabled", True):
+                    print("[pulse-scheduler] disabled after wake — skipping")
+                    continue
             print(f"[pulse-scheduler] {h:02d}:{m:02d} Pacific — running market pulse scan on saved reports…")
             # Collect tickers from DB
             tickers = []
@@ -9911,9 +10012,11 @@ def _auto_market_pulse_worker() -> None:
                 }
             _run_scan(job_id, tickers)   # blocking — intentional (runs in its own thread)
             print(f"[pulse-scheduler] scan complete — {len(tickers)} tickers merged into Market Pulse")
+            _automation_record_run("market_pulse", True, f"{len(tickers)} tickers")
         except Exception as _e:
             import time as _t2
             print(f"[pulse-scheduler] error (retrying in 1h): {_e}")
+            _automation_record_run("market_pulse", False, str(_e))
             _t2.sleep(3600)
 
 threading.Thread(target=_auto_market_pulse_worker, daemon=True, name="pulse-scheduler").start()
@@ -9931,24 +10034,33 @@ def _auto_snaptrade_sync_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            wait_secs = _secs_until(h, m)
-            print(f"[snaptrade-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
-            _time.sleep(wait_secs)
-            cfg2 = _get_automation_settings().get("snaptrade_sync", {})
-            if not cfg2.get("enabled", False):
-                print("[snaptrade-scheduler] disabled after wake — skipping")
-                continue
+            if _automation_needs_catchup("snaptrade_sync", h, m):
+                print("[snaptrade-scheduler] missed today's run — catching up now")
+            else:
+                wait_secs = _secs_until(h, m)
+                print(f"[snaptrade-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+                _time.sleep(wait_secs)
+                cfg2 = _get_automation_settings().get("snaptrade_sync", {})
+                if not cfg2.get("enabled", False):
+                    print("[snaptrade-scheduler] disabled after wake — skipping")
+                    continue
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
                 print("[snaptrade-scheduler] no database — skipping")
                 continue
             print(f"[snaptrade-scheduler] {h:02d}:{m:02d} Pacific — syncing SnapTrade holdings…")
             res = _snaptrade_run_sync()
+            n_err = len(res.get('errors', []))
             print(f"[snaptrade-scheduler] synced {len(res.get('synced',[]))} account(s), "
                   f"pushed {len(res.get('lots_written',[]))} fund(s); "
-                  f"{len(res.get('errors',[]))} error(s)")
+                  f"{n_err} error(s)")
+            # Full per-account error detail lands in the record (was: counts only).
+            _automation_record_run("snaptrade_sync", n_err == 0,
+                                   json.dumps(res.get("errors", []))[:400] if n_err
+                                   else f"{len(res.get('synced', []))} accounts")
         except Exception as _e:
             import time as _t2
             print(f"[snaptrade-scheduler] error (retrying in 1h): {_e}")
+            _automation_record_run("snaptrade_sync", False, str(_e))
             _t2.sleep(3600)
 
 threading.Thread(target=_auto_snaptrade_sync_worker, daemon=True, name="snaptrade-scheduler").start()
@@ -9980,6 +10092,28 @@ def _fund_conn():
         return psycopg2.connect(url)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Fund DB unavailable: {e}")
+
+
+def _ddl_once(fn):
+    """Run a DDL ensure-table function only once per process.
+
+    The `_ensure_*` functions are idempotent, but several sat on hot request
+    paths executing CREATE TABLE + ALTERs (5-10 extra round-trips + catalog
+    locks) on EVERY call — e.g. the quarterly-letter read path. First
+    completed call wins; a process restart naturally retries, so a transient
+    first-call failure can't permanently skip the DDL across deploys.
+    """
+    import functools
+    state = {"done": False}
+
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        if state["done"]:
+            return
+        r = fn(*a, **k)
+        state["done"] = True
+        return r
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -10640,6 +10774,14 @@ def _apply_self_migrations() -> None:
         _step("manual_annual_returns",      lambda: _ensure_manual_annual_returns_table(conn))
         _step("seed_manual_annual_returns", lambda: _seed_manual_annual_returns(conn))
 
+        def _tax_lots_open_idx():
+            # 30+ queries filter tax_lots by fund + open; no index existed.
+            with conn.cursor() as cur:
+                cur.execute("CREATE INDEX IF NOT EXISTS tax_lots_fund_open_idx "
+                            "ON tax_lots(fund_id) WHERE closed_at IS NULL")
+            conn.commit()
+        _step("tax_lots_open_index", _tax_lots_open_idx)
+
         # Mark the migration as applied EVEN IF some optional seed step
         # failed — those failures are logged once and ignored. This
         # prevents the per-request re-run that was making every page
@@ -11240,8 +11382,14 @@ async def fund_auth_endpoint(body: FundAuthRequest):
 
 
 @app.get("/api/fund/overview")
-async def fund_overview(request: Request, fund_id: str = None):
+def fund_overview(request: Request, fund_id: str = None):
     _require_fund_token(request)
+    # 25s response cache — the dashboard fires overview + lps + positions on
+    # every load and each was independently recomputing the market NAV.
+    cache_key = ("fund_overview", str(fund_id or ""))
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -11275,7 +11423,7 @@ async def fund_overview(request: Request, fund_id: str = None):
             gain = nav - contributions
             gain_pct = (gain / contributions * 100) if contributions else 0
 
-            return {
+            _out = {
                 "fund_name":      fund["name"],
                 "short_name":     fund["short_name"],
                 "inception_date": str(fund["inception_date"]),
@@ -11291,15 +11439,22 @@ async def fund_overview(request: Request, fund_id: str = None):
                 "lp_count":       lp_count,
                 "position_count": position_count,
             }
+            _user_cache_put(cache_key, _out)
+            return _out
     finally:
         conn.close()
 
 
 @app.get("/api/fund/lps")
-async def fund_lps(request: Request, fund_id: str = None):
+def fund_lps(request: Request, fund_id: str = None):
     _require_fund_token(request)
     _fund_lps_claims = getattr(request.state, 'auth_claims', None) or {}
     _is_demo = bool(_fund_lps_claims.get("demo_mode"))
+    # 25s cache, keyed by fund + demo flag (demo anonymises names).
+    cache_key = ("fund_lps", str(fund_id or ""), _is_demo)
+    _cached = _user_cache_get(cache_key)
+    if _cached is not None:
+        return _cached
     conn = _fund_conn()
     try:
         with conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -11339,6 +11494,7 @@ async def fund_lps(request: Request, fund_id: str = None):
                     "gain":         round(cur_val - commitment, 2),
                     "share_pct":    round(share * 100, 2),
                 })
+            _user_cache_put(cache_key, result)
             return result
     finally:
         conn.close()
@@ -16809,6 +16965,7 @@ PODCAST_AUDITION_VOICES = [
 
 
 # ── DGA Memos (PDF-export of podcast scripts) ─────────────────────────
+@_ddl_once
 def _ensure_dga_memos_table() -> None:
     """Create dga_memos table — DGA Capital memos generated from podcast
     scripts. Idempotent."""
@@ -17698,6 +17855,7 @@ def delete_memo(memo_id: str, request: Request):
 
 
 # ── Podcast DB schema ──────────────────────────────────────────────────
+@_ddl_once
 def _ensure_podcast_table() -> None:
     """Create analyst_podcasts if missing. Idempotent, per-ALTER commits."""
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
@@ -18641,6 +18799,7 @@ _AGENTIC_SYSTEM_DEFAULT = (
 )
 
 
+@_ddl_once
 def _ensure_strategist_reviews_table() -> None:
     """Persist full Portfolio Strategist committee reviews so they survive
     Railway redeploys (the live job dict is in-memory and wiped on restart)."""
@@ -18692,6 +18851,7 @@ def _persist_strategist_review(job_id: str, job: dict, answer: str,
         print(f"⚠️ [strategist persist insert] {e!s:.150}", flush=True)
 
 
+@_ddl_once
 def _ensure_analyst_reviews_table() -> None:
     """Persist completed AI Analyst answers so they survive Railway redeploys
     (the in-memory _agentic_jobs dict is wiped on restart) and can be re-opened
@@ -18777,7 +18937,7 @@ def _run_agentic_analysis(job_id: str, question: str,
     _set(stage="queued", status="running", label="Starting…",
          started_at=time.time(), steps=0, tool_calls=[], cost_usd=0.0)
     try:
-        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
         model = _AGENTIC_MODEL
         think = _agentic_thinking_kwargs(model)
         system = system_override or _AGENTIC_SYSTEM_DEFAULT
@@ -18909,7 +19069,7 @@ def models_check(request: Request):
     import anthropic as _anthropic
     out = {"ok": True, "configured_agentic_model": _AGENTIC_MODEL}
     try:
-        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
     except Exception as e:
         return {"ok": False, "error": f"client init failed: {e!s:.150}"}
     # 1. list models
@@ -18974,7 +19134,7 @@ def _synthesize_lp_memo(source_text: str, fund_name: str | None = None) -> str:
     to the original text if the model call fails, so a memo always renders."""
     import anthropic as _anthropic
     try:
-        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+        client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
     except Exception:
         return source_text
     ctx = (f"FUND: {fund_name}\n\n" if fund_name else "")
@@ -19594,6 +19754,7 @@ def quarterly_letter_funds(request: Request):
     return {"ok": True, "funds": out}
 
 
+@_ddl_once
 def _ensure_quarterly_letters_table() -> None:
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -20409,6 +20570,7 @@ _TRANSCRIPT_EXTRACT_MODEL = (os.environ.get("TRANSCRIPT_MODEL", "").strip()
 _EMBED_MODEL = "text-embedding-3-small"          # 1536-dim, ~$0.02/1M tokens
 
 
+@_ddl_once
 def _ensure_transcripts_tables() -> None:
     """Create transcript tables. Idempotent. Embeddings are stored as JSONB
     float arrays (cosine computed in Python) — no pgvector extension needed,
@@ -20586,7 +20748,7 @@ def _extract_transcript_entities(text: str) -> dict:
     falls back to the agentic model on error. Degrades to empty on failure."""
     import anthropic as _anthropic
     snippet = (text or "")[:42000]   # keep the extraction call bounded
-    client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key())
+    client = _anthropic.Anthropic(api_key=analyst.get_claude_api_key(), timeout=120.0)
     user = f"TRANSCRIPT:\n{snippet}"
     for mdl in (_TRANSCRIPT_EXTRACT_MODEL, _AGENTIC_MODEL):
         try:
@@ -21549,6 +21711,7 @@ _FIN_COLMAP = {
 }
 
 
+@_ddl_once
 def _ensure_financials_table() -> None:
     """Create the company_financials store. Idempotent. PK is (ticker,
     period_type, period_end) — robust to non-calendar filers whose fiscal-year
@@ -21961,6 +22124,7 @@ def options_scan_status(job_id: str, request: Request):
 _market_sync_jobs: dict[str, dict] = {}
 
 
+@_ddl_once
 def _ensure_market_tables():
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -22104,29 +22268,50 @@ def _run_market_sync(job_id: str, universe: list) -> None:
                 _store_quote(cur, sym, q)
             conn.commit()
         # 2. Per-name: sector (EDGAR SIC, reliable) + analyst target (best-effort).
+        # Only for names whose stored meta is stale (>24h) — sectors/targets
+        # change daily at most, but this loop used to refetch yf .info for the
+        # WHOLE universe on every 10-minute market-hours autosync run.
+        stale = list(universe)
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT symbol FROM security_meta "
+                            "WHERE symbol = ANY(%s) AND updated_at > now() - interval '24 hours'",
+                            (list(universe),))
+                _fresh = {r[0] for r in cur.fetchall()}
+            stale = [s for s in universe if s not in _fresh]
+        except Exception:
+            pass
         sectors_n = 0
-        for i, sym in enumerate(universe):
-            _set(label=f"⚙ {sym} ({i+1}/{total})…", done=i)
-            sec, ind = _builder_call_timeout(
-                lambda: _builder_resolve_sector_live(sym), 5.0, (None, None))
-            target = None
-            if _YFINANCE_OK:
-                info = _builder_call_timeout(lambda: (yf.Ticker(sym).info or {}), 6.0, {}) or {}
-                t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
-                try:
-                    if t and float(t) > 0:
-                        target = float(t)
-                except Exception:
-                    pass
-            if sec or target:
-                with _fund_conn() as conn, conn.cursor() as cur:
-                    _store_meta(cur, sym, {"sector": sec, "industry": ind, "name": None,
-                                           "analyst_target": target, "source": "edgar+yf"})
-                    conn.commit()
-                if sec:
-                    sectors_n += 1
+        meta_conn = _fund_conn()
+        meta_conn.autocommit = True
+        meta_cur = meta_conn.cursor()
+        try:
+            for i, sym in enumerate(stale):
+                _set(label=f"⚙ {sym} ({i+1}/{len(stale)})…", done=i)
+                sec, ind = _builder_call_timeout(
+                    lambda: _builder_resolve_sector_live(sym), 5.0, (None, None))
+                target = None
+                if _YFINANCE_OK:
+                    info = _builder_call_timeout(lambda: (yf.Ticker(sym).info or {}), 6.0, {}) or {}
+                    t = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+                    try:
+                        if t and float(t) > 0:
+                            target = float(t)
+                    except Exception:
+                        pass
+                if sec or target:
+                    _store_meta(meta_cur, sym, {"sector": sec, "industry": ind, "name": None,
+                                                "analyst_target": target, "source": "edgar+yf"})
+                    if sec:
+                        sectors_n += 1
+        finally:
+            try:
+                meta_cur.close()
+                meta_conn.close()
+            except Exception:
+                pass
         _set(stage="done", status="done", done=total,
-             label=f"✓ Synced {len(quotes)} quotes · {sectors_n}/{total} sectors",
+             label=f"✓ Synced {len(quotes)} quotes · {sectors_n}/{len(stale) or 1} sectors refreshed ({len(universe)-len(stale)} fresh)",
              result={"quotes": len(quotes), "names": total, "sectors": sectors_n,
                      "source": _md.source_label(),
                      "synced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
@@ -25119,6 +25304,7 @@ async def no_cache_shell_middleware(request: Request, call_next):
 #  encrypted at rest (secure_store). Enabling issues one-time recovery codes
 #  (stored only as SHA-256 hashes) so a lost authenticator can't lock you out.
 # ─────────────────────────────────────────────────────────────────────────────
+@_ddl_once
 def _ensure_mfa_table() -> None:
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -25328,6 +25514,7 @@ def contact_page():
 #  link/public tokens. Fidelity credentials are entered on Fidelity's own OAuth
 #  page via Plaid Link and never reach this server.
 # ─────────────────────────────────────────────────────────────────────────────
+@_ddl_once
 def _ensure_plaid_tables() -> None:
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -25714,6 +25901,7 @@ async def plaid_assign(request: Request):
 
 
 # ── SnapTrade (Fidelity holdings — Plaid can't connect Fidelity since Oct 2023) ──
+@_ddl_once
 def _ensure_snaptrade_tables():
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return
@@ -26229,65 +26417,77 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
     default_end = end or today.isoformat()
     synced, errors = [], []
     gated_reported = False
-    for acct_id in acct_ids:
-        if start:
-            a_start = start
-        else:
-            with _fund_conn() as conn, conn.cursor() as cur:
+    # One autocommit connection for the whole ingest (was: two per account).
+    conn = _fund_conn()
+    conn.autocommit = True
+    cur = conn.cursor()
+    try:
+        for acct_id in acct_ids:
+            if start:
+                a_start = start
+            else:
                 cur.execute("SELECT max(trade_date) FROM snaptrade_activities WHERE account_id=%s",
                             (acct_id,))
                 row = cur.fetchone()
                 last_td = row[0] if row else None
-            if not last_td:
-                a_start = f"{today.year}-01-01"
-            else:
-                # Rolling 35-day incremental, but never leave a gap: if the last
-                # stored activity is older than that (app was down / key was
-                # gated for a while), resume just before it instead.
-                base = today - timedelta(days=35)
-                if last_td < base:
-                    base = last_td - timedelta(days=3)
-                a_start = base.isoformat()
-        try:
-            acts = _st.get_account_activities(uid, secret, acct_id, a_start, default_end)
-        except Exception as e:
-            detail = _snaptrade_error_detail(e)
-            if _snaptrade_plan_gated(detail):
-                if not gated_reported:
-                    errors.append({"stage": "activities", "error":
-                        "SnapTrade transactions are gated on the free plan — add the "
-                        "pay-as-you-go production key (SNAPTRADE_CLIENT_ID / "
-                        "SNAPTRADE_CONSUMER_KEY) to unlock automatic activity import. "
-                        f"({detail[:120]})"})
-                    gated_reported = True
-            else:
-                errors.append({"account_id": acct_id, "stage": "activities", "error": detail})
-            continue
-        n = 0
-        with _fund_conn() as conn, conn.cursor() as cur:
+                if not last_td:
+                    a_start = f"{today.year}-01-01"
+                else:
+                    # Rolling 35-day incremental, but never leave a gap: if the last
+                    # stored activity is older than that (app was down / key was
+                    # gated for a while), resume just before it instead.
+                    base = today - timedelta(days=35)
+                    if last_td < base:
+                        base = last_td - timedelta(days=3)
+                    a_start = base.isoformat()
+            try:
+                acts = _st.get_account_activities(uid, secret, acct_id, a_start, default_end)
+            except Exception as e:
+                detail = _snaptrade_error_detail(e)
+                if _snaptrade_plan_gated(detail):
+                    if not gated_reported:
+                        errors.append({"stage": "activities", "error":
+                            "SnapTrade transactions are gated on the free plan — add the "
+                            "pay-as-you-go production key (SNAPTRADE_CLIENT_ID / "
+                            "SNAPTRADE_CONSUMER_KEY) to unlock automatic activity import. "
+                            f"({detail[:120]})"})
+                        gated_reported = True
+                else:
+                    errors.append({"account_id": acct_id, "stage": "activities", "error": detail})
+                continue
+            n = 0
             for a in (acts or []):
                 p = _snaptrade_parse_activity(a)
                 if not p:
                     continue
                 p["account_id"] = p["account_id"] or acct_id
-                cur.execute("""
-                    INSERT INTO snaptrade_activities
-                        (activity_id, account_id, trade_date, settlement_date, type, symbol,
-                         description, units, price, amount, currency, fee, raw_json, synced_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
-                    ON CONFLICT (activity_id) DO UPDATE SET
-                        account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
-                        settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
-                        symbol=EXCLUDED.symbol, description=EXCLUDED.description,
-                        units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
-                        currency=EXCLUDED.currency, fee=EXCLUDED.fee,
-                        raw_json=EXCLUDED.raw_json, synced_at=now()
-                """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
-                      p["type"], p["symbol"], p["description"], p["units"], p["price"],
-                      p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
-                n += 1
-            conn.commit()
-        synced.append({"account_id": acct_id, "activities": n, "since": a_start})
+                try:
+                    cur.execute("""
+                        INSERT INTO snaptrade_activities
+                            (activity_id, account_id, trade_date, settlement_date, type, symbol,
+                             description, units, price, amount, currency, fee, raw_json, synced_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
+                        ON CONFLICT (activity_id) DO UPDATE SET
+                            account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
+                            settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
+                            symbol=EXCLUDED.symbol, description=EXCLUDED.description,
+                            units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
+                            currency=EXCLUDED.currency, fee=EXCLUDED.fee,
+                            raw_json=EXCLUDED.raw_json, synced_at=now()
+                    """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
+                          p["type"], p["symbol"], p["description"], p["units"], p["price"],
+                          p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
+                    n += 1
+                except Exception as e:
+                    errors.append({"account_id": acct_id, "stage": "activity_upsert",
+                                   "error": _snaptrade_error_detail(e)})
+            synced.append({"account_id": acct_id, "activities": n, "since": a_start})
+    finally:
+        try:
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
     return synced, errors
 
 
@@ -26575,6 +26775,12 @@ def _snaptrade_run_sync() -> dict:
     out = []
     errors = []
     acct_norm = {}   # account_id -> normalized positions, for the tax_lots bridge
+    # ONE autocommit connection for the whole account loop (was: two fresh
+    # connections per account — TLS setup per iteration). Autocommit keeps a
+    # failed statement from poisoning the rest of the loop.
+    _loop_conn = _fund_conn()
+    _loop_conn.autocommit = True
+    _loop_cur = _loop_conn.cursor()
     for acct in (accts or []):
         if not isinstance(acct, dict):
             continue
@@ -26635,19 +26841,17 @@ def _snaptrade_run_sync() -> dict:
             snap_val = None
         if snap_val is not None:
             try:
-                with _fund_conn() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO snaptrade_balances (account_id, d, total_value, synced_at)
-                        VALUES (%s, %s, %s, now())
-                        ON CONFLICT (account_id, d) DO UPDATE
-                          SET total_value = EXCLUDED.total_value, synced_at = now()
-                    """, (norm["account_id"], _snaptrade_pacific_today(), float(snap_val)))
-                    conn.commit()
+                _loop_cur.execute("""
+                    INSERT INTO snaptrade_balances (account_id, d, total_value, synced_at)
+                    VALUES (%s, %s, %s, now())
+                    ON CONFLICT (account_id, d) DO UPDATE
+                      SET total_value = EXCLUDED.total_value, synced_at = now()
+                """, (norm["account_id"], _snaptrade_pacific_today(), float(snap_val)))
             except Exception as e:
                 errors.append({"account_id": norm["account_id"], "stage": "balance_snapshot",
                                "error": _snaptrade_error_detail(e)})
-        with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("""
+        try:
+            _loop_cur.execute("""
                 INSERT INTO snaptrade_accounts (account_id, connection_id, brokerage_name,
                                                 account_name, account_mask, total_value,
                                                 holdings_json, status, last_synced_at, updated_at)
@@ -26660,27 +26864,35 @@ def _snaptrade_run_sync() -> dict:
             """, (norm["account_id"], norm["connection_id"], norm["brokerage"],
                   norm["account_name"], norm["account_mask"], norm["total_value"],
                   json.dumps(norm["positions"], default=str)))
-            # After a key-swap reset, account ids change — restore the saved
-            # fund assignment by mask+name so the user doesn't have to re-pick.
-            # Consumed one key at a time so it never fights a manual unassign.
-            try:
-                backup = _kv_get("snaptrade.assignment_backup") or {}
-                bkey = f"{norm.get('account_mask') or ''}|{(norm.get('account_name') or '').strip().lower()}"
-                if backup.get(bkey):
-                    cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() "
-                                "WHERE account_id=%s AND fund_id IS NULL",
-                                (backup[bkey], norm["account_id"]))
-                    if cur.rowcount:
-                        print(f"[snaptrade] restored assignment {bkey} → {backup[bkey]}", flush=True)
-                    backup.pop(bkey, None)
-                    _kv_put("snaptrade.assignment_backup", backup)
-            except Exception:
-                pass
-            conn.commit()
+        except Exception as e:
+            errors.append({"account_id": norm["account_id"], "stage": "account_upsert",
+                           "error": _snaptrade_error_detail(e)})
+            continue
+        # After a key-swap reset, account ids change — restore the saved
+        # fund assignment by mask+name so the user doesn't have to re-pick.
+        # Consumed one key at a time so it never fights a manual unassign.
+        try:
+            backup = _kv_get("snaptrade.assignment_backup") or {}
+            bkey = f"{norm.get('account_mask') or ''}|{(norm.get('account_name') or '').strip().lower()}"
+            if backup.get(bkey):
+                _loop_cur.execute("UPDATE snaptrade_accounts SET fund_id=%s, updated_at=now() "
+                                  "WHERE account_id=%s AND fund_id IS NULL",
+                                  (backup[bkey], norm["account_id"]))
+                if _loop_cur.rowcount:
+                    print(f"[snaptrade] restored assignment {bkey} → {backup[bkey]}", flush=True)
+                backup.pop(bkey, None)
+                _kv_put("snaptrade.assignment_backup", backup)
+        except Exception:
+            pass
         acct_norm[norm["account_id"]] = norm["positions"]
         out.append({"account_id": norm["account_id"], "account_name": norm["account_name"],
                     "brokerage": norm["brokerage"], "positions": norm["count"],
                     "total_value": norm["total_value"]})
+    try:
+        _loop_cur.close()
+        _loop_conn.close()
+    except Exception:
+        pass
 
     # ── Bridge: push assigned accounts' holdings into tax_lots (live positions) ──
     # Group by fund (a fund may have >1 linked account) and write once per fund.
