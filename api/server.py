@@ -1106,6 +1106,11 @@ import claude_analyst as analyst
 
 app = FastAPI(title="DGA Research Analyst API", version="1.0.0")
 
+# Compress every response ≥1 KB. The GP shell is ~1 MB of raw HTML and JSON
+# payloads (positions, overview) are large — gzip cuts transfer ~5-7x.
+from fastapi.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.add_middleware(
     CORSMiddleware,
     # Wildcard is intentional — the API is consumed by:
@@ -1836,7 +1841,7 @@ def _fetch_news_for_ticker(ticker: str, limit: int = 3) -> list[dict]:
     if _YFINANCE_OK:
         try:
             import yfinance as _yf
-            raw = _yf.Ticker(tk).news or []
+            raw = _builder_call_timeout(lambda: _yf.Ticker(tk).news or [], 8.0, []) or []
             for it in raw[:8]:
                 content = it.get("content") or {}
                 title = (it.get("title") or content.get("title") or "").strip()
@@ -1981,10 +1986,15 @@ def market_indices():
     out = []
     for label, sym in _INDEX_TICKERS:
         try:
-            t = yf.Ticker(sym)
-            info = t.fast_info
-            last  = float(info.last_price)  if info.last_price  is not None else None
-            prev  = float(info.previous_close) if info.previous_close is not None else None
+            # fast_info is lazy — property ACCESS does the network fetch, so it
+            # must happen inside the timeout thread, not after.
+            vals = _builder_call_timeout(
+                lambda s=sym: (lambda fi: (fi.last_price, fi.previous_close))(yf.Ticker(s).fast_info),
+                6.0, None)
+            if vals is None:
+                continue
+            last  = float(vals[0]) if vals[0] is not None else None
+            prev  = float(vals[1]) if vals[1] is not None else None
             pct   = ((last - prev) / prev * 100.0) if (last and prev and prev > 0) else None
             out.append({
                 "label":    label,
@@ -2030,8 +2040,8 @@ def search_resolve(q: str = ""):
     # Heuristic: looks like a ticker → try direct resolution first
     if len(query) <= 6 and re.fullmatch(r"[A-Za-z0-9.\-]+", query):
         try:
-            t = yf.Ticker(query.upper())
-            info = getattr(t, "info", {}) or {}
+            info = _builder_call_timeout(
+                lambda: getattr(yf.Ticker(query.upper()), "info", {}) or {}, 6.0, {}) or {}
             longname = info.get("longName") or info.get("shortName")
             if longname:
                 results.append({
@@ -3178,14 +3188,17 @@ def gp_portfolio_chart(request: Request, period: str = "ytd", fund_id: str = Non
 
     import pandas as _pd
     try:
-        raw = yf.download(
-            tickers,
-            start=start_date.isoformat(),
-            end=(today + _td(days=1)).isoformat(),
-            progress=False,
-            auto_adjust=True,
-            threads=True,
-        )
+        raw = _builder_call_timeout(
+            lambda: yf.download(
+                tickers,
+                start=start_date.isoformat(),
+                end=(today + _td(days=1)).isoformat(),
+                progress=False,
+                auto_adjust=True,
+                threads=True,
+            ), 15.0, None)
+        if raw is None:
+            return {"dates": [], "values": [], "error": "yfinance timed out"}
     except Exception as e:
         return {"dates": [], "values": [], "error": f"yfinance error: {e}"}
 
@@ -5088,7 +5101,7 @@ BRANDING_DIR = Path(__file__).resolve().parent.parent / "branding"
 
 
 @app.get("/")
-async def root():
+def root(request: Request):
     """Serve the new production login page (portfolio.dgacapital.com entry point).
 
     The legacy single-password app shell is still reachable at /app/ for
@@ -5096,13 +5109,13 @@ async def root():
     """
     path = WEB_DIR / "portfolio.html"
     if path.exists():
-        return FileResponse(str(path), headers=_NOCACHE)
+        return _shell_response(path, request)
     # Fallback if portfolio.html missing (shouldn't happen post-deploy)
     return RedirectResponse(url="/app/")
 
 
 @app.get("/gp")
-async def serve_gp_dashboard():
+def serve_gp_dashboard(request: Request):
     """GP dashboard (Terminal Pro). Client-side auth-guard.js redirects
     unauthenticated requests to /. Server doesn't enforce here — the
     page is just static HTML; all sensitive data goes through /api/*
@@ -5110,16 +5123,16 @@ async def serve_gp_dashboard():
     path = WEB_DIR / "portfolio-gp.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="portfolio-gp.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
+    return _shell_response(path, request)
 
 
 @app.get("/lp")
-async def serve_lp_dashboard():
+def serve_lp_dashboard(request: Request):
     """LP dashboard. Same auth-guard pattern as /gp."""
     path = WEB_DIR / "portfolio-lp.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="portfolio-lp.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
+    return _shell_response(path, request)
 
 
 # Hard-coded no-cache headers applied to every shell response.
@@ -5136,11 +5149,39 @@ _NOCACHE = {
     "Cloudflare-CDN-Cache-Control": "no-store",
 }
 
+# Shell serving with revalidation: the browser must re-check on EVERY load
+# (so a deploy is never stale — same guarantee as _NOCACHE) but an unchanged
+# file answers 304 with no body instead of re-sending ~1 MB of HTML. CDN
+# edges still never cache. ETag is derived from mtime+size — cheap and
+# changes on every deploy (Railway rewrites files at build).
+_REVALIDATE = {
+    "Cache-Control":              "no-cache, must-revalidate",
+    "Pragma":                     "no-cache",
+    "Surrogate-Control":          "no-store",
+    "CDN-Cache-Control":          "no-store",
+    "Cloudflare-CDN-Cache-Control": "no-store",
+}
+
+
+def _shell_response(path: Path, request: Request | None = None):
+    try:
+        st = path.stat()
+        etag = f'W/"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    except OSError:
+        etag = None
+    headers = dict(_REVALIDATE)
+    if etag:
+        headers["ETag"] = etag
+        inm = request.headers.get("if-none-match") if request is not None else None
+        if inm and etag in inm:
+            return Response(status_code=304, headers=headers)
+    return FileResponse(str(path), headers=headers)
+
 
 @app.get("/app/")
 @app.get("/app/index.html")
-async def serve_shell():
-    """Serve the web app shell with strict no-cache headers.
+def serve_shell(request: Request):
+    """Serve the web app shell with revalidation headers.
 
     Defined as explicit routes so they take precedence over the
     StaticFiles mount — guarantees Cache-Control is set on every
@@ -5149,7 +5190,7 @@ async def serve_shell():
     path = WEB_DIR / "index.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
+    return _shell_response(path, request)
 
 
 @app.get("/info")
@@ -5157,36 +5198,9 @@ def info():
     return {"service": "DGA Research Analyst API", "status": "ok"}
 
 
-# ── Mockup preview routes — convenience short URLs ───────────────────────────
-# These serve the front-page redesign mockups from the project root so they're
-# accessible at /mockup-a.html (in addition to /app/mockup-a.html via the
-# StaticFiles mount). Used to preview proposed layouts before shipping.
-@app.get("/mockup-a.html")
-async def serve_mockup_a():
-    path = WEB_DIR / "mockup-a.html"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="mockup-a.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
-
-
-@app.get("/mockup-b.html")
-async def serve_mockup_b():
-    path = WEB_DIR / "mockup-b.html"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="mockup-b.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
-
-
-@app.get("/mockup-hybrid.html")
-@app.get("/preview")
-async def serve_mockup_hybrid():
-    """Unified login + role-router preview. Two-password gate (GP/LP)
-    routes to the appropriate layout mockup. Used to validate the
-    portfolio.dgacapital.com flow before shipping to production."""
-    path = WEB_DIR / "mockup-hybrid.html"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="mockup-hybrid.html not found")
-    return FileResponse(str(path), headers=_NOCACHE)
+# Mockup preview routes removed (ui334): the real login flow shipped long ago
+# and the mockups were stale, unauthenticated login previews on a production
+# host. Files deleted from web/ as well.
 
 
 # ── Build/version endpoint ────────────────────────────────────────────────────
@@ -5660,8 +5674,10 @@ def _get_ytd_benchmark_return(benchmark_key: str) -> Optional[float]:
     total_w, total_r = 0.0, 0.0
     for ticker, weight in defn["tickers"]:
         try:
-            hist = yf.Ticker(ticker).history(start=start_of_year, interval="1d")
-            if hist.empty:
+            hist = _builder_call_timeout(
+                lambda tk=ticker: yf.Ticker(tk).history(start=start_of_year, interval="1d"),
+                8.0, None)
+            if hist is None or hist.empty:
                 continue
             first_close = float(hist["Close"].iloc[0])
             last_close  = float(hist["Close"].iloc[-1])
@@ -5743,9 +5759,10 @@ def get_spy_ytd():
 
     try:
         start_of_year = _dt.date(_dt.date.today().year, 1, 1).isoformat()
-        spy = yf.Ticker("SPY")
-        hist = spy.history(start=start_of_year, interval="1d")
-        if hist.empty:
+        hist = _builder_call_timeout(
+            lambda: yf.Ticker("SPY").history(start=start_of_year, interval="1d"),
+            8.0, None)
+        if hist is None or hist.empty:
             raise ValueError("Empty history returned for SPY")
         first_close = float(hist["Close"].iloc[0])
         last_close  = float(hist["Close"].iloc[-1])
@@ -5837,7 +5854,7 @@ def get_ticker_meta(ticker: str):
     news_list: list[dict] = []
     if _YFINANCE_OK:
         try:
-            news_items = yf.Ticker(t).news or []
+            news_items = _builder_call_timeout(lambda: yf.Ticker(t).news or [], 8.0, []) or []
             for item in news_items[:8]:        # fetch up to 8, keep best 5
                 # yfinance ≥ 0.2.x wraps fields inside "content" sub-dict
                 content = item.get("content") or {}
@@ -8419,15 +8436,14 @@ class WatchlistUpdate(BaseModel):
     tickers: list[str]
 
 
-@app.get("/api/watchlist")
-def get_watchlist():
-    """Return the current watchlist."""
-    return {"tickers": analyst.load_watchlist()}
-
-
+# NOTE (ui334): the legacy file-based GET /api/watchlist and
+# DELETE /api/watchlist/{ticker} routes that lived here were SHADOWED by the
+# v2 DB-backed routes registered earlier (first match wins) — dead code,
+# removed. PUT (replace-all) and POST /{ticker} are kept for the legacy
+# /app/ shell, still writing the JSON file.
 @app.put("/api/watchlist")
 def set_watchlist(body: WatchlistUpdate):
-    """Replace the entire watchlist."""
+    """Replace the entire legacy file watchlist (legacy /app/ shell only)."""
     clean = [t.strip().upper() for t in body.tickers if t.strip()]
     analyst.save_watchlist(clean)
     return {"tickers": analyst.load_watchlist()}
@@ -8435,7 +8451,7 @@ def set_watchlist(body: WatchlistUpdate):
 
 @app.post("/api/watchlist/{ticker}")
 def add_watchlist_ticker(ticker: str):
-    """Add a single ticker to the watchlist."""
+    """Add a single ticker to the legacy file watchlist (legacy /app/ shell)."""
     t = ticker.strip().upper()
     if not t or not t.replace(".", "").isalnum() or len(t) > 10:
         raise HTTPException(status_code=422, detail="Invalid ticker")
@@ -8443,11 +8459,30 @@ def add_watchlist_ticker(ticker: str):
     return {"tickers": tickers}
 
 
-@app.delete("/api/watchlist/{ticker}")
-def remove_watchlist_ticker(ticker: str):
-    """Remove a single ticker from the watchlist."""
-    tickers = analyst.remove_from_watchlist(ticker.strip().upper())
-    return {"tickers": tickers}
+def _all_watchlist_tickers() -> list:
+    """Union of the DB watchlists (what the terminal UI writes) and the legacy
+    JSON-file list (what pre-v2 tooling wrote). The options-scan and
+    market-store universes used to read ONLY the file — tickers added in the
+    UI never entered the wheel scan or the quote store."""
+    out = []
+    try:
+        out.extend(analyst.load_watchlist() or [])
+    except Exception:
+        pass
+    if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+        try:
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT ticker FROM watchlists")
+                out.extend(r[0] for r in cur.fetchall())
+        except Exception as e:
+            print(f"[watchlist] union read failed: {e!s:.120}", flush=True)
+    seen, uniq = set(), []
+    for t in out:
+        t = (t or "").strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
 
 
 # ---------------------------------------------------------------------------
@@ -8569,7 +8604,7 @@ def start_market_scan(background_tasks: BackgroundTasks):
 @app.post("/api/scan")
 def start_scan(background_tasks: BackgroundTasks):
     """Kick off a live-search news scan for all watchlist tickers."""
-    tickers = _filter_scan_tickers(analyst.load_watchlist())
+    tickers = _filter_scan_tickers(_all_watchlist_tickers())
     if not tickers:
         raise HTTPException(status_code=422, detail="Watchlist is empty — add tickers first")
 
@@ -8981,8 +9016,14 @@ def batch_quotes(tickers: str = ""):
         # period="1mo" ensures we capture illiquid OTC preferreds (Freddie/Fannie)
         # that may only trade a few times per week.  dropna() in _extract always
         # returns the most-recent available close, so stale days don't matter.
-        data = _yf.download(yahoo_syms, period="1mo", auto_adjust=True,
-                            progress=False, group_by="ticker")
+        # Timeout-guarded: a rate-limited Yahoo call can hang indefinitely from
+        # the cloud IP (the ui209 failure class) — never let it stall a request.
+        data = _builder_call_timeout(
+            lambda: _yf.download(yahoo_syms, period="1mo", auto_adjust=True,
+                                 progress=False, group_by="ticker"),
+            10.0, None)
+        if data is None:
+            raise ValueError("yf.download timed out")
 
         def _extract(ysym: str) -> tuple:
             """Return (price, pct_change) from the last two available close prices.
@@ -9033,10 +9074,25 @@ def batch_quotes(tickers: str = ""):
                 fetched[orig] = tiingo_data[orig]
                 print(f"[quotes] {orig}: Yahoo miss → Tiingo hit")
 
+    # ── Last resort: newest persisted quote of ANY age, marked as_of ─────────
+    # A 12-minute-old autosync price beats a blank cell — the UI can badge it
+    # as stale instead of rendering "—" during a Yahoo/Tiingo outage.
+    still_null = [orig for orig, v in fetched.items() if v.get("price") is None]
+    if still_null:
+        db_any = _db_quotes(still_null)
+        for orig in still_null:
+            dq = db_any.get(orig)
+            if dq and dq.get("price") is not None:
+                fetched[orig] = dq
+                print(f"[quotes] {orig}: live miss → store quote as_of {dq.get('as_of')}")
+
     # ── Store per-ticker in unified cache and merge into result ───────────────
+    # Null rows get a short effective TTL (60s) instead of the full window, so
+    # a transient failure doesn't pin blanks on screen for 10 minutes.
     ts_now = time.time()
     for sym, q in fetched.items():
-        _QUOTE_CACHE[sym] = {**q, "_ts": ts_now}
+        _QUOTE_CACHE[sym] = {**q, "_ts": (ts_now if q.get("price") is not None
+                                          else ts_now - _QUOTE_TTL + 60)}
         result[sym] = q
     for sym in misses:
         if sym not in result:
@@ -9793,7 +9849,10 @@ def _auto_daily_brief_worker() -> None:
                 print("[daily-brief-scheduler] disabled after wake — skipping")
                 continue
             print(f"[daily-brief-scheduler] {h:02d}:{m:02d} Pacific — running daily brief…")
-            analyst.run_daily_brief()
+            # Same call as the manual endpoint — includes the GP's book tickers
+            # (the bare run_daily_brief() the worker used to make silently
+            # generated a brief with no book context).
+            analyst.run_daily_brief(book_tickers=_dga_book_tickers())
             # Persist to kv_store so the UI picks it up
             try:
                 brief = analyst.DAILY_BRIEF_FILE
@@ -13309,10 +13368,10 @@ def get_spy_monthly(ticker: str = "SPY"):
     try:
         import yfinance as yf
         from datetime import date as _date
-        tkr   = yf.Ticker(sym)
         start = f"{_date.today().year}-01-01"
-        hist  = tkr.history(start=start, interval="1d")
-        if hist.empty:
+        hist  = _builder_call_timeout(
+            lambda: yf.Ticker(sym).history(start=start, interval="1d"), 8.0, None)
+        if hist is None or hist.empty:
             raise ValueError(f"Empty history for {sym}")
         first_close = float(hist.iloc[0]["Close"])
         monthly = hist.resample("ME").last().dropna(subset=["Close"])
@@ -13345,10 +13404,10 @@ def get_spy_monthly_data():
         if cached.get("ts") and (now - cached["ts"]) < 900:
             return {k: v for k, v in cached.items() if k != "ts"}
         sym = "SPY"
-        tkr = yf.Ticker(sym)
         start = f"{_date.today().year}-01-01"
-        hist  = tkr.history(start=start, interval="1d")
-        if hist.empty:
+        hist  = _builder_call_timeout(
+            lambda: yf.Ticker(sym).history(start=start, interval="1d"), 8.0, None)
+        if hist is None or hist.empty:
             raise ValueError("Empty SPY history")
         first_close = float(hist.iloc[0]["Close"])
         monthly = hist.resample("ME").last().dropna(subset=["Close"])
@@ -15715,7 +15774,8 @@ def _get_spy_benchmark(quarter: str) -> dict:
             # Pull a few extra days back to catch market holidays at start
             fetch_start = (start_date - _dt.timedelta(days=5)).isoformat()
             fetch_end   = end_date.isoformat()
-            hist = spy.history(start=fetch_start, end=fetch_end)
+            hist = _builder_call_timeout(
+                lambda: spy.history(start=fetch_start, end=fetch_end), 8.0, None)
             if hist is None or hist.empty:
                 return None
             prices_series = hist["Close"]
@@ -21854,7 +21914,7 @@ async def options_scan(req: Request, background_tasks: BackgroundTasks):
     else:
         # Union: holdings, then watchlist, then saved-report coverage. Held names
         # go first so they're never pushed out of the cap.
-        watch = _filter_scan_tickers(analyst.load_watchlist())
+        watch = _filter_scan_tickers(_all_watchlist_tickers())
         reports = _filter_scan_tickers(_saved_report_tickers())
         seen, universe = set(), []
         for src in (held, watch, reports):
@@ -21991,14 +22051,15 @@ def _db_quotes(symbols, max_age_s=None) -> dict:
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             if max_age_s is not None:
-                cur.execute("""SELECT symbol, price, pct_change FROM market_quotes
+                cur.execute("""SELECT symbol, price, pct_change, updated_at FROM market_quotes
                                 WHERE symbol = ANY(%s)
                                   AND updated_at > now() - (%s || ' seconds')::interval""",
                             (syms, str(int(max_age_s))))
             else:
-                cur.execute("SELECT symbol, price, pct_change FROM market_quotes "
+                cur.execute("SELECT symbol, price, pct_change, updated_at FROM market_quotes "
                             "WHERE symbol = ANY(%s)", (syms,))
-            return {r["symbol"]: {"price": r["price"], "pct_change": r["pct_change"]}
+            return {r["symbol"]: {"price": r["price"], "pct_change": r["pct_change"],
+                                  "as_of": r["updated_at"].isoformat() if r.get("updated_at") else None}
                     for r in (cur.fetchall() or []) if r.get("price") is not None}
     except Exception as e:
         print(f"[market] db_quotes failed: {e!s:.120}", flush=True)
@@ -22150,7 +22211,7 @@ def _market_universe() -> list:
     """Default sync/scan universe: holdings + watchlist + saved reports (held
     first so they're never pushed out of the cap), deduped and capped."""
     held = _filter_scan_tickers(_held_tickers())
-    watch = _filter_scan_tickers(analyst.load_watchlist())
+    watch = _filter_scan_tickers(_all_watchlist_tickers())
     reports = _filter_scan_tickers(_saved_report_tickers())
     seen, uni = set(), []
     for src in (held, watch, reports):

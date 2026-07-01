@@ -214,16 +214,31 @@ def _save_overlay_to_file(overlay: dict[str, dict]) -> None:
     p.write_text(json.dumps(overlay, indent=2, sort_keys=True))
 
 
+# The overlay backs EVERY authenticated request (the auth middleware resolves
+# the user from it), so an uncached load = one fresh Postgres connection + a
+# full-table SELECT per API call. Cache it briefly; _save_overlay invalidates,
+# so GP edits still take effect immediately within this process.
+_OVERLAY_CACHE: dict = {"data": None, "ts": 0.0}
+_OVERLAY_TTL_SECS = 15.0
+
+
 def _load_overlay() -> dict[str, dict]:
+    import time as _time
+    now = _time.time()
+    if _OVERLAY_CACHE["data"] is not None and (now - _OVERLAY_CACHE["ts"]) < _OVERLAY_TTL_SECS:
+        return _OVERLAY_CACHE["data"]
     file_data = _load_overlay_from_file()
+    data = file_data
     if _OVERLAY_DB_LOAD is not None:
         try:
             db_data = _OVERLAY_DB_LOAD()
             # DB wins — merge file first, then DB on top
-            return {**file_data, **db_data}
+            data = {**file_data, **db_data}
         except Exception:
             pass
-    return file_data
+    _OVERLAY_CACHE["data"] = data
+    _OVERLAY_CACHE["ts"] = now
+    return data
 
 
 def _save_overlay(overlay: dict[str, dict]) -> None:
@@ -236,6 +251,10 @@ def _save_overlay(overlay: dict[str, dict]) -> None:
             _OVERLAY_DB_SAVE(overlay)
         except Exception:
             pass
+    # Invalidate so the next request re-reads (credential changes are rare but
+    # must be visible immediately — e.g. disabling an LP's access).
+    _OVERLAY_CACHE["data"] = None
+    _OVERLAY_CACHE["ts"] = 0.0
 
 
 def _all_credentials() -> dict[str, dict]:
