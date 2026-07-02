@@ -27288,6 +27288,7 @@ def _snaptrade_run_sync() -> dict:
     the daily scheduler can call it. Preserves each account's fund_id assignment.
     Raises on a fatal accounts-fetch failure; per-account issues go in errors[]."""
     import snaptrade_link as _st
+    _snaptrade_sync_stage("Contacting SnapTrade…")
     uid, secret = _snaptrade_ensure_user()
     accts = _st.list_accounts(uid, secret)
     if isinstance(accts, dict):
@@ -27308,6 +27309,7 @@ def _snaptrade_run_sync() -> dict:
         acct_id = acct.get("id")
         if not acct_id:
             continue
+        _snaptrade_sync_stage(f"Pulling holdings ({(acct.get('name') or str(acct_id)[-4:])})…")
         # Per-account holdings (get_all_user_holdings is deprecated).
         try:
             ah = _st.get_account_holdings(uid, secret, acct_id)
@@ -27417,6 +27419,7 @@ def _snaptrade_run_sync() -> dict:
 
     # ── Bridge: push assigned accounts' holdings into tax_lots (live positions) ──
     # Group by fund (a fund may have >1 linked account) and write once per fund.
+    _snaptrade_sync_stage("Updating positions…")
     lots_written = []
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
@@ -27440,6 +27443,7 @@ def _snaptrade_run_sync() -> dict:
     # ── Activities (automatic) — Jan-1 backfill on first sync, then 35-day
     # incremental. Gated on the free plan; the ingester reports that once with
     # a production-key hint instead of failing the sync.
+    _snaptrade_sync_stage("Importing activity…")
     activities = []
     try:
         activities, act_errors = _snaptrade_ingest_activities(uid, secret, list(acct_norm.keys()))
@@ -27462,6 +27466,7 @@ def _snaptrade_run_sync() -> dict:
         # Lean per-symbol fetch (~5 weeks of bars, ~20 rows) with a HARD 30s
         # total budget — the first version of this used _sync_price_history
         # (11-YEAR backfill per symbol × 40) and wedged the app.
+        _snaptrade_sync_stage("Fetching Jan-1 prices (first runs only)…")
         try:
             _yr = datetime.utcnow().year
             _jan1 = f"{_yr}-01-01"
@@ -27490,6 +27495,7 @@ def _snaptrade_run_sync() -> dict:
                 print(f"[snaptrade] jan1 closes prewarmed: {_warmed}/{len(_need)}", flush=True)
         except Exception as _e:
             print(f"[snaptrade] jan1 prewarm skipped: {_e!s:.120}", flush=True)
+        _snaptrade_sync_stage("Rebuilding balance history & attribution…")
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
                         "WHERE status='active' AND fund_id IS NOT NULL")
@@ -27523,8 +27529,19 @@ def _snaptrade_run_sync() -> dict:
 _SNAPTRADE_SYNC_JOB: dict = {}
 
 
+def _snaptrade_sync_stage(label: str) -> None:
+    """Progress note for the sync job — shown live on the Sync buttons so a
+    long first-of-day sync (activity backfill, Jan-1 price prewarm) reads as
+    progress instead of a stuck timer."""
+    try:
+        if _SNAPTRADE_SYNC_JOB.get("status") == "running":
+            _SNAPTRADE_SYNC_JOB["stage"] = label
+    except Exception:
+        pass
+
+
 def _snaptrade_sync_job_runner(job_id: str) -> None:
-    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running",
+    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running", "stage": None,
                                 "started_at": time.time(), "result": None, "error": None})
     try:
         res = _snaptrade_run_sync()
@@ -27557,7 +27574,7 @@ def snaptrade_sync(request: Request, background_tasks: BackgroundTasks):
     job_id = "SNAPSYNC_" + _uuid.uuid4().hex[:10]
     # Claim the slot BEFORE returning — BackgroundTasks start after the
     # response, and a fast poll must not read the previous job's "done".
-    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running",
+    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running", "stage": None,
                                 "started_at": time.time(), "result": None, "error": None})
     background_tasks.add_task(_snaptrade_sync_job_runner, job_id)
     return {"ok": True, "async": True, "job_id": job_id, "status": "running"}
@@ -27571,6 +27588,7 @@ def snaptrade_sync_status(request: Request):
     if not j:
         return {"ok": True, "status": "idle"}
     out = {"ok": True, "status": j.get("status"), "job_id": j.get("job_id"),
+           "stage": j.get("stage"),
            "elapsed_s": round(time.time() - (j.get("started_at") or time.time()))}
     if j.get("status") == "done":
         out["result"] = j.get("result")
