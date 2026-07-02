@@ -10,3 +10,10 @@ builder = "nixpacks"
 startCommand = "MALLOC_ARENA_MAX=2 MALLOC_TRIM_THRESHOLD_=67108864 uvicorn api.server:app --host 0.0.0.0 --port $PORT"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+# Zero-downtime deploys: Railway keeps the CURRENT deployment serving until
+# the new one answers 200 on /health (this app boots slowly — heavy imports
+# + startup threads). Without a healthcheck, traffic switched the moment the
+# new container started, so every deploy showed "Application failed to
+# respond" until uvicorn finished binding.
+healthcheckPath = "/health"
+healthcheckTimeout = 300
