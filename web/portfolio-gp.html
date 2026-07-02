@@ -13285,10 +13285,9 @@ End with the sleeve block at this account's real market value so I can push it t
       if (acts) msg += ' ' + acts + ' activities imported.';
       if (bh) {
         msg += bh.attribution_rows
-          ? ' Attribution: ' + bh.attribution_rows + ' names.'
-          : (bh.activities_available === false
-              ? ' ⚠ No activity data yet (fresh link — SnapTrade delivers transactions with a delay), so no attribution; re-sync later.'
-              : ' ⚠ Attribution empty despite activity data — check server logs.');
+          ? ' Attribution: ' + bh.attribution_rows + ' names' +
+            (bh.activities_available === false ? ' (price-based estimate — trades pending).' : '.')
+          : ' ⚠ Attribution came back empty — use the Diagnose button in the attribution panel.';
       }
       const gated = (r.errors || []).find(e => /production key|gated/i.test(e.error || ''));
       if (gated) msg += ' ⚠ Automatic activity import needs the SnapTrade pay-as-you-go production key.';
@@ -15234,6 +15233,7 @@ End with the sleeve block at this account's real market value so I can push it t
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">YTD Attribution (per-stock contribution)</span>
             <span class="panel-badge">${rows.length} names</span>
+            ${data.attribution_estimated ? '<span style="font-size:10px;color:#d97706;font-weight:700;" title="Built from holdings + Jan-1 prices only — SnapTrade hasn\'t delivered this year\'s transactions yet. Refines automatically once they arrive.">≈ price-based estimate (trades pending)</span>' : ''}
             <span class="ac-chevron">▸</span>
           </summary>
           <table class="data-table" style="width:100%;">

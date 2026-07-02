@@ -27036,23 +27036,27 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
             prev = None
     yr = overview.get("year") or datetime.utcnow().year
     auto_attr = []
-    if has_acts:
-        # Own savepoint: a failure here must not abort the transaction and
-        # take the balance-history/flows writes down with it.
+    # NOT gated on has_acts (that gate hid working attribution for a whole
+    # day): with zero activities the builder still produces a price-based
+    # estimate from holdings + Jan-1 closes (jan1_qty = end_qty). It's flagged
+    # estimated and self-corrects once SnapTrade delivers transactions.
+    # Own savepoint: a failure here must not abort the transaction and take
+    # the balance-history/flows writes down with it.
+    try:
+        cur.execute("SAVEPOINT snap_attr")
+        auto_attr = _snaptrade_build_attribution(
+            cur, fund_id, int(yr), float(overview.get("begin_value") or 0))
+        cur.execute("RELEASE SAVEPOINT snap_attr")
+    except Exception as e:
         try:
-            cur.execute("SAVEPOINT snap_attr")
-            auto_attr = _snaptrade_build_attribution(
-                cur, fund_id, int(yr), float(overview.get("begin_value") or 0))
-            cur.execute("RELEASE SAVEPOINT snap_attr")
-        except Exception as e:
-            try:
-                cur.execute("ROLLBACK TO SAVEPOINT snap_attr")
-            except Exception:
-                pass
-            print(f"[snaptrade] auto-attribution failed {fund_id}: {e!s:.140}", flush=True)
+            cur.execute("ROLLBACK TO SAVEPOINT snap_attr")
+        except Exception:
+            pass
+        print(f"[snaptrade] auto-attribution failed {fund_id}: {e!s:.140}", flush=True)
     if auto_attr:
         overview["attribution"] = auto_attr
         overview["attribution_source"] = "snaptrade_auto"
+        overview["attribution_estimated"] = not has_acts
     elif prev:
         for k in ("attribution", "top_gainers", "top_losers"):
             if prev.get(k) is not None:
@@ -27171,16 +27175,20 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
     # Human-readable verdict so the GP doesn't have to interpret raw fields.
     if not out["accounts"]:
         out["verdict"] = "No SnapTrade account is assigned to this fund."
-    elif out["activities_total"] == 0:
-        out["verdict"] = ("SnapTrade has not delivered any transaction history for this "
-                          "connection yet (holdings arrive fast; transactions can lag a "
-                          "fresh link by hours). Try Settings → SnapTrade → Force refresh, "
-                          "wait a couple of minutes, then Sync again.")
     elif out.get("live_builder_error"):
         out["verdict"] = "Attribution builder is failing — see live_builder_error."
+    elif out.get("live_builder_rows") and out["cache_attribution_rows"] == 0:
+        out["verdict"] = ("Builder produces rows but the cache is empty — run ↻ Sync to "
+                          "rebuild it and attribution will appear"
+                          + (" (as a price-based estimate until SnapTrade delivers this "
+                             "year's transactions)." if out["activities_total"] == 0 else "."))
+    elif out["activities_total"] == 0:
+        out["verdict"] = ("Attribution is showing as a price-based estimate — SnapTrade "
+                          "hasn't delivered transaction history yet (can lag a fresh link "
+                          "by hours). It refines automatically once transactions arrive; "
+                          "Settings → SnapTrade → Force refresh can nudge it.")
     elif out.get("live_builder_rows"):
-        out["verdict"] = ("Builder produces rows — if the page shows none, the cache "
-                          "predates the fix: run a Sync to rebuild it.")
+        out["verdict"] = "Attribution pipeline healthy."
     else:
         out["verdict"] = "Activities exist but the builder returned 0 rows — inspect equity_symbols / activities_by_type."
     return out
@@ -27427,6 +27435,29 @@ def _snaptrade_run_sync() -> dict:
             get_spy_monthly_data()
         except Exception:
             pass
+        # Prewarm Jan-1 closes for attribution OUTSIDE the rebuild transaction —
+        # the in-transaction builder only backfills 8 missing names per run
+        # (txn-holding cap), which left coverage at 11/33 after the first sync.
+        try:
+            _jan1 = f"{datetime.utcnow().year}-01-01"
+            _need = set()
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
+                            "WHERE status='active' AND fund_id IS NOT NULL")
+                for _fr in cur.fetchall():
+                    for s, h in _snaptrade_fund_holdings(cur, str(_fr["fund_id"])).items():
+                        if h.get("asset_class") in ("cash", "option"):
+                            continue
+                        cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
+                                    (s, _jan1))
+                        if not cur.fetchone():
+                            _need.add(s)
+            for s in sorted(_need)[:40]:
+                _builder_call_timeout(lambda tk=s: _sync_price_history(tk), 6.0, None)
+            if _need:
+                print(f"[snaptrade] prewarmed jan1 prices for {min(len(_need),40)} symbol(s)", flush=True)
+        except Exception as _e:
+            print(f"[snaptrade] jan1 prewarm skipped: {_e!s:.120}", flush=True)
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
                         "WHERE status='active' AND fund_id IS NOT NULL")
