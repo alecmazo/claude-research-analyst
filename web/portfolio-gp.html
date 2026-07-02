@@ -15188,9 +15188,15 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'
           + (d.live_builder_error ? '<pre style="white-space:pre-wrap;font-size:10px;margin:6px 0 0;color:var(--red,#dc2626);">' + _gfEsc(d.live_builder_error) + '</pre>' : '')
           + '</div>'
+          + (d.row_shapes && d.row_shapes.length
+              ? '<div style="margin-top:6px;">Row shapes (type · option · units · price · amount · count):'
+                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">'
+                + _gfEsc(d.row_shapes.map(s => `${s.type} · opt:${s.option?'Y':'n'} · u:${s.units?'Y':'n'} · p:${s.price?'Y':'n'} · a:${s.amount?'Y':'n'} × ${s.count}`).join('\n'))
+                + '</pre></div>'
+              : '')
           + (d.unmapped_symbol_samples && Object.keys(d.unmapped_symbol_samples).length
               ? '<div style="margin-top:6px;">⚠ Symbols with rows that map to NO share math: <strong>' + _gfEsc(Object.keys(d.unmapped_symbol_samples).join(', ')) + '</strong>'
-                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">' + _gfEsc(JSON.stringify(d.unmapped_symbol_samples, null, 1).slice(0, 1200)) + '</pre></div>'
+                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">' + _gfEsc(JSON.stringify(d.unmapped_symbol_samples, null, 1).slice(0, 1800)) + '</pre></div>'
               : '');
       } catch (e) {
         const out2 = document.getElementById('acd-attr-diag-out');

@@ -26919,22 +26919,12 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                                     "sell_proceeds": 0.0, "dividends": 0.0,
                                     "bought_units": 0.0, "sold_units": 0.0})
         if is_option_row:
-            if "ASSIGN" in t or "EXERCISE" in t:
-                strike = _snaptrade_num(opt.get("strike_price")) if isinstance(opt, dict) else None
-                otype  = str((opt.get("option_type") if isinstance(opt, dict) else "") or "").upper()
-                contracts = abs(u)
-                shares = contracts * 100.0
-                if strike and shares:
-                    gross = shares * strike
-                    if otype.startswith("C"):      # call assigned/exercised → shares OUT
-                        e["net_units"] -= shares
-                        e["sell_proceeds"] += gross
-                        e["sold_units"] += shares
-                    elif otype.startswith("P"):    # put assigned/exercised → shares IN
-                        e["net_units"] += shares
-                        e["buy_cost"] += gross
-                        e["bought_units"] += shares
-            # Premium trades / expirations: never share math.
+            # Option-marked rows are excluded from share math, ASSIGNMENTS
+            # INCLUDED for now: the ui357 attempt to synthesize share moves
+            # from assignment rows DOUBLE-COUNTED (INTC gain → null, AMZN
+            # −$11K) because the real share movements evidently arrive in
+            # other rows too. The Diagnose unmapped-samples output is the
+            # source of truth for the correct mapping — do not guess again.
             continue
         gross = u * px if (u and px) else abs(amt)
         if t in _SNAP_BUY_TYPES:
@@ -27287,15 +27277,35 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
                 "to": r["max_d"].isoformat() if r["max_d"] else None,
             } for r in cur.fetchall()]
         out["activities_total"] = sum(a["count"] for a in out["activities_by_type"])
-        # Raw samples for symbols whose rows DON'T map to share math — shows the
-        # exact activity type/shape still needing a mapping (assignment types,
-        # odd casings, missing units) instead of silent dashes.
+        # THE mapping source of truth: every distinct row shape in the store
+        # (type × option-marker × has-units × has-price) with counts, plus raw
+        # samples for symbols whose rows map to NO share math. One Diagnose
+        # click shows exactly what SnapTrade sends — no more guessed mappings.
+        out["row_shapes"] = []
         out["unmapped_symbol_samples"] = {}
         if acct_ids:
+            cur.execute("""
+                SELECT a.type,
+                       (a.raw_json -> 'option_symbol') IS NOT NULL AS is_opt,
+                       (a.units IS NOT NULL AND a.units <> 0)      AS has_units,
+                       (a.price IS NOT NULL AND a.price <> 0)      AS has_price,
+                       (a.amount IS NOT NULL AND a.amount <> 0)    AS has_amount,
+                       count(*) AS n
+                  FROM snaptrade_activities a
+                 WHERE a.account_id = ANY(%s)
+                   AND EXTRACT(YEAR FROM a.trade_date) = %s
+                 GROUP BY 1, 2, 3, 4, 5 ORDER BY n DESC
+            """, (acct_ids, yr))
+            out["row_shapes"] = [
+                {"type": r2["type"], "option": bool(r2["is_opt"]),
+                 "units": bool(r2["has_units"]), "price": bool(r2["has_price"]),
+                 "amount": bool(r2["has_amount"]), "count": int(r2["n"])}
+                for r2 in cur.fetchall()]
             _known = (_SNAP_BUY_TYPES | _SNAP_SELL_TYPES | _SNAP_DIV_TYPES
                       | _SNAP_FLOW_TYPES | _SNAP_INT_TYPES | _SNAP_FEE_TYPES)
             cur.execute("""
                 SELECT a.symbol, a.type, a.units, a.price, a.amount, a.trade_date,
+                       a.description,
                        (a.raw_json -> 'option_symbol') IS NOT NULL AS is_opt
                   FROM snaptrade_activities a
                  WHERE a.account_id = ANY(%s) AND a.symbol IS NOT NULL
@@ -27306,20 +27316,18 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
             for r2 in cur.fetchall():
                 _by_sym.setdefault(r2["symbol"], []).append(r2)
             for s, rws in _by_sym.items():
-                if len(out["unmapped_symbol_samples"]) >= 3:
+                if len(out["unmapped_symbol_samples"]) >= 5:
                     break
-                mapped = any(
-                    ((not x["is_opt"]) and (x["type"] or "").upper() in _known)
-                    or (x["is_opt"] and ("ASSIGN" in (x["type"] or "").upper()
-                                         or "EXERCISE" in (x["type"] or "").upper()))
-                    for x in rws)
+                mapped = any((not x["is_opt"]) and (x["type"] or "").upper() in _known
+                             for x in rws)
                 if not mapped:
                     out["unmapped_symbol_samples"][s] = [
                         {"type": x["type"], "units": float(x["units"] or 0),
                          "price": float(x["price"] or 0), "amount": float(x["amount"] or 0),
                          "option": bool(x["is_opt"]),
+                         "desc": (x["description"] or "")[:60],
                          "date": x["trade_date"].isoformat() if x["trade_date"] else None}
-                        for x in rws[:4]]
+                        for x in rws[:5]]
         holdings = _snaptrade_fund_holdings(cur, fid)
         eq = {s: h for s, h in holdings.items()
               if h.get("asset_class") not in ("cash", "option")}
