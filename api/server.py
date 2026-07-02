@@ -26634,8 +26634,12 @@ def _snaptrade_parse_activity(a: dict) -> dict | None:
     return {
         "activity_id":     str(aid),
         "account_id":      str(acct_id) if acct_id else None,
-        "trade_date":      (a.get("trade_date") or "")[:10] or None,
-        "settlement_date": (a.get("settlement_date") or "")[:10] or None,
+        # Key variants: the legacy combined endpoint says trade_date/
+        # settlement_date; the per-account endpoint (the one that actually
+        # works on current plans) may say date / settled_at.
+        "trade_date":      (a.get("trade_date") or a.get("date") or "")[:10] or None,
+        "settlement_date": (a.get("settlement_date") or a.get("settled_at")
+                            or a.get("settled_date") or "")[:10] or None,
         "type":            (a.get("type") or "").upper() or None,
         "symbol":          _snaptrade_activity_symbol(a),
         "description":     a.get("description"),

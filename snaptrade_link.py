@@ -182,21 +182,82 @@ def get_account_activities(user_id: str, user_secret: str, account_id: str,
     Returns BUY / SELL / DIVIDEND / CONTRIBUTION / WITHDRAWAL / INTEREST / FEE /
     TRANSFER activities — what the position/balance endpoints do NOT give. This is
     the basis for YTD trade lists and external-cash-flow-aware return math.
+
+    Tries the PER-ACCOUNT paginated endpoint first
+    (account_information.get_account_activities): the legacy combined
+    transactions_and_reporting.get_activities returns 'This endpoint is no
+    longer available for your account' on current SnapTrade plans (verified
+    live 2026-07-02 — the per-account method was the only one returning data).
+    Falls back to the legacy endpoint for older plans/SDKs.
     """
-    kw = {"user_id": str(user_id), "user_secret": user_secret, "accounts": str(account_id)}
-    if start_date:
-        kw["start_date"] = start_date
-    if end_date:
-        kw["end_date"] = end_date
-    r = _client().transactions_and_reporting.get_activities(**kw)
-    body = _to_dict(r.body)
-    if isinstance(body, dict):
-        items = body.get("data") or body.get("activities") or []
-    else:
-        items = body or []
-    # Coerce each element to a plain dict — the SDK may hand back schema objects,
-    # which would otherwise be silently dropped downstream.
-    return [_to_dict(x) for x in items]
+    uid, sec, aid = str(user_id), user_secret, str(account_id)
+    try:
+        return _get_account_activities_paged(uid, sec, aid, start_date, end_date)
+    except Exception as first_err:
+        # Fallback: the legacy combined endpoint (older plans/SDKs).
+        try:
+            kw = {"user_id": uid, "user_secret": sec, "accounts": aid}
+            if start_date:
+                kw["start_date"] = start_date
+            if end_date:
+                kw["end_date"] = end_date
+            r = _client().transactions_and_reporting.get_activities(**kw)
+            body = _to_dict(r.body)
+            if isinstance(body, dict):
+                items = body.get("data") or body.get("activities") or []
+            else:
+                items = body or []
+            return [_to_dict(x) for x in items]
+        except Exception:
+            raise first_err
+
+
+def _get_account_activities_paged(uid: str, sec: str, aid: str,
+                                  start_date: str | None, end_date: str | None):
+    """account_information.get_account_activities with pagination — loops until
+    the window is exhausted. Handles both paginated ({data, pagination}) and
+    plain-list response shapes, and SDKs without offset/limit kwargs."""
+    ai = _client().account_information
+    out: list = []
+    offset = 0
+    page_size = 500
+    while True:
+        kw = {"account_id": aid, "user_id": uid, "user_secret": sec,
+              "offset": offset, "limit": page_size}
+        if start_date:
+            kw["start_date"] = start_date
+        if end_date:
+            kw["end_date"] = end_date
+        try:
+            r = ai.get_account_activities(**kw)
+        except TypeError:
+            # Older SDK without pagination kwargs — single unpaged call.
+            kw.pop("offset", None)
+            kw.pop("limit", None)
+            r = ai.get_account_activities(**kw)
+            body = _to_dict(r.body)
+            items = body.get("data") if isinstance(body, dict) else body
+            return [_to_dict(x) for x in (items or [])]
+        body = _to_dict(r.body)
+        total = None
+        if isinstance(body, dict):
+            items = body.get("data") or body.get("activities") or []
+            pag = body.get("pagination") or {}
+            try:
+                total = int(pag.get("total")) if pag.get("total") is not None else None
+            except (TypeError, ValueError):
+                total = None
+        else:
+            items = body or []
+        items = [_to_dict(x) for x in items]
+        out.extend(items)
+        if (not items or len(items) < page_size
+                or (total is not None and len(out) >= total)):
+            break
+        offset += len(items)
+        if offset > 20000:   # runaway-pagination backstop
+            break
+    return out
 
 
 def probe_activity_methods(user_id: str, user_secret: str, account_id: str,
