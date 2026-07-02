@@ -9975,18 +9975,18 @@ def _auto_daily_brief_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            if _automation_needs_catchup("daily_brief", h, m):
-                print("[daily-brief-scheduler] missed today's run (deploy across run time?) — catching up now")
-                _automation_record_run("daily_brief", None, "catch-up started")
-            else:
-                wait_secs = _secs_until(h, m)
-                print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
-                _time.sleep(wait_secs)
-                # Re-check enabled after waking (user may have disabled while sleeping)
-                cfg2 = _get_automation_settings().get("daily_brief", {})
-                if not cfg2.get("enabled", True):
-                    print("[daily-brief-scheduler] disabled after wake — skipping")
-                    continue
+            # NO deploy-restart catch-up here: the daily brief is an AI job
+            # that COSTS MONEY — it runs ONLY at its scheduled time. (The
+            # catch-up briefly added in ui335 re-fired it on every deploy;
+            # auto-recovery is reserved for the free, data-only SnapTrade sync.)
+            wait_secs = _secs_until(h, m)
+            print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+            _time.sleep(wait_secs)
+            # Re-check enabled after waking (user may have disabled while sleeping)
+            cfg2 = _get_automation_settings().get("daily_brief", {})
+            if not cfg2.get("enabled", True):
+                print("[daily-brief-scheduler] disabled after wake — skipping")
+                continue
             print(f"[daily-brief-scheduler] {h:02d}:{m:02d} Pacific — running daily brief…")
             # Same call as the manual endpoint — includes the GP's book tickers
             # (the bare run_daily_brief() the worker used to make silently
@@ -10022,17 +10022,15 @@ def _auto_market_pulse_worker() -> None:
                 _time.sleep(3600)
                 continue
             h, m = cfg["hour"], cfg["minute"]
-            if _automation_needs_catchup("market_pulse", h, m):
-                print("[pulse-scheduler] missed today's run — catching up now")
-                _automation_record_run("market_pulse", None, "catch-up started")
-            else:
-                wait_secs = _secs_until(h, m)
-                print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
-                _time.sleep(wait_secs)
-                cfg2 = _get_automation_settings().get("market_pulse", {})
-                if not cfg2.get("enabled", True):
-                    print("[pulse-scheduler] disabled after wake — skipping")
-                    continue
+            # NO deploy-restart catch-up: the pulse scan is an AI job that
+            # COSTS MONEY — scheduled time only, never auto-relaunched.
+            wait_secs = _secs_until(h, m)
+            print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
+            _time.sleep(wait_secs)
+            cfg2 = _get_automation_settings().get("market_pulse", {})
+            if not cfg2.get("enabled", True):
+                print("[pulse-scheduler] disabled after wake — skipping")
+                continue
             print(f"[pulse-scheduler] {h:02d}:{m:02d} Pacific — running market pulse scan on saved reports…")
             # Collect tickers from DB
             tickers = []
