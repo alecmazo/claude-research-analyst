@@ -221,7 +221,12 @@ def _get_account_activities_paged(uid: str, sec: str, aid: str,
     out: list = []
     offset = 0
     page_size = 500
+    pages = 0
+    first_id_prev = None
     while True:
+        pages += 1
+        if pages > 10:   # wall-clock sanity: 10 pages = 5,000 activities max/run
+            break
         kw = {"account_id": aid, "user_id": uid, "user_secret": sec,
               "offset": offset, "limit": page_size}
         if start_date:
@@ -250,13 +255,22 @@ def _get_account_activities_paged(uid: str, sec: str, aid: str,
         else:
             items = body or []
         items = [_to_dict(x) for x in items]
+        # No-progress guard: if the endpoint IGNORES offset (or paginates by
+        # cursor), every "page" is the same — detect via the first activity id
+        # and stop instead of looping 20k dupes (the 36-minute-sync incident).
+        first_id = None
+        for x in items:
+            if isinstance(x, dict) and (x.get("id") or x.get("activity_id")):
+                first_id = str(x.get("id") or x.get("activity_id"))
+                break
+        if first_id is not None and first_id == first_id_prev:
+            break
+        first_id_prev = first_id
         out.extend(items)
         if (not items or len(items) < page_size
                 or (total is not None and len(out) >= total)):
             break
         offset += len(items)
-        if offset > 20000:   # runaway-pagination backstop
-            break
     return out
 
 

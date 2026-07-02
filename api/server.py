@@ -26716,47 +26716,74 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
                     if last_td < base:
                         base = last_td - timedelta(days=3)
                     a_start = base.isoformat()
-            try:
-                acts = _st.get_account_activities(uid, secret, acct_id, a_start, default_end)
-            except Exception as e:
-                detail = _snaptrade_error_detail(e)
+            _snaptrade_sync_stage(f"Importing activity (…{str(acct_id)[-4:]})…")
+            # Timeout-guarded fetch (the SDK has none): a hung SnapTrade call
+            # was the likely core of the 36-minute-sync incident. The wrapper
+            # swallows exceptions, so capture the error explicitly to keep the
+            # plan-gating detection working.
+            _res: dict = {}
+
+            def _fetch(a=acct_id, s=a_start):
+                try:
+                    _res["acts"] = _st.get_account_activities(uid, secret, a, s, default_end)
+                except Exception as e:
+                    _res["err"] = e
+            _builder_call_timeout(_fetch, 180.0, None)
+            if "err" in _res:
+                detail = _snaptrade_error_detail(_res["err"])
                 if _snaptrade_plan_gated(detail):
                     if not gated_reported:
                         errors.append({"stage": "activities", "error":
-                            "SnapTrade transactions are gated on the free plan — add the "
-                            "pay-as-you-go production key (SNAPTRADE_CLIENT_ID / "
-                            "SNAPTRADE_CONSUMER_KEY) to unlock automatic activity import. "
+                            "SnapTrade transactions are gated on this plan. "
                             f"({detail[:120]})"})
                         gated_reported = True
                 else:
                     errors.append({"account_id": acct_id, "stage": "activities", "error": detail})
                 continue
-            n = 0
+            if "acts" not in _res:
+                errors.append({"account_id": acct_id, "stage": "activities",
+                               "error": "SnapTrade activities fetch timed out (180s) — retried next sync"})
+                continue
+            acts = _res["acts"]
+            # Dedup by activity id (pagination overlap would make the batched
+            # ON CONFLICT fail: 'cannot affect row a second time'), then upsert
+            # in 500-row batches — the per-row autocommit round-trips made the
+            # first 6-month backfill crawl.
+            rows_by_id: dict = {}
             for a in (acts or []):
                 p = _snaptrade_parse_activity(a)
                 if not p:
                     continue
                 p["account_id"] = p["account_id"] or acct_id
-                try:
-                    cur.execute("""
-                        INSERT INTO snaptrade_activities
-                            (activity_id, account_id, trade_date, settlement_date, type, symbol,
-                             description, units, price, amount, currency, fee, raw_json, synced_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
-                        ON CONFLICT (activity_id) DO UPDATE SET
-                            account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
-                            settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
-                            symbol=EXCLUDED.symbol, description=EXCLUDED.description,
-                            units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
-                            currency=EXCLUDED.currency, fee=EXCLUDED.fee,
-                            raw_json=EXCLUDED.raw_json, synced_at=now()
-                    """, (p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
-                          p["type"], p["symbol"], p["description"], p["units"], p["price"],
-                          p["amount"], p["currency"], p["fee"], json.dumps(a, default=str)))
-                    n += 1
-                except Exception as e:
-                    errors.append({"account_id": acct_id, "stage": "activity_upsert",
-                                   "error": _snaptrade_error_detail(e)})
+                rows_by_id[p["activity_id"]] = (
+                    p["activity_id"], p["account_id"], p["trade_date"], p["settlement_date"],
+                    p["type"], p["symbol"], p["description"], p["units"], p["price"],
+                    p["amount"], p["currency"], p["fee"], json.dumps(a, default=str))
+            rows = list(rows_by_id.values())
+            n = 0
+            if rows:
+                from psycopg2.extras import execute_values as _ev
+                for i in range(0, len(rows), 500):
+                    chunk = rows[i:i + 500]
+                    try:
+                        _ev(cur, """
+                            INSERT INTO snaptrade_activities
+                                (activity_id, account_id, trade_date, settlement_date, type, symbol,
+                                 description, units, price, amount, currency, fee, raw_json, synced_at)
+                            VALUES %s
+                            ON CONFLICT (activity_id) DO UPDATE SET
+                                account_id=EXCLUDED.account_id, trade_date=EXCLUDED.trade_date,
+                                settlement_date=EXCLUDED.settlement_date, type=EXCLUDED.type,
+                                symbol=EXCLUDED.symbol, description=EXCLUDED.description,
+                                units=EXCLUDED.units, price=EXCLUDED.price, amount=EXCLUDED.amount,
+                                currency=EXCLUDED.currency, fee=EXCLUDED.fee,
+                                raw_json=EXCLUDED.raw_json, synced_at=now()
+                        """, chunk,
+                            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())")
+                        n += len(chunk)
+                    except Exception as e:
+                        errors.append({"account_id": acct_id, "stage": "activity_upsert",
+                                       "error": _snaptrade_error_detail(e)})
             synced.append({"account_id": acct_id, "activities": n, "since": a_start})
     finally:
         try:
