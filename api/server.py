@@ -26654,8 +26654,9 @@ def _snaptrade_parse_activity(a: dict) -> dict | None:
     }
 
 
-# Activity-type buckets for YTD math.
-_SNAP_BUY_TYPES   = {"BUY", "REINVESTMENT", "DRIP"}
+# Activity-type buckets for YTD math. ("REI" = reinvestment as delivered by
+# the per-account endpoint — confirmed from the live row census 2026-07-02.)
+_SNAP_BUY_TYPES   = {"BUY", "REINVESTMENT", "DRIP", "REI"}
 _SNAP_SELL_TYPES  = {"SELL"}
 # External cash flows (move money in/out of the account; not performance).
 _SNAP_FLOW_TYPES  = {"CONTRIBUTION", "DEPOSIT", "WITHDRAWAL", "TRANSFER",
@@ -26919,22 +26920,26 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                                     "sell_proceeds": 0.0, "dividends": 0.0,
                                     "bought_units": 0.0, "sold_units": 0.0})
         if is_option_row:
-            # Option-marked rows are excluded from share math, ASSIGNMENTS
-            # INCLUDED for now: the ui357 attempt to synthesize share moves
-            # from assignment rows DOUBLE-COUNTED (INTC gain → null, AMZN
-            # −$11K) because the real share movements evidently arrive in
-            # other rows too. The Diagnose unmapped-samples output is the
-            # source of truth for the correct mapping — do not guess again.
+            # True option rows (contract trades, OPTIONEXPIRATION/ASSIGNMENT
+            # contract legs) stay out of share math — the census proved the
+            # SHARE legs of assignments arrive as ordinary SELL rows, so
+            # nothing is lost by excluding these.
             continue
-        gross = u * px if (u and px) else abs(amt)
+        # CENSUS FACT (2026-07-02): the per-account endpoint uses SIGNED units
+        # (sells are NEGATIVE, e.g. AMD SELL units=-45). Treating them as
+        # magnitudes made every sell ADD shares to the rewind → negative Jan-1
+        # quantities → nulled gains (the dashed-exits incident). Use |units|
+        # with direction from the TYPE.
+        u_abs = abs(u)
+        gross = (u_abs * px) if (u_abs and px) else abs(amt)
         if t in _SNAP_BUY_TYPES:
-            e["net_units"] += u
+            e["net_units"] += u_abs
             e["buy_cost"] += gross
-            e["bought_units"] += u
+            e["bought_units"] += u_abs
         elif t in _SNAP_SELL_TYPES:
-            e["net_units"] -= u
+            e["net_units"] -= u_abs
             e["sell_proceeds"] += gross
-            e["sold_units"] += u
+            e["sold_units"] += u_abs
         elif t in _SNAP_DIV_TYPES:
             e["dividends"] += amt
     if not holdings and not trades:
@@ -27286,7 +27291,7 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
         if acct_ids:
             cur.execute("""
                 SELECT a.type,
-                       (a.raw_json -> 'option_symbol') IS NOT NULL AS is_opt,
+                       jsonb_typeof(a.raw_json -> 'option_symbol') = 'object' AS is_opt,
                        (a.units IS NOT NULL AND a.units <> 0)      AS has_units,
                        (a.price IS NOT NULL AND a.price <> 0)      AS has_price,
                        (a.amount IS NOT NULL AND a.amount <> 0)    AS has_amount,
@@ -27306,7 +27311,7 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
             cur.execute("""
                 SELECT a.symbol, a.type, a.units, a.price, a.amount, a.trade_date,
                        a.description,
-                       (a.raw_json -> 'option_symbol') IS NOT NULL AS is_opt
+                       jsonb_typeof(a.raw_json -> 'option_symbol') = 'object' AS is_opt
                   FROM snaptrade_activities a
                  WHERE a.account_id = ANY(%s) AND a.symbol IS NOT NULL
                    AND EXTRACT(YEAR FROM a.trade_date) = %s
