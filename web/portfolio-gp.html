@@ -13283,6 +13283,13 @@ End with the sleeve block at this account's real market value so I can push it t
         msg += bh.flows_estimated ? ' (flows estimated — no activity data yet).' : '.';
       }
       if (acts) msg += ' ' + acts + ' activities imported.';
+      if (bh) {
+        msg += bh.attribution_rows
+          ? ' Attribution: ' + bh.attribution_rows + ' names.'
+          : (bh.activities_available === false
+              ? ' ⚠ No activity data yet (fresh link — SnapTrade delivers transactions with a delay), so no attribution; re-sync later.'
+              : ' ⚠ Attribution empty despite activity data — check server logs.');
+      }
       const gated = (r.errors || []).find(e => /production key|gated/i.test(e.error || ''));
       if (gated) msg += ' ⚠ Automatic activity import needs the SnapTrade pay-as-you-go production key.';
       const otherErrs = (r.errors || []).filter(e => !/production key|gated/i.test(e.error || ''));
@@ -15156,7 +15163,23 @@ End with the sleeve block at this account's real market value so I can push it t
   function renderAcctAttribution(data) {
     const el = document.getElementById('acd-attribution');
     const rows = data.attribution || [];
-    if (!rows.length) { el.innerHTML = ''; return; }
+    if (!rows.length) {
+      // Show WHY it's empty instead of rendering nothing — attribution builds
+      // from YTD activity, which can lag a freshly re-linked connection.
+      el.innerHTML = `
+        <section class="panel">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap;">
+            <span class="panel-title">YTD Attribution</span>
+            <span style="font-size:11px;color:var(--text-secondary,#58616f);">
+              No per-stock attribution yet. It's built automatically from this year's
+              activity — after a fresh Fidelity re-link, SnapTrade can take a while to
+              deliver transaction history. It fills in on the next sync once activity
+              arrives (or immediately after a manual Positions + Activity CSV run).
+            </span>
+          </div>
+        </section>`;
+      return;
+    }
     const fmtP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const sortedRows = [...rows].sort((a, b) =>
       (b.contribution_pct || 0) - (a.contribution_pct || 0));
@@ -15179,7 +15202,7 @@ End with the sleeve block at this account's real market value so I can push it t
 
     el.innerHTML = `
       <section class="panel">
-        <details>
+        <details open>
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">YTD Attribution (per-stock contribution)</span>
             <span class="panel-badge">${rows.length} names</span>

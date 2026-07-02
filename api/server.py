@@ -27076,7 +27076,9 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     """, (fund_id, float(nav), float(ytd_pct), json.dumps(overview)))
     return {"fund_id": str(fund_id), "months_added": len(synth),
             "ytd_pct": ytd_pct, "nav": nav,
-            "flows_estimated": any(r.get("estimated") for r in synth)}
+            "flows_estimated": any(r.get("estimated") for r in synth),
+            "activities_available": has_acts,
+            "attribution_rows": len(overview.get("attribution") or [])}
 
 
 def _snaptrade_holdings_items(body):
