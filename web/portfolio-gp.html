@@ -1569,6 +1569,11 @@
   @media (max-width: 1200px) {
     .acd-side-by-side { grid-template-columns: 1fr; }
   }
+  /* attribution (6 cols) : cash flows (4 cols) */
+  .acd-attr-flows { grid-template-columns: minmax(0, 13fr) minmax(0, 7fr); }
+  @media (max-width: 1200px) {
+    .acd-attr-flows { grid-template-columns: 1fr; }
+  }
   .acd-compact-table {
     width: 100%;
     border-collapse: collapse;
@@ -4274,16 +4279,18 @@ End with the sleeve block at this account's real market value so I can push it t
     <div id="acd-balance"     style="margin-top:14px;"></div>
     <div id="acd-alltime"     style="margin-top:14px;"></div>
 
-    <!-- ④ Holdings (left) + rebalance (right), then analysis -->
+    <!-- ④ Holdings (left) + rebalance (right), then attribution + cash flows -->
     <div class="acd-side-by-side">
       <div id="acd-positions" style="min-width:0;"></div>
       <div style="min-width:0;">
-        <div id="acd-rebalance-wrap"></div>
-        <div id="acd-rebalance-result" style="margin-top:10px;"></div>
+        <div id="acd-rebalance-wrap" style="display:none;"></div>
+        <div id="acd-rebalance-result"></div>
       </div>
     </div>
-    <div id="acd-attribution" style="margin-top:14px;"></div>
-    <div id="acd-history"     style="margin-top:14px;"></div>
+    <div class="acd-side-by-side acd-attr-flows">
+      <div id="acd-attribution" style="min-width:0;"></div>
+      <div id="acd-history"     style="min-width:0;"></div>
+    </div>
 
     <!-- ⑥ Manual data (backup) — collapsed; the auto-import above makes this
          a rarely-needed path -->
@@ -14518,20 +14525,9 @@ End with the sleeve block at this account's real market value so I can push it t
         _updatePositionsReturnTile();
       }
 
-      // Rebalance header bar (right column of the side-by-side layout)
-      const wrap = document.getElementById('acd-rebalance-wrap');
-      if (wrap) {
-        wrap.innerHTML =
-          '<section class="panel"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;">' +
-            '<span class="panel-title">Rebalance</span>' +
-            '<span id="acd-rebalance-status" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
-            '<button class="tab-btn sm" id="acd-rebalance-btn" style="font-size:10px;">📊 Run</button>' +
-          '</div></section>';
-        const rbtn = document.getElementById('acd-rebalance-btn');
-        if (rbtn) rbtn.addEventListener('click', () => runAcctRebalance(fundId));
-      }
-
-      // Load and render saved rebalance (if any)
+      // Rebalance panel placeholder (Run button lives in ITS header so it
+      // lines up with the positions table); replaced by the saved result.
+      renderRebalancePlaceholder(fundId);
       loadSavedRebalance(fundId);
 
     } catch (e) {
@@ -14566,6 +14562,22 @@ End with the sleeve block at this account's real market value so I can push it t
 
   // ── Rebalance helpers ──────────────────────────────────────────────────────
 
+  function renderRebalancePlaceholder(fundId) {
+    const elResult = document.getElementById('acd-rebalance-result');
+    if (!elResult) return;
+    elResult.innerHTML =
+      '<section class="panel">' +
+        '<div class="panel-head" style="display:flex;align-items:center;gap:8px;">' +
+          '<span class="panel-title">Rebalance Suggestions</span>' +
+          '<span id="acd-rebalance-status" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
+          '<button id="acd-rebalance-btn" class="tab-btn sm" style="font-size:10px;">📊 Run</button>' +
+        '</div>' +
+        '<div style="padding:10px 12px;font-size:11px;color:var(--text-secondary,#58616f);">Run to compute suggested weights from research ratings &amp; upside — results appear here beside the positions.</div>' +
+      '</section>';
+    document.getElementById('acd-rebalance-btn')
+      ?.addEventListener('click', () => runAcctRebalance(fundId));
+  }
+
   async function runAcctRebalance(fundId) {
     const btn = document.getElementById('acd-rebalance-btn');
     const status = document.getElementById('acd-rebalance-status');
@@ -14577,7 +14589,9 @@ End with the sleeve block at this account's real market value so I can push it t
       const data = await r.json();
       if (!data.ok) throw new Error(data.detail || 'Rebalance failed');
       renderRebalanceResult(data, fundId);
-      if (status) { status.style.color='var(--green)'; status.textContent='✓ Done — ' + new Date(data.run_at).toLocaleString('en-US', _PT); }
+      // Re-query: renderRebalanceResult replaced the panel (and the status el).
+      const st2 = document.getElementById('acd-rebalance-status');
+      if (st2) { st2.style.color='var(--green)'; st2.textContent='✓ ' + new Date(data.run_at).toLocaleString('en-US', _PT); }
     } catch(e) {
       if (status) { status.style.color='var(--red)'; status.textContent='❌ ' + e.message; }
     } finally {
@@ -14637,8 +14651,10 @@ End with the sleeve block at this account's real market value so I can push it t
               '<span style="font-size:10px;color:var(--mid);">Run: ' + runDate + '</span>' +
             '</span>' +
             '<span style="display:flex;align-items:center;gap:6px;flex-shrink:0;" onclick="event.stopPropagation()">' +
+              '<span id="acd-rebalance-status" style="font-size:10px;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
+              '<button id="acd-rebalance-btn" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📊 Run</button>' +
               '<span id="' + emailMsgId + '" style="font-size:10px;min-width:0;"></span>' +
-              '<button id="' + emailBtnId + '" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📨 Email Report</button>' +
+              '<button id="' + emailBtnId + '" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📨 Email</button>' +
             '</span>' +
           '</summary>' +
           '<div style="padding:8px 12px 6px;">' +
@@ -14666,7 +14682,9 @@ End with the sleeve block at this account's real market value so I can push it t
         '</details>' +
       '</section>';
 
-    // Wire the email button
+    // Wire the Run + email buttons (both live in the panel header now)
+    document.getElementById('acd-rebalance-btn')
+      ?.addEventListener('click', () => runAcctRebalance(fundId));
     const emailBtn = document.getElementById(emailBtnId);
     const emailMsg = document.getElementById(emailMsgId);
     if (emailBtn) {
@@ -15169,7 +15187,11 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div>Cache: <strong>' + (d.cache_attribution_rows || 0) + '</strong> attribution rows · source ' + _gfEsc(d.cache_source || '—') + ' · updated ' + _gfEsc((d.cache_updated_at || '—').slice(0, 16).replace('T', ' ')) + '</div>'
           + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'
           + (d.live_builder_error ? '<pre style="white-space:pre-wrap;font-size:10px;margin:6px 0 0;color:var(--red,#dc2626);">' + _gfEsc(d.live_builder_error) + '</pre>' : '')
-          + '</div>';
+          + '</div>'
+          + (d.unmapped_symbol_samples && Object.keys(d.unmapped_symbol_samples).length
+              ? '<div style="margin-top:6px;">⚠ Symbols with rows that map to NO share math: <strong>' + _gfEsc(Object.keys(d.unmapped_symbol_samples).join(', ')) + '</strong>'
+                + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">' + _gfEsc(JSON.stringify(d.unmapped_symbol_samples, null, 1).slice(0, 1200)) + '</pre></div>'
+              : '');
       } catch (e) {
         const out2 = document.getElementById('acd-attr-diag-out');
         if (out2) { out2.style.display = ''; out2.textContent = '❌ ' + (e.message || e); }
@@ -15272,23 +15294,25 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!flows.length) { el.innerHTML = ''; return; }
     el.innerHTML = `
       <section class="panel">
-        <details>
+        <details open>
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
-            <span class="panel-title">YTD Account History (Cash Flows)</span>
-            <span class="panel-badge">${flows.length} transactions</span>
+            <span class="panel-title">YTD Cash Flows</span>
+            <span class="panel-badge">${flows.length}</span>
             <span class="ac-chevron">▸</span>
           </summary>
-          <table class="data-table" style="width:100%;">
-            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th style="text-align:right;">Amount</th></tr></thead>
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table">
+            <thead><tr><th>Date</th><th>Action</th><th>Symbol</th><th class="num">Amount</th></tr></thead>
             <tbody>
               ${flows.map(f => `<tr>
-                <td style="color:var(--mid);font-size:11px;">${f.date || '—'}</td>
+                <td style="color:var(--mid);">${f.date || '—'}</td>
                 <td>${f.action || f.type || '—'}</td>
                 <td style="color:var(--blue);font-weight:700;">${f.symbol || f.ticker || '—'}</td>
-                <td style="text-align:right;font-variant-numeric:tabular-nums;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
+                <td class="num" style="font-weight:700;${(f.amount||0)>=0?'color:var(--green);':'color:var(--red);'}">${f.amount != null ? fmtUSD(f.amount) : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
+          </div>
         </details>
       </section>`;
   }

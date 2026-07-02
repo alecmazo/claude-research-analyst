@@ -26883,40 +26883,67 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                 if h.get("asset_class") not in ("cash", "option")
                 and not _snaptrade_cashlike(s)}
 
-    # YTD trade + dividend aggregates per symbol across assigned accounts.
-    # OPTION activities are EXCLUDED: covered-call/CSP trades arrive as
-    # BUY/SELL rows carrying the UNDERLYING's symbol (units in contracts,
-    # price per share, no ×100), which corrupted the equity share-rewind and
-    # flipped signs (the INTC incident). raw_json keeps the option_symbol
-    # marker even though the flat row doesn't.
+    # YTD trade + dividend aggregation per symbol, RAW rows aggregated in
+    # Python for full control over option handling:
+    #  • contract premium trades (BUY/SELL with an option marker) are excluded
+    #    from share math — counting contracts as shares flipped signs (INTC);
+    #  • ASSIGNMENT / EXERCISE rows ARE share movements at the strike — Alec
+    #    exits most positions via covered-call assignment, and excluding these
+    #    erased every called-away sale (the BKLN/HAL/DIS dash incident):
+    #    call → shares out (sell), put → shares in (buy), 100/contract;
+    #  • rows missing units/price but carrying a cash amount still credit
+    #    cost/proceeds from the amount.
     cur.execute("""
-        SELECT a.symbol, a.type,
-               COALESCE(SUM(a.units), 0)           AS units,
-               COALESCE(SUM(a.units * a.price), 0) AS gross,
-               COALESCE(SUM(a.amount), 0)          AS amount
+        SELECT a.symbol, a.type, a.units, a.price, a.amount,
+               a.raw_json -> 'option_symbol' AS opt
           FROM snaptrade_activities a
           JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
          WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
-           AND (a.raw_json ->> 'option_symbol') IS NULL
-           AND COALESCE(a.raw_json ->> 'option_type', '') = ''
-         GROUP BY a.symbol, a.type
     """, (fund_id, jan1))
     trades = {}
     for r in cur.fetchall():
-        sym, t = (r["symbol"] or "").strip(), (r["type"] or "")
+        sym, t = (r["symbol"] or "").strip(), (r["type"] or "").upper()
         if not sym:
             continue
+        u   = float(r["units"] or 0)
+        px  = float(r["price"] or 0)
+        amt = float(r["amount"] or 0)
+        opt = r["opt"]
+        if isinstance(opt, str):
+            try:
+                opt = json.loads(opt)
+            except Exception:
+                opt = None
+        is_option_row = bool(opt) or "OPTION" in t
         e = trades.setdefault(sym, {"net_units": 0.0, "buy_cost": 0.0,
                                     "sell_proceeds": 0.0, "dividends": 0.0,
                                     "bought_units": 0.0, "sold_units": 0.0})
-        u, g, amt = float(r["units"] or 0), float(r["gross"] or 0), float(r["amount"] or 0)
+        if is_option_row:
+            if "ASSIGN" in t or "EXERCISE" in t:
+                strike = _snaptrade_num(opt.get("strike_price")) if isinstance(opt, dict) else None
+                otype  = str((opt.get("option_type") if isinstance(opt, dict) else "") or "").upper()
+                contracts = abs(u)
+                shares = contracts * 100.0
+                if strike and shares:
+                    gross = shares * strike
+                    if otype.startswith("C"):      # call assigned/exercised → shares OUT
+                        e["net_units"] -= shares
+                        e["sell_proceeds"] += gross
+                        e["sold_units"] += shares
+                    elif otype.startswith("P"):    # put assigned/exercised → shares IN
+                        e["net_units"] += shares
+                        e["buy_cost"] += gross
+                        e["bought_units"] += shares
+            # Premium trades / expirations: never share math.
+            continue
+        gross = u * px if (u and px) else abs(amt)
         if t in _SNAP_BUY_TYPES:
             e["net_units"] += u
-            e["buy_cost"] += g
+            e["buy_cost"] += gross
             e["bought_units"] += u
         elif t in _SNAP_SELL_TYPES:
             e["net_units"] -= u
-            e["sell_proceeds"] += g
+            e["sell_proceeds"] += gross
             e["sold_units"] += u
         elif t in _SNAP_DIV_TYPES:
             e["dividends"] += amt
@@ -27260,6 +27287,39 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
                 "to": r["max_d"].isoformat() if r["max_d"] else None,
             } for r in cur.fetchall()]
         out["activities_total"] = sum(a["count"] for a in out["activities_by_type"])
+        # Raw samples for symbols whose rows DON'T map to share math — shows the
+        # exact activity type/shape still needing a mapping (assignment types,
+        # odd casings, missing units) instead of silent dashes.
+        out["unmapped_symbol_samples"] = {}
+        if acct_ids:
+            _known = (_SNAP_BUY_TYPES | _SNAP_SELL_TYPES | _SNAP_DIV_TYPES
+                      | _SNAP_FLOW_TYPES | _SNAP_INT_TYPES | _SNAP_FEE_TYPES)
+            cur.execute("""
+                SELECT a.symbol, a.type, a.units, a.price, a.amount, a.trade_date,
+                       (a.raw_json -> 'option_symbol') IS NOT NULL AS is_opt
+                  FROM snaptrade_activities a
+                 WHERE a.account_id = ANY(%s) AND a.symbol IS NOT NULL
+                   AND EXTRACT(YEAR FROM a.trade_date) = %s
+                 ORDER BY a.symbol, a.trade_date
+            """, (acct_ids, yr))
+            _by_sym: dict = {}
+            for r2 in cur.fetchall():
+                _by_sym.setdefault(r2["symbol"], []).append(r2)
+            for s, rws in _by_sym.items():
+                if len(out["unmapped_symbol_samples"]) >= 3:
+                    break
+                mapped = any(
+                    ((not x["is_opt"]) and (x["type"] or "").upper() in _known)
+                    or (x["is_opt"] and ("ASSIGN" in (x["type"] or "").upper()
+                                         or "EXERCISE" in (x["type"] or "").upper()))
+                    for x in rws)
+                if not mapped:
+                    out["unmapped_symbol_samples"][s] = [
+                        {"type": x["type"], "units": float(x["units"] or 0),
+                         "price": float(x["price"] or 0), "amount": float(x["amount"] or 0),
+                         "option": bool(x["is_opt"]),
+                         "date": x["trade_date"].isoformat() if x["trade_date"] else None}
+                        for x in rws[:4]]
         holdings = _snaptrade_fund_holdings(cur, fid)
         eq = {s: h for s, h in holdings.items()
               if h.get("asset_class") not in ("cash", "option")}
