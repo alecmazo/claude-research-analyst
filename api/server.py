@@ -22177,40 +22177,43 @@ def _wheel_rank_key(row: dict, side_key: str, yield_field: str):
 
 
 def _snaptrade_short_options_map() -> dict:
-    """{UNDERLYING: {"short_calls": contracts, "short_puts": contracts}} from
-    linked SnapTrade accounts' option positions (holdings_json rows with
-    asset_class='option', negative units = written). Lets the wheel scan see
-    calls/puts ALREADY written — without this it recommends selling calls
-    against shares that are already covered."""
+    """{UNDERLYING: {"short_calls": contracts, "short_puts": contracts}} —
+    calls/puts ALREADY written, so the wheel scan never recommends selling
+    calls against shares that are already covered.
+
+    Fetched LIVE from SnapTrade AT SCAN TIME (per Alec's rule, options logic
+    runs only on explicit Options-tab use — the daily sync makes no option
+    calls). Timeout-capped per account; empty map on any failure just means
+    no coverage badges."""
     out: dict = {}
     if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
         return out
     try:
-        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-            cur.execute("SELECT holdings_json FROM snaptrade_accounts WHERE status='active'")
-            for r in cur.fetchall():
-                hj = r["holdings_json"]
-                if isinstance(hj, str):
-                    try:
-                        hj = json.loads(hj)
-                    except Exception:
-                        hj = []
-                for p in (hj or []):
-                    if not isinstance(p, dict) or p.get("asset_class") != "option":
-                        continue
-                    u = (p.get("underlying") or "").strip().upper()
-                    try:
-                        q = float(p.get("quantity"))
-                    except (TypeError, ValueError):
-                        continue
-                    if not u or q >= 0:   # long options aren't wheel inventory
-                        continue
-                    txt = f"{p.get('symbol') or ''} {p.get('name') or ''}".upper()
-                    e = out.setdefault(u, {"short_calls": 0.0, "short_puts": 0.0})
-                    if "PUT" in txt or re.search(r"\sP[\d.]", txt):
-                        e["short_puts"] += -q
-                    else:
-                        e["short_calls"] += -q
+        import snaptrade_link as _st
+        uid, secret = _snaptrade_ensure_user()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active'")
+            acct_ids = [r[0] for r in cur.fetchall()]
+        for aid in acct_ids:
+            opts = _builder_call_timeout(
+                lambda a=aid: _snaptrade_normalize_options(_st.get_option_holdings(uid, secret, a)),
+                10.0, []) or []
+            for p in opts:
+                if not isinstance(p, dict) or p.get("asset_class") != "option":
+                    continue
+                u = (p.get("underlying") or "").strip().upper()
+                try:
+                    q = float(p.get("quantity"))
+                except (TypeError, ValueError):
+                    continue
+                if not u or q >= 0:   # long options aren't wheel inventory
+                    continue
+                txt = f"{p.get('symbol') or ''} {p.get('name') or ''}".upper()
+                e = out.setdefault(u, {"short_calls": 0.0, "short_puts": 0.0})
+                if "PUT" in txt or re.search(r"\sP[\d.]", txt):
+                    e["short_puts"] += -q
+                else:
+                    e["short_calls"] += -q
     except Exception as e:
         print(f"[options] short-options map failed: {e!s:.120}", flush=True)
     return out
@@ -27409,23 +27412,12 @@ def _snaptrade_run_sync() -> dict:
         norm = _snaptrade_normalize_account(merged)
         if not norm.get("account_id"):
             norm["account_id"] = str(acct_id)
-        # Option positions (covered calls / CSPs) come from a separate endpoint —
-        # get_user_account_positions never includes them. Valuation-only: they
-        # join holdings_json + total_value but stay out of tax_lots.
-        opts = []
-        try:
-            opts = _snaptrade_normalize_options(_st.get_option_holdings(uid, secret, acct_id))
-        except Exception as e:
-            print(f"[snaptrade] options {acct_id}: {e!s:.140}", flush=True)
-        if opts:
-            norm["positions"] = list(norm["positions"]) + opts
-            norm["count"] = len(norm["positions"])
-            if isinstance(merged.get("total_value"), (int, float)):
-                # total_value was summed from equity positions + cash only —
-                # fold in option MV (negative for short contracts). When it fell
-                # back to the account's reported balance, options are already in.
-                opt_mv = sum((o.get("market_value") or 0.0) for o in opts)
-                norm["total_value"] = (norm["total_value"] or 0.0) + opt_mv
+        # NOTE (ui353): option positions are NOT fetched here anymore — Alec's
+        # rule: options logic runs ONLY on explicit Options-tab use. The wheel
+        # scan fetches option holdings live at scan-click time
+        # (_snaptrade_short_options_map). Balance snapshots are unaffected:
+        # they prefer the brokerage-reported account total, which already
+        # includes short-option liabilities.
         # Daily balance snapshot — the raw series for the automatic returns path.
         # Prefer the brokerage-reported account total (includes short option
         # liabilities, matching Fidelity's balance page); fall back to our sum.
