@@ -27516,26 +27516,67 @@ def _snaptrade_run_sync() -> dict:
             "activities": activities, "balance_history": balance_history}
 
 
-@app.post("/api/snaptrade/sync")
-def snaptrade_sync(request: Request):
-    """GP-only: pull holdings for all connected accounts and upsert them. Read-only;
-    preserves each account's managed-account assignment (fund_id)."""
-    _plaid_require_gp(request)
-    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-        raise HTTPException(503, "Database not available.")
+# Single-slot sync job (one GP). A full sync legitimately takes minutes
+# (per-account SnapTrade calls + activities + rebuild) — riding one HTTP
+# request through Railway's edge proxy produced plain-text "upstream error"
+# timeouts in the browser. POST starts (or joins) the job; GET polls it.
+_SNAPTRADE_SYNC_JOB: dict = {}
+
+
+def _snaptrade_sync_job_runner(job_id: str) -> None:
+    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running",
+                                "started_at": time.time(), "result": None, "error": None})
     try:
-        return _snaptrade_run_sync()
-    except HTTPException:
-        raise
+        res = _snaptrade_run_sync()
+        _SNAPTRADE_SYNC_JOB.update({"status": "done", "result": res,
+                                    "finished_at": time.time()})
     except Exception as e:
         import traceback; traceback.print_exc()
         detail = _snaptrade_error_detail(e)
         if _snaptrade_user_invalid(detail):
-            raise HTTPException(502,
-                "SnapTrade key changed: the stored user belongs to the previous client id. "
-                "Click “+ Connect Fidelity” to re-link — it resets automatically and your "
-                "account assignments are restored on the next sync.")
-        raise HTTPException(502, f"SnapTrade sync failed: {detail}")
+            detail = ("SnapTrade key changed: the stored user belongs to the previous "
+                      "client id. Click “+ Connect Fidelity” to re-link — it resets "
+                      "automatically and your account assignments are restored on the "
+                      "next sync.")
+        _SNAPTRADE_SYNC_JOB.update({"status": "error", "error": detail,
+                                    "finished_at": time.time()})
+
+
+@app.post("/api/snaptrade/sync")
+def snaptrade_sync(request: Request, background_tasks: BackgroundTasks):
+    """GP-only: START a background holdings/activities/balances sync and return
+    immediately with {job_id}. Poll GET /api/snaptrade/sync-status. If a sync
+    is already running, joins it (the connect flow polls aggressively)."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    j = _SNAPTRADE_SYNC_JOB
+    if j.get("status") == "running" and time.time() - (j.get("started_at") or 0) < 600:
+        return {"ok": True, "async": True, "job_id": j.get("job_id"), "status": "running"}
+    import uuid as _uuid
+    job_id = "SNAPSYNC_" + _uuid.uuid4().hex[:10]
+    # Claim the slot BEFORE returning — BackgroundTasks start after the
+    # response, and a fast poll must not read the previous job's "done".
+    _SNAPTRADE_SYNC_JOB.update({"job_id": job_id, "status": "running",
+                                "started_at": time.time(), "result": None, "error": None})
+    background_tasks.add_task(_snaptrade_sync_job_runner, job_id)
+    return {"ok": True, "async": True, "job_id": job_id, "status": "running"}
+
+
+@app.get("/api/snaptrade/sync-status")
+def snaptrade_sync_status(request: Request):
+    """GP-only: state of the current/most-recent sync job."""
+    _plaid_require_gp(request)
+    j = _SNAPTRADE_SYNC_JOB
+    if not j:
+        return {"ok": True, "status": "idle"}
+    out = {"ok": True, "status": j.get("status"), "job_id": j.get("job_id"),
+           "elapsed_s": round(time.time() - (j.get("started_at") or time.time()))}
+    if j.get("status") == "done":
+        out["result"] = j.get("result")
+    if j.get("status") == "error":
+        out["error"] = j.get("error")
+    return out
 
 
 @app.post("/api/snaptrade/refresh")

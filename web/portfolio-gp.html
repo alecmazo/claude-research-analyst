@@ -13271,8 +13271,9 @@ End with the sleeve block at this account's real market value so I can push it t
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = '↻ Syncing…';
     try {
-      const r = await (await window.dgaFetch('/api/snaptrade/sync',
-        { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })).json();
+      const r = await dgaSnapRunSync(st => {
+        btn.textContent = '↻ Syncing… ' + (st.elapsed_s || 0) + 's';
+      });
       if (!r.ok) throw new Error(r.detail || 'Sync failed');
       const bh = (r.balance_history || []).find(h => h.fund_id === CURRENT_FUND_ID);
       const acts = (r.activities || []).reduce((s, a) => s + (a.activities || 0), 0);
@@ -19132,24 +19133,51 @@ End with the sleeve block at this account's real market value so I can push it t
       body.querySelectorAll('[data-snap-unhide]').forEach(b => b.addEventListener('click', () => dgaSnapHide(b.getAttribute('data-snap-unhide'), false)));
     } catch (e) { body.innerHTML = '<span style="color:var(--text-tertiary);">Could not load SnapTrade accounts.</span>'; }
   }
+  // Tolerant parse: Railway's edge can answer long requests with PLAIN TEXT
+  // ("upstream error") — never let JSON.parse turn that into a cryptic toast.
+  async function _snapJson(r) {
+    const txt = await r.text();
+    try { return JSON.parse(txt); }
+    catch (_) { return { ok: false, detail: (txt || '').slice(0, 160) || ('HTTP ' + r.status) }; }
+  }
+  // Start (or join) the background sync job and poll until it finishes.
+  // The sync itself can take minutes — it no longer rides one HTTP request.
+  async function dgaSnapRunSync(onTick) {
+    const s = await _snapJson(await window.dgaFetch('/api/snaptrade/sync',
+      { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' }));
+    if (!s.ok) throw new Error(s.detail || 'Sync failed to start');
+    if (!s.async) return s;   // safety: pre-job server still returns the result inline
+    const t0 = Date.now();
+    while (Date.now() - t0 < 300000) {
+      await new Promise(res => setTimeout(res, 3000));
+      let st;
+      try { st = await _snapJson(await window.dgaFetch('/api/snaptrade/sync-status')); }
+      catch (_) { continue; }   // transient network blip — keep polling
+      if (st.status === 'done')  return st.result || { ok: true };
+      if (st.status === 'error') throw new Error(st.error || 'Sync failed');
+      if (onTick) onTick(st);
+    }
+    throw new Error('Sync is still running in the background — refresh in a minute.');
+  }
   async function dgaSnapConnect(){
     const btn = document.getElementById('snaptrade-connect');
     if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
     try {
-      const d = await (await window.dgaFetch('/api/snaptrade/connect', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      const d = await _snapJson(await window.dgaFetch('/api/snaptrade/connect', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }));
       if (!d.ok || !d.redirect_uri) { alert(d.detail || 'Could not start SnapTrade connection.'); return; }
       window.open(d.redirect_uri, '_blank');
       const body = document.getElementById('snaptrade-body');
       if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Finish linking Fidelity in the new tab, then click <strong>↻ Sync</strong> to pull holdings.</span>';
-      let tries = 0;
-      const iv = setInterval(async () => {
-        tries++;
-        try {
-          const r = await (await window.dgaFetch('/api/snaptrade/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
-          if (r.ok && (r.synced||[]).length) { clearInterval(iv); loadSnapTrade(); }
-        } catch (e) {}
-        if (tries >= 12) clearInterval(iv);
-      }, 5000);
+      // After linking, run up to 3 background syncs until accounts appear.
+      (async () => {
+        for (let round = 0; round < 3; round++) {
+          try {
+            const r = await dgaSnapRunSync();
+            if ((r.synced || []).length) { loadSnapTrade(); return; }
+          } catch (_) {}
+          await new Promise(res => setTimeout(res, 10000));
+        }
+      })();
     } catch (e) { alert('SnapTrade connect failed: ' + (e.message||e)); }
     finally { if (btn) { btn.disabled = false; btn.textContent = '+ Connect Fidelity'; } }
   }
@@ -19157,7 +19185,9 @@ End with the sleeve block at this account's real market value so I can push it t
     const btn = document.getElementById('snaptrade-sync');
     if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
     try {
-      const r = await (await window.dgaFetch('/api/snaptrade/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      const r = await dgaSnapRunSync(st => {
+        if (btn) btn.textContent = '↻ Syncing… ' + (st.elapsed_s || 0) + 's';
+      });
       if (!r.ok) alert('Sync failed: ' + (r.detail||''));
       else {
         const fundsPushed = (r.lots_written||[]).length;
@@ -19304,7 +19334,7 @@ End with the sleeve block at this account's real market value so I can push it t
     if (btn) { btn.disabled = true; btn.textContent = '⟳ Refreshing…'; }
     if (body) body.innerHTML = '<span style="color:var(--text-secondary);">Asking SnapTrade to re-pull Fidelity…</span>';
     try {
-      const r = await (await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json();
+      const r = await _snapJson(await window.dgaFetch('/api/snaptrade/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }));
       if (!r.ok) throw new Error(r.detail || 'refresh failed');
       if ((r.errors||[]).length) {
         const emsg = (r.errors[0].error||'');
