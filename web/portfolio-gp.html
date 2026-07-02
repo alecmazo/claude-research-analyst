@@ -15160,14 +15160,51 @@ End with the sleeve block at this account's real market value so I can push it t
     drawAcctMonthlyBarChart(pts);
   }
 
+  // Diagnose wiring shared by BOTH attribution states (the button originally
+  // existed only in the empty state — once rows appeared it vanished).
+  function _acdWireAttrDiag() {
+    const btn = document.getElementById('acd-attr-diag-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();   // the button can live inside a <summary> — don't toggle it
+      const out = document.getElementById('acd-attr-diag-out');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const r = await window.dgaFetch('/api/snaptrade/attribution-debug?fund_id=' + encodeURIComponent(CURRENT_FUND_ID));
+        const d = await _snapJson(r);
+        if (!r.ok || d.ok === false) throw new Error(d.detail || 'HTTP ' + r.status);
+        const actLine = (d.activities_by_type || []).map(a => a.type + ' ×' + a.count).join(' · ') || 'none';
+        out.style.display = '';
+        const liveA = (d.live_activities || []).map(x =>
+          x.error ? ('ERROR: ' + x.error) : (x.returned + ' returned')).join(' · ');
+        const probeLine = (d.method_probe || []).filter(m => (m.count || 0) > 0)
+          .map(m => m.method + ' → ' + m.count).join(' · ');
+        out.innerHTML =
+          '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">' + _gfEsc(d.verdict || '') + '</div>'
+          + '<div>Activities stored: <strong>' + (d.activities_total || 0) + '</strong> (' + _gfEsc(actLine) + ')</div>'
+          + '<div>SnapTrade live call: <strong>' + _gfEsc(liveA || '—') + '</strong></div>'
+          + (probeLine ? '<div>SDK methods with data: <strong>' + _gfEsc(probeLine) + '</strong></div>' : '')
+          + '<div>Equity holdings: <strong>' + (d.equity_holdings || 0) + '</strong> · Jan-1 price coverage: <strong>' + _gfEsc(d.jan1_price_coverage || '—') + '</strong></div>'
+          + '<div>Cache: <strong>' + (d.cache_attribution_rows || 0) + '</strong> attribution rows · source ' + _gfEsc(d.cache_source || '—') + ' · updated ' + _gfEsc((d.cache_updated_at || '—').slice(0, 16).replace('T', ' ')) + '</div>'
+          + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'
+          + (d.live_builder_error ? '<pre style="white-space:pre-wrap;font-size:10px;margin:6px 0 0;color:var(--red,#dc2626);">' + _gfEsc(d.live_builder_error) + '</pre>' : '')
+          + '</div>';
+      } catch (e) {
+        const out2 = document.getElementById('acd-attr-diag-out');
+        if (out2) { out2.style.display = ''; out2.textContent = '❌ ' + (e.message || e); }
+      } finally {
+        btn.disabled = false; btn.textContent = '🔍 Diagnose';
+      }
+    });
+  }
+
   function renderAcctAttribution(data) {
     const el = document.getElementById('acd-attribution');
     const rows = data.attribution || [];
     if (!rows.length) {
       // Show WHY it's empty instead of rendering nothing — attribution builds
-      // from YTD activity, which can lag a freshly re-linked connection. The
-      // Diagnose button runs the server-side pipeline check and prints a
-      // plain-English verdict.
+      // from YTD activity, which can lag a freshly re-linked connection.
       el.innerHTML = `
         <section class="panel">
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap;">
@@ -15182,36 +15219,7 @@ End with the sleeve block at this account's real market value so I can push it t
           </div>
           <div id="acd-attr-diag-out" style="display:none;padding:0 14px 12px;font-size:11px;color:var(--text-secondary,#58616f);"></div>
         </section>`;
-      document.getElementById('acd-attr-diag-btn')?.addEventListener('click', async (ev) => {
-        const btn = ev.target, out = document.getElementById('acd-attr-diag-out');
-        btn.disabled = true; btn.textContent = 'Checking…';
-        try {
-          const r = await window.dgaFetch('/api/snaptrade/attribution-debug?fund_id=' + encodeURIComponent(CURRENT_FUND_ID));
-          const d = await r.json();
-          if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
-          const actLine = (d.activities_by_type || []).map(a => a.type + ' ×' + a.count).join(' · ') || 'none';
-          out.style.display = '';
-          const liveA = (d.live_activities || []).map(x =>
-            x.error ? ('ERROR: ' + x.error) : (x.returned + ' returned')).join(' · ');
-          const probeLine = (d.method_probe || []).filter(m => (m.count || 0) > 0)
-            .map(m => m.method + ' → ' + m.count).join(' · ');
-          out.innerHTML =
-            '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">' + _gfEsc(d.verdict || '') + '</div>'
-            + '<div>Activities stored: <strong>' + (d.activities_total || 0) + '</strong> (' + _gfEsc(actLine) + ')</div>'
-            + '<div>SnapTrade live call: <strong>' + _gfEsc(liveA || '—') + '</strong></div>'
-            + (probeLine ? '<div>SDK methods with data: <strong>' + _gfEsc(probeLine) + '</strong></div>' : '')
-            + '<div>Equity holdings: <strong>' + (d.equity_holdings || 0) + '</strong> · Jan-1 price coverage: <strong>' + _gfEsc(d.jan1_price_coverage || '—') + '</strong></div>'
-            + '<div>Cache: <strong>' + (d.cache_attribution_rows || 0) + '</strong> attribution rows · source ' + _gfEsc(d.cache_source || '—') + ' · updated ' + _gfEsc((d.cache_updated_at || '—').slice(0, 16).replace('T', ' ')) + '</div>'
-            + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'
-            + (d.live_builder_error ? '<pre style="white-space:pre-wrap;font-size:10px;margin:6px 0 0;color:var(--red,#dc2626);">' + _gfEsc(d.live_builder_error) + '</pre>' : '')
-            + '</div>';
-        } catch (e) {
-          out.style.display = '';
-          out.textContent = '❌ ' + (e.message || e);
-        } finally {
-          btn.disabled = false; btn.textContent = '🔍 Diagnose';
-        }
-      });
+      _acdWireAttrDiag();
       return;
     }
     const fmtP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
@@ -15241,8 +15249,10 @@ End with the sleeve block at this account's real market value so I can push it t
             <span class="panel-title">YTD Attribution (per-stock contribution)</span>
             <span class="panel-badge">${rows.length} names</span>
             ${data.attribution_estimated ? '<span style="font-size:10px;color:#d97706;font-weight:700;" title="Built from holdings + Jan-1 prices only — SnapTrade hasn\'t delivered this year\'s transactions yet. Refines automatically once they arrive.">≈ price-based estimate (trades pending)</span>' : ''}
+            <button class="tab-btn sm" id="acd-attr-diag-btn" style="font-size:10px;margin-left:auto;">🔍 Diagnose</button>
             <span class="ac-chevron">▸</span>
           </summary>
+          <div id="acd-attr-diag-out" style="display:none;padding:8px 14px 4px;font-size:11px;color:var(--text-secondary,#58616f);"></div>
           <table class="data-table" style="width:100%;">
             <thead><tr>
               <th>Ticker</th><th style="text-align:right;">End Shares</th>
@@ -15269,6 +15279,7 @@ End with the sleeve block at this account's real market value so I can push it t
           </table>
         </details>
       </section>`;
+    _acdWireAttrDiag();
   }
 
   function renderAcctHistory(data) {
