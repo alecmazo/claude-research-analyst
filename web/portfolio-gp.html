@@ -15191,9 +15191,15 @@ End with the sleeve block at this account's real market value so I can push it t
           if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
           const actLine = (d.activities_by_type || []).map(a => a.type + ' ×' + a.count).join(' · ') || 'none';
           out.style.display = '';
+          const liveA = (d.live_activities || []).map(x =>
+            x.error ? ('ERROR: ' + x.error) : (x.returned + ' returned')).join(' · ');
+          const probeLine = (d.method_probe || []).filter(m => (m.count || 0) > 0)
+            .map(m => m.method + ' → ' + m.count).join(' · ');
           out.innerHTML =
             '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">' + _gfEsc(d.verdict || '') + '</div>'
             + '<div>Activities stored: <strong>' + (d.activities_total || 0) + '</strong> (' + _gfEsc(actLine) + ')</div>'
+            + '<div>SnapTrade live call: <strong>' + _gfEsc(liveA || '—') + '</strong></div>'
+            + (probeLine ? '<div>SDK methods with data: <strong>' + _gfEsc(probeLine) + '</strong></div>' : '')
             + '<div>Equity holdings: <strong>' + (d.equity_holdings || 0) + '</strong> · Jan-1 price coverage: <strong>' + _gfEsc(d.jan1_price_coverage || '—') + '</strong></div>'
             + '<div>Cache: <strong>' + (d.cache_attribution_rows || 0) + '</strong> attribution rows · source ' + _gfEsc(d.cache_source || '—') + ' · updated ' + _gfEsc((d.cache_updated_at || '—').slice(0, 16).replace('T', ' ')) + '</div>'
             + '<div>Live builder: <strong>' + (d.live_builder_error ? 'ERROR' : (d.live_builder_rows || 0) + ' rows') + '</strong>'

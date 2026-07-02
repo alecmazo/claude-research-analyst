@@ -9886,14 +9886,16 @@ def _secs_until(hour: int, minute: int, pacific_offset=None) -> float:
         target += timedelta(days=1)
     return (target - now).total_seconds()
 
-def _automation_record_run(job: str, ok: bool, detail: str = "") -> None:
+def _automation_record_run(job: str, ok, detail: str = "") -> None:
     """Persist per-scheduler run status so the UI / health endpoint can show it.
-    The workers used to print() to Railway logs only — a dead thread or a
-    failing job was invisible (the 'next run' label is computed from settings,
-    not thread liveness)."""
+    ok=None means "started/claimed" — written BEFORE a catch-up run so a deploy
+    that kills the job mid-flight doesn't make the next boot re-launch it.
+    (Without the claim, ~15 deploys in one day re-fired the daily brief and a
+    full market-pulse AI scan on every restart — constant background load.)"""
     try:
         _kv_put(f"automation.last_run.{job}",
-                {"ts": datetime.utcnow().isoformat(), "ok": bool(ok),
+                {"ts": datetime.utcnow().isoformat(),
+                 "ok": (None if ok is None else bool(ok)),
                  "detail": str(detail)[:400]})
     except Exception:
         pass
@@ -9975,6 +9977,7 @@ def _auto_daily_brief_worker() -> None:
             h, m = cfg["hour"], cfg["minute"]
             if _automation_needs_catchup("daily_brief", h, m):
                 print("[daily-brief-scheduler] missed today's run (deploy across run time?) — catching up now")
+                _automation_record_run("daily_brief", None, "catch-up started")
             else:
                 wait_secs = _secs_until(h, m)
                 print(f"[daily-brief-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
@@ -10021,6 +10024,7 @@ def _auto_market_pulse_worker() -> None:
             h, m = cfg["hour"], cfg["minute"]
             if _automation_needs_catchup("market_pulse", h, m):
                 print("[pulse-scheduler] missed today's run — catching up now")
+                _automation_record_run("market_pulse", None, "catch-up started")
             else:
                 wait_secs = _secs_until(h, m)
                 print(f"[pulse-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
@@ -10076,6 +10080,7 @@ def _auto_snaptrade_sync_worker() -> None:
             h, m = cfg["hour"], cfg["minute"]
             if _automation_needs_catchup("snaptrade_sync", h, m):
                 print("[snaptrade-scheduler] missed today's run — catching up now")
+                _automation_record_run("snaptrade_sync", None, "catch-up started")
             else:
                 wait_secs = _secs_until(h, m)
                 print(f"[snaptrade-scheduler] next run at {h:02d}:{m:02d} Pacific — sleeping {wait_secs/3600:.1f}h")
@@ -27195,21 +27200,69 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
                 cur.execute("ROLLBACK TO SAVEPOINT attr_dbg")
             except Exception:
                 pass
+    # LIVE SnapTrade probe — stored-count 0 is ambiguous (SnapTrade returns
+    # nothing vs our call/parse is wrong vs plan gating). Ask SnapTrade NOW.
+    live_err = None
+    try:
+        import snaptrade_link as _st
+        uid, secret = _snaptrade_ensure_user()
+        end_iso = datetime.utcnow().date().isoformat()
+        out["live_activities"] = []
+        for a in out["accounts"][:3]:
+            try:
+                acts = _st.get_account_activities(uid, secret, a["account_id"],
+                                                  f"{yr}-01-01", end_iso)
+                sample = (acts or [])[:2]
+                out["live_activities"].append({
+                    "account_id": a["account_id"], "returned": len(acts or []),
+                    "sample": json.loads(json.dumps(sample, default=str)) if sample else [],
+                })
+            except Exception as e:
+                live_err = _snaptrade_error_detail(e)
+                out["live_activities"].append({"account_id": a["account_id"], "error": live_err})
+        # Direct call failed or returned zero everywhere → enumerate every
+        # transactions/activity SDK method and report which ones return data.
+        if out["accounts"] and (live_err or all((x.get("returned") or 0) == 0
+                                                for x in out["live_activities"])):
+            try:
+                rep = _st.probe_activity_methods(uid, secret, out["accounts"][0]["account_id"],
+                                                 start_date=f"{yr}-01-01", end_date=end_iso)
+                out["method_probe"] = [
+                    {"method": r.get("method"), "count": r.get("count"),
+                     "sample": (r.get("sample") or "")[:200]}
+                    for r in rep.get("results", []) if r.get("ok")][:8]
+            except Exception as e:
+                out["method_probe_error"] = _snaptrade_error_detail(e)
+    except Exception as e:
+        out["live_activities_error"] = _snaptrade_error_detail(e)
+
     # Human-readable verdict so the GP doesn't have to interpret raw fields.
+    live_rows = sum((x.get("returned") or 0) for x in out.get("live_activities") or [])
     if not out["accounts"]:
         out["verdict"] = "No SnapTrade account is assigned to this fund."
+    elif live_err:
+        out["verdict"] = ("SnapTrade is REFUSING the activities call: " + live_err[:200]
+                          + " — if this mentions plan/availability, the transactions "
+                            "add-on isn't enabled on the production key (check the "
+                            "SnapTrade dashboard billing/add-ons).")
+    elif live_rows and out["activities_total"] == 0:
+        out["verdict"] = ("SnapTrade RETURNS activity data but our ingest stored none — "
+                          "parse/shape bug on our side; see live_activities sample.")
+    elif not live_rows and out["activities_total"] == 0:
+        _working = [m for m in (out.get("method_probe") or []) if (m.get("count") or 0) > 0]
+        if _working:
+            out["verdict"] = ("get_activities returns ZERO but SDK method "
+                              + str(_working[0]["method"]) + " DOES return data — the "
+                              "ingest should switch to that method (sample included).")
+        else:
+            out["verdict"] = ("SnapTrade returns ZERO activities for the YTD window on "
+                              "every SDK method — their transaction backfill for this "
+                              "connection genuinely hasn't landed. Force refresh "
+                              "(Settings → SnapTrade), wait, and re-check here.")
     elif out.get("live_builder_error"):
         out["verdict"] = "Attribution builder is failing — see live_builder_error."
     elif out.get("live_builder_rows") and out["cache_attribution_rows"] == 0:
-        out["verdict"] = ("Builder produces rows but the cache is empty — run ↻ Sync to "
-                          "rebuild it and attribution will appear"
-                          + (" (as a price-based estimate until SnapTrade delivers this "
-                             "year's transactions)." if out["activities_total"] == 0 else "."))
-    elif out["activities_total"] == 0:
-        out["verdict"] = ("Attribution is showing as a price-based estimate — SnapTrade "
-                          "hasn't delivered transaction history yet (can lag a fresh link "
-                          "by hours). It refines automatically once transactions arrive; "
-                          "Settings → SnapTrade → Force refresh can nudge it.")
+        out["verdict"] = "Builder produces rows but the cache is empty — run ↻ Sync to rebuild it."
     elif out.get("live_builder_rows"):
         out["verdict"] = "Attribution pipeline healthy."
     else:
