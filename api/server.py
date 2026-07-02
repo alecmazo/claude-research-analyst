@@ -27037,10 +27037,18 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     yr = overview.get("year") or datetime.utcnow().year
     auto_attr = []
     if has_acts:
+        # Own savepoint: a failure here must not abort the transaction and
+        # take the balance-history/flows writes down with it.
         try:
+            cur.execute("SAVEPOINT snap_attr")
             auto_attr = _snaptrade_build_attribution(
                 cur, fund_id, int(yr), float(overview.get("begin_value") or 0))
+            cur.execute("RELEASE SAVEPOINT snap_attr")
         except Exception as e:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT snap_attr")
+            except Exception:
+                pass
             print(f"[snaptrade] auto-attribution failed {fund_id}: {e!s:.140}", flush=True)
     if auto_attr:
         overview["attribution"] = auto_attr
@@ -27079,6 +27087,103 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
             "flows_estimated": any(r.get("estimated") for r in synth),
             "activities_available": has_acts,
             "attribution_rows": len(overview.get("attribution") or [])}
+
+
+@app.get("/api/snaptrade/attribution-debug")
+def snaptrade_attribution_debug(request: Request, fund_id: str):
+    """GP-only: stage-by-stage state of the auto-attribution pipeline for one
+    managed account — assigned accounts, activity counts by type, equity
+    holdings, Jan-1 price coverage, what's in the YTD cache, and a LIVE run of
+    the builder (rolled back) including its exception if it fails. Wired to
+    the Diagnose button in the empty attribution panel."""
+    _plaid_require_gp(request)
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available.")
+    _ensure_snaptrade_tables()
+    out: dict = {"ok": True, "fund_id": fund_id}
+    yr = datetime.utcnow().year
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        fid = str(_resolve_fund_id(cur, fund_id))
+        out["fund_id"] = fid
+        cur.execute("SELECT account_id, account_name, account_mask, last_synced_at "
+                    "FROM snaptrade_accounts WHERE status='active' AND fund_id=%s", (fid,))
+        accts = cur.fetchall()
+        out["accounts"] = [{
+            "account_id": a["account_id"], "name": a["account_name"],
+            "mask": a["account_mask"],
+            "last_synced_at": a["last_synced_at"].isoformat() if a["last_synced_at"] else None,
+        } for a in accts]
+        acct_ids = [a["account_id"] for a in accts]
+        out["activities_by_type"] = []
+        if acct_ids:
+            cur.execute("""SELECT type, count(*) AS n, min(trade_date) AS min_d,
+                                  max(trade_date) AS max_d
+                             FROM snaptrade_activities
+                            WHERE account_id = ANY(%s)
+                            GROUP BY type ORDER BY n DESC""", (acct_ids,))
+            out["activities_by_type"] = [{
+                "type": r["type"], "count": int(r["n"]),
+                "from": r["min_d"].isoformat() if r["min_d"] else None,
+                "to": r["max_d"].isoformat() if r["max_d"] else None,
+            } for r in cur.fetchall()]
+        out["activities_total"] = sum(a["count"] for a in out["activities_by_type"])
+        holdings = _snaptrade_fund_holdings(cur, fid)
+        eq = {s: h for s, h in holdings.items()
+              if h.get("asset_class") not in ("cash", "option")}
+        out["equity_holdings"] = len(eq)
+        out["equity_symbols"] = sorted(eq)[:40]
+        cov = 0
+        for s in list(eq)[:40]:
+            cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
+                        (s, f"{yr}-01-01"))
+            if cur.fetchone():
+                cov += 1
+        out["jan1_price_coverage"] = f"{cov}/{len(eq)}"
+        # Current cache state
+        cur.execute("SELECT result_json, updated_at FROM managed_account_ytd_cache WHERE fund_id=%s", (fid,))
+        rj = cur.fetchone()
+        cache = {}
+        if rj and rj.get("result_json"):
+            try:
+                cache = (rj["result_json"] if isinstance(rj["result_json"], dict)
+                         else json.loads(rj["result_json"]))
+            except Exception:
+                cache = {}
+        out["cache_source"] = cache.get("source")
+        out["cache_attribution_rows"] = len(cache.get("attribution") or [])
+        out["cache_begin_value"] = cache.get("begin_value")
+        out["cache_updated_at"] = rj["updated_at"].isoformat() if rj and rj.get("updated_at") else None
+        # Live builder run — rolled back, exception surfaced
+        cur.execute("SAVEPOINT attr_dbg")
+        try:
+            rows = _snaptrade_build_attribution(cur, fid, yr, float(cache.get("begin_value") or 0))
+            out["live_builder_rows"] = len(rows)
+            out["live_builder_sample"] = rows[:3]
+        except Exception as e:
+            import traceback
+            out["live_builder_error"] = f"{type(e).__name__}: {e!s:.300}"
+            out["live_builder_trace"] = traceback.format_exc()[-800:]
+        finally:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT attr_dbg")
+            except Exception:
+                pass
+    # Human-readable verdict so the GP doesn't have to interpret raw fields.
+    if not out["accounts"]:
+        out["verdict"] = "No SnapTrade account is assigned to this fund."
+    elif out["activities_total"] == 0:
+        out["verdict"] = ("SnapTrade has not delivered any transaction history for this "
+                          "connection yet (holdings arrive fast; transactions can lag a "
+                          "fresh link by hours). Try Settings → SnapTrade → Force refresh, "
+                          "wait a couple of minutes, then Sync again.")
+    elif out.get("live_builder_error"):
+        out["verdict"] = "Attribution builder is failing — see live_builder_error."
+    elif out.get("live_builder_rows"):
+        out["verdict"] = ("Builder produces rows — if the page shows none, the cache "
+                          "predates the fix: run a Sync to rebuild it.")
+    else:
+        out["verdict"] = "Activities exist but the builder returned 0 rows — inspect equity_symbols / activities_by_type."
+    return out
 
 
 def _snaptrade_holdings_items(body):
