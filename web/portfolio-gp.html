@@ -1558,6 +1558,44 @@
   }
   .acd-meta-line strong { color: var(--text-primary); font-weight: 700; }
 
+  /* ── Side-by-side positions + rebalance, compact tables (ui356) ───────── */
+  .acd-side-by-side {
+    display: grid;
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+    gap: 12px;
+    align-items: start;
+    margin-top: 14px;
+  }
+  @media (max-width: 1200px) {
+    .acd-side-by-side { grid-template-columns: 1fr; }
+  }
+  .acd-compact-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+  }
+  .acd-compact-table th {
+    font-size: 8.5px;
+    font-weight: 800;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--panel-edge);
+    white-space: nowrap;
+    text-align: left;
+  }
+  .acd-compact-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.10);
+    white-space: nowrap;
+  }
+  .acd-compact-table tr:last-child td { border-bottom: none; }
+  .acd-compact-table th.num, .acd-compact-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
   .acd-upload-group {
     padding: 16px 18px 14px;
   }
@@ -4236,14 +4274,16 @@ End with the sleeve block at this account's real market value so I can push it t
     <div id="acd-balance"     style="margin-top:14px;"></div>
     <div id="acd-alltime"     style="margin-top:14px;"></div>
 
-    <!-- ④ Holdings + analysis -->
-    <div id="acd-positions"   style="margin-top:14px;"></div>
+    <!-- ④ Holdings (left) + rebalance (right), then analysis -->
+    <div class="acd-side-by-side">
+      <div id="acd-positions" style="min-width:0;"></div>
+      <div style="min-width:0;">
+        <div id="acd-rebalance-wrap"></div>
+        <div id="acd-rebalance-result" style="margin-top:10px;"></div>
+      </div>
+    </div>
     <div id="acd-attribution" style="margin-top:14px;"></div>
     <div id="acd-history"     style="margin-top:14px;"></div>
-
-    <!-- ⑤ Tools -->
-    <div id="acd-rebalance-wrap"  style="margin-top:14px;"></div>
-    <div id="acd-rebalance-result" style="margin-top:14px;"></div>
 
     <!-- ⑥ Manual data (backup) — collapsed; the auto-import above makes this
          a rarely-needed path -->
@@ -14137,27 +14177,27 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!rows.length) {
       return `<section class="panel"><header class="panel-head"><span class="panel-title">Open Positions</span></header><div class="tab-empty">No positions yet.</div></section>`;
     }
+    // Compact 7-column layout (ui356): name → tooltip on the symbol; the two
+    // rebalance columns (Suggested % / New QTY) live in the side-by-side
+    // Rebalance panel now; Cost Basis dropped (avg cost × qty).
     const html = `
       <section class="panel">
         <details open>
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">Open Positions</span>
-            <span class="panel-badge">${rows.length} positions · ${fmtUSD(totalMv)} MV</span>
+            <span class="panel-badge">${rows.length} · ${fmtUSD(totalMv)}</span>
             <span class="ac-chevron">▸</span>
           </summary>
-          <table class="data-table" id="pos-table" style="width:100%;">
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table" id="pos-table">
             <thead><tr>
               <th>Symbol</th>
-              <th>Name</th>
-              <th id="pos-th-curpct" style="text-align:center;">Current %</th>
-              <th style="text-align:center;">→ Suggested %</th>
-              <th style="text-align:right;">Qty</th>
-              <th style="text-align:right;">→ New QTY</th>
-              <th style="text-align:right;">Avg Cost</th>
-              <th style="text-align:right;">Cost Basis</th>
-              <th style="text-align:right;">Last</th>
-              <th style="text-align:right;">Market Value</th>
-              <th style="text-align:right;">Unrealized</th>
+              <th class="num">Qty</th>
+              <th class="num">Avg Cost</th>
+              <th class="num">Last</th>
+              <th class="num">Mkt Value</th>
+              <th class="num">Unreal.</th>
+              <th class="num" id="pos-th-curpct">Weight</th>
             </tr></thead>
             <tbody id="pos-tbody">
               ${rows.map(p => {
@@ -14167,24 +14207,18 @@ End with the sleeve block at this account's real market value so I can push it t
                   ? p.market_weight_pct
                   : (p.market_value && totalMv > 0 ? (p.market_value / totalMv * 100) : (p.weight_pct || null));
                 return '<tr>' +
-                  '<td style="font-weight:800;color:var(--blue);">' + (p.symbol || '—') + '</td>' +
-                  '<td style="color:var(--mid);font-size:11px;">' + (p.name || '').slice(0, 30) + '</td>' +
-                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);" data-sort-val="' + (curPct != null ? curPct.toFixed(4) : '') + '">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
-                  '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--dim);" data-suggested="' + (p.symbol || '') + '">—</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.total_qty || 0).toFixed(2) + '</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--dim);" data-newqty="' + (p.symbol || '') + '">—</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtUSD(p.total_cost || 0) + '</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.last_price != null ? fmtUSD(p.last_price) : '—') + '</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (p.market_value != null ? fmtUSD(p.market_value) : '—') + '</td>' +
-                  '<td style="text-align:right;font-variant-numeric:tabular-nums;' + cls + '">' + (unr != null ? fmtUSD(unr) : '—') + '</td>' +
+                  '<td style="font-weight:800;color:var(--blue);" title="' + _gfEsc(p.name || '') + '">' + (p.symbol || '—') + '</td>' +
+                  '<td class="num">' + (p.total_qty || 0).toFixed(2) + '</td>' +
+                  '<td class="num">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
+                  '<td class="num">' + (p.last_price != null ? fmtUSD(p.last_price) : '—') + '</td>' +
+                  '<td class="num" style="font-weight:700;">' + (p.market_value != null ? fmtUSD(p.market_value) : '—') + '</td>' +
+                  '<td class="num" style="' + cls + '">' + (unr != null ? fmtUSD(unr) : '—') + '</td>' +
+                  '<td class="num" style="color:var(--mid);" data-sort-val="' + (curPct != null ? curPct.toFixed(4) : '') + '">' + (curPct != null ? curPct.toFixed(1) + '%' : '—') + '</td>' +
                   '</tr>';
               }).join('')}
-              <tr id="pos-ev-row" data-pin="bottom" style="display:none;background:rgba(91,184,212,0.06);border-top:1px solid rgba(91,184,212,0.2);">
-                <td colspan="11" style="padding:6px 10px;font-size:11px;color:var(--mid);">Run rebalance to see EV improvement</td>
-              </tr>
             </tbody>
           </table>
+          </div>
         </details>
       </section>`;
 
@@ -14192,7 +14226,7 @@ End with the sleeve block at this account's real market value so I can push it t
     requestAnimationFrame(function() {
       const th    = document.getElementById('pos-th-curpct');
       const tbody = document.getElementById('pos-tbody');
-      if (th && tbody) _wireColumnSort(th, tbody, 2, 'desc');
+      if (th && tbody) _wireColumnSort(th, tbody, 6, 'desc');
     });
 
     return html;
@@ -14484,14 +14518,15 @@ End with the sleeve block at this account's real market value so I can push it t
         _updatePositionsReturnTile();
       }
 
-      // Show rebalance button
+      // Rebalance header bar (right column of the side-by-side layout)
       const wrap = document.getElementById('acd-rebalance-wrap');
       if (wrap) {
         wrap.innerHTML =
-          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-            '<button class="tab-btn" id="acd-rebalance-btn" style="font-size:12px;padding:6px 18px;">📊 Run Rebalance</button>' +
-            '<span id="acd-rebalance-status" style="font-size:11px;"></span>' +
-          '</div>';
+          '<section class="panel"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;">' +
+            '<span class="panel-title">Rebalance</span>' +
+            '<span id="acd-rebalance-status" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>' +
+            '<button class="tab-btn sm" id="acd-rebalance-btn" style="font-size:10px;">📊 Run</button>' +
+          '</div></section>';
         const rbtn = document.getElementById('acd-rebalance-btn');
         if (rbtn) rbtn.addEventListener('click', () => runAcctRebalance(fundId));
       }
@@ -14546,7 +14581,7 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch(e) {
       if (status) { status.style.color='var(--red)'; status.textContent='❌ ' + e.message; }
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '📊 Run Rebalance'; }
+      if (btn) { btn.disabled = false; btn.textContent = '📊 Run'; }
     }
   }
 
@@ -14561,47 +14596,8 @@ End with the sleeve block at this account's real market value so I can push it t
 
   function renderRebalanceResult(data, fundId) {
     if (!data || !data.rows) return;
-
-    // 1. Populate Suggested % and New QTY cells in positions table
-    data.rows.forEach(function(row) {
-      // Suggested %
-      const cell = document.querySelector('[data-suggested="' + row.ticker + '"]');
-      if (cell) {
-        const pct  = (row.suggested_pct || 0).toFixed(1);
-        const diff = (row.suggested_pct || 0) - (row.current_pct || 0);
-        const col  = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
-        cell.textContent = pct + '%';
-        cell.style.color = col;
-      }
-      // New QTY
-      const qtyCell = document.querySelector('[data-newqty="' + row.ticker + '"]');
-      if (qtyCell && row.new_qty != null) {
-        const sd    = row.shares_delta;
-        const newQty = row.new_qty;
-        const isBuy  = sd > 0.01;
-        const isSell = sd < -0.01;
-        const col    = isBuy ? 'var(--green)' : isSell ? 'var(--red)' : 'var(--mid)';
-        const arrow  = isBuy ? '↑' : isSell ? '↓' : '';
-        qtyCell.innerHTML = '<span style="color:' + col + ';font-weight:700;">' + arrow + ' ' + newQty.toFixed(2) + '</span>';
-        qtyCell.title = 'Δ ' + (sd >= 0 ? '+' : '') + sd.toFixed(2) + ' shares';
-      }
-    });
-
-    // 2. Update/show EV row
-    const evRow = document.getElementById('pos-ev-row');
-    if (evRow) {
-      const curEV = (data.current_ev || 0).toFixed(1);
-      const sugEV = (data.suggested_ev || 0).toFixed(1);
-      const evCol = (data.suggested_ev || 0) > (data.current_ev || 0) ? 'var(--green)' : 'var(--red)';
-      evRow.style.display = '';
-      evRow.innerHTML =
-        '<td colspan="2" style="font-weight:800;color:var(--blue);font-size:11px;">EXPECTED VALUE</td>' +
-        '<td style="text-align:center;font-variant-numeric:tabular-nums;color:var(--mid);">' + curEV + '%</td>' +
-        '<td style="text-align:center;font-variant-numeric:tabular-nums;' + evCol + ';font-weight:700;">' + sugEV + '%</td>' +
-        '<td colspan="7" style="font-size:10px;color:var(--mid);">Weighted avg upside across equity positions</td>';
-    }
-
-    // 3. Render summary panel
+    // (ui356) The positions table no longer carries Suggested %/New QTY cells —
+    // this panel, side by side with it, is the single home for rebalance data.
     const elResult = document.getElementById('acd-rebalance-result');
     if (!elResult) return;
 
@@ -14611,27 +14607,21 @@ End with the sleeve block at this account's real market value so I can push it t
     const rowsHtml = (data.rows || []).slice().sort(function(a,b){ return (b.suggested_pct||0)-(a.suggested_pct||0); }).map(function(row) {
       const diff = (row.suggested_pct||0) - (row.current_pct||0);
       const diffCol = diff > 0.5 ? 'var(--green)' : diff < -0.5 ? 'var(--red)' : 'var(--mid)';
-      const diffStr = diff > 0.1 ? '▲ +' + diff.toFixed(1) + '%' : diff < -0.1 ? '▼ ' + diff.toFixed(1) + '%' : '—';
       const ratingColors = {'Buy':'var(--green)','Strong Buy':'var(--green)','Hold':'var(--mid)','Sell':'var(--red)','Strong Sell':'var(--red)'};
       const ratingCol = ratingColors[row.rating] || 'var(--mid)';
       const upside = row.upside_pct;
-      // Shares column
       const sd = row.shares_delta;
       let sharesStr = '—', sharesCol = 'var(--dim)';
       if (sd != null && Math.abs(sd) >= 0.01) {
-        sharesStr = (sd > 0 ? '+' : '') + sd.toFixed(2) + ' sh';
+        sharesStr = (sd > 0 ? '+' : '') + sd.toFixed(2);
         sharesCol = sd > 0 ? 'var(--green)' : 'var(--red)';
       }
       return '<tr>' +
-        '<td style="font-weight:800;color:var(--blue);">' + row.ticker + '</td>' +
-        '<td style="text-align:right;color:' + ratingCol + ';">' + (row.rating||'—') + '</td>' +
-        '<td style="text-align:right;color:' + ((upside||0)>=0?'var(--green)':'var(--red)') + ';">' + (upside!=null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—') + '</td>' +
-        '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (row.score||0).toFixed(2) + '</td>' +
-        '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (row.current_pct||0).toFixed(1) + '%</td>' +
-        '<td style="text-align:center;color:var(--blue);opacity:0.6;">→</td>' +
-        '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + diffCol + ';font-weight:700;">' + (row.suggested_pct||0).toFixed(1) + '%</td>' +
-        '<td style="text-align:right;font-size:10px;color:' + diffCol + ';">' + diffStr + '</td>' +
-        '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:' + sharesCol + ';">' + sharesStr + '</td>' +
+        '<td style="font-weight:800;color:var(--blue);" title="Score ' + (row.score||0).toFixed(2) + '">' + row.ticker + '</td>' +
+        '<td style="color:' + ratingCol + ';">' + (row.rating||'—') + '</td>' +
+        '<td class="num" style="color:' + ((upside||0)>=0?'var(--green)':'var(--red)') + ';">' + (upside!=null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—') + '</td>' +
+        '<td class="num" style="color:var(--mid);">' + (row.current_pct||0).toFixed(1) + '% <span style="color:var(--blue);opacity:.55;">→</span> <span style="color:' + diffCol + ';font-weight:700;">' + (row.suggested_pct||0).toFixed(1) + '%</span></td>' +
+        '<td class="num" style="font-weight:700;color:' + sharesCol + ';" title="Δ shares to trade">' + sharesStr + '</td>' +
         '</tr>';
     }).join('');
 
@@ -14651,37 +14641,27 @@ End with the sleeve block at this account's real market value so I can push it t
               '<button id="' + emailBtnId + '" class="tab-btn sm" style="font-size:9px;padding:0 10px;white-space:nowrap;">📨 Email Report</button>' +
             '</span>' +
           '</summary>' +
-          '<div style="padding:12px 14px 6px;">' +
-          '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">' +
-            '<div style="text-align:center;">' +
-              '<div style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;margin-bottom:3px;">CURRENT EV</div>' +
-              '<div style="font-size:20px;font-weight:800;color:var(--mid);">' + (data.current_ev||0).toFixed(1) + '%</div>' +
-              '<div style="font-size:9px;color:var(--dim);">wtd avg upside</div>' +
-            '</div>' +
-            '<div style="display:flex;align-items:center;font-size:22px;color:var(--blue);opacity:0.7;">→</div>' +
-            '<div style="text-align:center;">' +
-              '<div style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:1px;margin-bottom:3px;">SUGGESTED EV</div>' +
-              '<div style="font-size:20px;font-weight:800;' + (evImprove>=0?'color:var(--green)':'color:var(--red)') + ';">' + (data.suggested_ev||0).toFixed(1) + '%</div>' +
-              '<div style="font-size:9px;color:var(--dim);">wtd avg upside</div>' +
-            '</div>' +
-            '<div style="display:flex;align-items:center;">' +
-              '<span style="background:rgba(34,197,94,0.12);color:var(--green);padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;">' + (evImprove>=0?'+':'') + evImprove.toFixed(1) + '% EV improvement</span>' +
-            '</div>' +
+          '<div style="padding:8px 12px 6px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--mid);">' +
+            '<span style="font-size:8.5px;font-weight:800;letter-spacing:.7px;color:var(--dim);">EXPECTED VALUE</span>' +
+            '<span style="font-variant-numeric:tabular-nums;font-weight:700;">' + (data.current_ev||0).toFixed(1) + '%</span>' +
+            '<span style="color:var(--blue);opacity:.6;">→</span>' +
+            '<span style="font-variant-numeric:tabular-nums;font-weight:800;' + (evImprove>=0?'color:var(--green)':'color:var(--red)') + ';">' + (data.suggested_ev||0).toFixed(1) + '%</span>' +
+            '<span style="background:rgba(34,197,94,0.12);color:' + (evImprove>=0?'var(--green)':'var(--red)') + ';padding:1px 8px;border-radius:5px;font-size:10px;font-weight:700;">' + (evImprove>=0?'+':'') + evImprove.toFixed(1) + '%</span>' +
+            '<span style="font-size:9px;color:var(--dim);">wtd avg upside</span>' +
           '</div>' +
-          '<table class="data-table" style="width:100%;">' +
+          '<div style="max-height:460px;overflow-y:auto;">' +
+          '<table class="acd-compact-table">' +
             '<thead><tr>' +
               '<th>Ticker</th>' +
-              '<th style="text-align:right;">Rating</th>' +
-              '<th style="text-align:right;">Upside</th>' +
-              '<th style="text-align:right;">Score</th>' +
-              '<th style="text-align:right;">Current %</th>' +
-              '<th style="text-align:center;">→</th>' +
-              '<th style="text-align:right;">Suggested %</th>' +
-              '<th style="text-align:right;">Action</th>' +
-              '<th style="text-align:right;">Shares</th>' +
+              '<th>Rating</th>' +
+              '<th class="num">Upside</th>' +
+              '<th class="num">Cur → Sug</th>' +
+              '<th class="num">Δ Sh</th>' +
             '</tr></thead>' +
             '<tbody>' + rowsHtml + '</tbody>' +
           '</table>' +
+          '</div>' +
         '</div>' +
         '</details>' +
       '</section>';
@@ -15229,14 +15209,14 @@ End with the sleeve block at this account's real market value so I can push it t
     const maxContrib = Math.max(...sortedRows.map(r => Math.abs(r.contribution_pct || 0)), 0.01);
 
     const contribBar = (val) => {
-      if (val == null) return '';
+      if (val == null) return '<span style="color:var(--dim);">—</span>';
       const pct  = Math.min(Math.abs(val) / maxContrib * 100, 100);
       const col  = val >= 0 ? '#1a7f40' : '#cc3333';
       const dir  = val >= 0 ? 'left' : 'right';
       return `
-        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
-          <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${col};min-width:52px;text-align:right;">${fmtP(val)}</span>
-          <div style="width:72px;height:10px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:5px;justify-content:flex-end;">
+          <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${col};min-width:46px;text-align:right;">${fmtP(val)}</span>
+          <div style="width:54px;height:8px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden;flex-shrink:0;">
             <div style="width:${pct.toFixed(1)}%;height:100%;background:${col};border-radius:3px;float:${dir};opacity:0.85;"></div>
           </div>
         </div>`;
@@ -15253,30 +15233,34 @@ End with the sleeve block at this account's real market value so I can push it t
             <span class="ac-chevron">▸</span>
           </summary>
           <div id="acd-attr-diag-out" style="display:none;padding:8px 14px 4px;font-size:11px;color:var(--text-secondary,#58616f);"></div>
-          <table class="data-table" style="width:100%;">
+          <div style="max-height:520px;overflow-y:auto;">
+          <table class="acd-compact-table">
             <thead><tr>
-              <th>Ticker</th><th style="text-align:right;">End Shares</th>
-              <th style="text-align:right;">Jan 1 Price</th><th style="text-align:right;">End Price</th>
-              <th style="text-align:right;">Dollar Gain</th><th style="text-align:right;">Stock Return</th>
-              <th style="text-align:right;min-width:160px;">Portfolio Contribution</th>
+              <th>Ticker</th><th class="num">Shares</th>
+              <th class="num">Jan 1 → Now</th>
+              <th class="num">Gain</th><th class="num">Return</th>
+              <th class="num">Contribution</th>
             </tr></thead>
             <tbody>
               ${sortedRows.map(r => {
-                const gain    = r.dollar_gain ?? 0;
+                const gain    = r.dollar_gain;
                 const retPct  = r.ticker_return_pct;
                 const contrib = r.contribution_pct;
+                const pxSpan = (r.jan1_price != null || r.end_price != null)
+                  ? `${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'} <span style="color:var(--blue);opacity:.5;">→</span> ${r.end_price != null ? fmtUSD(r.end_price) : '—'}`
+                  : '—';
                 return `<tr>
-                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:9px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:4px;padding:1px 5px;vertical-align:middle;">SOLD</span>' : ''}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_shares != null ? r.end_shares.toFixed(3) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_price != null ? fmtUSD(r.end_price) : '—'}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;${gain >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtUSD(gain)}</td>
-                  <td style="text-align:right;font-variant-numeric:tabular-nums;${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}</td>
+                  <td class="num">${r.end_shares != null && r.end_shares > 0 ? r.end_shares.toFixed(2) : '—'}</td>
+                  <td class="num" title="${r.closed ? 'Jan-1 (or avg buy) → avg exit price' : 'Jan-1 close → last price'}">${pxSpan}</td>
+                  <td class="num" style="font-weight:700;${gain == null ? 'color:var(--dim);' : (gain >= 0 ? 'color:var(--green);' : 'color:var(--red);')}">${gain != null ? fmtUSD(gain) : '—'}</td>
+                  <td class="num" style="${(retPct||0) >= 0 ? 'color:var(--green);' : 'color:var(--red);'}">${fmtP(retPct)}</td>
                   <td>${contribBar(contrib)}</td>
                 </tr>`;
               }).join('')}
             </tbody>
           </table>
+          </div>
         </details>
       </section>`;
     _acdWireAttrDiag();
