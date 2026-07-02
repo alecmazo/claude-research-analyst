@@ -1507,6 +1507,57 @@
   .fd-upload-status { font-size: 11px; min-height: 16px; line-height: 1.3; }
 
   /* ── Redesigned upload panel ─────────────────────────────────── */
+  /* ── Managed-account hero stat tiles (ui340) ─────────────────────────── */
+  .acd-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .acd-tile {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    padding: 10px 14px 9px;
+    min-width: 0;
+  }
+  .acd-tile-label {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .acd-tile-value {
+    font-size: 19px;
+    font-weight: 800;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+  .acd-tile-sub {
+    font-size: 9.5px;
+    color: var(--dim);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .acd-meta-line {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 10.5px;
+    color: var(--mid);
+    padding: 6px 2px 0;
+  }
+  .acd-meta-line strong { color: var(--text-primary); font-weight: 700; }
+
   .acd-upload-group {
     padding: 16px 18px 14px;
   }
@@ -1746,10 +1797,10 @@
   /* ac-chevron on light panels */
   .ac-chevron { color: var(--mid); }
 
-  /* inline select elements inside compact stats table */
+  /* inline select elements inside the stat tiles */
   #acd-bench-select,
   select.acd-select {
-    background: #f8fafc !important;
+    background: var(--surface, #f8fafc) !important;
     color: var(--text-primary) !important;
     border-color: var(--panel-edge) !important;
   }
@@ -4163,35 +4214,47 @@ End with the sleeve block at this account's real market value so I can push it t
       </span>
     </div>
 
-    <div id="acd-meta" class="tab-loading">Loading…</div>
-    <div id="acd-perf-tiles"  style="display:none;"></div>
-    <div id="acd-balance"     style="margin-top:18px;"></div>
-    <div id="acd-positions"   style="margin-top:18px;"></div>
-    <div id="acd-rebalance-wrap"  style="margin-top:14px;"></div>
-    <div id="acd-rebalance-result" style="margin-top:14px;"></div>
-    <div id="acd-attribution" style="margin-top:18px;"></div>
-    <div id="acd-history"     style="margin-top:18px;"></div>
-    <div id="acd-alltime" style="margin-top:18px;"></div>
+    <!-- Page narrative (ui340): data source status → headline numbers →
+         performance charts → holdings → analysis → tools → data plumbing.
+         Container IDs are load targets — do not rename. -->
 
-    <!-- ── SnapTrade automatic import ───────────────────────────────── -->
-    <section class="panel" id="acd-snap-strip" style="margin-top:18px;display:none;">
-      <header class="panel-head">
-        <span class="panel-title">Automatic Import — SnapTrade (Fidelity)</span>
+    <!-- ① Data source: slim SnapTrade status bar -->
+    <section class="panel" id="acd-snap-strip" style="margin-top:2px;margin-bottom:12px;display:none;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;">
         <span class="panel-badge" id="acd-snap-badge">—</span>
-      </header>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px 4px;">
         <span id="acd-snap-status" style="font-size:11.5px;color:var(--text-secondary,#58616f);">…</span>
-        <button class="tab-btn sm" id="acd-snap-sync-btn" style="margin-left:auto;font-size:10px;">↻ Sync from Fidelity now</button>
+        <button class="tab-btn sm" id="acd-snap-sync-btn" style="margin-left:auto;font-size:10px;">↻ Sync now</button>
       </div>
-      <div id="acd-snap-note" style="font-size:10.5px;color:var(--text-secondary,#58616f);padding:2px 12px 10px;"></div>
+      <div id="acd-snap-note" style="font-size:10.5px;color:var(--text-secondary,#58616f);padding:0 12px 8px;display:none;"></div>
     </section>
 
-    <!-- ── Upload Panel (manual backup) ─────────────────────────────── -->
-    <section class="panel" style="margin-top:18px;">
-      <header class="panel-head">
-        <span class="panel-title">Manual Data Uploads</span>
-        <span class="panel-badge">CSV · backup</span>
-      </header>
+    <!-- ② Headline numbers -->
+    <div id="acd-meta" class="tab-loading">Loading…</div>
+    <div id="acd-perf-tiles"  style="display:none;"></div>
+
+    <!-- ③ Performance charts: this year, then since inception -->
+    <div id="acd-balance"     style="margin-top:14px;"></div>
+    <div id="acd-alltime"     style="margin-top:14px;"></div>
+
+    <!-- ④ Holdings + analysis -->
+    <div id="acd-positions"   style="margin-top:14px;"></div>
+    <div id="acd-attribution" style="margin-top:14px;"></div>
+    <div id="acd-history"     style="margin-top:14px;"></div>
+
+    <!-- ⑤ Tools -->
+    <div id="acd-rebalance-wrap"  style="margin-top:14px;"></div>
+    <div id="acd-rebalance-result" style="margin-top:14px;"></div>
+
+    <!-- ⑥ Manual data (backup) — collapsed; the auto-import above makes this
+         a rarely-needed path -->
+    <section class="panel" style="margin-top:14px;">
+      <details id="acd-manual-data">
+        <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+          <span class="panel-title">Manual Data Uploads</span>
+          <span class="panel-badge">CSV · backup</span>
+          <span style="font-size:10px;color:var(--dim);">balance history · positions · activity · merge · baseline</span>
+          <span class="ac-chevron" style="margin-left:auto;">▸</span>
+        </summary>
 
       <!-- ① Run — one button, splits YTD vs full-year automatically -->
       <div class="acd-upload-group">
@@ -4339,6 +4402,7 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </div>
 
+      </details>
     </section>
   </div>
 </div><!-- #tab-acct-detail -->
@@ -13141,6 +13205,7 @@ End with the sleeve block at this account's real market value so I can push it t
         badge.textContent = 'NOT LINKED';
         status.textContent = 'No Fidelity account is linked to this managed account yet.';
         btn.style.display = 'none';
+        note.style.display = '';
         // Inline assign: offer any unassigned (visible) SnapTrade accounts right
         // here instead of sending the user to Settings.
         const unassigned = (d.accounts || []).filter(a => !a.hidden && !a.fund_id);
@@ -13188,11 +13253,15 @@ End with the sleeve block at this account's real market value so I can push it t
       }
       badge.textContent = fresh ? 'AUTO' : 'STALE';
       const names = linked.map(a => (a.account_name || a.brokerage || 'Account') + ' ••' + (a.account_mask || '')).join(' + ');
-      const tot = linked.reduce((s, a) => s + (a.total_value || 0), 0);
-      status.innerHTML = 'Linked to <strong>' + _gfEsc(names) + '</strong> · ' + fmtUSDFull(tot, 0) +
-                         ' · last synced <strong>' + _gfEsc(ago) + '</strong>';
-      note.textContent = 'Positions, activity and balances import automatically (daily via Automation Schedule, or on demand here). ' +
-                         'The CSV uploads below remain a manual backup and always take precedence for the months they cover.';
+      // Slim one-line status: everything essential inline; the note element is
+      // reserved for sync results (acdSnapSyncNow writes it AFTER this reload
+      // so the message isn't clobbered) and assignment UI.
+      status.innerHTML = 'Fidelity <strong>' + _gfEsc(names) + '</strong>'
+        + ' · positions, activity &amp; balances auto-import daily'
+        + ' · synced <strong>' + _gfEsc(ago) + '</strong>'
+        + '<span style="color:var(--dim);"> · manual CSVs below remain the backup</span>';
+      note.style.display = 'none';
+      note.textContent = '';
     } catch (e) { /* keep hidden */ }
   }
 
@@ -13218,13 +13287,15 @@ End with the sleeve block at this account's real market value so I can push it t
       if (gated) msg += ' ⚠ Automatic activity import needs the SnapTrade pay-as-you-go production key.';
       const otherErrs = (r.errors || []).filter(e => !/production key|gated/i.test(e.error || ''));
       if (otherErrs.length) msg += ' ⚠ ' + otherErrs.length + ' issue(s) — see Settings → SnapTrade.';
-      if (note) note.textContent = msg;
       loadAcctPositions(CURRENT_FUND_ID);
       if (typeof loadAcctYtdSections === 'function') loadAcctYtdSections(CURRENT_FUND_ID);
       loadAllTimePerf(CURRENT_FUND_ID);
-      loadAcctSnapStrip(CURRENT_FUND_ID);
+      // Await the strip reload FIRST — it rewrites/hides the note, which used
+      // to clobber this result message the moment it appeared.
+      await loadAcctSnapStrip(CURRENT_FUND_ID);
+      if (note) { note.style.display = ''; note.textContent = msg; }
     } catch (e) {
-      if (note) note.textContent = '❌ ' + (e.message || e);
+      if (note) { note.style.display = ''; note.textContent = '❌ ' + (e.message || e); }
     } finally {
       btn.disabled = false; btn.textContent = orig;
     }
@@ -14328,6 +14399,11 @@ End with the sleeve block at this account's real market value so I can push it t
   let _acctPositionsMV = null; // live sum(market_value) from positions, set after positions load
 
   function renderAcctMeta(d) {
+    // Hero stat tiles (ui340) — the old version buried NAV/YTD/alpha in a
+    // dense 11px two-row table. Every element ID is unchanged (the chart/
+    // positions loaders write textContent + cssText into them), and sizing
+    // lives on the .acd-tile-value PARENT because those writers REPLACE
+    // cssText on the value elements.
     const fmtPct = v => v != null ? (v * 100).toFixed(2) + '%' : '—';
     const feeStr = d.mgmt_fee_pct != null ? fmtPct(d.mgmt_fee_pct) + ' fee' : '';
     const navStr = d.nav != null ? fmtUSD(d.nav) : '—';
@@ -14335,47 +14411,48 @@ End with the sleeve block at this account's real market value so I can push it t
     const selOpts = BENCH_OPTIONS.map(o =>
       `<option value="${o.key}"${o.key === _acctBenchKey ? ' selected' : ''}>${o.label}</option>`
     ).join('');
-    const lc  = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px 5px 14px;white-space:nowrap;vertical-align:middle;"';
-    const lci = 'style="color:var(--dim);font-size:9px;font-weight:800;letter-spacing:0.7px;padding:5px 8px;white-space:nowrap;vertical-align:middle;"';
-    const vc  = 'style="font-weight:700;color:var(--text-primary);padding:5px 16px 5px 0;vertical-align:middle;"';
     document.getElementById('acd-meta').innerHTML = `
-      <details open id="acd-stats-details" style="background:var(--panel-bg);border:1px solid var(--panel-edge);border-radius:8px;margin-bottom:4px;">
-        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:9px;font-weight:800;letter-spacing:1px;color:var(--mid);user-select:none;">
-          <span>ACCOUNT OVERVIEW</span><span class="ac-chevron">▸</span>
-        </summary>
-        <table style="width:100%;border-collapse:collapse;font-size:11px;border-top:1px solid var(--panel-edge);">
-          <tbody>
-            <tr style="border-bottom:1px solid var(--panel-edge);">
-              <td ${lc}>TYPE</td>
-              <td ${vc}>Managed Account<div style="font-size:9px;color:var(--dim);font-weight:400;">${d.short_name || ''}</div></td>
-              <td ${lci}>STATUS</td>
-              <td ${vc}>${(d.status||'open').toUpperCase()}<div style="font-size:9px;color:var(--dim);font-weight:400;">Inception ${d.inception_date||'—'}${feeStr ? ' · ' + feeStr : ''}</div></td>
-              <td ${lci}>NAV</td>
-              <td ${vc}><span id="acd-nav-tile-val">${navStr}</span><div id="acd-nav-tile-sub" style="font-size:9px;color:var(--dim);font-weight:400;">${navSub}</div></td>
-            </tr>
-            <tr>
-              <td ${lc}>YTD RETURN</td>
-              <td style="font-weight:700;color:var(--mid);padding:5px 16px 5px 0;vertical-align:top;" id="acd-pos-ret-val">—</td>
-              <td ${lci} id="acd-bench-label">${_acctBenchKey} YTD</td>
-              <td style="padding:4px 16px 4px 0;vertical-align:top;">
-                <div id="acd-bench-val" style="font-weight:700;color:var(--mid);">—</div>
-                <select id="acd-bench-select" style="margin-top:4px;background:#f8fafc;border:1px solid var(--panel-edge);color:#1e293b;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;width:100%;">
-                  ${selOpts}
-                </select>
-              </td>
-              <td ${lci}>ALPHA</td>
-              <td style="padding:4px 16px 4px 0;vertical-align:top;">
-                <div id="acd-alpha-val" style="font-weight:700;color:var(--mid);">—</div>
-                <div id="acd-alpha-sub" style="font-size:9px;color:var(--dim);">vs ${_acctBenchKey}</div>
-              </td>
-              <td ${lci} style="white-space:nowrap;">PORTFOLIO RETURN<div style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Time-Weighted · benchmark comparable</div></td>
-              <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-md-val">—</td>
-              <td ${lci} style="white-space:nowrap;">YOUR PERSONAL RETURN<div id="acd-xirr-label" style="font-size:8px;color:var(--dim);font-weight:400;letter-spacing:0;">Money-weighted · same period as Portfolio Return</div></td>
-              <td style="font-weight:700;color:var(--mid);padding:5px 14px 5px 0;vertical-align:top;" id="acd-xirr-val">—</td>
-            </tr>
-          </tbody>
-        </table>
-      </details>`;
+      <div id="acd-stats-details">
+        <div class="acd-tiles">
+          <div class="acd-tile">
+            <div class="acd-tile-label">Account Value</div>
+            <div class="acd-tile-value"><span id="acd-nav-tile-val">${navStr}</span></div>
+            <div class="acd-tile-sub" id="acd-nav-tile-sub">${navSub}</div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">YTD Return</div>
+            <div class="acd-tile-value"><span id="acd-pos-ret-val">—</span></div>
+            <div class="acd-tile-sub">Time-weighted (TWR)
+              <span style="display:none;"><span id="acd-md-val">—</span></span>
+            </div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label" id="acd-bench-label">${_acctBenchKey} YTD</div>
+            <div class="acd-tile-value"><span id="acd-bench-val">—</span></div>
+            <div class="acd-tile-sub">
+              <select id="acd-bench-select" style="background:var(--surface,#f8fafc);border:1px solid var(--panel-edge);color:var(--text-primary,#1e293b);border-radius:4px;padding:1px 4px;font-size:9.5px;cursor:pointer;max-width:100%;">
+                ${selOpts}
+              </select>
+            </div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">Alpha</div>
+            <div class="acd-tile-value"><span id="acd-alpha-val">—</span></div>
+            <div class="acd-tile-sub" id="acd-alpha-sub">vs ${_acctBenchKey}</div>
+          </div>
+          <div class="acd-tile">
+            <div class="acd-tile-label">Your Personal Return</div>
+            <div class="acd-tile-value"><span id="acd-xirr-val">—</span></div>
+            <div class="acd-tile-sub" id="acd-xirr-label">Money-weighted · reflects your deposit timing</div>
+          </div>
+        </div>
+        <div class="acd-meta-line">
+          <span>Managed Account${d.short_name ? ' · <strong>' + d.short_name + '</strong>' : ''}</span>
+          <span>Status <strong>${(d.status||'open').toUpperCase()}</strong></span>
+          <span>Inception <strong>${d.inception_date||'—'}</strong></span>
+          ${feeStr ? '<span><strong>' + feeStr + '</strong></span>' : ''}
+        </div>
+      </div>`;
   }
 
   async function loadAcctPositions(fundId) {
