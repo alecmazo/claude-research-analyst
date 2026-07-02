@@ -26665,6 +26665,17 @@ _SNAP_DIV_TYPES   = {"DIVIDEND", "CASH_DIVIDEND"}
 _SNAP_INT_TYPES   = {"INTEREST"}
 _SNAP_FEE_TYPES   = {"FEE", "MANAGEMENT_FEE", "ADMINISTRATIVE_FEE"}
 
+# Money-market / core-cash symbols — cash sweeps "trade" constantly (every
+# deposit/settlement buys or sells the sweep), so letting them into per-stock
+# attribution booked millions of sweep churn as stock trading (the SPAXX
+# −$2.75M incident). Fidelity/typical MM tickers end in XX.
+_SNAP_MM_SYMBOLS = {"SPAXX", "FDRXX", "FZFXX", "FZDXX", "FCASH", "CORE"}
+
+
+def _snaptrade_cashlike(sym: str) -> bool:
+    s = (sym or "").strip().upper()
+    return s in _SNAP_MM_SYMBOLS or (len(s) >= 4 and s.endswith("XX"))
+
 
 def _snaptrade_pacific_today():
     """Civil date in the user's timezone — snapshot rows key on this so the
@@ -26844,9 +26855,15 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
     jan1 = f"{year}-01-01"
     holdings = _snaptrade_fund_holdings(cur, fund_id)
     holdings = {s: h for s, h in holdings.items()
-                if h.get("asset_class") not in ("cash", "option")}
+                if h.get("asset_class") not in ("cash", "option")
+                and not _snaptrade_cashlike(s)}
 
     # YTD trade + dividend aggregates per symbol across assigned accounts.
+    # OPTION activities are EXCLUDED: covered-call/CSP trades arrive as
+    # BUY/SELL rows carrying the UNDERLYING's symbol (units in contracts,
+    # price per share, no ×100), which corrupted the equity share-rewind and
+    # flipped signs (the INTC incident). raw_json keeps the option_symbol
+    # marker even though the flat row doesn't.
     cur.execute("""
         SELECT a.symbol, a.type,
                COALESCE(SUM(a.units), 0)           AS units,
@@ -26855,6 +26872,8 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
           FROM snaptrade_activities a
           JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
          WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
+           AND (a.raw_json ->> 'option_symbol') IS NULL
+           AND COALESCE(a.raw_json ->> 'option_type', '') = ''
          GROUP BY a.symbol, a.type
     """, (fund_id, jan1))
     trades = {}
@@ -26877,9 +26896,11 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         return []
 
     # Option symbols leak into activities too (assignments etc.) — keep only
-    # plausible equity tickers.
+    # plausible equity tickers, and never cash sweeps.
     def _equityish(s):
-        return bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s)) and not any(c.isdigit() for c in s[:4])
+        return (bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s))
+                and not any(c.isdigit() for c in s[:4])
+                and not _snaptrade_cashlike(s))
 
     syms = {s for s in set(holdings) | set(trades) if _equityish(s)}
     rows, missing_price = [], 0
@@ -26900,9 +26921,15 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         if jan1_px is None:
             missing_price += 1
         end_value  = end_qty * (end_px or 0.0)
+        # Impossible rewind (jan1 shares < 0) = the activity record is missing
+        # something we can't see (split, assignment, transfer-in-kind). Show an
+        # honest "—" instead of a fabricated gain — a wrong sign on a big name
+        # destroys trust in the whole table.
+        rewind_ok = jan1_qty >= -1e-4
+        jan1_qty = max(jan1_qty, 0.0)
         jan1_value = (jan1_qty * jan1_px) if (jan1_px is not None and jan1_qty > 1e-6) else (0.0 if jan1_qty <= 1e-6 else None)
         gain = None
-        if jan1_value is not None:
+        if rewind_ok and jan1_value is not None:
             gain = end_value - jan1_value - (tr["buy_cost"] - tr["sell_proceeds"]) + tr["dividends"]
         ret = ((end_px / jan1_px - 1.0) * 100.0) if (end_px and jan1_px) else None
         contrib = (gain / begin_value * 100.0) if (gain is not None and begin_value) else None
