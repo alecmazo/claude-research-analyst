@@ -15266,7 +15266,7 @@ End with the sleeve block at this account's real market value so I can push it t
                 const retPct  = r.ticker_return_pct;
                 const contrib = r.contribution_pct;
                 return `<tr>
-                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}</td>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:9px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:4px;padding:1px 5px;vertical-align:middle;">SOLD</span>' : ''}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_shares != null ? r.end_shares.toFixed(3) : '—'}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'}</td>
                   <td style="text-align:right;font-variant-numeric:tabular-nums;">${r.end_price != null ? fmtUSD(r.end_price) : '—'}</td>

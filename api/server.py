@@ -26713,23 +26713,39 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
     cur = conn.cursor()
     try:
         for acct_id in acct_ids:
+            bf_key = f"snaptrade.activities_backfilled.{acct_id}"
+            full_backfill = False
             if start:
                 a_start = start
             else:
-                cur.execute("SELECT max(trade_date) FROM snaptrade_activities WHERE account_id=%s",
-                            (acct_id,))
-                row = cur.fetchone()
-                last_td = row[0] if row else None
-                if not last_td:
+                # Completeness flag, NOT row-existence: the killed first import
+                # left RECENT rows behind, so max(trade_date) made every later
+                # sync incremental-only and Jan–May trades were never pulled —
+                # closed positions (WBD/TSM/NKE) vanished from attribution and
+                # partial histories flipped signs (HAL). Full-year backfill
+                # until a COMPLETE Jan-1 fetch succeeds for the current year.
+                try:
+                    bf = _kv_get(bf_key)
+                except Exception:
+                    bf = None
+                if str(bf or "") != str(today.year):
                     a_start = f"{today.year}-01-01"
+                    full_backfill = True
                 else:
-                    # Rolling 35-day incremental, but never leave a gap: if the last
-                    # stored activity is older than that (app was down / key was
-                    # gated for a while), resume just before it instead.
-                    base = today - timedelta(days=35)
-                    if last_td < base:
-                        base = last_td - timedelta(days=3)
-                    a_start = base.isoformat()
+                    cur.execute("SELECT max(trade_date) FROM snaptrade_activities WHERE account_id=%s",
+                                (acct_id,))
+                    row = cur.fetchone()
+                    last_td = row[0] if row else None
+                    if not last_td:
+                        a_start = f"{today.year}-01-01"
+                        full_backfill = True
+                    else:
+                        # Rolling 35-day incremental; never leave a gap if the
+                        # app was down for longer.
+                        base = today - timedelta(days=35)
+                        if last_td < base:
+                            base = last_td - timedelta(days=3)
+                        a_start = base.isoformat()
             _snaptrade_sync_stage(f"Importing activity (…{str(acct_id)[-4:]})…")
             # Timeout-guarded fetch (the SDK has none): a hung SnapTrade call
             # was the likely core of the 36-minute-sync incident. The wrapper
@@ -26775,6 +26791,7 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
                     p["amount"], p["currency"], p["fee"], json.dumps(a, default=str))
             rows = list(rows_by_id.values())
             n = 0
+            upsert_failed = False
             if rows:
                 from psycopg2.extras import execute_values as _ev
                 for i in range(0, len(rows), 500):
@@ -26796,8 +26813,16 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
                             template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())")
                         n += len(chunk)
                     except Exception as e:
+                        upsert_failed = True
                         errors.append({"account_id": acct_id, "stage": "activity_upsert",
                                        "error": _snaptrade_error_detail(e)})
+            # Mark the year's backfill complete ONLY after a clean full run —
+            # fetch succeeded (no timeout) and every chunk landed.
+            if full_backfill and not upsert_failed:
+                try:
+                    _kv_put(bf_key, str(today.year))
+                except Exception:
+                    pass
             synced.append({"account_id": acct_id, "activities": n, "since": a_start})
     finally:
         try:
@@ -26882,14 +26907,17 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         if not sym:
             continue
         e = trades.setdefault(sym, {"net_units": 0.0, "buy_cost": 0.0,
-                                    "sell_proceeds": 0.0, "dividends": 0.0})
+                                    "sell_proceeds": 0.0, "dividends": 0.0,
+                                    "bought_units": 0.0, "sold_units": 0.0})
         u, g, amt = float(r["units"] or 0), float(r["gross"] or 0), float(r["amount"] or 0)
         if t in _SNAP_BUY_TYPES:
             e["net_units"] += u
             e["buy_cost"] += g
+            e["bought_units"] += u
         elif t in _SNAP_SELL_TYPES:
             e["net_units"] -= u
             e["sell_proceeds"] += g
+            e["sold_units"] += u
         elif t in _SNAP_DIV_TYPES:
             e["dividends"] += amt
     if not holdings and not trades:
@@ -26907,7 +26935,8 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
     for sym in sorted(syms):
         h = holdings.get(sym) or {}
         tr = trades.get(sym) or {"net_units": 0.0, "buy_cost": 0.0,
-                                 "sell_proceeds": 0.0, "dividends": 0.0}
+                                 "sell_proceeds": 0.0, "dividends": 0.0,
+                                 "bought_units": 0.0, "sold_units": 0.0}
         end_qty = float(h.get("qty") or 0.0)
         end_px  = _snaptrade_num(h.get("price"))
         jan1_qty = end_qty - tr["net_units"]
@@ -26931,7 +26960,18 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         gain = None
         if rewind_ok and jan1_value is not None:
             gain = end_value - jan1_value - (tr["buy_cost"] - tr["sell_proceeds"]) + tr["dividends"]
-        ret = ((end_px / jan1_px - 1.0) * 100.0) if (end_px and jan1_px) else None
+        # Stock return: live price vs Jan-1 for open names. Closed names use
+        # their average EXIT price (they rendered null across the board); for
+        # within-year round trips (not held on Jan 1) the base is the average
+        # BUY price — the Jan-1 close is meaningless for those.
+        closed = end_qty <= 1e-6 and tr["sold_units"] > 1e-6
+        px_for_ret = end_px
+        base_px = jan1_px
+        if closed:
+            px_for_ret = tr["sell_proceeds"] / tr["sold_units"]
+            if jan1_qty <= 1e-6 and tr["bought_units"] > 1e-6:
+                base_px = tr["buy_cost"] / tr["bought_units"]
+        ret = ((px_for_ret / base_px - 1.0) * 100.0) if (px_for_ret and base_px) else None
         contrib = (gain / begin_value * 100.0) if (gain is not None and begin_value) else None
         if end_qty <= 1e-6 and not (tr["buy_cost"] or tr["sell_proceeds"]):
             continue   # neither held nor traded this year
@@ -26939,11 +26979,13 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             "ticker": sym,
             "end_shares": round(end_qty, 4),
             "jan1_price": round(jan1_px, 4) if jan1_px is not None else None,
-            "end_price": round(end_px, 4) if end_px is not None else None,
+            # Closed names show their average EXIT price, not a live quote.
+            "end_price": round(px_for_ret, 4) if px_for_ret is not None else None,
             "dollar_gain": round(gain, 2) if gain is not None else None,
             "ticker_return_pct": round(ret, 2) if ret is not None else None,
             "contribution_pct": round(contrib, 2) if contrib is not None else None,
             "dividends_cash": round(tr["dividends"], 2),
+            "closed": bool(closed),
             "source": "snaptrade_auto",
         })
     rows.sort(key=lambda r: -(abs(r["contribution_pct"] or 0)))
@@ -27575,14 +27617,31 @@ def _snaptrade_run_sync() -> dict:
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
                             "WHERE status='active' AND fund_id IS NOT NULL")
+                _cands = set()
                 for _fr in cur.fetchall():
                     for s, h in _snaptrade_fund_holdings(cur, str(_fr["fund_id"])).items():
-                        if h.get("asset_class") in ("cash", "option"):
+                        if h.get("asset_class") in ("cash", "option") or _snaptrade_cashlike(s):
                             continue
-                        cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
-                                    (s, _jan1))
-                        if not cur.fetchone():
-                            _need.add(s)
+                        _cands.add(s)
+                # CLOSED positions need Jan-1 closes too — attribution rewinds
+                # every symbol TRADED this year, not just current holdings
+                # (the prewarm skipping exits left WBD/TSM/NKE priceless → null).
+                cur.execute("""SELECT DISTINCT a.symbol FROM snaptrade_activities a
+                                 JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+                                WHERE sa.fund_id IS NOT NULL AND a.symbol IS NOT NULL
+                                  AND a.trade_date >= %s
+                                  AND (a.raw_json ->> 'option_symbol') IS NULL""", (_jan1,))
+                for r in cur.fetchall():
+                    s = (r["symbol"] or "").strip()
+                    if (re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s)
+                            and not any(c.isdigit() for c in s[:4])
+                            and not _snaptrade_cashlike(s)):
+                        _cands.add(s)
+                for s in _cands:
+                    cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
+                                (s, _jan1))
+                    if not cur.fetchone():
+                        _need.add(s)
             _budget_end = time.time() + 30
             _warmed = 0
             for s in sorted(_need):
