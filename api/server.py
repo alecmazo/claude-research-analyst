@@ -26760,6 +26760,109 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
     return synced, errors
 
 
+def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: float) -> list:
+    """Per-stock YTD attribution built automatically from SnapTrade data —
+    replaces the manual positions+activity CSV run as the attribution source.
+
+    Per symbol (current equity holdings ∪ symbols traded YTD, so full exits
+    are covered): rewind YTD buys/sells to get Jan-1 shares, price them from
+    price_history, and compute
+        dollar_gain = end_value − jan1_value − (buy_cost − sell_proceeds) + dividends.
+    Output rows match renderAcctAttribution: ticker, end_shares, jan1_price,
+    end_price, dollar_gain, ticker_return_pct, contribution_pct (vs the
+    account's Jan-1 balance). Cash and option rows are excluded (options are
+    per-contract and covered by the account-level balance history).
+    `cur` must be a RealDictCursor. Returns [] when there's nothing to build.
+    """
+    jan1 = f"{year}-01-01"
+    holdings = _snaptrade_fund_holdings(cur, fund_id)
+    holdings = {s: h for s, h in holdings.items()
+                if h.get("asset_class") not in ("cash", "option")}
+
+    # YTD trade + dividend aggregates per symbol across assigned accounts.
+    cur.execute("""
+        SELECT a.symbol, a.type,
+               COALESCE(SUM(a.units), 0)           AS units,
+               COALESCE(SUM(a.units * a.price), 0) AS gross,
+               COALESCE(SUM(a.amount), 0)          AS amount
+          FROM snaptrade_activities a
+          JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+         WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
+         GROUP BY a.symbol, a.type
+    """, (fund_id, jan1))
+    trades = {}
+    for r in cur.fetchall():
+        sym, t = (r["symbol"] or "").strip(), (r["type"] or "")
+        if not sym:
+            continue
+        e = trades.setdefault(sym, {"net_units": 0.0, "buy_cost": 0.0,
+                                    "sell_proceeds": 0.0, "dividends": 0.0})
+        u, g, amt = float(r["units"] or 0), float(r["gross"] or 0), float(r["amount"] or 0)
+        if t in _SNAP_BUY_TYPES:
+            e["net_units"] += u
+            e["buy_cost"] += g
+        elif t in _SNAP_SELL_TYPES:
+            e["net_units"] -= u
+            e["sell_proceeds"] += g
+        elif t in _SNAP_DIV_TYPES:
+            e["dividends"] += amt
+    if not holdings and not trades:
+        return []
+
+    # Option symbols leak into activities too (assignments etc.) — keep only
+    # plausible equity tickers.
+    def _equityish(s):
+        return bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s)) and not any(c.isdigit() for c in s[:4])
+
+    syms = {s for s in set(holdings) | set(trades) if _equityish(s)}
+    rows, missing_price = [], 0
+    for sym in sorted(syms):
+        h = holdings.get(sym) or {}
+        tr = trades.get(sym) or {"net_units": 0.0, "buy_cost": 0.0,
+                                 "sell_proceeds": 0.0, "dividends": 0.0}
+        end_qty = float(h.get("qty") or 0.0)
+        end_px  = _snaptrade_num(h.get("price"))
+        jan1_qty = end_qty - tr["net_units"]
+        # Jan-1 close from the price store; a small, timeout-capped live sync
+        # only for the first few missing names (rebuild runs in a transaction).
+        cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
+                    "ORDER BY d DESC LIMIT 1", (sym, jan1))
+        pr = cur.fetchone()
+        jan1_px = float(pr["close"]) if pr and pr["close"] is not None else None
+        if jan1_px is None and jan1_qty > 1e-6 and missing_price < 8:
+            missing_price += 1
+            try:
+                _builder_call_timeout(lambda s=sym: _sync_price_history(s), 5.0, None)
+                cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
+                            "ORDER BY d DESC LIMIT 1", (sym, jan1))
+                pr = cur.fetchone()
+                jan1_px = float(pr["close"]) if pr and pr["close"] is not None else None
+            except Exception:
+                pass
+        end_value  = end_qty * (end_px or 0.0)
+        jan1_value = (jan1_qty * jan1_px) if (jan1_px is not None and jan1_qty > 1e-6) else (0.0 if jan1_qty <= 1e-6 else None)
+        gain = None
+        if jan1_value is not None:
+            gain = end_value - jan1_value - (tr["buy_cost"] - tr["sell_proceeds"]) + tr["dividends"]
+        ret = ((end_px / jan1_px - 1.0) * 100.0) if (end_px and jan1_px) else None
+        contrib = (gain / begin_value * 100.0) if (gain is not None and begin_value) else None
+        if end_qty <= 1e-6 and not (tr["buy_cost"] or tr["sell_proceeds"]):
+            continue   # neither held nor traded this year
+        rows.append({
+            "ticker": sym,
+            "end_shares": round(end_qty, 4),
+            "jan1_price": round(jan1_px, 4) if jan1_px is not None else None,
+            "end_price": round(end_px, 4) if end_px is not None else None,
+            "dollar_gain": round(gain, 2) if gain is not None else None,
+            "ticker_return_pct": round(ret, 2) if ret is not None else None,
+            "contribution_pct": round(contrib, 2) if contrib is not None else None,
+            "dividends_cash": round(tr["dividends"], 2),
+            "source": "snaptrade_auto",
+        })
+    rows.sort(key=lambda r: -(abs(r["contribution_pct"] or 0)))
+    return rows
+
+
 def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     """Task-3 core: synthesize monthly balance records (same shape as the parsed
     Balance & Income Detail CSV) from SnapTrade daily snapshots + activities, and
@@ -26830,9 +26933,9 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     anchor_key = (csv_rows[-1]["year"], csv_rows[-1]["month"]) if csv_rows else None
     month_keys = sorted({(d.year, d.month) for d in days
                          if anchor_key is None or (d.year, d.month) > anchor_key})
-    if not month_keys:
-        return {"fund_id": str(fund_id), "months_added": 0,
-                "note": "CSV history already covers the latest snapshot month."}
+    # month_keys may be empty (CSV already covers the latest snapshot month) —
+    # still fall through with synth=[] so the YTD cache gets its automatic
+    # attribution + flows refreshed even when no new balance month is added.
 
     # Month-level activity aggregates (empty when the plan gates get_activities).
     cur.execute("""
@@ -26918,8 +27021,9 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     overview["live_months"] = len(synth)
     overview["flows_estimated"] = any(r.get("estimated") for r in synth)
 
-    # Preserve the manual 3-file run's attribution; refresh flows from live
-    # activities when we have them (the Account History panel reads .flows).
+    # Attribution: built automatically from SnapTrade holdings + activities.
+    # Falls back to whatever a manual 3-file run left when auto can't compute
+    # (no activities yet — free plan, or a brand-new link).
     cur.execute("SELECT result_json FROM managed_account_ytd_cache WHERE fund_id=%s",
                 (fund_id,))
     prev_row = cur.fetchone()
@@ -26930,12 +27034,22 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
                     else json.loads(prev_row["result_json"]))
         except Exception:
             prev = None
-    if prev:
+    yr = overview.get("year") or datetime.utcnow().year
+    auto_attr = []
+    if has_acts:
+        try:
+            auto_attr = _snaptrade_build_attribution(
+                cur, fund_id, int(yr), float(overview.get("begin_value") or 0))
+        except Exception as e:
+            print(f"[snaptrade] auto-attribution failed {fund_id}: {e!s:.140}", flush=True)
+    if auto_attr:
+        overview["attribution"] = auto_attr
+        overview["attribution_source"] = "snaptrade_auto"
+    elif prev:
         for k in ("attribution", "top_gainers", "top_losers"):
             if prev.get(k) is not None:
                 overview[k] = prev[k]
     if has_acts:
-        yr = overview.get("year") or datetime.utcnow().year
         cur.execute("""
             SELECT trade_date, type, symbol, amount FROM snaptrade_activities
              WHERE account_id = ANY(%s) AND type = ANY(%s)

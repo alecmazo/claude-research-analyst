@@ -2935,7 +2935,6 @@
     <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="options">Options</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
-    <span class="topbar-link" data-tab="reports">Reports</span>
     <span class="topbar-link" data-tab="memos">Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
     <button id="theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle theme">🌙</button>
@@ -4346,7 +4345,12 @@ End with the sleeve block at this account's real market value so I can push it t
 
 
 <!-- ══ REPORTS TAB ═════════════════════════════════════════════ -->
-<div id="tab-reports" class="tab-panel">
+<!-- Reports tab removed (ui339): the hand-written "Quarterly Investor Reports"
+     composer is superseded by the Quarterly Letter pipeline in the Memos tab
+     (AI-drafted per-fund sections, GP preview, publish to LP portal + email).
+     Its JS (loadReportsTab/sendQuarterlyReport/…) is retained but unreachable;
+     restore via git if ever needed. -->
+<div id="tab-reports" class="tab-panel" style="display:none;">
   <div class="wide-shell">
 
     <!-- toolbar -->
@@ -5327,7 +5331,8 @@ End with the sleeve block at this account's real market value so I can push it t
     tracker:   () => loadTrackerTab(),
     fund:      () => loadFundTab(),
     settings:  () => loadSettingsTab(),
-    reports:   () => loadReportsTab(),
+    // reports tab removed (ui339) — superseded by the Quarterly Letter
+    // pipeline in Memos (AI-drafted sections, publish to LP portal + email).
     memos:     () => loadMemosTab(),
     transcripts: () => _initTranscriptsTab(),
     financials: () => _initFinancialsTab(),
