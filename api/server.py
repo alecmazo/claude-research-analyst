@@ -26760,6 +26760,36 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
     return synced, errors
 
 
+def _sync_jan1_close(sym: str, year: int) -> None:
+    """Fetch ONLY a ~5-week window of daily closes around Jan 1 of `year` and
+    upsert into price_history. _sync_price_history was the wrong tool for
+    attribution prewarm: its first call per symbol backfills ~11 YEARS
+    (thousands of single-row inserts) — 40 of those wedged the whole app
+    (ui343 incident). Attribution needs exactly one close on/before Jan 1."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        import market_data as _md
+        start = f"{year - 1}-12-10"
+        end   = f"{year}-01-15"
+        bars = _md.get_price_history(sym, interval="daily", start=start, end=end)
+        if not bars:
+            return
+        src = "tradier" if _md.tradier_available() else "yahoo"
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for b in bars:
+                if not b.get("date") or b.get("close") is None:
+                    continue
+                cur.execute("""INSERT INTO price_history (symbol, d, close, source, updated_at)
+                               VALUES (%s,%s,%s,%s, now())
+                               ON CONFLICT (symbol, d) DO UPDATE SET
+                                 close=EXCLUDED.close, source=EXCLUDED.source, updated_at=now()""",
+                            (sym, b["date"], b["close"], src))
+            conn.commit()
+    except Exception as e:
+        print(f"[price-hist] jan1 {sym} failed: {e!s:.120}", flush=True)
+
+
 def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: float) -> list:
     """Per-stock YTD attribution built automatically from SnapTrade data —
     replaces the manual positions+activity CSV run as the attribution source.
@@ -26823,22 +26853,15 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         end_qty = float(h.get("qty") or 0.0)
         end_px  = _snaptrade_num(h.get("price"))
         jan1_qty = end_qty - tr["net_units"]
-        # Jan-1 close from the price store; a small, timeout-capped live sync
-        # only for the first few missing names (rebuild runs in a transaction).
+        # Jan-1 close from the price store — STRICTLY read-only. The store is
+        # prewarmed by _sync_jan1_close OUTSIDE this transaction (doing network
+        # fetches while holding the rebuild txn wedged the app — ui343).
         cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
                     "ORDER BY d DESC LIMIT 1", (sym, jan1))
         pr = cur.fetchone()
         jan1_px = float(pr["close"]) if pr and pr["close"] is not None else None
-        if jan1_px is None and jan1_qty > 1e-6 and missing_price < 8:
+        if jan1_px is None:
             missing_price += 1
-            try:
-                _builder_call_timeout(lambda s=sym: _sync_price_history(s), 5.0, None)
-                cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
-                            "ORDER BY d DESC LIMIT 1", (sym, jan1))
-                pr = cur.fetchone()
-                jan1_px = float(pr["close"]) if pr and pr["close"] is not None else None
-            except Exception:
-                pass
         end_value  = end_qty * (end_px or 0.0)
         jan1_value = (jan1_qty * jan1_px) if (jan1_px is not None and jan1_qty > 1e-6) else (0.0 if jan1_qty <= 1e-6 else None)
         gain = None
@@ -27435,11 +27458,13 @@ def _snaptrade_run_sync() -> dict:
             get_spy_monthly_data()
         except Exception:
             pass
-        # Prewarm Jan-1 closes for attribution OUTSIDE the rebuild transaction —
-        # the in-transaction builder only backfills 8 missing names per run
-        # (txn-holding cap), which left coverage at 11/33 after the first sync.
+        # Prewarm Jan-1 closes for attribution OUTSIDE the rebuild transaction.
+        # Lean per-symbol fetch (~5 weeks of bars, ~20 rows) with a HARD 30s
+        # total budget — the first version of this used _sync_price_history
+        # (11-YEAR backfill per symbol × 40) and wedged the app.
         try:
-            _jan1 = f"{datetime.utcnow().year}-01-01"
+            _yr = datetime.utcnow().year
+            _jan1 = f"{_yr}-01-01"
             _need = set()
             with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                 cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts "
@@ -27452,10 +27477,17 @@ def _snaptrade_run_sync() -> dict:
                                     (s, _jan1))
                         if not cur.fetchone():
                             _need.add(s)
-            for s in sorted(_need)[:40]:
-                _builder_call_timeout(lambda tk=s: _sync_price_history(tk), 6.0, None)
+            _budget_end = time.time() + 30
+            _warmed = 0
+            for s in sorted(_need):
+                if time.time() > _budget_end:
+                    print(f"[snaptrade] jan1 prewarm budget hit — {_warmed}/{len(_need)} done, "
+                          "rest next sync", flush=True)
+                    break
+                _builder_call_timeout(lambda tk=s: _sync_jan1_close(tk, _yr), 6.0, None)
+                _warmed += 1
             if _need:
-                print(f"[snaptrade] prewarmed jan1 prices for {min(len(_need),40)} symbol(s)", flush=True)
+                print(f"[snaptrade] jan1 closes prewarmed: {_warmed}/{len(_need)}", flush=True)
         except Exception as _e:
             print(f"[snaptrade] jan1 prewarm skipped: {_e!s:.120}", flush=True)
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
