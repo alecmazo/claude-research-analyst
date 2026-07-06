@@ -27335,10 +27335,15 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         closed = end_qty <= 1e-6 and tr["sold_units"] > 1e-6
         px_for_ret = end_px
         base_px = jan1_px
+        origin_buy = False
         if closed:
             px_for_ret = tr["sell_proceeds"] / tr["sold_units"]
-            if jan1_qty <= 1e-6 and tr["bought_units"] > 1e-6:
-                base_px = tr["buy_cost"] / tr["bought_units"]
+        # Positions NOT held on Jan 1 (bought this year — IPOs like PSUS have
+        # no Jan-1 close at all) originate at the average ACQUISITION price
+        # from the activity records; the Jan-1 close is meaningless/absent.
+        if jan1_qty <= 1e-6 and tr["bought_units"] > 1e-6:
+            base_px = tr["buy_cost"] / tr["bought_units"]
+            origin_buy = True
         ret = ((px_for_ret / base_px - 1.0) * 100.0) if (px_for_ret and base_px) else None
         contrib = (gain / begin_value * 100.0) if (gain is not None and begin_value) else None
         if end_qty <= 1e-6 and not (tr["buy_cost"] or tr["sell_proceeds"]):
@@ -27346,7 +27351,11 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         rows.append({
             "ticker": sym,
             "end_shares": round(end_qty, 4),
-            "jan1_price": round(jan1_px, 4) if jan1_px is not None else None,
+            # For this-year entries the "origin" column shows the avg
+            # acquisition price (flagged origin_buy), not a Jan-1 close.
+            "jan1_price": (round(base_px, 4) if origin_buy and base_px
+                           else (round(jan1_px, 4) if jan1_px is not None else None)),
+            "origin_buy": origin_buy,
             # Closed names show their average EXIT price, not a live quote.
             "end_price": round(px_for_ret, 4) if px_for_ret is not None else None,
             "dollar_gain": round(gain, 2) if gain is not None else None,
