@@ -27181,6 +27181,46 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             # Only a RESIDUAL unmatched unvalued leg is truly unpriceable.
             e["transfer_unvalued"] = (e.get("xfer_in_unval", 0.0)
                                       + e.get("xfer_out_unval", 0.0)) > 1e-6
+
+        # PREDECESSOR ADOPTION: donor accounts (unassigned, with transfer-out
+        # legs feeding this fund) often SOLD positions before consolidating —
+        # e.g. WBD, exited in the old account in the spring, funding the
+        # transfer. Those stories belong to this fund's lineage but displayed
+        # NOWHERE (donors are unassigned by design). Adopt donor symbols the
+        # fund itself never held or traded; overlapping symbols (INTC!) keep
+        # their leg-matched treatment so nothing double-counts.
+        cur.execute("""
+            SELECT DISTINCT sa.account_id
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.status = 'active' AND sa.fund_id IS NULL
+               AND a.trade_date >= %s AND a.units < 0
+               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+               AND UPPER(a.symbol) = ANY(%s)
+        """, (jan1, list(_SNAP_FLOW_TYPES), [s.upper() for s in xfer_syms]))
+        donor_ids = [r["account_id"] for r in cur.fetchall()]
+        if donor_ids:
+            cur.execute("""
+                SELECT a.symbol, a.type, a.units, a.price, a.amount,
+                       a.raw_json -> 'option_symbol' AS opt
+                  FROM snaptrade_activities a
+                 WHERE a.account_id = ANY(%s) AND a.trade_date >= %s
+                   AND a.symbol IS NOT NULL
+            """, (donor_ids, jan1))
+            donor_trades: dict = {}
+            for r in cur.fetchall():
+                sym = (r["symbol"] or "").strip()
+                if not sym or sym in trades or sym in holdings:
+                    continue
+                _apply_row(donor_trades.setdefault(sym, _new_agg()), r)
+            for sym, e in donor_trades.items():
+                # Only self-contained trading stories — pure transfer echoes
+                # stay out, and a symbol the donor transferred ELSEWHERE
+                # belongs to that fund's leg-match, not here.
+                if ((e.get("sold_units", 0.0) > 1e-6 or e.get("bought_units", 0.0) > 1e-6)
+                        and not e.get("had_unit_transfer")):
+                    e["predecessor"] = True
+                    trades[sym] = e
     if not holdings and not trades:
         return []
 
@@ -27250,6 +27290,7 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             "contribution_pct": round(contrib, 2) if contrib is not None else None,
             "dividends_cash": round(tr["dividends"], 2),
             "closed": bool(closed),
+            "predecessor": bool(tr.get("predecessor")),
             "source": "snaptrade_auto",
         })
     rows.sort(key=lambda r: -(abs(r["contribution_pct"] or 0)))
@@ -28053,9 +28094,11 @@ def _snaptrade_run_sync() -> dict:
                 # CLOSED positions need Jan-1 closes too — attribution rewinds
                 # every symbol TRADED this year, not just current holdings
                 # (the prewarm skipping exits left WBD/TSM/NKE priceless → null).
+                # Include UNASSIGNED (donor) accounts too — predecessor
+                # adoption surfaces their exits (e.g. WBD) in successor funds.
                 cur.execute("""SELECT DISTINCT a.symbol FROM snaptrade_activities a
                                  JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
-                                WHERE sa.fund_id IS NOT NULL AND a.symbol IS NOT NULL
+                                WHERE sa.status = 'active' AND a.symbol IS NOT NULL
                                   AND a.trade_date >= %s
                                   AND (a.raw_json ->> 'option_symbol') IS NULL""", (_jan1,))
                 for r in cur.fetchall():

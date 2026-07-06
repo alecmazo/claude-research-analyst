@@ -15314,7 +15314,7 @@ End with the sleeve block at this account's real market value so I can push it t
                   ? `${r.jan1_price != null ? fmtUSD(r.jan1_price) : '—'} <span style="color:var(--blue);opacity:.5;">→</span> ${r.end_price != null ? fmtUSD(r.end_price) : '—'}`
                   : '—';
                 return `<tr>
-                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}</td>
+                  <td style="font-weight:800;color:var(--blue);">${r.ticker || '—'}${r.closed ? ' <span style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">SOLD</span>' : ''}${r.predecessor ? ' <span title="Traded in the predecessor account before it was consolidated into this one" style="font-size:8px;font-weight:700;color:var(--text-secondary,#58616f);background:rgba(0,0,0,0.06);border-radius:3px;padding:0 4px;vertical-align:middle;">PRIOR ACCT</span>' : ''}</td>
                   <td class="num">${r.end_shares != null && r.end_shares > 0 ? r.end_shares.toFixed(2) : '—'}</td>
                   <td class="num" title="${r.closed ? 'Jan-1 (or avg buy) → avg exit price' : 'Jan-1 close → last price'}">${pxSpan}</td>
                   <td class="num" style="font-weight:700;${gain == null ? 'color:var(--dim);' : (gain >= 0 ? 'color:var(--green);' : 'color:var(--red);')}">${gain != null ? fmtUSD(gain) : '—'}</td>
