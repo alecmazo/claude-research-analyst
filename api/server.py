@@ -27217,13 +27217,50 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         fund_in: dict = {}
         for r in cur.fetchall():
             fund_in.setdefault(r["fid"], {})[r["sym"]] = float(r["in_units"] or 0)
+        # CASH-MERGE donors have no in-kind legs to pair (they sold everything
+        # and moved cash) — map those by same-day cash-transfer overlap
+        # instead: cash leaves the donor and lands in the successor fund on
+        # the same date.
+        cur.execute("""
+            SELECT a.account_id, a.trade_date::date::text AS d, SUM(ABS(a.amount)) AS amt
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.status = 'active' AND sa.fund_id IS NULL
+               AND a.trade_date >= %s AND COALESCE(a.units, 0) = 0
+               AND COALESCE(a.amount, 0) < 0
+               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+             GROUP BY 1, 2
+        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        donor_cash: dict = {}
+        for r in cur.fetchall():
+            donor_cash.setdefault(r["account_id"], {})[r["d"]] = float(r["amt"] or 0)
+        cur.execute("""
+            SELECT sa.fund_id::text AS fid, a.trade_date::date::text AS d, SUM(a.amount) AS amt
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.status = 'active' AND sa.fund_id IS NOT NULL
+               AND a.trade_date >= %s AND COALESCE(a.units, 0) = 0
+               AND COALESCE(a.amount, 0) > 0
+               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+             GROUP BY 1, 2
+        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        fund_cash: dict = {}
+        for r in cur.fetchall():
+            fund_cash.setdefault(r["fid"], {})[r["d"]] = float(r["amt"] or 0)
         donor_ids = []
-        for _acct, _outs in donor_out.items():
+        for _acct in set(donor_out) | set(donor_cash):
+            _outs = donor_out.get(_acct) or {}
             best_fid, best_score = None, 0.0
             for _fid, _ins in fund_in.items():
                 _score = sum(min(q, _ins.get(s, 0.0)) for s, q in _outs.items())
                 if _score > best_score:
                     best_fid, best_score = _fid, _score
+            if best_fid is None:
+                _cash = donor_cash.get(_acct) or {}
+                for _fid, _fc in fund_cash.items():
+                    _score = sum(min(v, _fc.get(d, 0.0)) for d, v in _cash.items())
+                    if _score > best_score:
+                        best_fid, best_score = _fid, _score
             if best_fid == str(fund_id) and best_score > 1e-9:
                 donor_ids.append(_acct)
         if donor_ids:
@@ -28156,7 +28193,7 @@ def _snaptrade_run_sync() -> dict:
             # budget every sync, starving the tail (WBD never got its Jan-1
             # close). Fresh names go first for the same reason.
             _order = sorted(_need, key=lambda s: (_JAN1_FAIL.get(s, 0), s))
-            _budget_end = time.time() + 45
+            _budget_end = time.time() + 75
             _warmed = 0
             _budget_hit = False
             for s in _order:
