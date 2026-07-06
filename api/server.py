@@ -5307,13 +5307,22 @@ def health_data():
         out["status"] = "degraded"
         out["issues"].append(f"db: {e!s:.120}")
         return out
+    try:
+        _auto_cfg = _get_automation_settings()
+    except Exception:
+        _auto_cfg = {}
     for job in ("daily_brief", "market_pulse", "snaptrade_sync"):
         try:
             rec = _kv_get(f"automation.last_run.{job}") or {}
         except Exception:
             rec = {}
-        out["schedulers"][job] = {"last_ts": rec.get("ts"), "ok": rec.get("ok")}
-        if rec and rec.get("ok") is False:
+        _enabled = bool((_auto_cfg.get(job) or {}).get("enabled"))
+        out["schedulers"][job] = {"last_ts": rec.get("ts"), "ok": rec.get("ok"),
+                                  "detail": (rec.get("detail") or "")[:200],
+                                  "enabled": _enabled}
+        # Only an ENABLED job's failure degrades health — a disabled job that
+        # never ran (Alec keeps the AI jobs off) is a choice, not a problem.
+        if _enabled and rec and rec.get("ok") is False:
             out["issues"].append(f"{job}: last run failed")
     # SnapTrade data older than 36h with the daily sync enabled = silently stale.
     try:
@@ -10114,13 +10123,18 @@ def _auto_snaptrade_sync_worker() -> None:
             print(f"[snaptrade-scheduler] {h:02d}:{m:02d} Pacific — syncing SnapTrade holdings…")
             res = _snaptrade_run_sync()
             n_err = len(res.get('errors', []))
-            print(f"[snaptrade-scheduler] synced {len(res.get('synced',[]))} account(s), "
+            n_ok  = len(res.get('synced', []))
+            print(f"[snaptrade-scheduler] synced {n_ok} account(s), "
                   f"pushed {len(res.get('lots_written',[]))} fund(s); "
                   f"{n_err} error(s)")
-            # Full per-account error detail lands in the record (was: counts only).
-            _automation_record_run("snaptrade_sync", n_err == 0,
-                                   json.dumps(res.get("errors", []))[:400] if n_err
-                                   else f"{len(res.get('synced', []))} accounts")
+            # ok = CORE success (accounts synced). Per-account warnings used to
+            # flip the whole run to "failed" on the Data Health card even when
+            # positions/activities landed fine — warnings go in detail instead.
+            _automation_record_run(
+                "snaptrade_sync", n_ok > 0,
+                (f"{n_ok} accounts" + (f" · {n_err} warning(s): "
+                    + json.dumps(res.get("errors", []))[:280] if n_err else ""))
+                if n_ok else json.dumps(res.get("errors", []))[:400])
         except Exception as _e:
             import time as _t2
             print(f"[snaptrade-scheduler] error (retrying in 1h): {_e}")
@@ -27971,6 +27985,13 @@ def _snaptrade_sync_job_runner(job_id: str) -> None:
         res = _snaptrade_run_sync()
         _SNAPTRADE_SYNC_JOB.update({"status": "done", "result": res,
                                     "finished_at": time.time()})
+        # Manual syncs refresh the Data Health record too — a stale scheduler
+        # "failed" used to linger on the card while button syncs worked fine.
+        n_ok = len(res.get("synced", []) or [])
+        n_err = len(res.get("errors", []) or [])
+        _automation_record_run(
+            "snaptrade_sync", n_ok > 0,
+            f"manual · {n_ok} accounts" + (f" · {n_err} warning(s)" if n_err else ""))
     except Exception as e:
         import traceback; traceback.print_exc()
         detail = _snaptrade_error_detail(e)
@@ -27981,6 +28002,7 @@ def _snaptrade_sync_job_runner(job_id: str) -> None:
                       "next sync.")
         _SNAPTRADE_SYNC_JOB.update({"status": "error", "error": detail,
                                     "finished_at": time.time()})
+        _automation_record_run("snaptrade_sync", False, f"manual · {detail[:300]}")
 
 
 @app.post("/api/snaptrade/sync")

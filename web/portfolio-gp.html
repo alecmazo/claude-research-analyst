@@ -18792,6 +18792,7 @@ End with the sleeve block at this account's real market value so I can push it t
   function _dhRow(label, state, text, detail) {
     const col = state === 'ok' ? 'var(--green,#16a34a)'
               : state === 'bad' ? 'var(--red,#dc2626)'
+              : state === 'off' ? 'var(--dim,#94a3b8)'
               : 'var(--amber,#d97706)';
     return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--panel-edge,#f1f5f9);"'
       + (detail ? ' title="' + _cfEsc(detail) + '"' : '') + '>'
@@ -18819,9 +18820,21 @@ End with the sleeve block at this account's real market value so I can push it t
         const s = scheds[job] || {};
         const ts = s.last_ts ? _parseServerDate(s.last_ts) : null;
         const ageS = (ts && !isNaN(ts)) ? (Date.now() - ts.getTime()) / 1000 : null;
-        const state = s.ok === false ? 'bad' : (s.ok && ageS != null && ageS < DAY ? 'ok' : 'warn');
-        const text = (s.ok === false ? 'failed · ' : '') + _dhAgo(ageS);
-        rows.push(_dhRow(schedLabels[job], state, text, s.detail || (s.ok === false ? 'Last run failed' : '')));
+        let state, text;
+        if (s.enabled === false) {
+          state = 'off';
+          text = 'off' + (ageS != null ? ' · last ' + _dhAgo(ageS) : '');
+        } else if (s.ok === false) {
+          state = 'bad';
+          text = 'failed · ' + _dhAgo(ageS);
+        } else if (s.ok === null && ageS != null && ageS < 1800) {
+          state = 'warn';
+          text = 'running · started ' + _dhAgo(ageS);
+        } else {
+          state = (s.ok && ageS != null && ageS < DAY) ? 'ok' : 'warn';
+          text = _dhAgo(ageS);
+        }
+        rows.push(_dhRow(schedLabels[job], state, text, s.detail || ''));
       });
       body.innerHTML = rows.join('');
       if (badge) {
