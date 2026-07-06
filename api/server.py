@@ -27188,16 +27188,44 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         # NOWHERE (donors are unassigned by design). Adopt donor symbols the
         # fund itself never held or traded; overlapping symbols (INTC!) keep
         # their leg-matched treatment so nothing double-counts.
+        # Donor → successor is ONE-TO-ONE: each donor account is adopted by
+        # the single fund whose transfer-IN legs best pair with the donor's
+        # OUT legs (summed unit overlap per symbol). Plain symbol overlap let
+        # one donor qualify for MULTIPLE funds — HAL/WBD/MU/SRLN/BKLN showed
+        # up in both ANAT-DEF and ANAT-IRA.
         cur.execute("""
-            SELECT DISTINCT sa.account_id
+            SELECT a.account_id, UPPER(a.symbol) AS sym, SUM(-a.units) AS out_units
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active' AND sa.fund_id IS NULL
-               AND a.trade_date >= %s AND a.units < 0
+               AND a.trade_date >= %s AND a.units < 0 AND a.symbol IS NOT NULL
                AND UPPER(COALESCE(a.type, '')) = ANY(%s)
-               AND UPPER(a.symbol) = ANY(%s)
-        """, (jan1, list(_SNAP_FLOW_TYPES), [s.upper() for s in xfer_syms]))
-        donor_ids = [r["account_id"] for r in cur.fetchall()]
+             GROUP BY 1, 2
+        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        donor_out: dict = {}
+        for r in cur.fetchall():
+            donor_out.setdefault(r["account_id"], {})[r["sym"]] = float(r["out_units"] or 0)
+        cur.execute("""
+            SELECT sa.fund_id::text AS fid, UPPER(a.symbol) AS sym, SUM(a.units) AS in_units
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.status = 'active' AND sa.fund_id IS NOT NULL
+               AND a.trade_date >= %s AND a.units > 0 AND a.symbol IS NOT NULL
+               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+             GROUP BY 1, 2
+        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        fund_in: dict = {}
+        for r in cur.fetchall():
+            fund_in.setdefault(r["fid"], {})[r["sym"]] = float(r["in_units"] or 0)
+        donor_ids = []
+        for _acct, _outs in donor_out.items():
+            best_fid, best_score = None, 0.0
+            for _fid, _ins in fund_in.items():
+                _score = sum(min(q, _ins.get(s, 0.0)) for s, q in _outs.items())
+                if _score > best_score:
+                    best_fid, best_score = _fid, _score
+            if best_fid == str(fund_id) and best_score > 1e-9:
+                donor_ids.append(_acct)
         if donor_ids:
             cur.execute("""
                 SELECT a.symbol, a.type, a.units, a.price, a.amount,
