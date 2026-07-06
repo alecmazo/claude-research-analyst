@@ -9000,7 +9000,15 @@ def _tiingo_batch(syms: list[str]) -> dict[str, dict]:
         return {}
     try:
         import requests as _rq
-        tickers_param = ",".join(s.lower() for s in syms)
+        # Apply the alias map — Tiingo used to be queried with RAW Fidelity
+        # symbols, so "BRKB" priced a different listing entirely ($183 while
+        # BRK-B traded ~$506 — the ANAT-IRA incident) and "NLYPRF" returned
+        # nothing. Query aliased, answer keyed by the ORIGINAL symbol.
+        alias_of = {s: _resolve_ticker_alias(s) for s in syms}
+        orig_of = {}
+        for o, a in alias_of.items():
+            orig_of.setdefault(a.upper(), o.upper())
+        tickers_param = ",".join(a.lower() for a in alias_of.values())
         resp = _rq.get(
             "https://api.tiingo.com/iex",
             params={"tickers": tickers_param, "token": key},
@@ -9014,6 +9022,7 @@ def _tiingo_batch(syms: list[str]) -> dict[str, dict]:
         out: dict[str, dict] = {}
         for row in rows:
             sym = (row.get("ticker") or "").upper()
+            sym = orig_of.get(sym, sym)
             last       = row.get("last") or row.get("tngoLast")
             prev_close = row.get("prevClose")
             if last is None:
@@ -22499,7 +22508,17 @@ def _run_market_sync(job_id: str, universe: list) -> None:
     try:
         _ensure_market_tables()
         # 1. Batch quotes for the whole universe (one call).
-        quotes = _builder_call_timeout(lambda: _md.get_quotes(universe), 25.0, {}) or {}
+        # Fetch with provider-format symbols (BRKB→BRK-B), store under the
+        # originals — the store previously held wrong-instrument prices for
+        # alias symbols, which the any-age quote fallback then served.
+        _alias_of = {s: _resolve_ticker_alias(s) for s in universe}
+        _q_raw = _builder_call_timeout(
+            lambda: _md.get_quotes(list(_alias_of.values())), 25.0, {}) or {}
+        quotes = {}
+        for _orig, _al in _alias_of.items():
+            _qv = _q_raw.get(_al) or _q_raw.get(_al.upper()) or _q_raw.get(_orig)
+            if _qv:
+                quotes[_orig] = _qv
         with _fund_conn() as conn, conn.cursor() as cur:
             for sym, q in quotes.items():
                 _store_quote(cur, sym, q)
@@ -23350,7 +23369,7 @@ def _sync_price_history(tk: str) -> None:
             return                                            # already current
         else:
             start = last_d.isoformat()                        # tail only
-        bars = _md.get_price_history(tk, interval="daily",
+        bars = _md.get_price_history(_resolve_ticker_alias(tk), interval="daily",
                                      start=start, end=today.isoformat())
         if not bars:
             return
@@ -26834,6 +26853,10 @@ def _snaptrade_ingest_activities(uid: str, secret: str, acct_ids: list,
     return synced, errors
 
 
+# Per-process failure counts for Jan-1 close prewarm (see the prewarm loop).
+_JAN1_FAIL: dict = {}
+
+
 def _sync_jan1_close(sym: str, year: int) -> None:
     """Fetch ONLY a ~5-week window of daily closes around Jan 1 of `year` and
     upsert into price_history. _sync_price_history was the wrong tool for
@@ -26846,7 +26869,10 @@ def _sync_jan1_close(sym: str, year: int) -> None:
         import market_data as _md
         start = f"{year - 1}-12-10"
         end   = f"{year}-01-15"
-        bars = _md.get_price_history(sym, interval="daily", start=start, end=end)
+        # Fetch with the provider-format symbol (BRKB→BRK-B, NLYPRF→NLY-PF);
+        # rows are stored under the ORIGINAL symbol so attribution lookups hit.
+        bars = _md.get_price_history(_resolve_ticker_alias(sym), interval="daily",
+                                     start=start, end=end)
         if not bars:
             return
         src = "tradier" if _md.tradier_available() else "yahoo"
@@ -27715,15 +27741,29 @@ def _snaptrade_run_sync() -> dict:
                                 (s, _jan1))
                     if not cur.fetchone():
                         _need.add(s)
-            _budget_end = time.time() + 30
+            # Skip symbols that already failed twice this process — a handful
+            # of permanently-failing names used to burn the whole alphabetical
+            # budget every sync, starving the tail (WBD never got its Jan-1
+            # close). Fresh names go first for the same reason.
+            _order = sorted(_need, key=lambda s: (_JAN1_FAIL.get(s, 0), s))
+            _budget_end = time.time() + 45
             _warmed = 0
-            for s in sorted(_need):
+            for s in _order:
+                if _JAN1_FAIL.get(s, 0) >= 2:
+                    continue
                 if time.time() > _budget_end:
                     print(f"[snaptrade] jan1 prewarm budget hit — {_warmed}/{len(_need)} done, "
                           "rest next sync", flush=True)
                     break
                 _builder_call_timeout(lambda tk=s: _sync_jan1_close(tk, _yr), 6.0, None)
                 _warmed += 1
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
+                                (s, _jan1))
+                    if cur.fetchone():
+                        _JAN1_FAIL.pop(s, None)
+                    else:
+                        _JAN1_FAIL[s] = _JAN1_FAIL.get(s, 0) + 1
             if _need:
                 print(f"[snaptrade] jan1 closes prewarmed: {_warmed}/{len(_need)}", flush=True)
         except Exception as _e:
