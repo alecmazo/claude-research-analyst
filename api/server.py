@@ -15699,14 +15699,13 @@ def fund_export_pdf(request: Request, fund_id: str = None):
         # Monthly performance
         if monthly_pdf:
             story_a.append(Paragraph('Monthly Performance', _h2))
-            rows_mo = [['Month', 'Start Value', 'End Value', 'Dollar Gain',
+            rows_mo = [['Month', 'Start Value', 'End Value',
                         'Monthly Return', 'SPY Monthly', 'Alpha']]
             for mo in monthly_pdf:
                 m_int_p  = int(mo.get('month') or 0)
                 lbl_p    = str(mo.get('label') or m_int_p)
                 sv_p     = float(mo.get('start_value') or 0)
                 ev_p     = float(mo.get('end_value') or 0)
-                dg_p     = float(mo.get('dollar_gain') or 0)
                 ret_p    = float(mo.get('return_pct') or 0)
                 spy_pt_p = spy_by_m_int_pdf.get(m_int_p) or {}
                 prev_p   = spy_by_m_int_pdf.get(m_int_p - 1) if m_int_p > 1 else None
@@ -15715,14 +15714,14 @@ def fund_export_pdf(request: Request, fund_id: str = None):
                 spy_mo_p  = spy_ytd_p - spy_prv_p if spy_pt_p else None
                 alpha_p   = (ret_p - spy_mo_p) if spy_mo_p is not None else None
                 rows_mo.append([
-                    lbl_p, money(sv_p), money(ev_p), money(dg_p),
+                    lbl_p, money(sv_p), money(ev_p),
                     f"{ret_p:+.2f}%",
                     f"{spy_mo_p:+.2f}%" if spy_mo_p is not None else '—',
                     f"{alpha_p:+.2f}%" if alpha_p is not None else '—',
                 ])
             story_a.append(_tbl_pdf(rows_mo,
-                                    [0.55*inch, 1.0*inch, 1.0*inch, 0.9*inch,
-                                     0.85*inch, 0.85*inch, 0.75*inch]))
+                                    [0.6*inch, 1.1*inch, 1.1*inch,
+                                     1.1*inch, 1.1*inch, 0.9*inch]))
             story_a.append(Spacer(1, 12))
 
         # Cash flows
