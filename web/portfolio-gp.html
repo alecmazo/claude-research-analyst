@@ -15215,7 +15215,8 @@ End with the sleeve block at this account's real market value so I can push it t
             tout.innerHTML =
               '<div style="font-size:10.5px;"><strong>' + _gfEsc(t.symbol) + '</strong> · holdings now: <strong>' + (t.holdings_qty != null ? t.holdings_qty : '—') + '</strong>'
               + ' · Jan-1 close: <strong>' + (t.jan1_price != null ? fmtUSD(t.jan1_price) : 'MISSING') + '</strong>'
-              + ' · agg: ' + _gfEsc(JSON.stringify(t.aggregate)) + '</div>'
+              + (t.other_account_legs ? ' · other-acct transfer legs: in ' + t.other_account_legs.in + ' / out ' + t.other_account_legs.out : '')
+              + ' · fund agg (pre-match): ' + _gfEsc(JSON.stringify(t.aggregate)) + '</div>'
               + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);max-height:220px;overflow-y:auto;">'
               + _gfEsc((t.rows || []).map(x => `${x.date} ${x.type}${x.option ? ' [OPT]' : ''} u:${x.units} p:${x.price} a:${x.amount} → ${x.bucket} | ${x.desc}`).join('\n') || 'NO ROWS STORED FOR THIS SYMBOL')
               + '</pre>';

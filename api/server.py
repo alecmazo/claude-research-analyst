@@ -26995,25 +26995,23 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         u_abs = abs(u)
         gross = (u_abs * px) if (u_abs and px) else abs(amt)
         if t in _SNAP_FLOW_TYPES:
-            # Transfers move SHARES + a marked value, but must not pollute
-            # trade stats (exit-price avg and SOLD detection use real sells
-            # only). Legs are tracked separately so the cross-account MATCH
-            # can neutralize them (Jan-1 anchoring) without importing the
-            # counterparty account's other trades.
+            # Transfers move SHARES + (maybe) a marked value. Units ALWAYS
+            # move — zero-valued legs (outbound/fractional in-kind legs often
+            # carry amount:0) must not null the symbol outright: matching
+            # consumes them first (a matched leg needs no value at all), and
+            # only a RESIDUAL unmatched unvalued leg nulls the gain. Value
+            # rides xfer_net_val; trade stats stay pure (exit avg / SOLD use
+            # real sells only).
             if u_abs > 1e-9:
                 val = abs(amt)
-                if val <= 0:
-                    e["transfer_unvalued"] = True   # can't price it → honest null
-                elif u > 0:
-                    e["net_units"] += u_abs
-                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + val
-                    e["xfer_in_units"] = e.get("xfer_in_units", 0.0) + u_abs
-                    e["xfer_in_val"] = e.get("xfer_in_val", 0.0) + val
+                side = "in" if u > 0 else "out"
+                e["net_units"] += u_abs if u > 0 else -u_abs
+                e[f"xfer_{side}_units"] = e.get(f"xfer_{side}_units", 0.0) + u_abs
+                if val > 0:
+                    e[f"xfer_{side}_val"] = e.get(f"xfer_{side}_val", 0.0) + val
+                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + (val if u > 0 else -val)
                 else:
-                    e["net_units"] -= u_abs
-                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) - val
-                    e["xfer_out_units"] = e.get("xfer_out_units", 0.0) + u_abs
-                    e["xfer_out_val"] = e.get("xfer_out_val", 0.0) + val
+                    e[f"xfer_{side}_unval"] = e.get(f"xfer_{side}_unval", 0.0) + u_abs
                 e["had_unit_transfer"] = True
             return
         if t in _SNAP_BUY_TYPES:
@@ -27076,21 +27074,46 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         other_legs = {r["sym"]: {"in": float(r["in_units"] or 0),
                                  "out": float(r["out_units"] or 0)}
                       for r in cur.fetchall()}
+
+        def _consume_leg(e: dict, qty: float, side: str) -> None:
+            """Neutralize `qty` units of the fund's `side` transfer legs:
+            unvalued units first (they carry nothing to remove), then valued
+            proportionally out of xfer_net_val."""
+            unval_k, val_k, units_k = f"xfer_{side}_unval", f"xfer_{side}_val", f"xfer_{side}_units"
+            unval = e.get(unval_k, 0.0)
+            valued_units = max(e.get(units_k, 0.0) - unval, 0.0)
+            m_unval = min(qty, unval)
+            e[unval_k] = unval - m_unval
+            rem = qty - m_unval
+            if rem > 1e-9 and valued_units > 1e-9:
+                remove = e.get(val_k, 0.0) * min(rem / valued_units, 1.0)
+                e[val_k] = e.get(val_k, 0.0) - remove
+                e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + (-remove if side == "in" else remove)
+            e[units_k] = max(e.get(units_k, 0.0) - qty, 0.0)
+
         for s in xfer_syms:
             e = trades[s]
+            # 1) INTERNAL pairing — both legs inside this fund's scope (e.g. a
+            #    source account assigned to the same fund): units already net
+            #    to zero in net_units; cancel the leg values against each other.
+            m_int = min(e.get("xfer_in_units", 0.0), e.get("xfer_out_units", 0.0))
+            if m_int > 1e-9:
+                _consume_leg(e, m_int, "in")
+                _consume_leg(e, m_int, "out")
             legs = other_legs.get(s.upper()) or {"in": 0.0, "out": 0.0}
-            in_u = e.get("xfer_in_units", 0.0)
-            if in_u > 1e-9 and legs["out"] > 1e-9:
-                m = min(in_u, legs["out"])
-                frac = m / in_u
-                e["net_units"] -= m                                   # rewind picks them up as Jan-1 holdings
-                e["xfer_net_val"] = e.get("xfer_net_val", 0.0) - e.get("xfer_in_val", 0.0) * frac
-            out_u = e.get("xfer_out_units", 0.0)
-            if out_u > 1e-9 and legs["in"] > 1e-9:
-                m2 = min(out_u, legs["in"])
-                frac2 = m2 / out_u
-                e["net_units"] += m2                                  # shares' YTD follows them to the receiving account
-                e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + e.get("xfer_out_val", 0.0) * frac2
+            # 2) fund IN ↔ other-account OUT → those shares become Jan-1-anchored
+            m = min(e.get("xfer_in_units", 0.0), legs["out"])
+            if m > 1e-9:
+                e["net_units"] -= m
+                _consume_leg(e, m, "in")
+            # 3) fund OUT ↔ other-account IN → their YTD follows them out
+            m2 = min(e.get("xfer_out_units", 0.0), legs["in"])
+            if m2 > 1e-9:
+                e["net_units"] += m2
+                _consume_leg(e, m2, "out")
+            # Only a RESIDUAL unmatched unvalued leg is truly unpriceable.
+            e["transfer_unvalued"] = (e.get("xfer_in_unval", 0.0)
+                                      + e.get("xfer_out_unval", 0.0)) > 1e-6
     if not holdings and not trades:
         return []
 
@@ -27617,19 +27640,18 @@ def snaptrade_attribution_debug(request: Request, fund_id: str, symbol: str = No
                 elif t3 in _SNAP_FLOW_TYPES and abs(u3) > 1e-9:
                     ua = abs(u3)
                     val3 = abs(a3)
-                    if val3 <= 0:
-                        bucket = "TRANSFER UNVALUED (gain nulled)"
-                        agg["transfer_unvalued"] = 1
-                    elif u3 > 0:
-                        bucket = ("TRANSFER IN (+%s sh @ value %s — cross-account stitch "
-                                  "applies if the matching OUT leg is in a linked account)"
-                                  % (round(ua, 3), round(val3, 2)))
-                        agg["net_units"] += ua
-                        agg["xfer_net_val"] = agg.get("xfer_net_val", 0.0) + val3
+                    _side = "IN" if u3 > 0 else "OUT"
+                    bucket = ("TRANSFER %s (%s%s sh%s)" % (
+                        _side, "+" if u3 > 0 else "−", round(ua, 3),
+                        (" @ value %s" % round(val3, 2)) if val3 > 0
+                        else " — UNVALUED leg (nulls gain only if unmatched)"))
+                    agg["net_units"] += ua if u3 > 0 else -ua
+                    if val3 > 0:
+                        agg["xfer_net_val"] = agg.get("xfer_net_val", 0.0) + (val3 if u3 > 0 else -val3)
                     else:
-                        bucket = "TRANSFER OUT (−%s sh @ value %s)" % (round(ua, 3), round(val3, 2))
-                        agg["net_units"] -= ua
-                        agg["xfer_net_val"] = agg.get("xfer_net_val", 0.0) - val3
+                        agg["xfer_unval_units"] = agg.get("xfer_unval_units", 0.0) + ua
+                    agg["xfer_in_units" if u3 > 0 else "xfer_out_units"] = \
+                        agg.get("xfer_in_units" if u3 > 0 else "xfer_out_units", 0.0) + ua
                 else:
                     ua = abs(u3)
                     g3 = (ua * p3) if (ua and p3) else abs(a3)
@@ -27650,6 +27672,23 @@ def snaptrade_attribution_debug(request: Request, fund_id: str, symbol: str = No
                     "option": is_opt3, "bucket": bucket,
                     "desc": (r3["description"] or "")[:70]})
             trace["aggregate"] = {k: round(v, 3) for k, v in agg.items()}
+            # Other-account transfer legs for this symbol — what the builder's
+            # leg-match will consume (the trace shows fund-scope rows only).
+            cur2.execute("""
+                SELECT SUM(CASE WHEN a.units > 0 THEN a.units ELSE 0 END)  AS in_units,
+                       SUM(CASE WHEN a.units < 0 THEN -a.units ELSE 0 END) AS out_units
+                  FROM snaptrade_activities a
+                  JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+                 WHERE sa.status = 'active'
+                   AND (sa.fund_id IS NULL OR sa.fund_id::text <> %s)
+                   AND EXTRACT(YEAR FROM a.trade_date) = %s
+                   AND UPPER(a.symbol) = %s
+                   AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+                   AND a.units IS NOT NULL AND a.units <> 0
+            """, (fid2, yr, s_up, list(_SNAP_FLOW_TYPES)))
+            lr = cur2.fetchone() or {}
+            trace["other_account_legs"] = {"in": float(lr.get("in_units") or 0),
+                                           "out": float(lr.get("out_units") or 0)}
             cur2.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
                          "ORDER BY d DESC LIMIT 1", (s_up, f"{yr}-01-01"))
             pr3 = cur2.fetchone()
