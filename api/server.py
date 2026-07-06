@@ -26997,8 +26997,9 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         if t in _SNAP_FLOW_TYPES:
             # Transfers move SHARES + a marked value, but must not pollute
             # trade stats (exit-price avg and SOLD detection use real sells
-            # only) — value rides in xfer_net_val, cancelled exactly by a
-            # matching opposite leg in the cross-account stitch.
+            # only). Legs are tracked separately so the cross-account MATCH
+            # can neutralize them (Jan-1 anchoring) without importing the
+            # counterparty account's other trades.
             if u_abs > 1e-9:
                 val = abs(amt)
                 if val <= 0:
@@ -27006,9 +27007,13 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                 elif u > 0:
                     e["net_units"] += u_abs
                     e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + val
+                    e["xfer_in_units"] = e.get("xfer_in_units", 0.0) + u_abs
+                    e["xfer_in_val"] = e.get("xfer_in_val", 0.0) + val
                 else:
                     e["net_units"] -= u_abs
                     e["xfer_net_val"] = e.get("xfer_net_val", 0.0) - val
+                    e["xfer_out_units"] = e.get("xfer_out_units", 0.0) + u_abs
+                    e["xfer_out_val"] = e.get("xfer_out_val", 0.0) + val
                 e["had_unit_transfer"] = True
             return
         if t in _SNAP_BUY_TYPES:
@@ -27040,37 +27045,52 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             continue
         _apply_row(trades.setdefault(sym, _new_agg()), r)
 
-    # CROSS-ACCOUNT STITCH: an in-kind transfer between Alec's OWN linked
-    # accounts is administrative consolidation, not new money. For symbols
-    # with unit-transfer legs, re-aggregate across ALL linked accounts —
-    # matching IN/OUT legs cancel exactly, so the Jan-1 rewind reaches
-    # through the source account's history: INTC (held since Jan-1 @ $37 in
-    # the old account, consolidated in May, called away in June) anchors at
-    # Jan-1 for the full YTD gain, while a position the source account
-    # BOUGHT during the year anchors at its actual purchase cost. Transfers
-    # from untracked external sources keep the marked-value anchor (their
-    # legs have no matching OUT to cancel). Caveat: if the same symbol is
-    # actively traded in two accounts AND transferred, the stitch blends
-    # both accounts' trades for that symbol.
-    xfer_syms = [s for s, e in trades.items() if e.get("had_unit_transfer")]
+    # CROSS-ACCOUNT LEG MATCH: an in-kind transfer between Alec's OWN linked
+    # accounts is consolidation, not new money — but the fix must be scoped
+    # to THE TRANSFERRED SHARES ONLY. (The first stitch merged the source
+    # account's ENTIRE ticker history and inflated ANAT-DEF's INTC to $890K
+    # with the old account's separate Jan–Apr sales.) For each transfer leg
+    # in this fund, look for the OPPOSITE leg in OTHER linked accounts; the
+    # matched quantity is neutralized — units drop out of the flow so the
+    # Jan-1 rewind treats those shares as held-through, and the marked value
+    # is removed. Unmatched (external-source) legs keep the marked-value
+    # anchor. The counterparty account's own buys/sells stay in ITS books.
+    xfer_syms = [s for s, e in trades.items()
+                 if e.get("xfer_in_units") or e.get("xfer_out_units")]
     if xfer_syms:
         cur.execute("""
-            SELECT a.symbol, a.type, a.units, a.price, a.amount,
-                   a.raw_json -> 'option_symbol' AS opt
+            SELECT UPPER(a.symbol) AS sym,
+                   SUM(CASE WHEN a.units > 0 THEN a.units ELSE 0 END)  AS in_units,
+                   SUM(CASE WHEN a.units < 0 THEN -a.units ELSE 0 END) AS out_units
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
-             WHERE sa.status = 'active' AND a.trade_date >= %s
+             WHERE sa.status = 'active'
+               AND (sa.fund_id IS NULL OR sa.fund_id::text <> %s)
+               AND a.trade_date >= %s
                AND UPPER(a.symbol) = ANY(%s)
-        """, (jan1, [s.upper() for s in xfer_syms]))
-        stitched: dict = {}
-        for r in cur.fetchall():
-            sym = (r["symbol"] or "").strip()
-            if not sym:
-                continue
-            _apply_row(stitched.setdefault(sym, _new_agg()), r)
+               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
+               AND a.units IS NOT NULL AND a.units <> 0
+             GROUP BY 1
+        """, (str(fund_id), jan1, [s.upper() for s in xfer_syms],
+              list(_SNAP_FLOW_TYPES)))
+        other_legs = {r["sym"]: {"in": float(r["in_units"] or 0),
+                                 "out": float(r["out_units"] or 0)}
+                      for r in cur.fetchall()}
         for s in xfer_syms:
-            if s in stitched:
-                trades[s] = stitched[s]
+            e = trades[s]
+            legs = other_legs.get(s.upper()) or {"in": 0.0, "out": 0.0}
+            in_u = e.get("xfer_in_units", 0.0)
+            if in_u > 1e-9 and legs["out"] > 1e-9:
+                m = min(in_u, legs["out"])
+                frac = m / in_u
+                e["net_units"] -= m                                   # rewind picks them up as Jan-1 holdings
+                e["xfer_net_val"] = e.get("xfer_net_val", 0.0) - e.get("xfer_in_val", 0.0) * frac
+            out_u = e.get("xfer_out_units", 0.0)
+            if out_u > 1e-9 and legs["in"] > 1e-9:
+                m2 = min(out_u, legs["in"])
+                frac2 = m2 / out_u
+                e["net_units"] += m2                                  # shares' YTD follows them to the receiving account
+                e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + e.get("xfer_out_val", 0.0) * frac2
     if not holdings and not trades:
         return []
 
