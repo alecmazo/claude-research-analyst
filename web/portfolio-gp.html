@@ -15281,6 +15281,16 @@ End with the sleeve block at this account's real market value so I can push it t
           <summary class="panel-head" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
             <span class="panel-title">YTD Attribution (per-stock contribution)</span>
             <span class="panel-badge">${rows.length} names</span>
+            ${data.attribution_contrib_sum != null ? (() => {
+              const cs = data.attribution_contrib_sum;
+              const ytd = data.twrr_return_pct;
+              const closeEnough = ytd != null && Math.abs(cs - ytd) <= Math.max(1.5, Math.abs(ytd) * 0.2);
+              return '<span style="font-size:10px;font-weight:700;color:' + (closeEnough ? 'var(--green)' : 'var(--mid)') + ';"'
+                + ' title="Sum of the contribution column vs the account\'s YTD return. They should be close — the residual is cash interest, option premium income, fees, and (for consolidated positions) gains earned in the source account before transfer.">'
+                + 'Σ ' + (cs >= 0 ? '+' : '') + cs.toFixed(2) + '%'
+                + (ytd != null ? ' · portfolio YTD ' + (ytd >= 0 ? '+' : '') + Number(ytd).toFixed(2) + '%' : '')
+                + '</span>';
+            })() : ''}
             ${data.attribution_estimated ? '<span style="font-size:10px;color:#d97706;font-weight:700;" title="Built from holdings + Jan-1 prices only — SnapTrade hasn\'t delivered this year\'s transactions yet. Refines automatically once they arrive.">≈ price-based estimate (trades pending)</span>' : ''}
             <button class="tab-btn sm" id="acd-attr-diag-btn" style="font-size:10px;margin-left:auto;">🔍 Diagnose</button>
             <span class="ac-chevron">▸</span>

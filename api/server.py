@@ -27325,10 +27325,29 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
     # estimated and self-corrects once SnapTrade delivers transactions.
     # Own savepoint: a failure here must not abort the transaction and take
     # the balance-history/flows writes down with it.
+    # Contribution denominator: the SAME flow-weighted capital base the
+    # account's Modified-Dietz return divides by (implied from gain/md), so
+    # Σ contribution ≈ the portfolio YTD % — attribution is that number's
+    # decomposition. Raw Jan-1 balance overstated contributions badly for
+    # accounts funded by mid-year consolidations. Fallback: begin + ½·flows.
+    _beg = float(overview.get("begin_value") or 0)
+    _ig  = overview.get("investment_gain")
+    _md  = overview.get("md_return_pct")
+    attr_base = None
+    try:
+        if _ig is not None and _md and abs(float(_md)) >= 0.25:
+            _b = float(_ig) / (float(_md) / 100.0)
+            if _b > 0:
+                attr_base = _b
+    except Exception:
+        attr_base = None
+    if not attr_base:
+        attr_base = _beg + 0.5 * float(overview.get("net_external_flows") or 0)
+    if attr_base <= 0:
+        attr_base = _beg
     try:
         cur.execute("SAVEPOINT snap_attr")
-        auto_attr = _snaptrade_build_attribution(
-            cur, fund_id, int(yr), float(overview.get("begin_value") or 0))
+        auto_attr = _snaptrade_build_attribution(cur, fund_id, int(yr), float(attr_base))
         cur.execute("RELEASE SAVEPOINT snap_attr")
     except Exception as e:
         try:
@@ -27340,6 +27359,9 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
         overview["attribution"] = auto_attr
         overview["attribution_source"] = "snaptrade_auto"
         overview["attribution_estimated"] = not has_acts
+        overview["attribution_capital_base"] = round(float(attr_base), 2)
+        overview["attribution_contrib_sum"] = round(
+            sum((r.get("contribution_pct") or 0) for r in auto_attr), 2)
     elif prev:
         for k in ("attribution", "top_gainers", "top_losers"):
             if prev.get(k) is not None:
