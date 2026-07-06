@@ -27056,24 +27056,65 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
     xfer_syms = [s for s, e in trades.items()
                  if e.get("xfer_in_units") or e.get("xfer_out_units")]
     if xfer_syms:
+        # Source-side stats across OTHER linked accounts: transfer legs PLUS
+        # the source's own buys/sells and holdings, so matched transfers can
+        # re-anchor at the source's BLENDED BASIS — Jan-1 close for shares it
+        # held on Jan 1, average buy cost for shares it bought this year
+        # (pro-rata pool). Jan-1-anchoring everything showed BSX/CRM at
+        # −$124K/−$54K when the old IRA bought them mid-year at $50/$179.
         cur.execute("""
             SELECT UPPER(a.symbol) AS sym,
-                   SUM(CASE WHEN a.units > 0 THEN a.units ELSE 0 END)  AS in_units,
-                   SUM(CASE WHEN a.units < 0 THEN -a.units ELSE 0 END) AS out_units
+                   SUM(CASE WHEN UPPER(COALESCE(a.type,'')) = ANY(%s)
+                             AND a.units > 0 THEN a.units ELSE 0 END)  AS in_units,
+                   SUM(CASE WHEN UPPER(COALESCE(a.type,'')) = ANY(%s)
+                             AND a.units < 0 THEN -a.units ELSE 0 END) AS out_units,
+                   SUM(CASE WHEN UPPER(COALESCE(a.type,'')) = ANY(%s)
+                             AND jsonb_typeof(a.raw_json -> 'option_symbol') IS DISTINCT FROM 'object'
+                             AND POSITION('OPTION' IN UPPER(COALESCE(a.type,''))) = 0
+                        THEN ABS(COALESCE(a.units, 0)) ELSE 0 END)     AS bought_units,
+                   SUM(CASE WHEN UPPER(COALESCE(a.type,'')) = ANY(%s)
+                             AND jsonb_typeof(a.raw_json -> 'option_symbol') IS DISTINCT FROM 'object'
+                             AND POSITION('OPTION' IN UPPER(COALESCE(a.type,''))) = 0
+                        THEN COALESCE(ABS(a.units) * NULLIF(a.price, 0), ABS(a.amount), 0)
+                        ELSE 0 END)                                    AS buy_cost,
+                   SUM(CASE WHEN UPPER(COALESCE(a.type,'')) = ANY(%s)
+                             AND jsonb_typeof(a.raw_json -> 'option_symbol') IS DISTINCT FROM 'object'
+                             AND POSITION('OPTION' IN UPPER(COALESCE(a.type,''))) = 0
+                        THEN ABS(COALESCE(a.units, 0)) ELSE 0 END)     AS sold_units
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active'
                AND (sa.fund_id IS NULL OR sa.fund_id::text <> %s)
                AND a.trade_date >= %s
                AND UPPER(a.symbol) = ANY(%s)
-               AND UPPER(COALESCE(a.type, '')) = ANY(%s)
-               AND a.units IS NOT NULL AND a.units <> 0
              GROUP BY 1
-        """, (str(fund_id), jan1, [s.upper() for s in xfer_syms],
-              list(_SNAP_FLOW_TYPES)))
-        other_legs = {r["sym"]: {"in": float(r["in_units"] or 0),
-                                 "out": float(r["out_units"] or 0)}
-                      for r in cur.fetchall()}
+        """, (list(_SNAP_FLOW_TYPES), list(_SNAP_FLOW_TYPES),
+              list(_SNAP_BUY_TYPES), list(_SNAP_BUY_TYPES), list(_SNAP_SELL_TYPES),
+              str(fund_id), jan1, [s.upper() for s in xfer_syms]))
+        src_stats = {r["sym"]: {"in": float(r["in_units"] or 0),
+                                "out": float(r["out_units"] or 0),
+                                "bought_units": float(r["bought_units"] or 0),
+                                "buy_cost": float(r["buy_cost"] or 0),
+                                "sold_units": float(r["sold_units"] or 0)}
+                     for r in cur.fetchall()}
+        other_legs = {k: {"in": v["in"], "out": v["out"]} for k, v in src_stats.items()}
+        # Source accounts' current holdings per symbol (for the Jan-1 rewind
+        # of the SOURCE pool).
+        src_hold: dict = {}
+        cur.execute("""SELECT holdings_json FROM snaptrade_accounts
+                        WHERE status='active' AND (fund_id IS NULL OR fund_id::text <> %s)""",
+                    (str(fund_id),))
+        for hr in cur.fetchall():
+            hj = hr["holdings_json"]
+            if isinstance(hj, str):
+                try:
+                    hj = json.loads(hj)
+                except Exception:
+                    hj = []
+            for p in (hj or []):
+                ps = (p.get("symbol") or "").strip().upper()
+                if ps:
+                    src_hold[ps] = src_hold.get(ps, 0.0) + (_snaptrade_num(p.get("quantity")) or 0.0)
 
         def _consume_leg(e: dict, qty: float, side: str) -> None:
             """Neutralize `qty` units of the fund's `side` transfer legs:
@@ -27101,11 +27142,37 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                 _consume_leg(e, m_int, "in")
                 _consume_leg(e, m_int, "out")
             legs = other_legs.get(s.upper()) or {"in": 0.0, "out": 0.0}
-            # 2) fund IN ↔ other-account OUT → those shares become Jan-1-anchored
+            # 2) fund IN ↔ other-account OUT → re-anchor the matched shares at
+            #    the SOURCE's blended basis: Jan-1 close for the fraction it
+            #    held on Jan 1, average buy cost for the fraction it bought
+            #    this year (pro-rata pool). This is what makes INTC (held
+            #    since Jan-1) anchor at $37 while BSX/CRM (bought mid-year at
+            #    $50/$179 in the old IRA) anchor at purchase — matching both
+            #    Alec's expectation and Fidelity's G/L.
             m = min(e.get("xfer_in_units", 0.0), legs["out"])
             if m > 1e-9:
-                e["net_units"] -= m
-                _consume_leg(e, m, "in")
+                src = src_stats.get(s.upper()) or {}
+                s_end = src_hold.get(s.upper(), 0.0)
+                s_net = (src.get("bought_units", 0.0) - src.get("sold_units", 0.0)
+                         + src.get("in", 0.0) - src.get("out", 0.0))
+                jan1_pool = max(s_end - s_net, 0.0)
+                buy_pool  = src.get("bought_units", 0.0)
+                pool = jan1_pool + buy_pool
+                if pool > 1e-9:
+                    f_buy = buy_pool / pool
+                    avg_buy = (src.get("buy_cost", 0.0) / buy_pool) if buy_pool > 1e-9 else 0.0
+                    cur.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
+                                "ORDER BY d DESC LIMIT 1", (s, jan1))
+                    _pr = cur.fetchone()
+                    j1px = float(_pr["close"]) if _pr and _pr["close"] is not None else None
+                    if j1px is not None or (1.0 - f_buy) <= 1e-6:
+                        anchor = m * (f_buy * avg_buy + (1.0 - f_buy) * (j1px or 0.0))
+                        _consume_leg(e, m, "in")   # strip the marked value…
+                        e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + anchor
+                        # …and re-book at the blended basis. net_units stays —
+                        # matched shares behave like a buy at that basis.
+                    # jan1 fraction unpriceable → keep marked-value anchor.
+                # pool empty (source story unknown) → keep marked-value anchor.
             # 3) fund OUT ↔ other-account IN → their YTD follows them out
             m2 = min(e.get("xfer_out_units", 0.0), legs["in"])
             if m2 > 1e-9:
