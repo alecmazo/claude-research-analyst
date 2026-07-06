@@ -26998,6 +26998,27 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         # with direction from the TYPE.
         u_abs = abs(u)
         gross = (u_abs * px) if (u_abs and px) else abs(amt)
+        if t in _SNAP_FLOW_TYPES:
+            # IN-KIND SECURITY TRANSFERS (TRANSFER rows with units≠0): whole
+            # positions enter/leave an account mid-year — the traces showed
+            # the rewind backdating them to Jan-1 (BSX −$124K, CRM −$54K,
+            # INTC +$317K phantoms). Treat as buy/sell at the transfer's
+            # MARKED VALUE so attribution measures performance in THIS
+            # account since arrival — consistent with the account-level
+            # Dietz, which already counts these as external flows.
+            if u_abs > 1e-9:
+                val = abs(amt)
+                if val <= 0:
+                    e["transfer_unvalued"] = True   # can't price it → honest null
+                elif u > 0:
+                    e["net_units"] += u_abs
+                    e["buy_cost"] += val
+                    e["bought_units"] += u_abs
+                else:
+                    e["net_units"] -= u_abs
+                    e["sell_proceeds"] += val
+                    e["sold_units"] += u_abs
+            continue
         if t in _SNAP_BUY_TYPES:
             e["net_units"] += u_abs
             e["buy_cost"] += gross
@@ -27046,7 +27067,7 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         jan1_qty = max(jan1_qty, 0.0)
         jan1_value = (jan1_qty * jan1_px) if (jan1_px is not None and jan1_qty > 1e-6) else (0.0 if jan1_qty <= 1e-6 else None)
         gain = None
-        if rewind_ok and jan1_value is not None:
+        if rewind_ok and jan1_value is not None and not tr.get("transfer_unvalued"):
             gain = end_value - jan1_value - (tr["buy_cost"] - tr["sell_proceeds"]) + tr["dividends"]
         # Stock return: live price vs Jan-1 for open names. Closed names use
         # their average EXIT price (they rendered null across the board); for
@@ -27506,6 +27527,18 @@ def snaptrade_attribution_debug(request: Request, fund_id: str, symbol: str = No
                 is_opt3 = bool(opt3) or "OPTION" in t3
                 if is_opt3:
                     bucket = "EXCLUDED (option row)"
+                elif t3 in _SNAP_FLOW_TYPES and abs(u3) > 1e-9:
+                    ua = abs(u3)
+                    val3 = abs(a3)
+                    if val3 <= 0:
+                        bucket = "TRANSFER UNVALUED (gain nulled)"
+                        agg["transfer_unvalued"] = 1
+                    elif u3 > 0:
+                        bucket = "TRANSFER IN (+%s sh @ value %s)" % (round(ua, 3), round(val3, 2))
+                        agg["net_units"] += ua; agg["buy_cost"] += val3; agg["bought_units"] += ua
+                    else:
+                        bucket = "TRANSFER OUT (−%s sh @ value %s)" % (round(ua, 3), round(val3, 2))
+                        agg["net_units"] -= ua; agg["sell_proceeds"] += val3; agg["sold_units"] += ua
                 else:
                     ua = abs(u3)
                     g3 = (ua * p3) if (ua and p3) else abs(a3)
