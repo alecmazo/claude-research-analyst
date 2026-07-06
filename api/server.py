@@ -11698,6 +11698,29 @@ def fund_positions(request: Request, fund_id: str = None):
             symbols = [r["symbol"] for r in rows if r["symbol"]]
             quotes  = batch_quotes(",".join(symbols)) if symbols else {}
 
+            # Fallback prices from SnapTrade holdings — Fidelity's own quote,
+            # at most one sync old. Covers symbols no public source prices
+            # under the Fidelity spelling (NLYPRF stayed blank even with the
+            # alias because Yahoo/Tiingo/store all missed it).
+            _snap_px: dict = {}
+            try:
+                cur.execute("SELECT holdings_json FROM snaptrade_accounts "
+                            "WHERE status='active' AND fund_id=%s", (fid,))
+                for _hr in cur.fetchall():
+                    _hj = _hr["holdings_json"]
+                    if isinstance(_hj, str):
+                        try:
+                            _hj = json.loads(_hj)
+                        except Exception:
+                            _hj = []
+                    for _p in (_hj or []):
+                        _ps = (_p.get("symbol") or "").strip()
+                        _pv = _snaptrade_num(_p.get("price"))
+                        if _ps and _pv:
+                            _snap_px[_ps] = _pv
+            except Exception:
+                pass
+
             result = []
             total_mkt = 0.0
             for r in rows:
@@ -11708,6 +11731,9 @@ def fund_positions(request: Request, fund_id: str = None):
                 q         = quotes.get(sym) or {}
                 last_p    = q.get("price") if isinstance(q, dict) else (q if isinstance(q, (int, float)) else None)
                 pct_chg   = q.get("pct_change") if isinstance(q, dict) else None
+                if last_p is None and _snap_px.get(sym):
+                    last_p = _snap_px[sym]
+                    pct_chg = None
                 mkt_val   = round(qty * last_p, 2) if last_p else None
                 if mkt_val:
                     total_mkt += mkt_val
@@ -26871,8 +26897,10 @@ def _sync_jan1_close(sym: str, year: int) -> None:
         end   = f"{year}-01-15"
         # Fetch with the provider-format symbol (BRKB→BRK-B, NLYPRF→NLY-PF);
         # rows are stored under the ORIGINAL symbol so attribution lookups hit.
+        # adjusted=True: Jan-1 closes feed the rewind — raw pre-split bars
+        # doubled BSX's apparent Jan-1 value (−$124K phantom loss).
         bars = _md.get_price_history(_resolve_ticker_alias(sym), interval="daily",
-                                     start=start, end=end)
+                                     start=start, end=end, adjusted=True)
         if not bars:
             return
         src = "tradier" if _md.tradier_available() else "yahoo"
@@ -27736,11 +27764,23 @@ def _snaptrade_run_sync() -> dict:
                             and not any(c.isdigit() for c in s[:4])
                             and not _snaptrade_cashlike(s)):
                         _cands.add(s)
-                for s in _cands:
-                    cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
-                                (s, _jan1))
-                    if not cur.fetchone():
-                        _need.add(s)
+                # One-time forced re-warm (v2 = split-ADJUSTED closes): rows
+                # fetched before ui361 may hold raw pre-split Jan-1 prices
+                # (BSX $95 vs true ~$47) — refetch EVERY candidate once, then
+                # go back to missing-only.
+                _rewarm_key = "price_history.jan1_adjusted_rewarm"
+                try:
+                    _force_all = str(_kv_get(_rewarm_key) or "") != f"{_yr}-v2"
+                except Exception:
+                    _force_all = False
+                if _force_all:
+                    _need = set(_cands)
+                else:
+                    for s in _cands:
+                        cur.execute("SELECT 1 FROM price_history WHERE symbol=%s AND d <= %s LIMIT 1",
+                                    (s, _jan1))
+                        if not cur.fetchone():
+                            _need.add(s)
             # Skip symbols that already failed twice this process — a handful
             # of permanently-failing names used to burn the whole alphabetical
             # budget every sync, starving the tail (WBD never got its Jan-1
@@ -27748,10 +27788,12 @@ def _snaptrade_run_sync() -> dict:
             _order = sorted(_need, key=lambda s: (_JAN1_FAIL.get(s, 0), s))
             _budget_end = time.time() + 45
             _warmed = 0
+            _budget_hit = False
             for s in _order:
                 if _JAN1_FAIL.get(s, 0) >= 2:
                     continue
                 if time.time() > _budget_end:
+                    _budget_hit = True
                     print(f"[snaptrade] jan1 prewarm budget hit — {_warmed}/{len(_need)} done, "
                           "rest next sync", flush=True)
                     break
@@ -27764,6 +27806,12 @@ def _snaptrade_run_sync() -> dict:
                         _JAN1_FAIL.pop(s, None)
                     else:
                         _JAN1_FAIL[s] = _JAN1_FAIL.get(s, 0) + 1
+            if _force_all and not _budget_hit:
+                try:
+                    _kv_put(_rewarm_key, f"{_yr}-v2")
+                    print("[snaptrade] jan1 adjusted re-warm complete", flush=True)
+                except Exception:
+                    pass
             if _need:
                 print(f"[snaptrade] jan1 closes prewarmed: {_warmed}/{len(_need)}", flush=True)
         except Exception as _e:

@@ -385,13 +385,22 @@ def _yahoo_range_for(start: str) -> str:
 
 
 def get_price_history(symbol: str, interval: str = "daily",
-                      start: str = None, end: str = None) -> list:
+                      start: str = None, end: str = None,
+                      adjusted: bool = False) -> list:
     """Daily bars. Tradier (only if a paid token is configured) → free Yahoo v8
-    chart → yfinance library fallback. [{date, ...close}] chronological."""
+    chart → yfinance library fallback. [{date, ...close}] chronological.
+
+    adjusted=True prefers the Yahoo v8 chart (adjclose = SPLIT-ADJUSTED) over
+    Tradier, whose bars are raw trade prices. Historical closes used for
+    return math (e.g. the Jan-1 rewind in attribution) MUST be adjusted — a
+    raw pre-split close doubles the apparent starting value (the BSX −$124K
+    incident)."""
     rows = None
-    if tradier_available():
+    if adjusted:
+        rows = yahoo_history(symbol, rng=_yahoo_range_for(start))
+    if not rows and tradier_available():
         rows = tradier_history(symbol, interval=interval, start=start, end=end)
-    if not rows:
+    if not rows and not adjusted:
         rows = yahoo_history(symbol, rng=_yahoo_range_for(start))
     if not rows:
         rows = _yf_history(symbol)         # last-ditch: may be cloud-IP blocked
