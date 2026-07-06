@@ -273,6 +273,9 @@ _TICKER_ALIASES: dict[str, str] = {
     "BRKB":   "BRK-B",
     # Annaly Capital preferred F  (Fidelity: NLYPRF, Yahoo: NLY-PF)
     "NLYPRF": "NLY-PF",
+    # Flagstar preferred A (Fidelity: FLGPRA, SnapTrade: FLG.PA, Yahoo: FLG-PA)
+    "FLGPRA": "FLG-PA",
+    "FLG.PA": "FLG-PA",
     # Add more as needed — key = as-imported, value = Yahoo symbol
 }
 
@@ -340,9 +343,18 @@ def _ticker_should_ignore(sym: str) -> bool:
 
 
 def _resolve_ticker_alias(sym: str) -> str:
-    """Return the Yahoo-compatible symbol for sym, applying alias map first."""
+    """Return the Yahoo-compatible symbol for sym, applying alias map first.
+    Generic rule: SnapTrade's dot-preferred form "XXX.PY" → Yahoo "XXX-PY"
+    (e.g. FLG.PA → FLG-PA). US brokerage context — these are preferreds, not
+    Paris listings."""
     clean = sym.rstrip("*")
-    return _TICKER_ALIASES.get(clean.upper(), _TICKER_ALIASES.get(clean, clean))
+    hit = _TICKER_ALIASES.get(clean.upper(), _TICKER_ALIASES.get(clean))
+    if hit:
+        return hit
+    m = re.fullmatch(r"([A-Z]{1,6})\.P([A-Z])", clean.upper())
+    if m:
+        return f"{m.group(1)}-P{m.group(2)}"
+    return clean
 
 
 def _fetch_prices(symbols: list) -> dict:
@@ -27299,7 +27311,7 @@ def _snaptrade_rebuild_balance_history(cur, fund_id: str) -> dict | None:
 
 
 @app.get("/api/snaptrade/attribution-debug")
-def snaptrade_attribution_debug(request: Request, fund_id: str):
+def snaptrade_attribution_debug(request: Request, fund_id: str, symbol: str = None):
     """GP-only: stage-by-stage state of the auto-attribution pipeline for one
     managed account — assigned accounts, activity counts by type, equity
     holdings, Jan-1 price coverage, what's in the YTD cache, and a LIVE run of
@@ -27463,6 +27475,64 @@ def snaptrade_attribution_debug(request: Request, fund_id: str):
                 out["method_probe_error"] = _snaptrade_error_detail(e)
     except Exception as e:
         out["live_activities_error"] = _snaptrade_error_detail(e)
+
+    # Per-ticker trace: every stored YTD row for one symbol, classified through
+    # the SAME bucket logic the builder uses, plus the resulting aggregate,
+    # Jan-1 close, and current holdings qty. Settles "this number is wrong"
+    # claims (the INTC/ANAT-DEF case) with rows instead of theories.
+    if symbol:
+        s_up = symbol.strip().upper()
+        trace = {"symbol": s_up, "rows": [], "aggregate": None,
+                 "jan1_price": None, "holdings_qty": None}
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur2:
+            fid2 = str(_resolve_fund_id(cur2, out["fund_id"]))
+            cur2.execute("""
+                SELECT a.type, a.units, a.price, a.amount, a.trade_date, a.description,
+                       a.raw_json -> 'option_symbol' AS opt
+                  FROM snaptrade_activities a
+                  JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+                 WHERE sa.fund_id = %s AND UPPER(a.symbol) = %s
+                   AND EXTRACT(YEAR FROM a.trade_date) = %s
+                 ORDER BY a.trade_date
+            """, (fid2, s_up, yr))
+            agg = {"net_units": 0.0, "buy_cost": 0.0, "sell_proceeds": 0.0,
+                   "dividends": 0.0, "bought_units": 0.0, "sold_units": 0.0}
+            for r3 in cur2.fetchall():
+                t3 = (r3["type"] or "").upper()
+                u3 = float(r3["units"] or 0)
+                p3 = float(r3["price"] or 0)
+                a3 = float(r3["amount"] or 0)
+                opt3 = r3["opt"]
+                is_opt3 = bool(opt3) or "OPTION" in t3
+                if is_opt3:
+                    bucket = "EXCLUDED (option row)"
+                else:
+                    ua = abs(u3)
+                    g3 = (ua * p3) if (ua and p3) else abs(a3)
+                    if t3 in _SNAP_BUY_TYPES:
+                        bucket = "BUY (+%s sh, cost %s)" % (round(ua, 3), round(g3, 2))
+                        agg["net_units"] += ua; agg["buy_cost"] += g3; agg["bought_units"] += ua
+                    elif t3 in _SNAP_SELL_TYPES:
+                        bucket = "SELL (−%s sh, proceeds %s)" % (round(ua, 3), round(g3, 2))
+                        agg["net_units"] -= ua; agg["sell_proceeds"] += g3; agg["sold_units"] += ua
+                    elif t3 in _SNAP_DIV_TYPES:
+                        bucket = "DIVIDEND (+%s)" % round(a3, 2)
+                        agg["dividends"] += a3
+                    else:
+                        bucket = "IGNORED (type not bucketed)"
+                trace["rows"].append({
+                    "date": r3["trade_date"].isoformat() if r3["trade_date"] else None,
+                    "type": r3["type"], "units": u3, "price": p3, "amount": a3,
+                    "option": is_opt3, "bucket": bucket,
+                    "desc": (r3["description"] or "")[:70]})
+            trace["aggregate"] = {k: round(v, 3) for k, v in agg.items()}
+            cur2.execute("SELECT close FROM price_history WHERE symbol=%s AND d <= %s "
+                         "ORDER BY d DESC LIMIT 1", (s_up, f"{yr}-01-01"))
+            pr3 = cur2.fetchone()
+            trace["jan1_price"] = float(pr3["close"]) if pr3 and pr3["close"] is not None else None
+            h3 = _snaptrade_fund_holdings(cur2, fid2).get(s_up) or {}
+            trace["holdings_qty"] = h3.get("qty")
+        out["symbol_trace"] = trace
 
     # Human-readable verdict so the GP doesn't have to interpret raw fields.
     live_rows = sum((x.get("returned") or 0) for x in out.get("live_activities") or [])

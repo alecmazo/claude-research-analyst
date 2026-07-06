@@ -15197,7 +15197,32 @@ End with the sleeve block at this account's real market value so I can push it t
           + (d.unmapped_symbol_samples && Object.keys(d.unmapped_symbol_samples).length
               ? '<div style="margin-top:6px;">⚠ Symbols with rows that map to NO share math: <strong>' + _gfEsc(Object.keys(d.unmapped_symbol_samples).join(', ')) + '</strong>'
                 + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);">' + _gfEsc(JSON.stringify(d.unmapped_symbol_samples, null, 1).slice(0, 1800)) + '</pre></div>'
-              : '');
+              : '')
+          + '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;">'
+          + '<span style="font-size:10px;color:var(--dim);">Trace one ticker:</span>'
+          + '<input id="acd-attr-trace-sym" placeholder="e.g. INTC" style="width:80px;font-size:10.5px;padding:2px 6px;border:1px solid var(--panel-edge);border-radius:5px;background:var(--surface,#fff);color:var(--text-primary);text-transform:uppercase;">'
+          + '<button id="acd-attr-trace-btn" class="tab-btn sm" style="font-size:9.5px;">Trace</button>'
+          + '</div><div id="acd-attr-trace-out" style="margin-top:6px;"></div>';
+        document.getElementById('acd-attr-trace-btn')?.addEventListener('click', async () => {
+          const sym = (document.getElementById('acd-attr-trace-sym')?.value || '').trim().toUpperCase();
+          const tout = document.getElementById('acd-attr-trace-out');
+          if (!sym || !tout) return;
+          tout.textContent = 'Tracing ' + sym + '…';
+          try {
+            const tr = await _snapJson(await window.dgaFetch('/api/snaptrade/attribution-debug?fund_id=' + encodeURIComponent(CURRENT_FUND_ID) + '&symbol=' + encodeURIComponent(sym)));
+            const t = tr.symbol_trace;
+            if (!t) throw new Error('no trace returned');
+            tout.innerHTML =
+              '<div style="font-size:10.5px;"><strong>' + _gfEsc(t.symbol) + '</strong> · holdings now: <strong>' + (t.holdings_qty != null ? t.holdings_qty : '—') + '</strong>'
+              + ' · Jan-1 close: <strong>' + (t.jan1_price != null ? fmtUSD(t.jan1_price) : 'MISSING') + '</strong>'
+              + ' · agg: ' + _gfEsc(JSON.stringify(t.aggregate)) + '</div>'
+              + '<pre style="white-space:pre-wrap;font-size:9.5px;margin:4px 0 0;color:var(--text-secondary,#58616f);max-height:220px;overflow-y:auto;">'
+              + _gfEsc((t.rows || []).map(x => `${x.date} ${x.type}${x.option ? ' [OPT]' : ''} u:${x.units} p:${x.price} a:${x.amount} → ${x.bucket} | ${x.desc}`).join('\n') || 'NO ROWS STORED FOR THIS SYMBOL')
+              + '</pre>';
+          } catch (e) {
+            tout.textContent = '❌ ' + (e.message || e);
+          }
+        });
       } catch (e) {
         const out2 = document.getElementById('acd-attr-diag-out');
         if (out2) { out2.style.display = ''; out2.textContent = '❌ ' + (e.message || e); }
