@@ -26974,18 +26974,13 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
     #    call → shares out (sell), put → shares in (buy), 100/contract;
     #  • rows missing units/price but carrying a cash amount still credit
     #    cost/proceeds from the amount.
-    cur.execute("""
-        SELECT a.symbol, a.type, a.units, a.price, a.amount,
-               a.raw_json -> 'option_symbol' AS opt
-          FROM snaptrade_activities a
-          JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
-         WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
-    """, (fund_id, jan1))
-    trades = {}
-    for r in cur.fetchall():
-        sym, t = (r["symbol"] or "").strip(), (r["type"] or "").upper()
-        if not sym:
-            continue
+    def _apply_row(e: dict, r) -> None:
+        """One activity row → aggregate. CENSUS FACTS (2026-07-02): units are
+        SIGNED (sells negative) — |units| with direction from TYPE; option
+        rows stay out (assignment SHARE legs arrive as plain SELLs); rows
+        missing units/price credit cost/proceeds from |amount|. TRANSFER rows
+        WITH units are in-kind share moves at the transfer's marked value."""
+        t = (r["type"] or "").upper()
         u   = float(r["units"] or 0)
         px  = float(r["price"] or 0)
         amt = float(r["amount"] or 0)
@@ -26995,44 +26990,27 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
                 opt = json.loads(opt)
             except Exception:
                 opt = None
-        is_option_row = bool(opt) or "OPTION" in t
-        e = trades.setdefault(sym, {"net_units": 0.0, "buy_cost": 0.0,
-                                    "sell_proceeds": 0.0, "dividends": 0.0,
-                                    "bought_units": 0.0, "sold_units": 0.0})
-        if is_option_row:
-            # True option rows (contract trades, OPTIONEXPIRATION/ASSIGNMENT
-            # contract legs) stay out of share math — the census proved the
-            # SHARE legs of assignments arrive as ordinary SELL rows, so
-            # nothing is lost by excluding these.
-            continue
-        # CENSUS FACT (2026-07-02): the per-account endpoint uses SIGNED units
-        # (sells are NEGATIVE, e.g. AMD SELL units=-45). Treating them as
-        # magnitudes made every sell ADD shares to the rewind → negative Jan-1
-        # quantities → nulled gains (the dashed-exits incident). Use |units|
-        # with direction from the TYPE.
+        if bool(opt) or "OPTION" in t:
+            return
         u_abs = abs(u)
         gross = (u_abs * px) if (u_abs and px) else abs(amt)
         if t in _SNAP_FLOW_TYPES:
-            # IN-KIND SECURITY TRANSFERS (TRANSFER rows with units≠0): whole
-            # positions enter/leave an account mid-year — the traces showed
-            # the rewind backdating them to Jan-1 (BSX −$124K, CRM −$54K,
-            # INTC +$317K phantoms). Treat as buy/sell at the transfer's
-            # MARKED VALUE so attribution measures performance in THIS
-            # account since arrival — consistent with the account-level
-            # Dietz, which already counts these as external flows.
+            # Transfers move SHARES + a marked value, but must not pollute
+            # trade stats (exit-price avg and SOLD detection use real sells
+            # only) — value rides in xfer_net_val, cancelled exactly by a
+            # matching opposite leg in the cross-account stitch.
             if u_abs > 1e-9:
                 val = abs(amt)
                 if val <= 0:
                     e["transfer_unvalued"] = True   # can't price it → honest null
                 elif u > 0:
                     e["net_units"] += u_abs
-                    e["buy_cost"] += val
-                    e["bought_units"] += u_abs
+                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) + val
                 else:
                     e["net_units"] -= u_abs
-                    e["sell_proceeds"] += val
-                    e["sold_units"] += u_abs
-            continue
+                    e["xfer_net_val"] = e.get("xfer_net_val", 0.0) - val
+                e["had_unit_transfer"] = True
+            return
         if t in _SNAP_BUY_TYPES:
             e["net_units"] += u_abs
             e["buy_cost"] += gross
@@ -27043,6 +27021,56 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
             e["sold_units"] += u_abs
         elif t in _SNAP_DIV_TYPES:
             e["dividends"] += amt
+
+    def _new_agg() -> dict:
+        return {"net_units": 0.0, "buy_cost": 0.0, "sell_proceeds": 0.0,
+                "dividends": 0.0, "bought_units": 0.0, "sold_units": 0.0}
+
+    cur.execute("""
+        SELECT a.symbol, a.type, a.units, a.price, a.amount,
+               a.raw_json -> 'option_symbol' AS opt
+          FROM snaptrade_activities a
+          JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+         WHERE sa.fund_id = %s AND a.trade_date >= %s AND a.symbol IS NOT NULL
+    """, (fund_id, jan1))
+    trades = {}
+    for r in cur.fetchall():
+        sym = (r["symbol"] or "").strip()
+        if not sym:
+            continue
+        _apply_row(trades.setdefault(sym, _new_agg()), r)
+
+    # CROSS-ACCOUNT STITCH: an in-kind transfer between Alec's OWN linked
+    # accounts is administrative consolidation, not new money. For symbols
+    # with unit-transfer legs, re-aggregate across ALL linked accounts —
+    # matching IN/OUT legs cancel exactly, so the Jan-1 rewind reaches
+    # through the source account's history: INTC (held since Jan-1 @ $37 in
+    # the old account, consolidated in May, called away in June) anchors at
+    # Jan-1 for the full YTD gain, while a position the source account
+    # BOUGHT during the year anchors at its actual purchase cost. Transfers
+    # from untracked external sources keep the marked-value anchor (their
+    # legs have no matching OUT to cancel). Caveat: if the same symbol is
+    # actively traded in two accounts AND transferred, the stitch blends
+    # both accounts' trades for that symbol.
+    xfer_syms = [s for s, e in trades.items() if e.get("had_unit_transfer")]
+    if xfer_syms:
+        cur.execute("""
+            SELECT a.symbol, a.type, a.units, a.price, a.amount,
+                   a.raw_json -> 'option_symbol' AS opt
+              FROM snaptrade_activities a
+              JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
+             WHERE sa.status = 'active' AND a.trade_date >= %s
+               AND UPPER(a.symbol) = ANY(%s)
+        """, (jan1, [s.upper() for s in xfer_syms]))
+        stitched: dict = {}
+        for r in cur.fetchall():
+            sym = (r["symbol"] or "").strip()
+            if not sym:
+                continue
+            _apply_row(stitched.setdefault(sym, _new_agg()), r)
+        for s in xfer_syms:
+            if s in stitched:
+                trades[s] = stitched[s]
     if not holdings and not trades:
         return []
 
@@ -27082,7 +27110,10 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         jan1_value = (jan1_qty * jan1_px) if (jan1_px is not None and jan1_qty > 1e-6) else (0.0 if jan1_qty <= 1e-6 else None)
         gain = None
         if rewind_ok and jan1_value is not None and not tr.get("transfer_unvalued"):
-            gain = end_value - jan1_value - (tr["buy_cost"] - tr["sell_proceeds"]) + tr["dividends"]
+            gain = (end_value - jan1_value
+                    - (tr["buy_cost"] - tr["sell_proceeds"])
+                    - tr.get("xfer_net_val", 0.0)
+                    + tr["dividends"])
         # Stock return: live price vs Jan-1 for open names. Closed names use
         # their average EXIT price (they rendered null across the board); for
         # within-year round trips (not held on Jan 1) the base is the average
@@ -27548,11 +27579,15 @@ def snaptrade_attribution_debug(request: Request, fund_id: str, symbol: str = No
                         bucket = "TRANSFER UNVALUED (gain nulled)"
                         agg["transfer_unvalued"] = 1
                     elif u3 > 0:
-                        bucket = "TRANSFER IN (+%s sh @ value %s)" % (round(ua, 3), round(val3, 2))
-                        agg["net_units"] += ua; agg["buy_cost"] += val3; agg["bought_units"] += ua
+                        bucket = ("TRANSFER IN (+%s sh @ value %s — cross-account stitch "
+                                  "applies if the matching OUT leg is in a linked account)"
+                                  % (round(ua, 3), round(val3, 2)))
+                        agg["net_units"] += ua
+                        agg["xfer_net_val"] = agg.get("xfer_net_val", 0.0) + val3
                     else:
                         bucket = "TRANSFER OUT (−%s sh @ value %s)" % (round(ua, 3), round(val3, 2))
-                        agg["net_units"] -= ua; agg["sell_proceeds"] += val3; agg["sold_units"] += ua
+                        agg["net_units"] -= ua
+                        agg["xfer_net_val"] = agg.get("xfer_net_val", 0.0) - val3
                 else:
                     ua = abs(u3)
                     g3 = (ua * p3) if (ua and p3) else abs(a3)
