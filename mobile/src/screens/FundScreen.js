@@ -13,7 +13,7 @@
  *
  * Sub-tabs (LP Fund branch): Overview | LPs | Positions | Activity | Waterfall
  */
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, RefreshControl, TextInput,
   StyleSheet, ActivityIndicator, TouchableOpacity,
@@ -25,7 +25,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import AppHeader from '../components/AppHeader';
 import { colors } from '../components/theme';
-import { useTheme } from '../design';
 import { api, getFundToken, setFundToken, clearFundToken } from '../api/client';
 
 const LAST_PORTFOLIO_KEY = '@dga_last_portfolio';
@@ -51,108 +50,7 @@ const pctColor = (x) =>
 const BRANCHES = ['LP Fund', 'Managed Account', 'Rebalanced'];
 const LP_TABS  = ['Overview', 'LPs', 'Positions', 'Activity', 'Waterfall'];
 
-// ── Position row — VALUE + P&L first (owner's priorities), tap to expand ─────
-// Line 1: TICKER | MARKET VALUE.  Line 2: company name | P/L $ · P/L %.
-// Tap toggles an inline detail block (shares, last, avg cost, basis, weight, lots).
-function PosRow({ p, t, rs }) {
-  const [open, setOpen] = useState(false);
-
-  const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
-  const pct = p.unrealized_gain_pct != null
-    ? Number(p.unrealized_gain_pct)
-    : (gain != null && p.total_cost
-        ? (gain / Number(p.total_cost)) * 100
-        : null);
-  const plRef   = gain != null ? gain : pct;
-  const plColor = plRef == null ? t.textDim : (plRef >= 0 ? t.pillUpFg : t.pillDownFg);
-  const plParts = [];
-  if (gain != null) plParts.push((gain >= 0 ? '+' : '') + fmt$(gain));
-  if (pct != null)  plParts.push(fmtPct(pct, 1));
-
-  // Company name — only when genuinely present (cache fallback sets name=ticker)
-  const name     = p.name != null ? String(p.name).trim() : '';
-  const showName = !!name && name.toUpperCase() !== String(p.symbol || '').toUpperCase();
-
-  const mv = p.market_value != null
-    ? fmt$(p.market_value)
-    : (p.last_price != null && p.total_qty != null
-        ? fmt$(Number(p.last_price) * Number(p.total_qty))
-        : '—');
-
-  // Expanded detail — render only the fields this list's rows actually carry
-  const fields = [];
-  if (p.total_qty != null)  fields.push(['Shares', Number(p.total_qty).toLocaleString('en-US')]);
-  if (p.last_price != null) fields.push(['Last price', '$' + Number(p.last_price).toFixed(2)]);
-  if (p.avg_cost != null)   fields.push(['Avg cost', '$' + Number(p.avg_cost).toLocaleString('en-US', { maximumFractionDigits: 2 })]);
-  if (p.total_cost != null) fields.push(['Cost basis', fmt$(p.total_cost)]);
-  if (p.market_weight_pct != null) fields.push(['Weight', Number(p.market_weight_pct).toFixed(1) + '%']);
-  if (p.lot_count != null && p.lot_count > 1) fields.push(['Lots', String(p.lot_count)]);
-
-  return (
-    <View>
-      <TouchableOpacity style={rs.row} onPress={() => setOpen(o => !o)} activeOpacity={0.7}>
-        <View style={rs.left}>
-          <Text style={rs.ticker} numberOfLines={1}>{p.symbol}</Text>
-          {showName
-            ? <Text style={rs.name} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
-            : null}
-        </View>
-        <View style={rs.right}>
-          <Text style={rs.mktVal}>{mv}</Text>
-          <Text style={[rs.plTxt, { color: plColor }]}>
-            {plParts.length ? plParts.join(' · ') : '—'}
-          </Text>
-        </View>
-        <Ionicons
-          name="chevron-down" size={14} color={t.textDim}
-          style={[rs.chev, open && { transform: [{ rotate: '180deg' }] }]}
-        />
-      </TouchableOpacity>
-      {open && fields.length > 0 && (
-        <View style={rs.detailBlock}>
-          {fields.map(([k, v]) => (
-            <View key={k} style={rs.detailRow}>
-              <Text style={rs.detailKey}>{k}</Text>
-              <Text style={rs.detailVal}>{v}</Text>
-            </View>
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
-
-// Summary strip at the TOP of a positions card — count, total value, total P/L.
-function PosSummary({ rows, t, rs }) {
-  const cost = rows.reduce((acc, p) => acc + (p.total_cost || 0), 0);
-  const mkt  = rows.reduce((acc, p) => acc + (p.market_value || 0), 0);
-  const gain = rows.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0);
-  const pct  = cost > 0 ? (gain / cost) * 100 : null;
-  const plColor = gain >= 0 ? t.pillUpFg : t.pillDownFg;
-  return (
-    <View style={rs.summaryStrip}>
-      <View style={{ flex: 1 }}>
-        <Text style={rs.summaryLabel}>
-          {rows.length} POSITION{rows.length === 1 ? '' : 'S'}
-        </Text>
-        <Text style={rs.summaryValue}>{fmt$(mkt)}</Text>
-      </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={rs.summaryLabel}>TOTAL P/L</Text>
-        <Text style={[rs.summaryPl, { color: plColor }]}>
-          {(gain >= 0 ? '+' : '') + fmt$(gain)}
-          {pct != null ? '  ·  ' + fmtPct(pct, 1) : ''}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 export default function FundScreen({ navigation }) {
-  // ── Theme (position rows only — rest of the screen keeps its navy styling) ─
-  const { theme: t } = useTheme();
-  const rs = useMemo(() => makePosRowStyles(t), [t]);
-
   // ── Auth state ───────────────────────────────────────────────────────────
   const [locked,    setLocked]    = useState(true);
   const [password,  setPassword]  = useState('');
@@ -1049,18 +947,43 @@ export default function FundScreen({ navigation }) {
                   <Text style={s.importBtnText}>Import CSV</Text>
                 </TouchableOpacity>
               </View>
-              <View style={[s.fundTableCard, rs.listCard]}>
+              <View style={s.fundTableCard}>
                 {acctPositions.length === 0 ? (
                   <Text style={s.emptyText}>No positions. Import a Fidelity Positions CSV above.</Text>
                 ) : (
                   <>
-                    <PosSummary rows={acctPositions} t={t} rs={rs} />
-                    {acctPositions.map((p, i) => (
-                      <View key={p.symbol + i}>
-                        {i > 0 && <View style={rs.sep} />}
-                        <PosRow p={p} t={t} rs={rs} />
-                      </View>
-                    ))}
+                    <View style={s.posTableHead}>
+                      <Text style={[s.posTh, { flex: 1.2, textAlign: 'left' }]}>SYMBOL</Text>
+                      <Text style={s.posTh}>QTY</Text>
+                      <Text style={s.posTh}>COST</Text>
+                      <Text style={[s.posTh, { color: colors.primary }]}>MKT VAL</Text>
+                      <Text style={s.posTh}>G/L</Text>
+                    </View>
+                    {acctPositions.map((p, i) => {
+                      const gc = (p.unrealized_gain ?? 0) >= 0 ? '#4cc870' : '#e06050';
+                      return (
+                        <View key={p.symbol + i} style={[s.posTableRow, i > 0 && s.posTableBorder]}>
+                          <View style={{ flex: 1.2 }}>
+                            <Text style={s.posTicker}>{p.symbol}</Text>
+                            <Text style={s.posName} numberOfLines={1}>{p.name || ''}</Text>
+                          </View>
+                          <Text style={s.posNum}>{Number(p.total_qty).toLocaleString()}</Text>
+                          <Text style={s.posNum}>{fmt$(p.total_cost)}</Text>
+                          <Text style={[s.posNum, { color: colors.primary }]}>{p.market_value != null ? fmt$(p.market_value) : '—'}</Text>
+                          <Text style={[s.posNum, { color: gc }]}>{p.unrealized_gain != null ? fmt$(p.unrealized_gain) : '—'}</Text>
+                        </View>
+                      );
+                    })}
+                    {/* Total row */}
+                    <View style={[s.posTableRow, s.posTotalRow]}>
+                      <Text style={[s.posTicker, { color: '#6a8aaa', fontSize: 10, flex: 1.2 }]}>TOTAL</Text>
+                      <Text style={s.posNum}></Text>
+                      <Text style={s.posNum}>{fmt$(acctPositions.reduce((a, p) => a + (p.total_cost || 0), 0))}</Text>
+                      <Text style={[s.posNum, { color: colors.primary, fontWeight: '700' }]}>{fmt$(acctPositions.reduce((a, p) => a + (p.market_value || 0), 0))}</Text>
+                      <Text style={[s.posNum, { color: acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0) >= 0 ? '#4cc870' : '#e06050', fontWeight: '700' }]}>
+                        {fmt$(acctPositions.reduce((a, p) => a + (p.unrealized_gain || 0), 0))}
+                      </Text>
+                    </View>
                   </>
                 )}
               </View>
@@ -1517,6 +1440,7 @@ export default function FundScreen({ navigation }) {
   }
 
   function PositionsPanel() {
+    const totalMktVal = positions.reduce((s, p) => s + (p.market_value || 0), 0);
     return (
       <View>
         {/* Import button row */}
@@ -1541,15 +1465,66 @@ export default function FundScreen({ navigation }) {
         {!positions.length ? (
           <Text style={s.emptyText}>No open positions.</Text>
         ) : (
-          <View style={rs.listCardStandalone}>
-            <PosSummary rows={positions} t={t} rs={rs} />
-            {positions.map((p, i) => (
-              <View key={p.symbol + i}>
-                {i > 0 && <View style={rs.sep} />}
-                <PosRow p={p} t={t} rs={rs} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={s.tableWrap}>
+              <View style={[s.tableRow, s.tableHeader]}>
+                <Text style={[s.th, { width: 64 }]}>Symbol</Text>
+                <Text style={[s.th, s.thRight, { width: 56 }]}>Qty</Text>
+                <Text style={[s.th, s.thRight, { width: 64 }]}>Avg $</Text>
+                <Text style={[s.th, s.thRight, { width: 72 }]}>Cost</Text>
+                <Text style={[s.th, s.thRight, { width: 64, color: '#5BB8D4' }]}>Last $</Text>
+                <Text style={[s.th, s.thRight, { width: 80, color: '#5BB8D4' }]}>Mkt Val</Text>
+                <Text style={[s.th, s.thRight, { width: 72 }]}>P/L</Text>
+                <Text style={[s.th, s.thRight, { width: 48 }]}>Wt%</Text>
               </View>
-            ))}
-          </View>
+              {positions.map((p, i) => {
+                const hasMkt   = p.market_value != null;
+                const plColor  = (p.unrealized_gain || 0) >= 0 ? '#4cc870' : '#e06050';
+                const mktWt    = p.market_weight_pct != null ? p.market_weight_pct.toFixed(1) + '%' : '—';
+                return (
+                  <View key={p.symbol + i} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
+                    <View style={[{ width: 64 }, s.symbolCell]}>
+                      <Text style={s.symbolText}>{p.symbol}</Text>
+                      {p.lot_count > 1 && <Text style={s.lotBadge}>{p.lot_count}L</Text>}
+                    </View>
+                    <Text style={[s.td, s.tdRight, { width: 56 }]}>{Number(p.total_qty).toLocaleString()}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 64 }]}>${Math.round(p.avg_cost).toLocaleString('en-US')}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 72 }]}>{fmt$(p.total_cost)}</Text>
+                    <Text style={[s.td, s.tdRight, { width: 64, color: '#5BB8D4' }]}>
+                      {hasMkt ? `$${p.last_price?.toFixed(2)}` : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: hasMkt ? '#5BB8D4' : '#b0bdd0' }]}>
+                      {hasMkt ? fmt$(p.market_value) : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, { width: 72, color: hasMkt ? plColor : '#4a6080' }]}>
+                      {hasMkt ? fmt$(p.unrealized_gain) : '—'}
+                    </Text>
+                    <Text style={[s.td, s.tdRight, s.tdDim, { width: 48 }]}>{mktWt}</Text>
+                  </View>
+                );
+              })}
+              {/* Total footer */}
+              {totalMktVal > 0 && (
+                <View style={[s.tableRow, { borderTopWidth: 1, borderTopColor: 'rgba(91,184,212,0.2)' }]}>
+                  <Text style={[s.td, { width: 64, color: '#4a6080', fontSize: 9, fontWeight: '700' }]}>TOTAL</Text>
+                  <Text style={[s.td, s.tdRight, { width: 56 }]}></Text>
+                  <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 72 }]}>
+                    {fmt$(positions.reduce((acc, p) => acc + (p.total_cost || 0), 0))}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 64 }]}></Text>
+                  <Text style={[s.td, s.tdRight, s.tdBold, { width: 80, color: '#5BB8D4' }]}>
+                    {fmt$(totalMktVal)}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 72,
+                    color: positions.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0) >= 0 ? '#4cc870' : '#e06050' }]}>
+                    {fmt$(positions.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0))}
+                  </Text>
+                  <Text style={[s.td, s.tdRight, { width: 48 }]}></Text>
+                </View>
+              )}
+            </View>
+          </ScrollView>
         )}
       </View>
     );
@@ -2428,84 +2403,4 @@ const as = StyleSheet.create({
   holdContrib:  { fontSize: 12 },
   missingBadge: { fontSize: 9, fontWeight: '800', color: '#e8a060', backgroundColor: 'rgba(232,160,96,0.15)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
   mmBadge:      { fontSize: 9, fontWeight: '800', color: '#6090e8', backgroundColor: 'rgba(96,144,232,0.15)', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
-});
-
-// ── Themed position-row styles (brokerage "Movers"-style list) ───────────────
-// Built per-theme via useMemo(() => makePosRowStyles(t), [t]) in FundScreen.
-const makePosRowStyles = (t) => StyleSheet.create({
-  // Overrides for the existing s.fundTableCard container (managed account list)
-  listCard: { backgroundColor: t.surface, borderColor: t.border, borderWidth: 1 },
-  // Standalone card for the LP Positions tab (previously a bare column table)
-  listCardStandalone: {
-    marginHorizontal: 14,
-    marginTop: 6,
-    marginBottom: 4,
-    backgroundColor: t.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: t.border,
-    overflow: 'hidden',
-  },
-
-  // Summary strip — sits at the top of the card, absorbs the old TOTAL footer
-  summaryStrip: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: t.border,
-    backgroundColor: t.surfaceAlt,
-  },
-  summaryLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.0, color: t.textDim, marginBottom: 2 },
-  summaryValue: { fontSize: 20, fontWeight: '800', color: t.textPrimary, fontVariant: ['tabular-nums'] },
-  summaryPl:    { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'], lineHeight: 24 },
-
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-  },
-  sep: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: t.border,
-    marginLeft: 14,
-  },
-  left: { flex: 1, justifyContent: 'center', flexShrink: 1 },
-  ticker: { color: t.textPrimary, fontSize: 16.5, fontWeight: '800', letterSpacing: 0.3 },
-  name:   { color: t.textSecondary, fontSize: 12, fontWeight: '500', marginTop: 2, flexShrink: 1 },
-
-  right: { alignItems: 'flex-end', justifyContent: 'center' },
-  mktVal: {
-    color: t.textPrimary,
-    fontSize: 16,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums'],
-    textAlign: 'right',
-  },
-  plTxt: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    marginTop: 2,
-    textAlign: 'right',
-  },
-  chev: { marginLeft: 2 },
-
-  // Inline expanded detail block (collapsed by default)
-  detailBlock: {
-    paddingHorizontal: 14,
-    paddingBottom: 12,
-    paddingTop: 2,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 3,
-  },
-  detailKey: { fontSize: 11.5, fontWeight: '600', color: t.textDim },
-  detailVal: { fontSize: 12.5, fontWeight: '700', color: t.textSecondary, fontVariant: ['tabular-nums'] },
 });

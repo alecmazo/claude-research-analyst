@@ -332,6 +332,7 @@ export const api = {
     }),
 
   getJobStatus: (jobId) => request(`/api/jobs/${jobId}`),
+  cancelJob:    (jobId) => request('/api/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' }),
   listJobs:     ()       => request('/api/jobs'),
   // provider: 'grok' (default) | 'claude' — opens the right MD via ?provider=
   getReport:    (ticker, provider = 'grok') =>

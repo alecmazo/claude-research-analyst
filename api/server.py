@@ -5546,7 +5546,8 @@ def diagnostics():
 
 
 @app.post("/api/analyze", response_model=JobStatus)
-def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
+def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks,
+                   request: Request = None):
     """Kick off an async analysis for *ticker*. Returns a job_id to poll.
 
     Body fields:
@@ -5561,6 +5562,10 @@ def start_analysis(req: AnalyzeRequest, background_tasks: BackgroundTasks):
     provider = (req.llm_provider or "grok").lower().strip()
     if provider not in ("grok", "claude", "both"):
         raise HTTPException(status_code=422, detail="llm_provider must be 'grok' | 'claude' | 'both'")
+
+    # DEMO: no paid LLM call ever — synthesize a sample report instantly.
+    if request is not None and _request_is_demo(request):
+        return _demo_instant_analysis(ticker)
 
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -5676,7 +5681,13 @@ def list_jobs():
 
 
 @app.get("/api/report/{ticker}")
-def get_report(ticker: str, provider: str = "grok"):
+def get_report(ticker: str, provider: str = "grok", request: Request = None):
+    if request is not None and _request_is_demo(request):
+        md = _demo_report_lookup(ticker)
+        if md is None:
+            raise HTTPException(status_code=404, detail="No demo report for this ticker yet — run Analyze.")
+        return {"ticker": ticker.upper(), "report_md": md, "provider": "demo",
+                "generated_at": datetime.utcnow().isoformat()}
     """Return the full markdown report text for *ticker* from `provider`.
 
     provider:
@@ -8738,7 +8749,10 @@ def _hydrate_orphaned_claude_reports() -> None:
 
 
 @app.get("/api/reports")
-def list_reports():
+def list_reports(request: Request = None):
+    if request is not None and _request_is_demo(request):
+        rows = _kv_get("demo.reports") or []
+        return [{k: v for k, v in r.items() if k != "report_md"} for r in rows]
     """Return all tickers that have saved reports.
 
     Each entry now includes an extracted summary (`rating`, `price_target`,
@@ -9187,8 +9201,10 @@ def start_market_scan(background_tasks: BackgroundTasks):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/scan")
-def start_scan(background_tasks: BackgroundTasks):
+def start_scan(background_tasks: BackgroundTasks, request: Request = None):
     """Kick off a live-search news scan for all watchlist tickers."""
+    if request is not None and _request_is_demo(request):
+        return {"job_id": "demo-scan", "status": "done"}
     tickers = _filter_scan_tickers(_all_watchlist_tickers())
     if not tickers:
         raise HTTPException(status_code=422, detail="Watchlist is empty — add tickers first")
@@ -9211,7 +9227,9 @@ def start_scan(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/scan/latest")
-def get_latest_scan():
+def get_latest_scan(request: Request = None):
+    if request is not None and _request_is_demo(request):
+        return _kv_get("demo.samples.pulse") or {"exists": False}
     """Return the merged per-ticker scan pulse (persists across deploys).
 
     Primary source: kv_store 'scan.pulse' dict (per-ticker, survives redeploys).
@@ -9243,8 +9261,14 @@ def get_latest_scan():
 
 
 @app.get("/api/scan/{job_id}")
-def get_scan_status(job_id: str):
+def get_scan_status(job_id: str, request: Request = None):
     """Poll a running or completed scan job."""
+    if job_id == "demo-scan" or (request is not None and _request_is_demo(request)):
+        pulse = _kv_get("demo.samples.pulse") or {}
+        res = pulse.get("results") or {}
+        return {"job_id": "demo-scan", "status": "done",
+                "tickers": list(res), "tickers_done": list(res),
+                "results": res, "scanned_at": pulse.get("scanned_at"), "error": None}
     with _sjobs_lock:
         job = _sjobs.get(job_id)
     if not job:
@@ -9845,8 +9869,10 @@ def _run_daily_brief(job_id: str) -> None:
 
 
 @app.post("/api/daily-brief")
-def start_daily_brief(background_tasks: BackgroundTasks):
+def start_daily_brief(background_tasks: BackgroundTasks, request: Request = None):
     """Start a Goldman-style PM morning brief (Grok 4.30-beta w/ live search)."""
+    if request is not None and _request_is_demo(request):
+        return {"job_id": "demo-brief", "status": "done"}
     job_id = str(uuid.uuid4())
     now = _now_pacific().isoformat()
     with _bjobs_lock:
@@ -9862,7 +9888,9 @@ def start_daily_brief(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/daily-brief/latest")
-def get_latest_daily_brief():
+def get_latest_daily_brief(request: Request = None):
+    if request is not None and _request_is_demo(request):
+        return _kv_get("demo.samples.daily_brief") or {"exists": False}
     """Return the most-recently-completed daily brief.
 
     PRIMARY: kv_store row `daily_brief.latest` (Postgres — survives deploys).
@@ -9885,8 +9913,13 @@ def get_latest_daily_brief():
 
 
 @app.get("/api/daily-brief/{job_id}")
-def get_daily_brief_status(job_id: str):
+def get_daily_brief_status(job_id: str, request: Request = None):
     """Poll a running or completed daily-brief job."""
+    if job_id == "demo-brief" or (request is not None and _request_is_demo(request)):
+        s = _kv_get("demo.samples.daily_brief") or {}
+        return {"job_id": "demo-brief", "status": "done",
+                "markdown": s.get("markdown"), "generated_at": s.get("generated_at"),
+                "error": None}
     with _bjobs_lock:
         job = _bjobs.get(job_id)
     if not job:
@@ -11678,6 +11711,12 @@ def fund_list(request: Request, fund_type: str = None):
                      ORDER BY inception_date ASC
                 """)
             funds = [dict(r) for r in cur.fetchall()]
+            # DEMO PARTITION: demo sessions see ONLY demo funds; real sessions
+            # never see them (belt to the middleware's braces).
+            _demo_fund_set = {str(x).lower() for x in
+                              ((_demo_registry() or {}).get("fund_ids") or [])}
+            funds = [f for f in funds
+                     if (str(f["id"]).lower() in _demo_fund_set) == _is_demo]
             if not funds:
                 return []
 
@@ -19736,6 +19775,16 @@ def _run_agentic_analysis(job_id: str, question: str,
 
 @app.post("/api/research/agentic")
 def research_agentic_start(req: Request, background_tasks: BackgroundTasks):
+    if _request_is_demo(req):
+        s = _kv_get("demo.samples.agentic") or {}
+        _agentic_jobs["demo-agentic"] = {
+            "stage": "done", "status": "done", "label": "Demo sample answer",
+            "started_at": time.time(), "updated_at": time.time(), "steps": 1,
+            "tool_calls": [], "cost_usd": 0.0,
+            "result": {"markdown": s.get("markdown") or "*demo*"},
+            "markdown": s.get("markdown") or "*demo*",
+        }
+        return {"ok": True, "job_id": "demo-agentic"}
     """Kick off an agentic research run. Body: {question: str}.
     Returns {ok, job_id}; poll GET /api/research/agentic/{job_id}."""
     claims = _claims_or_401(req)
@@ -28794,6 +28843,9 @@ def _snaptrade_sync_job_runner(job_id: str) -> None:
 
 @app.post("/api/snaptrade/sync")
 def snaptrade_sync(request: Request, background_tasks: BackgroundTasks):
+    if _request_is_demo(request):
+        return {"ok": True, "job_id": "demo-sync", "status": "done",
+                "note": "Demo accounts are always in sync — sample data refreshes nightly."}
     """GP-only: START a background holdings/activities/balances sync and return
     immediately with {job_id}. Poll GET /api/snaptrade/sync-status. If a sync
     is already running, joins it (the connect flow polls aggressively)."""
@@ -28817,6 +28869,10 @@ def snaptrade_sync(request: Request, background_tasks: BackgroundTasks):
 def snaptrade_sync_status(request: Request):
     """GP-only: state of the current/most-recent sync job."""
     _plaid_require_gp(request)
+    if _request_is_demo(request):
+        return {"ok": True, "status": "done", "stage": "Demo data is static",
+                "finished_at": datetime.utcnow().isoformat(),
+                "result": {"ok": True, "note": "demo"}}
     j = _SNAPTRADE_SYNC_JOB
     if not j:
         return {"ok": True, "status": "idle"}
@@ -29097,7 +29153,9 @@ def snaptrade_accounts(request: Request):
                               account_mask, total_value, holdings_json, fund_id, last_synced_at,
                               COALESCE(hidden, FALSE) AS hidden
                          FROM snaptrade_accounts WHERE status='active'
-                         ORDER BY COALESCE(hidden, FALSE), created_at""")
+                           AND (account_id LIKE 'demo-%%') = %s
+                         ORDER BY COALESCE(hidden, FALSE), created_at""",
+                    (_request_is_demo(request),))
         for r in cur.fetchall():
             out.append({
                 "account_id":    r["account_id"],
@@ -29560,6 +29618,438 @@ def railway_usage(request: Request):
                  "Egress/volume not metered here. Adjust prices via RAILWAY_PRICE_* "
                  "env vars. RSS is reclaimed to the OS every sweep via malloc_trim."),
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DEMO SANDBOX — seed + admin endpoints (guards live next to auth_middleware).
+# The dataset is BORN SYNTHETIC: real tickers + real store prices (public
+# data), fictitious quantities/owners/history. Every entity is registered in
+# kv demo.registry, which drives the symmetric access guard.
+# ═════════════════════════════════════════════════════════════════════════════
+_DEMO_FALLBACK_TICKERS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "XOM", "UNH",
+    "HD", "COST", "AVGO", "LLY", "V", "PG", "CAT", "GE", "PEP", "KO", "ABBV",
+]
+_DEMO_GP_EMAIL, _DEMO_GP_PASSWORD = "demo.gp@dgacapital.com", "DemoGP!2026"
+_DEMO_LP_EMAIL, _DEMO_LP_PASSWORD = "demo.lp@dgacapital.com", "DemoLP!2026"
+_DEMO_FUND_NAME = "Demo Growth Partners, LP"
+_DEMO_LP_ALIAS  = "Blue Harbor Family Trust"
+
+
+def _demo_report_md(tk: str, name: str, px: float, sector: str) -> str:
+    """Instant zero-LLM sample research report (demo analyze stub output)."""
+    pt = round(px * 1.18, 2) if px else None
+    return f"""# {name or tk} ({tk}) — DGA Research Note *(demo sample)*
+
+**Rating: BUY · Price target: ${pt or '—'} (+18%)**
+
+> This is a pre-generated sample report shown in the demo. On a live account
+> this page is produced by the AI analyst from SEC filings, live market data
+> and news — typically 3–4 pages with full financial tables.
+
+## Thesis
+{name or tk} screens attractively within {sector or 'its sector'}: durable
+revenue growth, expanding margins, and a balance sheet that supports continued
+buybacks. We see the current price (${px or '—'}) underappreciating normalized
+earnings power.
+
+## Key points
+- **Growth**: revenue CAGR ahead of sector median; operating leverage intact.
+- **Moat**: scale + switching costs support pricing power through the cycle.
+- **Capital returns**: buyback authorization covers ~4% of float annually.
+- **Risks**: macro sensitivity, multiple compression if rates back up.
+
+## Valuation
+Base case {pt and f'${pt}'} on a mid-cycle multiple of forward earnings;
+bear/bull span ±20%. Options income (covered calls at the +8% strike) adds
+~1.5% quarterly yield while we wait.
+"""
+
+
+def _demo_brief_md() -> str:
+    d = datetime.utcnow().strftime("%A, %B %-d")
+    return f"""## ☀️ Daily Morning Brief — {d} *(demo sample)*
+
+**Tape**: Futures modestly higher; yields flat; dollar soft. Asia closed mixed,
+Europe +0.3%. Crude −0.8% on inventory build.
+
+**Your book**: The portfolio's largest holdings open quiet. Semis lead
+pre-market (+1.2% sector ETF) — supportive for your tech overweight. One
+holding reports earnings Thursday after close.
+
+**Watchlist movers**: Two names gap >2% on analyst upgrades; one flagged for
+unusual options volume (calls 3× average).
+
+**Calendar**: CPI print 8:30 ET tomorrow; Fed speakers at 11:00 and 14:00.
+
+*On a live account this brief is generated fresh each morning by AI from your
+actual positions, watchlist, and the overnight tape.*
+"""
+
+
+def _demo_reseed() -> dict:
+    """(Re)build the entire demo sandbox. Idempotent — safe to run any time.
+    Zero network calls: prices come from the local market-data store."""
+    import random as _rnd
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        raise HTTPException(503, "Database not available")
+    rnd = _rnd.Random(20260707)          # deterministic across reseeds
+    yr = datetime.utcnow().year
+    today = datetime.utcnow().date()
+    out: dict = {"ok": True}
+
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        # ── 1. Ticker universe: ~20 random watchlist names (store-priced) ──
+        cur.execute("SELECT DISTINCT ticker FROM watchlists")
+        pool = sorted({(r["ticker"] or "").strip().upper() for r in cur.fetchall()} - {""})
+        if len(pool) < 12:
+            pool = sorted(set(pool) | set(_DEMO_FALLBACK_TICKERS))
+        cur.execute("SELECT symbol, price FROM market_quotes WHERE symbol = ANY(%s) "
+                    "AND price IS NOT NULL AND price > 1", (pool,))
+        px_map = {r["symbol"]: float(r["price"]) for r in cur.fetchall()}
+        priced = [t for t in pool if t in px_map]
+        if len(priced) < 10:
+            cur.execute("SELECT symbol, price FROM market_quotes WHERE symbol = ANY(%s) "
+                        "AND price IS NOT NULL AND price > 1", (_DEMO_FALLBACK_TICKERS,))
+            for r in cur.fetchall():
+                px_map.setdefault(r["symbol"], float(r["price"]))
+            priced = sorted(px_map)
+        if len(priced) < 8:
+            raise HTTPException(503, "Market-data store has too few priced tickers — run a market sync first.")
+        tickers = rnd.sample(priced, min(20, len(priced)))
+        cur.execute("SELECT symbol, name, sector FROM security_meta WHERE symbol = ANY(%s)", (tickers,))
+        meta = {r["symbol"]: r for r in cur.fetchall()}
+        out["tickers"] = tickers
+
+        # ── 2. Funds (upsert by fixed short names → stable ids) ────────────
+        def _mk_fund(name, sn, ftype):
+            cur.execute("""
+                INSERT INTO funds (name, short_name, fund_type, inception_date,
+                                   fiscal_year_end, structure, domicile, base_ccy,
+                                   mgmt_fee_pct, mgmt_fee_basis, mgmt_fee_freq,
+                                   carry_pct, hurdle_pct, status)
+                VALUES (%s, %s, %s, %s, %s,
+                        %s, 'DE', 'USD', 1.5, 'nav', 'quarterly', 15.0, 6.0, 'open')
+                ON CONFLICT (short_name) DO UPDATE
+                    SET name = EXCLUDED.name, fund_type = EXCLUDED.fund_type,
+                        updated_at = NOW()
+                RETURNING id
+            """, (name, sn, ftype, f"{yr}-01-02", f"{yr}-12-31",
+                  "separately_managed" if ftype == "managed_account" else "3c1"))
+            fid = str(cur.fetchone()["id"])
+            _seed_coa_for_fund(cur, fid)
+            return fid
+        fund_id = _mk_fund(_DEMO_FUND_NAME, "DEMOFUND", "lp_fund")
+        core_id = _mk_fund("Demo Core Account", "DEMOCORE", "managed_account")
+        inc_id  = _mk_fund("Demo Income Account", "DEMOINC", "managed_account")
+        demo_fund_ids = [fund_id, core_id, inc_id]
+
+        # ── 3. Wipe previous demo dependents ───────────────────────────────
+        cur.execute("DELETE FROM snaptrade_activities WHERE account_id LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_balances   WHERE account_id LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_accounts   WHERE account_id LIKE 'demo-%'")
+        cur.execute("DELETE FROM commitments WHERE lp_id IN (SELECT id FROM lps WHERE fund_id = ANY(%s::uuid[]))",
+                    (demo_fund_ids,))
+        cur.execute("DELETE FROM lps WHERE fund_id = ANY(%s::uuid[])", (demo_fund_ids,))
+        cur.execute("DELETE FROM account_balance_history WHERE fund_id = ANY(%s::uuid[])", (demo_fund_ids,))
+        cur.execute("DELETE FROM managed_account_ytd_cache WHERE fund_id = ANY(%s::uuid[])", (demo_fund_ids,))
+
+        # ── 4. Positions. Everything is BOUGHT THIS YEAR (mid-January), so
+        #      attribution/returns need no pre-2026 price history at all. ──
+        def _mk_positions(tks, target_total):
+            wts = [rnd.uniform(0.6, 1.6) for _ in tks]
+            tot = sum(wts)
+            ps = []
+            for tk, w in zip(tks, wts):
+                px = px_map[tk]
+                gain = rnd.uniform(-0.12, 0.42)              # YTD gain per name
+                cost = round(px / (1.0 + gain), 4)
+                qty = max(1, int(target_total * (w / tot) / px))
+                nm = (meta.get(tk) or {}).get("name") or tk
+                ps.append({"symbol": tk, "quantity": qty, "price": px,
+                           "cost_basis_per_unit": cost, "asset_class": "equity",
+                           "name": nm})
+            return ps
+        fund_pos = _mk_positions(tickers[:12], 8_400_000)
+        core_pos = _mk_positions(tickers[6:15], 2_250_000)
+        inc_pos  = _mk_positions(tickers[13:20], 1_050_000)
+        _snaptrade_write_lots(cur, fund_id, fund_pos)
+        _snaptrade_write_lots(cur, core_id, core_pos)
+        _snaptrade_write_lots(cur, inc_id,  inc_pos)
+
+        # ── 5. LP roster + commitments ──────────────────────────────────────
+        lp_defs = [(_DEMO_LP_ALIAS, "trust", 3_500_000),
+                   ("Kestrel Point Capital LLC", "llc", 3_000_000),
+                   ("A. & M. Winslow", "individual", 2_000_000)]
+        for nm, et, amt in lp_defs:
+            cur.execute("""INSERT INTO lps (fund_id, legal_name, entity_type, accred_type, status)
+                           VALUES (%s, %s, %s, 'net_worth', 'active') RETURNING id""",
+                        (fund_id, nm, et))
+            lp_row = cur.fetchone()
+            cur.execute("""INSERT INTO commitments (lp_id, fund_id, commitment_amount, effective_date)
+                           VALUES (%s, %s, %s, %s)""",
+                        (str(lp_row["id"]), fund_id, amt, f"{yr}-01-02"))
+
+        # ── 6. Managed accounts: snaptrade rows + YTD activities + history ──
+        acct_defs = [("demo-core-001", core_id, "DEMO CORE", "0001", core_pos,
+                      [2.4, -1.1, -4.2, 6.8, 3.4, -1.6]),
+                     ("demo-inc-001", inc_id, "DEMO INCOME", "0002", inc_pos,
+                      [1.5, -0.4, -2.6, 4.1, 2.2, -0.9])]
+        snap_ids = []
+        for aid, fid, aname, mask, pos, rets in acct_defs:
+            snap_ids.append(aid)
+            equity_val = sum(p["quantity"] * p["price"] for p in pos)
+            total_val = round(equity_val * 1.03, 2)          # 3% cash pad
+            cur.execute("""
+                INSERT INTO snaptrade_accounts (account_id, connection_id, brokerage_name,
+                    account_name, account_mask, total_value, holdings_json, status,
+                    fund_id, last_synced_at, updated_at)
+                VALUES (%s, NULL, 'Demo Brokerage', %s, %s, %s, %s::jsonb, 'active',
+                        %s, now(), now())
+            """, (aid, aname, mask, total_val, json.dumps(pos), fid))
+            # Activities: buys mid-Jan at cost basis; one partial trim; one
+            # full round trip (SOLD chip); a few dividends.
+            acts, n = [], 0
+            for i, p in enumerate(pos):
+                n += 1
+                buy_d = f"{yr}-01-{12 + (i % 9):02d}"
+                extra = int(p["quantity"] * 0.5) if i == 1 else 0   # i==1 gets trimmed later
+                q0 = p["quantity"] + extra
+                acts.append((f"{aid}-a{n}", aid, buy_d, "BUY", p["symbol"],
+                             q0, p["cost_basis_per_unit"],
+                             -round(q0 * p["cost_basis_per_unit"], 2)))
+                if i == 1 and extra:
+                    n += 1
+                    sell_px = round(p["price"] * 0.96, 4)
+                    acts.append((f"{aid}-a{n}", aid, f"{yr}-05-14", "SELL", p["symbol"],
+                                 -extra, sell_px, round(extra * sell_px, 2)))
+                if i in (0, 3, 5):
+                    for mth in (3, 6):
+                        n += 1
+                        acts.append((f"{aid}-a{n}", aid, f"{yr}-{mth:02d}-28", "DIVIDEND",
+                                     p["symbol"], 0, 0,
+                                     round(p["quantity"] * p["price"] * 0.004, 2)))
+            # Full round trip on a ticker the account does NOT hold now.
+            rt_tk = next((t for t in tickers if t not in {p["symbol"] for p in pos}), None)
+            if rt_tk:
+                rt_px = px_map[rt_tk]
+                rt_q = max(1, int(120_000 / rt_px))
+                n += 1
+                acts.append((f"{aid}-a{n}", aid, f"{yr}-02-10", "BUY", rt_tk,
+                             rt_q, round(rt_px * 0.9, 4), -round(rt_q * rt_px * 0.9, 2)))
+                n += 1
+                acts.append((f"{aid}-a{n}", aid, f"{yr}-06-05", "SELL", rt_tk,
+                             -rt_q, round(rt_px * 1.04, 4), round(rt_q * rt_px * 1.04, 2)))
+            for a in acts:
+                cur.execute("""
+                    INSERT INTO snaptrade_activities (activity_id, account_id, trade_date,
+                        type, symbol, units, price, amount, currency, raw_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'USD', '{}'::jsonb)
+                    ON CONFLICT (activity_id) DO NOTHING
+                """, a)
+            # Monthly balance history Jan..last-complete-month, solved so the
+            # series lands exactly on today's total value.
+            months = list(range(1, today.month))            # Jan..prev month
+            rets = rets[:len(months)] or [1.0]
+            growth = 1.0
+            for r_ in rets:
+                growth *= (1 + r_ / 100.0)
+            dep0 = round(total_val / growth, 2)
+            records, beg = [], 0.0
+            for k, m in enumerate(months):
+                r_ = rets[k] if k < len(rets) else 0.0
+                deposits = dep0 if k == 0 else 0.0
+                withdrawals = 0.0
+                base = beg + deposits
+                mkt = round(base * (r_ / 100.0), 2)
+                div = round(base * 0.0012, 2)
+                end = round(base + mkt, 2)
+                mkt_ex_div = round(mkt - div, 2)
+                denom = beg + 0.5 * (deposits - withdrawals)
+                ret_pct = round((mkt / (denom if denom else deposits)) * 100, 4) if (denom or deposits) else 0.0
+                label = datetime(yr, m, 1).strftime("%b %Y")
+                records.append({
+                    "year": yr, "month": m, "label": label,
+                    "beg_balance": round(beg, 2), "end_balance": end,
+                    "market_change": mkt_ex_div, "dividends": div, "interest": 0.0,
+                    "deposits": deposits, "withdrawals": withdrawals, "fees": 0.0,
+                    "return_pct": ret_pct, "skip": False,
+                })
+                beg = end
+            overview = _account_overview_from_balance(records) or {}
+            overview["flows"] = [{"date": f"{yr}-01-05", "amount": dep0,
+                                  "type": "DEPOSIT", "description": "Initial funding (demo)"}]
+            overview["source"] = "demo_seed"
+            attr_base = dep0
+            try:
+                attr_rows = _snaptrade_build_attribution(cur, fid, yr, attr_base)
+            except Exception as _e:
+                attr_rows = []
+                out.setdefault("warnings", []).append(f"attribution {aname}: {_e!s:.120}")
+            if attr_rows:
+                overview["attribution"] = attr_rows
+                overview["attribution_source"] = "snaptrade_auto"
+                overview["attribution_estimated"] = False
+                overview["attribution_capital_base"] = round(attr_base, 2)
+                overview["attribution_contrib_sum"] = round(
+                    sum(r0.get("contribution_pct") or 0.0 for r0 in attr_rows), 2)
+            cur.execute("""
+                INSERT INTO account_balance_history (fund_id, data_json, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE SET data_json = EXCLUDED.data_json, updated_at = now()
+            """, (fid, json.dumps(records)))
+            cur.execute("""
+                INSERT INTO managed_account_ytd_cache (fund_id, nav, ytd_pct, result_json, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (fund_id) DO UPDATE
+                  SET nav = EXCLUDED.nav, ytd_pct = EXCLUDED.ytd_pct,
+                      result_json = EXCLUDED.result_json, updated_at = now()
+            """, (fid, float(overview.get("end_value") or total_val),
+                  float(overview.get("twrr_return_pct") or 0.0), json.dumps(overview)))
+        conn.commit()
+
+    # ── 7. Demo users (auth overlay) ────────────────────────────────────────
+    import auth_v2 as _av2
+    user_ids = []
+    for email, pw, name, role, kw in [
+        (_DEMO_GP_EMAIL, _DEMO_GP_PASSWORD, "Demo GP", "gp", {}),
+        (_DEMO_LP_EMAIL, _DEMO_LP_PASSWORD, "Demo LP", "lp",
+         {"fund_memberships": {_DEMO_FUND_NAME: _DEMO_LP_ALIAS},
+          "managed_account_ids": [core_id]}),
+    ]:
+        try:
+            old = _av2.find_user_by_email(email)
+            if old:
+                _av2.delete_user(old["lp_id"])
+            uid = _av2.create_user(email=email, name=name, password=pw, role=role,
+                                   must_change_password=False, demo_mode=True, **kw)
+            user_ids.append(uid)
+        except Exception as _e:
+            out.setdefault("warnings", []).append(f"user {email}: {_e!s:.120}")
+
+    # ── 8. Canned AI samples + demo reports (kv — never analyst_reports,
+    #      which is keyed by ticker and shared with the real book) ──────────
+    _kv_put("demo.samples.daily_brief", {
+        "exists": True, "markdown": _demo_brief_md(),
+        "generated_at": datetime.utcnow().isoformat()})
+    pulse_results = {}
+    for tk in tickers[:8]:
+        m = meta.get(tk) or {}
+        sent = ["BULLISH", "NEUTRAL", "BEARISH"][hash(tk) % 3]
+        pulse_results[tk] = {
+            "ticker": tk, "ok": True, "price": px_map.get(tk),
+            "pct_change": round((hash(tk) % 500 - 220) / 100.0, 2),
+            "sentiment": sent,
+            "markdown": (f"**Today's Move:** {tk} {'gaining on constructive chatter'
+                          if sent == 'BULLISH' else 'drifting with the tape'
+                          if sent == 'NEUTRAL' else 'soft on sector rotation'} "
+                         f"(demo sample — live scans read X/news in real time)."),
+        }
+    _kv_put("demo.samples.pulse", {"exists": True, "results": pulse_results,
+                                   "scanned_at": datetime.utcnow().isoformat()})
+    _kv_put("demo.samples.agentic", {
+        "markdown": ("### Portfolio check *(demo sample)*\n\nYour three largest "
+                     "positions drive ~42% of YTD gain; concentration is within "
+                     "policy. Two watchlist names now trade below their report "
+                     "price targets — worth a refresh.\n\n*(Live accounts get a "
+                     "tool-using AI analyst over real holdings, quotes, and "
+                     "saved research.)*")})
+    demo_reports = []
+    for tk in tickers[:5]:
+        m = meta.get(tk) or {}
+        px = px_map.get(tk)
+        demo_reports.append({
+            "ticker": tk, "generated_at": datetime.utcnow().isoformat(),
+            "rating": "BUY", "price_target": round(px * 1.18, 2) if px else None,
+            "upside_pct": 18.0, "has_docx": False, "has_pptx": False,
+            "archived": False,
+            "report_md": _demo_report_md(tk, m.get("name") or tk, px, m.get("sector")),
+        })
+    _kv_put("demo.reports", demo_reports)
+
+    # ── 9. Registry → activates the symmetric guard ─────────────────────────
+    _kv_put(_DEMO_REG_KEY, {
+        "fund_ids": demo_fund_ids,
+        "short_names": ["DEMOFUND", "DEMOCORE", "DEMOINC"],
+        "snap_ids": snap_ids, "user_ids": user_ids,
+        "fund_name": _DEMO_FUND_NAME,
+        "seeded_at": datetime.utcnow().isoformat(),
+    })
+    _demo_guard_refresh()
+    out.update(fund_id=fund_id, core_id=core_id, inc_id=inc_id,
+               users={"gp": _DEMO_GP_EMAIL, "lp": _DEMO_LP_EMAIL},
+               reports=len(demo_reports))
+    return out
+
+
+def _demo_report_lookup(ticker: str, create: bool = True) -> str | None:
+    """Fetch (or lazily synthesize) a demo sample report for `ticker`."""
+    tk = (ticker or "").strip().upper()
+    rows = _kv_get("demo.reports") or []
+    for r in rows:
+        if (r.get("ticker") or "").upper() == tk:
+            return r.get("report_md")
+    if not create:
+        return None
+    px, nm, sec = None, tk, None
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            cur.execute("SELECT price FROM market_quotes WHERE symbol=%s", (tk,))
+            q = cur.fetchone()
+            px = float(q["price"]) if q and q["price"] else None
+            cur.execute("SELECT name, sector FROM security_meta WHERE symbol=%s", (tk,))
+            m = cur.fetchone()
+            if m:
+                nm, sec = m["name"] or tk, m["sector"]
+    except Exception:
+        pass
+    md = _demo_report_md(tk, nm, px, sec)
+    rows.append({"ticker": tk, "generated_at": datetime.utcnow().isoformat(),
+                 "rating": "BUY", "price_target": round(px * 1.18, 2) if px else None,
+                 "upside_pct": 18.0, "has_docx": False, "has_pptx": False,
+                 "archived": False, "report_md": md})
+    _kv_put("demo.reports", rows[-40:])
+    return md
+
+
+def _demo_instant_analysis(ticker: str) -> dict:
+    """Demo analyze stub: synthesizes the sample report and returns an
+    already-done job — zero LLM tokens, feels like a (fast) real run."""
+    tk = ticker.strip().upper()
+    _demo_report_lookup(tk, create=True)
+    job_id = f"demo-analyze-{tk.lower()}"
+    job = {"job_id": job_id, "ticker": tk, "status": "done",
+           "created_at": datetime.utcnow().isoformat(), "error": None,
+           "result": {"ok": True, "has_report": True, "demo": True},
+           "progress": {"step": "done", "pct": 1.0,
+                        "label": "Demo sample report ready"}}
+    with _jobs_lock:
+        _jobs[job_id] = job
+    return job
+
+
+@app.post("/api/v2/admin/demo/reseed")
+def demo_reseed_endpoint(request: Request):
+    """REAL-GP-only: (re)build the demo sandbox. Demo tokens can't call this."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin") or claims.get("demo_mode"):
+        raise HTTPException(403, "Real GP role required")
+    res = _demo_reseed()
+    res["credentials"] = {"gp": {"email": _DEMO_GP_EMAIL, "password": _DEMO_GP_PASSWORD},
+                          "lp": {"email": _DEMO_LP_EMAIL, "password": _DEMO_LP_PASSWORD}}
+    return res
+
+
+@app.get("/api/v2/admin/demo/status")
+def demo_status_endpoint(request: Request):
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP role required")
+    reg = _demo_registry(force=True)
+    return {"seeded": bool(reg.get("fund_ids")), "registry": reg,
+            "credentials": ({"gp": {"email": _DEMO_GP_EMAIL, "password": _DEMO_GP_PASSWORD},
+                             "lp": {"email": _DEMO_LP_EMAIL, "password": _DEMO_LP_PASSWORD}}
+                            if not claims.get("demo_mode") else None)}
 
 
 if __name__ == "__main__":

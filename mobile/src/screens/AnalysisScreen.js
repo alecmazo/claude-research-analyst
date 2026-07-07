@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator,
-  ScrollView, TouchableOpacity, Linking, Animated, Easing,
+  ScrollView, TouchableOpacity, Linking, Animated, Easing, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api, getGammaEnabled } from '../api/client';
@@ -100,6 +100,12 @@ export default function AnalysisScreen({ route, navigation }) {
       } else if (data.status === 'failed') {
         clearInterval(timerRef.current);
         haptics.onError();
+      } else if (data.status === 'canceled') {
+        // User-requested cancel completed server-side — stop polling.
+        // (While the server is still winding down it reports status 'running'
+        // with a 'canceling…' progress.label, so we keep polling until here.)
+        clearInterval(timerRef.current);
+        haptics.onWarn();
       }
     } catch (err) {
       clearInterval(timerRef.current);
@@ -151,13 +157,35 @@ export default function AnalysisScreen({ route, navigation }) {
 
   const isDone = job?.status === 'done';
   const isFailed = job?.status === 'failed';
+  const isCanceled = job?.status === 'canceled';
+
+  // ── Cancel a running analysis ──
+  const handleCancel = () => {
+    haptics.onWarn();
+    Alert.alert(
+      'Cancel Analysis?',
+      'Cancel this analysis? Nothing will be saved.',
+      [
+        { text: 'Keep Running', style: 'cancel' },
+        { text: 'Cancel Analysis', style: 'destructive', onPress: async () => {
+          try {
+            await api.cancelJob(jobId);
+            // Server may keep status 'running' with a 'canceling…' progress
+            // label for a bit — the poll loop keeps going until 'canceled'.
+          } catch (err) {
+            Alert.alert('Could not cancel', err?.message || 'Please try again.');
+          }
+        }},
+      ],
+    );
+  };
 
   // Step status from server-reported progress.step.
   // Steps before the current one are 'done'; current is 'active'; rest are 'pending'.
   const currentStepIdx = STEPS.findIndex(s => s.key === progress.step);
   const stepStatus = (idx) => {
     if (isDone)   return 'done';
-    if (isFailed) return idx < currentStepIdx ? 'done' : 'pending';
+    if (isFailed || isCanceled) return idx < currentStepIdx ? 'done' : 'pending';
     if (currentStepIdx < 0) return idx === 0 ? 'active' : 'pending';
     if (idx <  currentStepIdx) return 'done';
     if (idx === currentStepIdx) return 'active';
@@ -203,20 +231,30 @@ export default function AnalysisScreen({ route, navigation }) {
                     inputRange:  [0, 1],
                     outputRange: ['0%', '100%'],
                   }),
-                  backgroundColor: isFailed ? t.red : t.primary,
+                  backgroundColor: isFailed ? t.red : isCanceled ? t.amber : t.primary,
                 },
               ]}
             />
           </View>
           <View style={s.progressMeta}>
             <Text style={s.progressLabel}>
-              {isDone ? 'Complete' : isFailed ? 'Failed' : (progress.label || 'Working…')}
+              {isDone ? 'Complete' : isFailed ? 'Failed' : isCanceled ? 'Canceled' : (progress.label || 'Working…')}
             </Text>
-            {!isDone && !isFailed && (
+            {!isDone && !isFailed && !isCanceled && (
               <Text style={s.progressEta}>{etaStr}</Text>
             )}
-            {(isDone || isFailed) && (
+            {(isDone || isFailed || isCanceled) && (
               <Text style={s.progressEta}>{elapsed}s</Text>
+            )}
+            {!isDone && !isFailed && !isCanceled && (
+              <TouchableOpacity
+                style={s.cancelBtn}
+                onPress={handleCancel}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={s.cancelBtnText}>✕ Cancel</Text>
+              </TouchableOpacity>
             )}
           </View>
 
@@ -226,6 +264,13 @@ export default function AnalysisScreen({ route, navigation }) {
               <StepRow t={t} s={s} key={step.key} step={step} status={stepStatus(i)} />
             ))}
           </View>
+
+          {isCanceled && (
+            <View style={s.canceledBox}>
+              <Ionicons name="close-circle-outline" size={20} color={t.amber} />
+              <Text style={s.canceledText}>Analysis canceled — nothing was saved.</Text>
+            </View>
+          )}
 
           {isFailed && (
             <View style={s.errorBox}>
@@ -391,6 +436,36 @@ function makeStyles(t) {
   stepsContainer: { gap: 14 },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 2 },
   stepLabel: { fontSize: fontSize.bodyLg, fontWeight: '500', flex: 1 },
+
+  // ── Cancel (running) ──
+  cancelBtn: {
+    marginLeft: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+    borderRadius: 6,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  cancelBtnText: {
+    fontSize: fontSize.small,
+    fontWeight: '700',
+    color: t.red,
+    letterSpacing: 0.3,
+  },
+
+  // ── Canceled note ──
+  canceledBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: t.surfaceAlt,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.amber,
+    padding: 12,
+    marginTop: 20,
+    gap: 10,
+  },
+  canceledText: { color: t.amber, flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '600' },
 
   // ── Error / retry ──
   errorBox: {

@@ -83,61 +83,140 @@ function fmtUSDFull(v) {
   return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// ── Position row ──────────────────────────────────────────────────────────────
+// Whole-dollar format with commas (used for market value / P&L amounts)
+function fmt$(v) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v);
+  return (n < 0 ? '−$' : '$')
+    + Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
 
-function PositionRow({ item, onPress, t, ts }) {
-  const pct    = item.day_change_pct;
-  const abs    = item.day_change_abs;
-  const up     = pct == null ? null : pct >= 0;
-  const pillBg = pct == null ? t.pillFlatBg : up ? t.pillUpBg : t.pillDownBg;
-  const pillFg = pct == null ? t.pillFlatFg : up ? t.pillUpFg : t.pillDownFg;
+// Signed 1-decimal percent for P/L (e.g. "+15.9%")
+function fmtPlPct(n, decimals = 1) {
+  if (n == null || isNaN(n)) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + Number(n).toFixed(decimals) + '%';
+}
 
-  // Company name — second line, only when we actually have one (never invent)
-  const name     = item.name != null ? String(item.name).trim() : '';
-  const showName = !!name && name.toUpperCase() !== String(item.symbol || '').toUpperCase();
+// ── Position row — VALUE + P&L first, tap to expand (ui377 design) ───────────
+// Line 1: TICKER | MARKET VALUE.  Line 2: company name | P/L $ · P/L %.
+// Tap toggles an inline detail block; "View report ›" lives inside the expander.
+function PosRow({ p, t, rs, onPressReport }) {
+  const [open, setOpen] = useState(false);
 
-  // Use full dollar format (not abbreviated) for gains to match web ui84 behaviour
-  const gainTxt = item.unrealized_gain != null
-    ? (item.unrealized_gain >= 0 ? '+' : '') + fmtUSDFull(item.unrealized_gain)
-      + (item.unrealized_gain_pct != null
-          ? ' (' + (item.unrealized_gain_pct >= 0 ? '+' : '') + item.unrealized_gain_pct.toFixed(1) + '%)'
-          : '')
-    : null;
+  const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
+  const pct = p.unrealized_gain_pct != null
+    ? Number(p.unrealized_gain_pct)
+    : (gain != null && p.total_cost
+        ? (gain / Number(p.total_cost)) * 100
+        : null);
+  const plRef   = gain != null ? gain : pct;
+  const plColor = plRef == null ? t.textDim : (plRef >= 0 ? t.pillUpFg : t.pillDownFg);
+  const plParts = [];
+  if (gain != null) plParts.push((gain >= 0 ? '+' : '') + fmt$(gain));
+  if (pct != null)  plParts.push(fmtPlPct(pct, 1));
 
-  // _acct_weight_pct is computed per-account in fetchPositions; fallback to global field
-  const wt = (item._acct_weight_pct ?? item.market_weight_pct) != null
-    ? (item._acct_weight_pct ?? item.market_weight_pct).toFixed(1) + '% of acct'
-    : null;
+  // Company name — only when genuinely present (cache fallback sets name=ticker)
+  const name     = p.name != null ? String(p.name).trim() : '';
+  const showName = !!name && name.toUpperCase() !== String(p.symbol || '').toUpperCase();
 
-  // Third line — keeps every detail the old row showed (weight, P/L $, day $)
-  const detail = [
-    wt,
-    gainTxt ? 'P/L ' + gainTxt : null,
-    abs != null ? 'Day ' + fmtAbs(abs) : null,
-  ].filter(Boolean).join('  ·  ');
+  const mv = p.market_value != null
+    ? fmt$(p.market_value)
+    : (p.last_price != null && p.total_qty != null
+        ? fmt$(Number(p.last_price) * Number(p.total_qty))
+        : '—');
+
+  // Expanded detail — render only the fields this list's rows actually carry
+  const fields = [];
+  if (p.total_qty != null)  fields.push(['Shares', Number(p.total_qty).toLocaleString('en-US')]);
+  if (p.last_price != null) fields.push(['Last price', fmtPrice(p.last_price)]);
+  if (p.day_change_abs != null) {
+    // day_change_abs is per-share; scale to the position when qty is known
+    const dayAbs = p.total_qty != null
+      ? Number(p.day_change_abs) * Number(p.total_qty)
+      : Number(p.day_change_abs);
+    const dayTxt = fmtAbs(dayAbs)
+      + (p.day_change_pct != null ? '  ·  ' + fmtPct(p.day_change_pct) : '');
+    fields.push(['Day change', dayTxt]);
+  }
+  const wt = p._acct_weight_pct ?? p.market_weight_pct;
+  if (wt != null) fields.push(['Acct weight', Number(wt).toFixed(1) + '%']);
+  if (gain != null || pct != null) {
+    fields.push(['Unrealized P/L', plParts.join('  ·  ')]);
+  }
 
   return (
-    <TouchableOpacity style={ts.row} onPress={() => onPress(item)} activeOpacity={0.6}>
-      {/* Left: big ticker + muted company name + dim detail line */}
-      <View style={ts.rowLeft}>
-        <Text style={ts.ticker} numberOfLines={1}>{item.symbol}</Text>
-        {showName ? (
-          <Text style={ts.company} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
-        ) : null}
-        {detail ? <Text style={ts.detail}>{detail}</Text> : null}
-      </View>
-
-      {/* Right: big price + day-% pill */}
-      <View style={ts.rowRight}>
-        <Text style={ts.price}>{fmtPrice(item.last_price)}</Text>
-        <View style={[ts.pill, { backgroundColor: pillBg }]}>
-          {pct != null && (
-            <Ionicons name={up ? 'arrow-up' : 'arrow-down'} size={13} color={pillFg} />
-          )}
-          <Text style={[ts.pillTxt, { color: pillFg }]}>{pct != null ? fmtPct(pct) : '—'}</Text>
+    <View>
+      <TouchableOpacity style={rs.row} onPress={() => setOpen(o => !o)} activeOpacity={0.7}>
+        <View style={rs.left}>
+          <Text style={rs.ticker} numberOfLines={1}>{p.symbol}</Text>
+          {showName
+            ? <Text style={rs.name} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
+            : null}
         </View>
+        <View style={rs.right}>
+          <Text style={rs.mktVal}>{mv}</Text>
+          <Text style={[rs.plTxt, { color: plColor }]}>
+            {plParts.length ? plParts.join(' · ') : '—'}
+          </Text>
+        </View>
+        <Ionicons
+          name="chevron-down" size={14} color={t.textDim}
+          style={[rs.chev, open && { transform: [{ rotate: '180deg' }] }]}
+        />
+      </TouchableOpacity>
+      {open && (
+        <View style={rs.detailBlock}>
+          {fields.map(([k, v]) => (
+            <View key={k} style={rs.detailRow}>
+              <Text style={rs.detailKey}>{k}</Text>
+              <Text style={rs.detailVal}>{v}</Text>
+            </View>
+          ))}
+          {onPressReport ? (
+            <TouchableOpacity
+              style={rs.reportBtn}
+              onPress={() => onPressReport(p)}
+              activeOpacity={0.7}
+            >
+              <Text style={rs.reportBtnTxt}>View report ›</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// Summary strip at the TOP of a positions card — count, total value, total P/L.
+function PosSummary({ rows, t, rs }) {
+  const cost = rows.reduce((acc, p) => acc + (
+    p.total_cost != null
+      ? Number(p.total_cost)
+      : (p.market_value != null && p.unrealized_gain != null
+          ? Number(p.market_value) - Number(p.unrealized_gain)
+          : 0)
+  ), 0);
+  const mkt  = rows.reduce((acc, p) => acc + (Number(p.market_value) || 0), 0);
+  const gain = rows.reduce((acc, p) => acc + (Number(p.unrealized_gain) || 0), 0);
+  const pct  = cost > 0 ? (gain / cost) * 100 : null;
+  const plColor = gain >= 0 ? t.pillUpFg : t.pillDownFg;
+  return (
+    <View style={rs.summaryStrip}>
+      <View style={{ flex: 1 }}>
+        <Text style={rs.summaryLabel}>
+          {rows.length} POSITION{rows.length === 1 ? '' : 'S'}
+        </Text>
+        <Text style={rs.summaryValue}>{fmt$(mkt)}</Text>
       </View>
-    </TouchableOpacity>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={rs.summaryLabel}>TOTAL P/L</Text>
+        <Text style={[rs.summaryPl, { color: plColor }]}>
+          {(gain >= 0 ? '+' : '') + fmt$(gain)}
+          {pct != null ? '  ·  ' + fmtPlPct(pct, 1) : ''}
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -147,7 +226,7 @@ function AccountSection({
   title, positions, navSum, daySum, dayValid, onPressRow,
   sourceType, stakePct,
   // theming
-  t, ts,
+  t, ts, rs,
   // view-config props
   open, onToggle,
   editMode, onMoveUp, onMoveDown, canMoveUp, canMoveDown,
@@ -202,13 +281,18 @@ function AccountSection({
         </Text>
       </TouchableOpacity>
 
-      {/* Collapsible body */}
-      {open && positions.map((item, idx) => (
-        <View key={`${item.symbol}-${idx}`}>
-          {idx > 0 && <View style={ts.rowSep} />}
-          <PositionRow item={item} onPress={onPressRow} t={t} ts={ts} />
-        </View>
-      ))}
+      {/* Collapsible body — summary strip + two-line expandable rows */}
+      {open && (
+        <>
+          <PosSummary rows={positions} t={t} rs={rs} />
+          {positions.map((item, idx) => (
+            <View key={`${item.symbol}-${idx}`}>
+              {idx > 0 && <View style={rs.sep} />}
+              <PosRow p={item} t={t} rs={rs} onPressReport={onPressRow} />
+            </View>
+          ))}
+        </>
+      )}
     </View>
   );
 }
@@ -219,6 +303,7 @@ export default function WatchlistScreen({ navigation }) {
   // ── Theme ─────────────────────────────────────────────────────────────────
   const { theme: t } = useTheme();
   const ts = useMemo(() => makeThemedStyles(t), [t]);
+  const rs = useMemo(() => makePosRowStyles(t), [t]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const [groupMap,     setGroupMap]     = useState({});   // key → group data
@@ -574,6 +659,7 @@ export default function WatchlistScreen({ navigation }) {
           onPressRow={handleRowPress}
           t={t}
           ts={ts}
+          rs={rs}
           sourceType={grp.sourceType}
           stakePct={grp.stakePct}
           open={openMap[grp.key] !== false}
@@ -832,51 +918,87 @@ const makeThemedStyles = (t) => StyleSheet.create({
   cardChevron:  { color: t.textDim },
   stakeBadge:   { color: t.primary },
   reorderArrow: { color: t.primary },
+});
 
-  // ── Ticker row ──
+// ── Themed position-row styles (ui377 value/P&L-first design) ────────────────
+// Built per-theme via useMemo(() => makePosRowStyles(t), [t]) in WatchlistScreen.
+const makePosRowStyles = (t) => StyleSheet.create({
+  // Summary strip — sits at the top of the positions card
+  summaryStrip: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    backgroundColor: t.surfaceAlt,
+  },
+  summaryLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.0, color: t.textDim, marginBottom: 2 },
+  summaryValue: { fontSize: 20, fontWeight: '800', color: t.textPrimary, fontVariant: ['tabular-nums'] },
+  summaryPl:    { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'], lineHeight: 24 },
+
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 12,
-  },
-  rowSep: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: t.border,
-    marginLeft: 16,
-  },
-  rowLeft: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  ticker:  { color: t.textPrimary, fontSize: 19, fontWeight: '800', letterSpacing: 0.3 },
-  company: { color: t.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 1 },
-  detail:  { color: t.textDim, fontSize: 11, marginTop: 2 },
-
-  rowRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     gap: 10,
   },
-  price: {
+  sep: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.border,
+    marginLeft: 14,
+  },
+  left: { flex: 1, justifyContent: 'center', flexShrink: 1 },
+  ticker: { color: t.textPrimary, fontSize: 16.5, fontWeight: '800', letterSpacing: 0.3 },
+  name:   { color: t.textSecondary, fontSize: 12, fontWeight: '500', marginTop: 2, flexShrink: 1 },
+
+  right: { alignItems: 'flex-end', justifyContent: 'center' },
+  mktVal: {
     color: t.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     fontVariant: ['tabular-nums'],
     textAlign: 'right',
   },
+  plTxt: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+    textAlign: 'right',
+  },
+  chev: { marginLeft: 2 },
 
-  // ── % pill ──
-  pill: {
-    minWidth: 86,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+  // Inline expanded detail block (collapsed by default)
+  detailBlock: {
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    paddingTop: 2,
+  },
+  detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
+    justifyContent: 'space-between',
+    paddingVertical: 3,
   },
-  pillTxt: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  detailKey: { fontSize: 11.5, fontWeight: '600', color: t.textDim },
+  detailVal: { fontSize: 12.5, fontWeight: '700', color: t.textSecondary, fontVariant: ['tabular-nums'] },
+
+  // "View report ›" action inside the expander (absorbs the old row tap → Report)
+  reportBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  reportBtnTxt: {
+    color: t.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
 });
