@@ -1295,6 +1295,9 @@ async def auth_middleware(request: Request, call_next):
             except Exception:
                 pass
             request.state.auth_claims = claims
+            _blk = await _demo_sandbox_check(request)
+            if _blk is not None:
+                return _blk
             return await call_next(request)
 
     # ── v1 token (legacy single-password HMAC) — backward compat for the
@@ -1303,6 +1306,9 @@ async def auth_middleware(request: Request, call_next):
              or request.query_params.get("token")
              or "")
     if _valid_token(token):
+        _blk = await _demo_sandbox_check(request)   # legacy = real session
+        if _blk is not None:
+            return _blk
         return await call_next(request)
 
     # Fund paths may also be accessed with a valid fund token alone
@@ -1312,6 +1318,9 @@ async def auth_middleware(request: Request, call_next):
                     or request.query_params.get("fund_token")
                     or "")
         if _valid_fund_token(fund_tok):
+            _blk = await _demo_sandbox_check(request)   # legacy = real session
+            if _blk is not None:
+                return _blk
             return await call_next(request)
 
     return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -1334,6 +1343,148 @@ async def _invalidate_cache_on_mutation(request: Request, call_next):
     except Exception:
         pass
     return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEMO SANDBOX — a synthetic fund + two managed accounts that exist ONLY for
+# demo_mode tokens. Two invariants, enforced symmetrically by middleware:
+#   1. A demo token can never touch a real fund/account (by UUID or short name).
+#   2. A real session never sees demo entities (kept out of lists + blocked
+#      by id), so demo rows can't pollute the real books.
+# Demo writes are limited to an allowlist; AI-cost endpoints serve canned
+# samples for demo tokens (never a paid LLM call). Data is seeded synthetic —
+# real positions never enter these rows, so nothing can leak by construction.
+# ─────────────────────────────────────────────────────────────────────────────
+_DEMO_REG_KEY = "demo.registry"
+_DEMO_REG_CACHE: dict = {"t": 0.0, "reg": None}
+_FUND_DIR_CACHE: dict = {"t": 0.0, "by_key": {}}   # uuid/short_name(lower) → is_demo
+_DEMO_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+# Demo tokens may only mutate through these path prefixes. Everything else
+# non-GET gets a friendly 403. The AI-looking entries are stubbed inside
+# their handlers (canned output, zero paid tokens).
+_DEMO_WRITE_ALLOW_PREFIXES = (
+    "/api/v2/auth/login", "/api/v2/auth/logout", "/api/v2/auth/me",
+    "/api/v2/lp/watchlist",        # per-user rows — demo user's own list
+    "/api/analyze",                # stub: canned analysis job
+    "/api/scan",                   # stub: canned market pulse
+    "/api/daily-brief",            # stub: canned brief
+    "/api/research/agentic",       # stub: canned analyst answer
+    "/api/snaptrade/sync",         # stub: instant fake sync for demo accts
+    "/api/v2/gp/fund/",            # rebalance run — free math, uuid-guarded
+    "/api/options/scan",           # wheel scan — market data only, no LLM
+)
+
+
+def _demo_registry(force: bool = False) -> dict:
+    """Demo registry from kv (60s in-process cache):
+    {fund_ids: [fund + 2 managed-acct uuids], short_names: [...],
+     snap_ids: [snaptrade demo account ids], user_ids: [...]}."""
+    now = time.time()
+    if not force and _DEMO_REG_CACHE["reg"] is not None and now - _DEMO_REG_CACHE["t"] < 60:
+        return _DEMO_REG_CACHE["reg"]
+    reg = _DEMO_REG_CACHE["reg"] or {}
+    try:
+        raw = _kv_get(_DEMO_REG_KEY)
+        if raw:
+            reg = json.loads(raw) if isinstance(raw, str) else raw
+        else:
+            reg = {}
+    except Exception:
+        pass                     # keep last-known registry on DB hiccup
+    _DEMO_REG_CACHE.update(t=now, reg=reg)
+    return reg
+
+
+def _demo_key_set() -> set:
+    """Lowercased uuid + short-name keys of all demo entities."""
+    reg = _DEMO_REG_CACHE["reg"] or {}
+    return {str(x).lower() for x in
+            (reg.get("fund_ids") or []) + (reg.get("short_names") or [])}
+
+
+def _fund_directory_refresh() -> None:
+    """Cache every fund's uuid + short_name → is_demo (60s TTL)."""
+    try:
+        demo = {str(x).lower() for x in
+                ((_DEMO_REG_CACHE["reg"] or {}).get("fund_ids") or [])}
+        by_key = {}
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id::text, COALESCE(short_name,'') FROM funds")
+            for fid, sn in cur.fetchall():
+                is_d = fid.lower() in demo
+                by_key[fid.lower()] = is_d
+                if sn:
+                    by_key[sn.lower()] = is_d
+        _FUND_DIR_CACHE.update(t=time.time(), by_key=by_key)
+    except Exception:
+        _FUND_DIR_CACHE["t"] = time.time()   # don't hammer a down DB
+
+
+def _demo_guard_refresh() -> None:
+    """Blocking refresh of both caches (runs in a worker thread)."""
+    _demo_registry(force=True)
+    _fund_directory_refresh()
+
+
+def _request_is_demo(request) -> bool:
+    c = getattr(request.state, "auth_claims", None) or {}
+    return bool(c.get("demo_mode"))
+
+
+async def _demo_sandbox_check(request: Request):
+    """Returns a JSONResponse to short-circuit the request, or None to allow.
+    MUST run after auth claims are attached (called from auth_middleware —
+    NOT its own @app.middleware, which would run before claims exist)."""
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return None
+    is_demo = _request_is_demo(request)
+    try:
+        if time.time() - min(_DEMO_REG_CACHE["t"], _FUND_DIR_CACHE["t"]) > 60:
+            import anyio as _anyio
+            await _anyio.to_thread.run_sync(_demo_guard_refresh)
+        demo_keys = _demo_key_set()
+        by_key    = _FUND_DIR_CACHE["by_key"]
+        # Candidate entity keys in the URL: uuids anywhere + path/query tokens
+        # that match known fund short names (fund routes accept both).
+        hay = path + "?" + str(request.url.query or "")
+        keys = {u.lower() for u in _DEMO_UUID_RE.findall(hay)}
+        for seg in re.split(r"[/?&=]", hay):
+            s = seg.lower()
+            if s and s in by_key:
+                keys.add(s)
+        if is_demo:
+            if not demo_keys and not path.startswith("/api/v2/auth/"):
+                return JSONResponse(status_code=403, content={
+                    "detail": "Demo dataset is not seeded yet — ask the GP to run the demo reseed."})
+            for k in keys:
+                # Block any key that is a KNOWN fund entity and not demo.
+                if by_key.get(k) is False:
+                    return JSONResponse(status_code=403, content={
+                        "detail": "Demo mode: only the demo fund and demo accounts are accessible."})
+            if request.method not in ("GET", "HEAD", "OPTIONS"):
+                if not any(path.startswith(p) for p in _DEMO_WRITE_ALLOW_PREFIXES):
+                    return JSONResponse(status_code=403, content={
+                        "detail": "Demo mode: this action is disabled in the demo. "
+                                  "Everything you see is sample data — changes, imports and "
+                                  "account-linking are available on a real account."})
+        else:
+            # Real session (v2 non-demo, legacy fund token, or v1 token):
+            # never allowed to touch demo entities by id/name.
+            for k in keys:
+                if k in demo_keys or by_key.get(k) is True:
+                    return JSONResponse(status_code=403, content={
+                        "detail": "This id belongs to the demo sandbox."})
+    except Exception:
+        # Real sessions: the guard must never take the app down (endpoints
+        # still do their own auth). Demo sessions: FAIL CLOSED — a broken
+        # guard must not become a window into real data.
+        if is_demo and not path.startswith("/api/v2/auth/"):
+            return JSONResponse(status_code=403, content={
+                "detail": "Demo mode: temporarily unavailable."})
+    return None
 
 
 # In-memory job store: { job_id: { status, ticker, result, error, created_at } }
@@ -5290,7 +5441,8 @@ def health_data():
             out["db"] = True
             try:
                 cur.execute("SELECT EXTRACT(EPOCH FROM (now() - max(last_synced_at))) "
-                            "FROM snaptrade_accounts WHERE status='active'")
+                            "FROM snaptrade_accounts WHERE status='active' "
+                            "AND account_id NOT LIKE 'demo-%'")
                 r = cur.fetchone()
                 if r and r[0] is not None:
                     out["snaptrade_age_s"] = int(float(r[0]))
@@ -19812,7 +19964,7 @@ def research_quarterly_letter(req: Request, background_tasks: BackgroundTasks):
     if not fund_ids and _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL")
+                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL AND account_id NOT LIKE 'demo-%'")
                 fund_ids = [str(r[0]) for r in cur.fetchall()]
         except Exception:
             pass
@@ -19920,7 +20072,7 @@ def research_quarterly_letter_intro(req: Request, background_tasks: BackgroundTa
     if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
         try:
             with _fund_conn() as conn, conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL")
+                cur.execute("SELECT DISTINCT fund_id FROM snaptrade_accounts WHERE status='active' AND fund_id IS NOT NULL AND account_id NOT LIKE 'demo-%'")
                 fund_ids = [str(r[0]) for r in cur.fetchall()]
         except Exception:
             pass
@@ -22252,7 +22404,8 @@ def _snaptrade_short_options_map() -> dict:
         import snaptrade_link as _st
         uid, secret = _snaptrade_ensure_user()
         with _fund_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active'")
+            cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active' "
+                        "AND account_id NOT LIKE 'demo-%'")
             acct_ids = [r[0] for r in cur.fetchall()]
         for aid in acct_ids:
             opts = _builder_call_timeout(
@@ -26340,7 +26493,7 @@ def _snaptrade_reset_stale_user() -> None:
         backup = {}
         try:
             cur.execute("SELECT account_mask, account_name, fund_id FROM snaptrade_accounts "
-                        "WHERE fund_id IS NOT NULL")
+                        "WHERE fund_id IS NOT NULL AND account_id NOT LIKE 'demo-%'")
             for mask, name, fid in cur.fetchall():
                 backup[f"{mask or ''}|{(name or '').strip().lower()}"] = str(fid)
         except Exception:
@@ -26365,9 +26518,11 @@ def _snaptrade_reset_stale_user() -> None:
         # Wipe user + per-client data. Activities/balances reference old
         # account ids that can never sync again under the new client.
         cur.execute("DELETE FROM snaptrade_user")
-        cur.execute("DELETE FROM snaptrade_accounts")
-        cur.execute("DELETE FROM snaptrade_activities")
-        cur.execute("DELETE FROM snaptrade_balances")
+        # Demo sandbox rows (account_id 'demo-…') are synthetic, not tied to
+        # any SnapTrade client — a key-swap purge must leave them alone.
+        cur.execute("DELETE FROM snaptrade_accounts WHERE account_id NOT LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_activities WHERE account_id NOT LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_balances WHERE account_id NOT LIKE 'demo-%'")
         conn.commit()
     print("[snaptrade] stale user reset — re-register under current client id", flush=True)
 
@@ -26958,6 +27113,10 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
     `cur` must be a RealDictCursor. Returns [] when there's nothing to build.
     """
     jan1 = f"{year}-01-01"
+    # Demo partition: demo funds only ever match demo accounts' legs and
+    # vice versa — synthetic transfers must never anchor real attribution.
+    _demo_part = str(fund_id).lower() in {
+        str(x).lower() for x in ((_demo_registry() or {}).get("fund_ids") or [])}
     holdings = _snaptrade_fund_holdings(cur, fund_id)
     holdings = {s: h for s, h in holdings.items()
                 if h.get("asset_class") not in ("cash", "option")
@@ -27084,12 +27243,13 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active'
                AND (sa.fund_id IS NULL OR sa.fund_id::text <> %s)
+               AND (sa.account_id LIKE 'demo-%%') = %s
                AND a.trade_date >= %s
                AND UPPER(a.symbol) = ANY(%s)
              GROUP BY 1
         """, (list(_SNAP_FLOW_TYPES), list(_SNAP_FLOW_TYPES),
               list(_SNAP_BUY_TYPES), list(_SNAP_BUY_TYPES), list(_SNAP_SELL_TYPES),
-              str(fund_id), jan1, [s.upper() for s in xfer_syms]))
+              str(fund_id), _demo_part, jan1, [s.upper() for s in xfer_syms]))
         src_stats = {r["sym"]: {"in": float(r["in_units"] or 0),
                                 "out": float(r["out_units"] or 0),
                                 "bought_units": float(r["bought_units"] or 0),
@@ -27101,8 +27261,9 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
         # of the SOURCE pool).
         src_hold: dict = {}
         cur.execute("""SELECT holdings_json FROM snaptrade_accounts
-                        WHERE status='active' AND (fund_id IS NULL OR fund_id::text <> %s)""",
-                    (str(fund_id),))
+                        WHERE status='active' AND (fund_id IS NULL OR fund_id::text <> %s)
+                          AND (account_id LIKE 'demo-%%') = %s""",
+                    (str(fund_id), _demo_part))
         for hr in cur.fetchall():
             hj = hr["holdings_json"]
             if isinstance(hj, str):
@@ -27198,10 +27359,11 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active' AND sa.fund_id IS NULL
+               AND (sa.account_id LIKE 'demo-%%') = %s
                AND a.trade_date >= %s AND a.units < 0 AND a.symbol IS NOT NULL
                AND UPPER(COALESCE(a.type, '')) = ANY(%s)
              GROUP BY 1, 2
-        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        """, (_demo_part, jan1, list(_SNAP_FLOW_TYPES)))
         donor_out: dict = {}
         for r in cur.fetchall():
             donor_out.setdefault(r["account_id"], {})[r["sym"]] = float(r["out_units"] or 0)
@@ -27210,10 +27372,11 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active' AND sa.fund_id IS NOT NULL
+               AND (sa.account_id LIKE 'demo-%%') = %s
                AND a.trade_date >= %s AND a.units > 0 AND a.symbol IS NOT NULL
                AND UPPER(COALESCE(a.type, '')) = ANY(%s)
              GROUP BY 1, 2
-        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        """, (_demo_part, jan1, list(_SNAP_FLOW_TYPES)))
         fund_in: dict = {}
         for r in cur.fetchall():
             fund_in.setdefault(r["fid"], {})[r["sym"]] = float(r["in_units"] or 0)
@@ -27226,11 +27389,12 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active' AND sa.fund_id IS NULL
+               AND (sa.account_id LIKE 'demo-%%') = %s
                AND a.trade_date >= %s AND COALESCE(a.units, 0) = 0
                AND COALESCE(a.amount, 0) < 0
                AND UPPER(COALESCE(a.type, '')) = ANY(%s)
              GROUP BY 1, 2
-        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        """, (_demo_part, jan1, list(_SNAP_FLOW_TYPES)))
         donor_cash: dict = {}
         for r in cur.fetchall():
             donor_cash.setdefault(r["account_id"], {})[r["d"]] = float(r["amt"] or 0)
@@ -27239,11 +27403,12 @@ def _snaptrade_build_attribution(cur, fund_id: str, year: int, begin_value: floa
               FROM snaptrade_activities a
               JOIN snaptrade_accounts sa ON sa.account_id = a.account_id
              WHERE sa.status = 'active' AND sa.fund_id IS NOT NULL
+               AND (sa.account_id LIKE 'demo-%%') = %s
                AND a.trade_date >= %s AND COALESCE(a.units, 0) = 0
                AND COALESCE(a.amount, 0) > 0
                AND UPPER(COALESCE(a.type, '')) = ANY(%s)
              GROUP BY 1, 2
-        """, (jan1, list(_SNAP_FLOW_TYPES)))
+        """, (_demo_part, jan1, list(_SNAP_FLOW_TYPES)))
         fund_cash: dict = {}
         for r in cur.fetchall():
             fund_cash.setdefault(r["fid"], {})[r["d"]] = float(r["amt"] or 0)
@@ -28108,7 +28273,8 @@ def _snaptrade_run_sync() -> dict:
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("SELECT account_id, fund_id FROM snaptrade_accounts "
-                        "WHERE status='active' AND fund_id IS NOT NULL")
+                        "WHERE status='active' AND fund_id IS NOT NULL "
+                        "AND account_id NOT LIKE 'demo-%'")
             by_fund = {}
             for r in cur.fetchall():
                 if r["account_id"] in acct_norm:
@@ -28390,7 +28556,8 @@ def snaptrade_activities_sync(request: Request):
     _ensure_snaptrade_tables()
     uid, secret = _snaptrade_ensure_user()
     with _fund_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active'")
+        cur.execute("SELECT account_id FROM snaptrade_accounts WHERE status='active' "
+                    "AND account_id NOT LIKE 'demo-%'")
         acct_ids = [r[0] for r in cur.fetchall()]
     out, errors = _snaptrade_ingest_activities(uid, secret, acct_ids, start, end)
     return {"ok": True, "start_date": start, "end_date": end, "synced": out, "errors": errors}
