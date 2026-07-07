@@ -51,80 +51,99 @@ const pctColor = (x) =>
 const BRANCHES = ['LP Fund', 'Managed Account', 'Rebalanced'];
 const LP_TABS  = ['Overview', 'LPs', 'Positions', 'Activity', 'Waterfall'];
 
-// ── Brokerage-style position row (ticker + name left, price + % pill right) ──
-// Theme-aware via useTheme() tokens passed as `t` + memoized styles `rs`.
-function PosRow({ p, t, rs, showAvg, showWeight }) {
-  // Pill % = unrealized P&L % (what these rows have always shown as G/L)
+// ── Position row — VALUE + P&L first (owner's priorities), tap to expand ─────
+// Line 1: TICKER | MARKET VALUE.  Line 2: company name | P/L $ · P/L %.
+// Tap toggles an inline detail block (shares, last, avg cost, basis, weight, lots).
+function PosRow({ p, t, rs }) {
+  const [open, setOpen] = useState(false);
+
+  const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
   const pct = p.unrealized_gain_pct != null
     ? Number(p.unrealized_gain_pct)
-    : (p.unrealized_gain != null && p.total_cost
-        ? (Number(p.unrealized_gain) / Number(p.total_cost)) * 100
+    : (gain != null && p.total_cost
+        ? (gain / Number(p.total_cost)) * 100
         : null);
-  const up     = pct == null ? null : pct >= 0;
-  const pillBg = pct == null ? t.pillFlatBg : up ? t.pillUpBg : t.pillDownBg;
-  const pillFg = pct == null ? t.pillFlatFg : up ? t.pillUpFg : t.pillDownFg;
+  const plRef   = gain != null ? gain : pct;
+  const plColor = plRef == null ? t.textDim : (plRef >= 0 ? t.pillUpFg : t.pillDownFg);
+  const plParts = [];
+  if (gain != null) plParts.push((gain >= 0 ? '+' : '') + fmt$(gain));
+  if (pct != null)  plParts.push(fmtPct(pct, 1));
 
   // Company name — only when genuinely present (cache fallback sets name=ticker)
   const name     = p.name != null ? String(p.name).trim() : '';
   const showName = !!name && name.toUpperCase() !== String(p.symbol || '').toUpperCase();
 
-  // Big right number: last price if available, else market value
-  const big = p.last_price != null
-    ? '$' + Number(p.last_price).toFixed(2)
-    : (p.market_value != null ? fmt$(p.market_value) : '—');
+  const mv = p.market_value != null
+    ? fmt$(p.market_value)
+    : (p.last_price != null && p.total_qty != null
+        ? fmt$(Number(p.last_price) * Number(p.total_qty))
+        : '—');
 
-  // Third line — keeps everything the old table columns showed
-  const parts = [];
-  if (p.total_qty != null) {
-    parts.push(
-      Number(p.total_qty).toLocaleString() + ' sh'
-      + (showAvg && p.avg_cost != null
-          ? ' @ $' + Math.round(p.avg_cost).toLocaleString('en-US')
-          : '')
-    );
-  }
-  if (p.total_cost != null)      parts.push('Cost ' + fmt$(p.total_cost));
-  if (p.market_value != null)    parts.push('Mkt ' + fmt$(p.market_value));
-  if (p.unrealized_gain != null) parts.push('P/L ' + (p.unrealized_gain >= 0 ? '+' : '') + fmt$(p.unrealized_gain));
-  if (showWeight && p.market_weight_pct != null) parts.push(p.market_weight_pct.toFixed(1) + '%');
-  if (showAvg && p.lot_count > 1) parts.push(p.lot_count + ' lots');
+  // Expanded detail — render only the fields this list's rows actually carry
+  const fields = [];
+  if (p.total_qty != null)  fields.push(['Shares', Number(p.total_qty).toLocaleString('en-US')]);
+  if (p.last_price != null) fields.push(['Last price', '$' + Number(p.last_price).toFixed(2)]);
+  if (p.avg_cost != null)   fields.push(['Avg cost', '$' + Number(p.avg_cost).toLocaleString('en-US', { maximumFractionDigits: 2 })]);
+  if (p.total_cost != null) fields.push(['Cost basis', fmt$(p.total_cost)]);
+  if (p.market_weight_pct != null) fields.push(['Weight', Number(p.market_weight_pct).toFixed(1) + '%']);
+  if (p.lot_count != null && p.lot_count > 1) fields.push(['Lots', String(p.lot_count)]);
 
   return (
-    <View style={rs.row}>
-      <View style={rs.left}>
-        <Text style={rs.ticker} numberOfLines={1}>{p.symbol}</Text>
-        {showName ? (
-          <Text style={rs.name} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
-        ) : null}
-        {parts.length ? <Text style={rs.detail}>{parts.join('  ·  ')}</Text> : null}
-      </View>
-      <View style={rs.right}>
-        <Text style={rs.price}>{big}</Text>
-        <View style={[rs.pill, { backgroundColor: pillBg }]}>
-          {pct != null && (
-            <Ionicons name={up ? 'arrow-up' : 'arrow-down'} size={13} color={pillFg} />
-          )}
-          <Text style={[rs.pillTxt, { color: pillFg }]}>{pct != null ? fmtPct(pct, 2) : '—'}</Text>
+    <View>
+      <TouchableOpacity style={rs.row} onPress={() => setOpen(o => !o)} activeOpacity={0.7}>
+        <View style={rs.left}>
+          <Text style={rs.ticker} numberOfLines={1}>{p.symbol}</Text>
+          {showName
+            ? <Text style={rs.name} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
+            : null}
         </View>
-      </View>
+        <View style={rs.right}>
+          <Text style={rs.mktVal}>{mv}</Text>
+          <Text style={[rs.plTxt, { color: plColor }]}>
+            {plParts.length ? plParts.join(' · ') : '—'}
+          </Text>
+        </View>
+        <Ionicons
+          name="chevron-down" size={14} color={t.textDim}
+          style={[rs.chev, open && { transform: [{ rotate: '180deg' }] }]}
+        />
+      </TouchableOpacity>
+      {open && fields.length > 0 && (
+        <View style={rs.detailBlock}>
+          {fields.map(([k, v]) => (
+            <View key={k} style={rs.detailRow}>
+              <Text style={rs.detailKey}>{k}</Text>
+              <Text style={rs.detailVal}>{v}</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
 
-// Totals footer for a positions list — preserves the old TOTAL row's numbers.
-function PosTotals({ rows, t, rs }) {
+// Summary strip at the TOP of a positions card — count, total value, total P/L.
+function PosSummary({ rows, t, rs }) {
   const cost = rows.reduce((acc, p) => acc + (p.total_cost || 0), 0);
   const mkt  = rows.reduce((acc, p) => acc + (p.market_value || 0), 0);
   const gain = rows.reduce((acc, p) => acc + (p.unrealized_gain || 0), 0);
+  const pct  = cost > 0 ? (gain / cost) * 100 : null;
+  const plColor = gain >= 0 ? t.pillUpFg : t.pillDownFg;
   return (
-    <View style={rs.totalRow}>
-      <Text style={rs.totalLabel}>TOTAL</Text>
-      <Text style={rs.totalVals}>
-        Cost {fmt$(cost)}  ·  Mkt {fmt$(mkt)}  ·  P/L{' '}
-        <Text style={{ color: gain >= 0 ? t.green : t.red }}>
-          {(gain >= 0 ? '+' : '') + fmt$(gain)}
+    <View style={rs.summaryStrip}>
+      <View style={{ flex: 1 }}>
+        <Text style={rs.summaryLabel}>
+          {rows.length} POSITION{rows.length === 1 ? '' : 'S'}
         </Text>
-      </Text>
+        <Text style={rs.summaryValue}>{fmt$(mkt)}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={rs.summaryLabel}>TOTAL P/L</Text>
+        <Text style={[rs.summaryPl, { color: plColor }]}>
+          {(gain >= 0 ? '+' : '') + fmt$(gain)}
+          {pct != null ? '  ·  ' + fmtPct(pct, 1) : ''}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1035,13 +1054,13 @@ export default function FundScreen({ navigation }) {
                   <Text style={s.emptyText}>No positions. Import a Fidelity Positions CSV above.</Text>
                 ) : (
                   <>
+                    <PosSummary rows={acctPositions} t={t} rs={rs} />
                     {acctPositions.map((p, i) => (
                       <View key={p.symbol + i}>
                         {i > 0 && <View style={rs.sep} />}
                         <PosRow p={p} t={t} rs={rs} />
                       </View>
                     ))}
-                    <PosTotals rows={acctPositions} t={t} rs={rs} />
                   </>
                 )}
               </View>
@@ -1498,7 +1517,6 @@ export default function FundScreen({ navigation }) {
   }
 
   function PositionsPanel() {
-    const totalMktVal = positions.reduce((s, p) => s + (p.market_value || 0), 0);
     return (
       <View>
         {/* Import button row */}
@@ -1524,13 +1542,13 @@ export default function FundScreen({ navigation }) {
           <Text style={s.emptyText}>No open positions.</Text>
         ) : (
           <View style={rs.listCardStandalone}>
+            <PosSummary rows={positions} t={t} rs={rs} />
             {positions.map((p, i) => (
               <View key={p.symbol + i}>
                 {i > 0 && <View style={rs.sep} />}
-                <PosRow p={p} t={t} rs={rs} showAvg showWeight />
+                <PosRow p={p} t={t} rs={rs} />
               </View>
             ))}
-            {totalMktVal > 0 && <PosTotals rows={positions} t={t} rs={rs} />}
           </View>
         )}
       </View>
@@ -2429,53 +2447,65 @@ const makePosRowStyles = (t) => StyleSheet.create({
     overflow: 'hidden',
   },
 
+  // Summary strip — sits at the top of the card, absorbs the old TOTAL footer
+  summaryStrip: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border,
+    backgroundColor: t.surfaceAlt,
+  },
+  summaryLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.0, color: t.textDim, marginBottom: 2 },
+  summaryValue: { fontSize: 20, fontWeight: '800', color: t.textPrimary, fontVariant: ['tabular-nums'] },
+  summaryPl:    { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'], lineHeight: 24 },
+
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 14,
-    gap: 12,
+    paddingVertical: 12,
+    gap: 10,
   },
   sep: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: t.border,
     marginLeft: 14,
   },
-  left: { flex: 1, justifyContent: 'center' },
-  ticker: { color: t.textPrimary, fontSize: 19, fontWeight: '800', letterSpacing: 0.3 },
-  name:   { color: t.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 1 },
-  detail: { color: t.textDim, fontSize: 11, marginTop: 2 },
+  left: { flex: 1, justifyContent: 'center', flexShrink: 1 },
+  ticker: { color: t.textPrimary, fontSize: 16.5, fontWeight: '800', letterSpacing: 0.3 },
+  name:   { color: t.textSecondary, fontSize: 12, fontWeight: '500', marginTop: 2, flexShrink: 1 },
 
-  right: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  price: {
+  right: { alignItems: 'flex-end', justifyContent: 'center' },
+  mktVal: {
     color: t.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     fontVariant: ['tabular-nums'],
     textAlign: 'right',
   },
-  pill: {
-    minWidth: 86,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
+  plTxt: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+    textAlign: 'right',
   },
-  pillTxt: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  chev: { marginLeft: 2 },
 
-  totalRow: {
+  // Inline expanded detail block (collapsed by default)
+  detailBlock: {
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    paddingTop: 2,
+  },
+  detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderTopWidth: 1,
-    borderTopColor: t.border,
-    backgroundColor: t.surfaceAlt,
+    paddingVertical: 3,
   },
-  totalLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.2, color: t.textDim },
-  totalVals:  { fontSize: 12, fontWeight: '700', color: t.textPrimary, fontVariant: ['tabular-nums'] },
+  detailKey: { fontSize: 11.5, fontWeight: '600', color: t.textDim },
+  detailVal: { fontSize: 12.5, fontWeight: '700', color: t.textSecondary, fontVariant: ['tabular-nums'] },
 });

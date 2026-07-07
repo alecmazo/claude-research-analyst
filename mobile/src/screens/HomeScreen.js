@@ -483,18 +483,8 @@ export default function HomeScreen({ navigation, route }) {
             )}
           </TouchableOpacity>
         </View>
-        <View style={s.gammaRow}>
-          <Text style={s.gammaLabel}>Generate Presentation</Text>
-          <Switch
-            value={gammaEnabled}
-            onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
-            trackColor={{ false: t.border, true: t.primary }}
-            thumbColor={t.onChrome}
-          />
-        </View>
-        {/* LLM engine selector — pick Grok / Claude / Both */}
-        <View style={s.llmRow}>
-          <Text style={s.llmRowLabel}>ENGINE</Text>
+        {/* Options — engine chips (Grok / Claude / Both) + presentation toggle */}
+        <View style={s.optionsRow}>
           <View style={s.llmPicker}>
             {[
               { v: 'grok',   label: 'Grok' },
@@ -521,26 +511,30 @@ export default function HomeScreen({ navigation, route }) {
               </TouchableOpacity>
             ))}
           </View>
+          <View style={{ flex: 1 }} />
+          <Text style={s.gammaLabel}>Presentation</Text>
+          <Switch
+            value={gammaEnabled}
+            onValueChange={v => { setGammaEnabled(v); saveGamma(v); }}
+            trackColor={{ false: t.border, true: t.primary }}
+            thumbColor={t.onChrome}
+            style={s.gammaSwitch}
+          />
         </View>
-      </View>
 
-      {/* AI Analyst entry — agentic Q&A over platform data */}
-      <TouchableOpacity
-        style={s.analystBanner}
-        onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
-        activeOpacity={0.85}
-      >
-        <View style={s.analystBannerIcon}>
-          <Text style={s.analystBannerEmoji}>🤖</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={s.analystBannerTitle}>AI Analyst</Text>
-          <Text style={s.analystBannerSub}>
-            Ask anything across your coverage — live data, cited & verified
+        {/* AI Analyst entry — merged into this card as a slim bottom row */}
+        <TouchableOpacity
+          style={s.analystRow}
+          onPress={() => { haptics.onPressPrimary(); navigation.navigate('Analyst'); }}
+          activeOpacity={0.7}
+        >
+          <Text style={s.analystRowEmoji}>🤖</Text>
+          <Text style={s.analystRowText} numberOfLines={1}>
+            <Text style={s.analystRowTitle}>AI Analyst</Text> — ask anything across your coverage
           </Text>
-        </View>
-        <Text style={s.analystBannerArrow}>›</Text>
-      </TouchableOpacity>
+          <Text style={s.analystRowArrow}>›</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Reports section header */}
       <View style={s.listHeaderRow}>
@@ -641,66 +635,39 @@ function makeStyles(t) {
   container:  { flex: 1, backgroundColor: t.bg },
   statusDot:  { width: 10, height: 10, borderRadius: 5 },
 
-  // Input card
+  // Input card — compact: input + button share one row, slim options row below,
+  // AI Analyst entry merged in as the card's bottom row.
   inputSection: {
     backgroundColor: t.surface,
     margin: 16,
-    marginBottom: 8,
+    marginBottom: 6,
     borderRadius: 12,
-    padding: 16,
+    padding: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 3,
   },
-  label:    { fontSize: 11, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5, marginBottom: 10 },
-
-  // AI Analyst banner
-  analystBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: t.chromeNavy,
-    marginHorizontal: 16,
-    marginTop: 4,
-    marginBottom: 4,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  analystBannerIcon: {
-    width: 40, height: 40, borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12,
-  },
-  analystBannerEmoji: { fontSize: 20 },
-  analystBannerTitle: { color: t.onChrome, fontWeight: '800', fontSize: 16, letterSpacing: 0.3 },
-  analystBannerSub:   { color: 'rgba(255,255,255,0.62)', fontSize: 12, marginTop: 2 },
-  analystBannerArrow: { color: t.gold, fontSize: 28, fontWeight: '300', marginLeft: 8 },
-  inputRow: { flexDirection: 'row', gap: 10 },
+  label:    { fontSize: 10, fontWeight: '700', color: t.textSecondary, letterSpacing: 1.5, marginBottom: 6 },
+  inputRow: { flexDirection: 'row', gap: 8 },
   input: {
     flex: 1,
-    height: 50,
-    borderWidth: 1.5,
+    height: 40,
+    borderWidth: 1,
     borderColor: t.border,
     borderRadius: 8,
-    paddingHorizontal: 14,
-    fontSize: 18,
+    paddingHorizontal: 12,
+    fontSize: 16,
     fontWeight: '700',
     color: t.textPrimary,
-    letterSpacing: 2,
+    letterSpacing: 1.5,
   },
   analyzeBtn: {
     backgroundColor: t.primary,
     borderRadius: 8,
-    paddingHorizontal: 18,
-    minWidth: 90,
+    paddingHorizontal: 14,
+    minWidth: 76,
     justifyContent: 'center',
     alignItems: 'center',
     borderTopWidth: 1,
@@ -719,33 +686,23 @@ function makeStyles(t) {
   },
   analyzeBtnDisabled: { opacity: 0.5 },
   analyzeBtnInner: { flexDirection: 'row', alignItems: 'center' },
-  analyzeBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  analyzeBtnLoadingText: { color: t.chromeNavy, fontWeight: '800', fontSize: 12, letterSpacing: 1, marginLeft: 6 },
-  gammaRow: {
+  analyzeBtnText: { color: t.chromeNavy, fontWeight: '800', fontSize: 12, letterSpacing: 1 },
+  analyzeBtnLoadingText: { color: t.chromeNavy, fontWeight: '800', fontSize: 11, letterSpacing: 1, marginLeft: 6 },
+
+  // Slim options row — engine chips left, presentation toggle right
+  optionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: t.border,
+    marginTop: 8,
   },
-  gammaLabel: { fontSize: 14, fontWeight: '600', color: t.textPrimary },
-
-  // LLM engine selector (Grok / Claude / Both)
-  llmRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  llmRowLabel: {
-    fontSize: 10, fontWeight: '800', color: t.textSecondary, letterSpacing: 1,
-  },
+  gammaLabel: { fontSize: 11, fontWeight: '600', color: t.textSecondary, marginRight: 2 },
+  gammaSwitch: { transform: [{ scaleX: 0.75 }, { scaleY: 0.75 }] },
   llmPicker: {
     flexDirection: 'row', backgroundColor: t.surfaceAlt,
     borderRadius: 6, padding: 2, gap: 2,
   },
   llmPickerOpt: {
-    paddingVertical: 5, paddingHorizontal: 11, borderRadius: 4,
+    paddingVertical: 4, paddingHorizontal: 10, borderRadius: 4,
   },
   llmPickerOptActiveGrok:   { backgroundColor: '#0A1628' },
   llmPickerOptActiveClaude: { backgroundColor: '#d97706' },
@@ -754,6 +711,20 @@ function makeStyles(t) {
     fontSize: 11, fontWeight: '700', color: t.textPrimary,
   },
   llmPickerOptTextActive: { color: t.onChrome },
+
+  // AI Analyst entry — slim row at the bottom of the input card
+  analystRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: t.border,
+  },
+  analystRowEmoji: { fontSize: 15, marginRight: 8 },
+  analystRowText:  { flex: 1, fontSize: 12.5, color: t.textSecondary },
+  analystRowTitle: { fontWeight: '800', color: t.textPrimary },
+  analystRowArrow: { color: t.gold, fontSize: 22, fontWeight: '300', marginLeft: 8, lineHeight: 24 },
 
   // Per-report provider badges (GROK / CLAUDE) — tappable
   llmPill: {
