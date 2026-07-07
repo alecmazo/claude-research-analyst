@@ -501,6 +501,124 @@
     margin-left: 6px; letter-spacing: 0.4px;
   }
 
+  /* ── Builder v2 — pool-first picker (ui377) ─────────────────────── */
+  .builder-grid2 {
+    display: grid; grid-template-columns: minmax(340px, 1.15fr) 2fr; gap: 14px;
+    align-items: start;
+  }
+  @media (max-width: 980px) { .builder-grid2 { grid-template-columns: 1fr; } }
+  .builder-pool-list { max-height: 480px; overflow-y: auto; }
+  .builder-pool-item {
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-bottom: 1px solid var(--panel-edge);
+    font-size: 11.5px; cursor: pointer;
+  }
+  .builder-pool-item:last-child { border-bottom: none; }
+  .builder-pool-item:hover { background: rgba(91,184,212,0.06); }
+  .builder-pool-item input[type="checkbox"] { accent-color: var(--blue); width: 13px; height: 13px; flex: none; cursor: pointer; }
+  .builder-pool-item .bp-tk { font-weight: 800; color: var(--text-primary); min-width: 52px; letter-spacing: 0.3px; }
+  .builder-pool-item .bp-name {
+    flex: 1; min-width: 0; color: var(--text-tertiary, #64748b); font-size: 10.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .builder-pool-item .bp-up { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 52px; text-align: right; }
+  .builder-pool-item .bp-up.pos { color: #16a34a; }
+  .builder-pool-item .bp-up.neg { color: #dc2626; }
+  .builder-pool-item .bp-up.none { color: var(--dim, #94a3b8); font-weight: 500; }
+  .builder-pool-item .bp-rating { font-size: 9px; font-weight: 700; color: var(--text-secondary); min-width: 34px; text-align: right; }
+  .builder-sec-chip {
+    display: inline-block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.3px;
+    background: rgba(91,184,212,0.12); color: var(--blue-dark, #3E9AB8);
+    border-radius: 3px; padding: 1px 5px; white-space: nowrap; flex: none;
+  }
+  .builder-seg { display: flex; gap: 0; border: 1px solid var(--panel-edge); border-radius: 5px; overflow: hidden; }
+  .builder-seg button {
+    flex: 1; background: transparent; border: none; cursor: pointer;
+    font-size: 10.5px; font-weight: 700; color: var(--text-secondary);
+    padding: 6px 8px; border-right: 1px solid var(--panel-edge); white-space: nowrap;
+  }
+  .builder-seg button:last-child { border-right: none; }
+  .builder-seg button.active { background: var(--blue); color: #0A1628; }
+  .builder-bars-row { display: flex; align-items: center; gap: 8px; padding: 3px 16px; font-size: 10.5px; }
+  .builder-bars-row .bb-name { min-width: 130px; color: var(--text-secondary); font-weight: 600; }
+  .builder-bars-row .bb-track { flex: 1; height: 7px; border-radius: 99px; background: rgba(91,184,212,0.12); overflow: hidden; }
+  .builder-bars-row .bb-fill { height: 100%; background: var(--blue); border-radius: 99px; }
+  .builder-bars-row .bb-pct { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 700; }
+
+  /* ── Free stock-info inline expander (positions rows, ui377) ────── */
+  .sie-cell { padding: 0 !important; background: rgba(91,184,212,0.045); }
+  .sie-wrap { padding: 10px 14px 12px; border-bottom: 2px solid rgba(91,184,212,0.35); }
+  .sie-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .sie-name { font-size: 13px; font-weight: 800; color: var(--text-primary); }
+  .sie-chip {
+    font-size: 9px; font-weight: 700; background: rgba(91,184,212,0.12);
+    color: var(--blue-dark, #3E9AB8); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.3px;
+  }
+  .sie-px { font-size: 12.5px; font-weight: 800; color: var(--text-primary); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .sie-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 6px 14px; margin: 8px 0;
+  }
+  .sie-stat { font-size: 10px; color: var(--dim, #94a3b8); font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
+  .sie-val { font-size: 11.5px; color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sie-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .sie-report-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; color: var(--blue-dark, #3E9AB8);
+    background: rgba(91,184,212,0.10); border: 1px solid rgba(91,184,212,0.30);
+    border-radius: 5px; padding: 2px 8px; cursor: pointer;
+  }
+  .sie-report-chip:hover { background: rgba(91,184,212,0.20); }
+  .sie-run-ai {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-size: 10px; font-weight: 700; color: #9333ea; text-decoration: underline;
+  }
+  .sie-run-ai:hover { color: #7e22ce; }
+  tr.sie-open > td { background: rgba(91,184,212,0.07); }
+  .sie-clickable { cursor: pointer; }
+
+  /* ── Market Pulse card (Research + Ideas, ui377) ─────────────────── */
+  .pulse-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 14px; border-bottom: 1px solid var(--panel-edge);
+    cursor: pointer; font-size: 11.5px;
+  }
+  .pulse-row:hover { background: rgba(91,184,212,0.05); }
+  .pulse-tk { font-weight: 800; color: var(--text-primary); min-width: 54px; letter-spacing: 0.4px; }
+  .pulse-pill {
+    font-size: 8.5px; font-weight: 800; letter-spacing: 0.5px;
+    border-radius: 3px; padding: 1px 6px; flex: none;
+  }
+  .pulse-pill.BULLISH { background: #dcfce7; color: #166534; }
+  .pulse-pill.BEARISH { background: #fee2e2; color: #991b1b; }
+  .pulse-pill.NEUTRAL, .pulse-pill.UNKNOWN { background: var(--gray-100, #f1f5f9); color: var(--text-secondary, #64748b); }
+  html[data-theme="dark"] .pulse-pill.BULLISH { background: rgba(22,163,74,0.18); color: #4ade80; }
+  html[data-theme="dark"] .pulse-pill.BEARISH { background: rgba(220,38,38,0.18); color: #f87171; }
+  .pulse-sum {
+    flex: 1; min-width: 0; color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
+  }
+  .pulse-day { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 11px; flex: none; }
+  .pulse-detail {
+    display: none; padding: 8px 16px 12px; border-bottom: 1px solid var(--panel-edge);
+    font-size: 11.5px; line-height: 1.65; color: var(--text-secondary);
+    background: rgba(91,184,212,0.04);
+  }
+  .pulse-detail.open { display: block; }
+
+  /* (*) info-star explainer used by Pulse + Brief cards */
+  .info-star {
+    background: none; border: none; cursor: help; padding: 0 2px;
+    color: var(--blue); font-size: 11px; font-weight: 800; vertical-align: super; line-height: 1;
+  }
+  .info-star:hover { color: var(--blue-dark, #3E9AB8); }
+  .info-explainer {
+    display: none; padding: 8px 14px; font-size: 10.5px; line-height: 1.55;
+    color: var(--text-tertiary, #64748b); background: rgba(91,184,212,0.05);
+    border-bottom: 1px solid var(--panel-edge); font-style: italic;
+  }
+  .info-explainer.open { display: block; }
+
   /* ── LLM Lab tab ──────────────────────────────────────────────── */
   .lab-grid {
     display: grid; grid-template-columns: 2fr 1fr; gap: 14px;
@@ -644,47 +762,50 @@
   }
 
   /* ── CENTER COLUMN: Research workspace ──────────────────────── */
+  /* Compact hero (ui377): paddings/fonts down ~35% — the card is a utility,
+     not a hero-block. All IDs and behavior preserved. */
   .hero-card {
     background: linear-gradient(135deg, #e8f4f8 0%, #fff 100%);
-    padding: 10px 14px;
+    padding: 7px 10px;
     border: 1px solid rgba(91,184,212,0.30);
-    border-radius: 10px;
-    margin-bottom: 12px;
+    border-radius: 8px;
+    margin-bottom: 10px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
   .hero-label {
-    font-size: 9px; font-weight: 800;
-    color: var(--blue); letter-spacing: 1.1px;
+    font-size: 8px; font-weight: 800;
+    color: var(--blue); letter-spacing: 1.0px;
     text-transform: uppercase;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
   }
   .hero-row {
-    display: flex; gap: 8px; align-items: center;
+    display: flex; gap: 6px; align-items: center;
   }
   .hero-input {
     flex: 1;
-    height: 34px;
+    height: 26px;
     background: #fff;
     border: 1px solid var(--panel-edge);
-    border-radius: 6px;
-    padding: 0 12px;
+    border-radius: 5px;
+    padding: 0 8px;
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: 11.5px;
     font-weight: 700;
-    letter-spacing: 1.5px;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
     outline: none;
+    min-width: 0;
   }
   .hero-input:focus { border-color: var(--blue); }
   .hero-btn {
-    height: 34px;
-    padding: 0 16px;
+    height: 26px;
+    padding: 0 10px;
     background: linear-gradient(180deg, var(--blue-light) 0%, var(--blue) 50%, var(--blue-dark) 100%);
     color: var(--text-primary);
     border: none;
-    border-radius: 6px;
-    font-weight: 800; font-size: 11px;
-    letter-spacing: 1.0px;
+    border-radius: 5px;
+    font-weight: 800; font-size: 10px;
+    letter-spacing: 0.8px;
     cursor: pointer;
     box-shadow:
       inset 0 1px 0 rgba(255,255,255,0.45),
@@ -692,6 +813,31 @@
       0 2px 8px rgba(91,184,212,0.32);
     transition: filter .15s, transform .08s;
   }
+  /* Cancel-analysis button — quiet red, only visible while a job runs */
+  .hero-cancel-btn {
+    background: transparent;
+    color: #b91c1c;
+    border: 1px solid rgba(220,38,38,0.45);
+    box-shadow: none;
+    font-weight: 700;
+  }
+  .hero-cancel-btn:hover { filter: none; background: rgba(220,38,38,0.08); }
+  .hero-cancel-btn:disabled { opacity: 0.55; cursor: default; }
+  /* Engine chips (drive the hidden #hero-llm select) */
+  .hero-llm-chip {
+    background: #fff;
+    border: 1px solid var(--panel-edge);
+    color: var(--mid);
+    font-size: 9px; font-weight: 800; letter-spacing: 0.4px;
+    padding: 2px 7px; border-radius: 10px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .hero-llm-chip:hover { border-color: var(--blue); color: var(--blue-dark, #3E9AB8); }
+  .hero-llm-chip.active {
+    background: var(--blue); border-color: var(--blue); color: #0A1628;
+  }
+  html[data-theme="dark"] .hero-llm-chip { background: var(--bg-surface); color: var(--text-secondary); }
+  html[data-theme="dark"] .hero-llm-chip.active { background: var(--blue); color: #0A1628; }
   .hero-btn:hover { filter: brightness(1.08); }
   .hero-btn:active { transform: translateY(1px); }
   .hero-btn { white-space: nowrap; }                 /* never wrap — progress is its own bar */
@@ -700,7 +846,7 @@
   @keyframes heroSpin { to { transform: rotate(360deg); } }
 
   /* ── Polished Analyze-Ticker progress bar ──────────────────────── */
-  .hero-progress { display: none; margin-top: 11px; }
+  .hero-progress { display: none; margin-top: 7px; }
   .hero-progress.show { display: block; animation: heroFade .2s ease; }
   @keyframes heroFade { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
   .hero-prog-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
@@ -3410,6 +3556,10 @@ End with the sleeve block at this account's real market value so I can push it t
       </table>
       </div>
     </section>
+
+    <!-- 🌡️ Market Pulse — shared card module (also on Ideas tab); markup is
+         injected by _pulseMount() so both tabs render the same card. -->
+    <div id="research-pulse-mount"></div>
   </section>
 
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
@@ -3452,12 +3602,14 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- Hero analyze card — moved to top of right column -->
+    <!-- Hero analyze card — compact (ui377): smaller paddings/fonts, chip
+         engine selector, Cancel button while a job is running. -->
     <div class="hero-card">
       <div class="hero-label">Analyze Ticker</div>
       <div class="hero-row">
         <input id="hero-ticker" class="hero-input" placeholder="e.g. AAPL" autocapitalize="characters" autocomplete="off">
         <button id="hero-run-btn" class="hero-btn">⚡ RUN</button>
+        <button id="hero-cancel-btn" class="hero-btn hero-cancel-btn" style="display:none;" title="Cancel the running analysis — nothing is saved">✕ Cancel</button>
       </div>
       <div id="hero-progress" class="hero-progress">
         <div class="hero-prog-head">
@@ -3468,23 +3620,30 @@ End with the sleeve block at this account's real market value so I can push it t
         <div class="hero-prog-track"><div class="hero-prog-fill" id="hero-prog-fill"></div></div>
       </div>
       <div id="hero-hint"></div>
-      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
-          <span style="font-size:9px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
-          <select id="hero-llm" style="font-size:11px;font-weight:700;border:1px solid var(--panel-edge);border-radius:4px;padding:3px 6px;background:#fff;color:#0A1628;cursor:pointer;">
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--panel-edge);display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:4px;cursor:default;user-select:none;">
+          <span style="font-size:8px;color:var(--mid);font-weight:800;letter-spacing:0.8px;">ENGINE:</span>
+          <!-- The <select> keeps its id + value contract (runAnalysis / cost estimator
+               read #hero-llm.value) but is hidden; the chips drive it. -->
+          <select id="hero-llm" style="display:none;">
             <option value="grok"   selected>Grok 4.20 (default)</option>
             <option value="claude">Claude Opus 4.8</option>
             <option value="both">Both (sequential ~5 min)</option>
           </select>
+          <span id="hero-llm-chips" style="display:inline-flex;gap:4px;">
+            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok 4.20 (default)">Grok</button>
+            <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude Opus 4.8">Claude</button>
+            <button type="button" class="hero-llm-chip" data-llm="both" title="Both (sequential ~5 min)">Both</button>
+          </span>
         </label>
         <span id="hero-cost-est"
               title="Estimated LLM cost for one report run (input/output tokens + live-search). Actual varies with report length and how much the model searches."
-              style="font-size:10px;font-weight:700;color:var(--blue-dark,#3E9AB8);background:rgba(91,184,212,0.10);border:1px solid rgba(91,184,212,0.30);border-radius:5px;padding:2px 7px;white-space:nowrap;">≈ $0.30–0.60 / report</span>
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
-          <span style="font-size:10px;color:var(--mid);font-weight:700;letter-spacing:0.5px;">Generate Gamma Presentation</span>
+              style="font-size:9px;font-weight:700;color:var(--blue-dark,#3E9AB8);background:rgba(91,184,212,0.10);border:1px solid rgba(91,184,212,0.30);border-radius:5px;padding:1px 6px;white-space:nowrap;">≈ $0.30–0.60 / report</span>
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="hero-gamma" style="accent-color:var(--blue);width:12px;height:12px;cursor:pointer;">
+          <span style="font-size:9px;color:var(--mid);font-weight:700;letter-spacing:0.4px;">Gamma deck</span>
         </label>
-        <span id="hero-gamma-status" style="font-size:9px;color:var(--dimmer);font-style:italic;">requires Gamma API key</span>
+        <span id="hero-gamma-status" style="font-size:8.5px;color:var(--dimmer);font-style:italic;">requires Gamma API key</span>
       </div>
     </div>
 
@@ -3515,80 +3674,77 @@ End with the sleeve block at this account's real market value so I can push it t
 </div><!-- #tab-research -->
 
 
-<!-- ══ BUILDER TAB ═════════════════════════════════════════════ -->
+<!-- ══ BUILDER TAB (pool-first redesign, ui377) ════════════════ -->
 <div id="tab-builder" class="tab-panel">
   <div class="wide-shell" style="max-width:1300px;margin:18px auto;padding:0 20px;">
     <div class="tab-toolbar" style="display:flex;align-items:baseline;gap:16px;margin-bottom:16px;">
       <h2 style="margin:0;font-size:22px;font-weight:800;letter-spacing:-0.3px;color:var(--text-primary);">🧮 Builder</h2>
       <div style="font-size:11.5px;color:#64748b;flex:1;">
-        Allocate a sector-weighted basket from your saved research. Highest-EV stocks per sector get the largest weights.
+        Pick stocks from your saved research, choose a weighting method, and build a basket.
+        Every saved report is eligible — names without a stored price target show "—" and stay in the pool.
       </div>
       <div id="builder-pool-meta" style="font-size:11px;color:#64748b;font-weight:600;">—</div>
     </div>
 
-    <div class="builder-grid">
-      <!-- ── LEFT: weight controls ────────────────────────────────── -->
+    <div class="builder-grid2">
+      <!-- ── LEFT: stock pool picker ──────────────────────────────── -->
       <section class="builder-card">
-        <header class="builder-card-head">Sector Weights</header>
-        <div class="builder-card-body">
-          <div id="builder-sectors-list"></div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-            <select id="builder-add-sector" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;">
-              <option value="">+ Add sector…</option>
-            </select>
-            <button id="builder-add-sector-btn" class="builder-btn-sec">Add</button>
-          </div>
-          <div id="builder-weight-total" style="margin-top:12px;padding:8px 10px;background:#f8fafc;border-radius:4px;font-size:11px;color:#475569;display:flex;justify-content:space-between;">
-            <span>Total weight:</span>
-            <strong id="builder-weight-total-val" style="color:var(--text-primary);">0%</strong>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── CENTER: options + build ──────────────────────────────── -->
-      <section class="builder-card">
-        <header class="builder-card-head">Options</header>
-        <div class="builder-card-body">
-          <label class="builder-field">
-            <span>Basket size ($)</span>
-            <input id="builder-basket-size" type="number" value="1000000" step="10000" min="0">
-          </label>
-          <label class="builder-field">
-            <span>Allocation method</span>
-            <select id="builder-method">
-              <option value="ev_weighted" selected>EV-weighted (softmax by upside)</option>
-              <option value="equal">Equal-weight top N</option>
-            </select>
-          </label>
-          <label class="builder-field">
-            <span>Max per stock (%)</span>
-            <input id="builder-max-per-stock" type="number" value="15" step="1" min="1" max="100">
-          </label>
-          <label class="builder-field">
-            <span>Max stocks per sector</span>
-            <input id="builder-max-per-sector" type="number" value="6" step="1" min="1" max="20">
-          </label>
-          <label class="builder-field-inline">
-            <input id="builder-redistribute" type="checkbox" checked>
-            <span>Redistribute empty sectors</span>
-          </label>
-          <button id="builder-run-btn" class="builder-btn-primary" style="margin-top:14px;">⚡ Build Basket</button>
-          <div id="builder-status" style="margin-top:8px;font-size:11px;color:#94a3b8;min-height:16px;"></div>
-        </div>
-      </section>
-
-      <!-- ── RIGHT: candidate pool summary ────────────────────────── -->
-      <section class="builder-card">
-        <header class="builder-card-head" style="display:flex;align-items:center;">
-          <span>Candidate Pool</span>
+        <header class="builder-card-head" style="gap:8px;">
+          <span>Stock Pool</span>
+          <span id="builder-pool-count" style="font-weight:700;color:var(--blue-dark,#3E9AB8);text-transform:none;letter-spacing:0;">—</span>
           <button id="builder-pool-refresh-btn" class="builder-btn-sec"
                   title="Re-pull tickers + targets from your saved reports and resolve sectors. Stays on this tab."
                   style="margin-left:auto;padding:3px 10px;font-size:11px;white-space:nowrap;">↻ Refresh</button>
         </header>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
+          <input id="builder-pool-search" type="text" placeholder="Filter ticker / name / sector…"
+            style="flex:1;min-width:140px;padding:5px 9px;border:1px solid var(--panel-edge);border-radius:4px;font-size:11.5px;background:var(--bg-elevated,#fff);color:var(--text-primary);">
+          <label style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text-secondary);cursor:pointer;white-space:nowrap;"
+                 title="Comp-table tickers extracted from your reports (upside from Yahoo analyst targets). Off by default.">
+            <input type="checkbox" id="builder-include-comps" style="accent-color:var(--blue);width:12px;height:12px;">
+            include comps
+          </label>
+          <span style="display:inline-flex;gap:4px;">
+            <button type="button" id="builder-pool-all"  class="builder-btn-sec" style="padding:2px 8px;font-size:10px;">All</button>
+            <button type="button" id="builder-pool-none" class="builder-btn-sec" style="padding:2px 8px;font-size:10px;">None</button>
+          </span>
+        </div>
+        <div id="builder-pool-list" class="builder-pool-list">
+          <div style="padding:12px 14px;font-size:11px;color:#94a3b8;font-style:italic;">Loading saved reports…</div>
+        </div>
+      </section>
+
+      <!-- ── RIGHT: construction controls ─────────────────────────── -->
+      <section class="builder-card">
+        <header class="builder-card-head">Construction</header>
         <div class="builder-card-body">
-          <div id="builder-sectors-summary" style="font-size:11.5px;color:#475569;">
-            <div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
+            <label class="builder-field" style="margin-bottom:0;width:150px;">
+              <span>Basket size ($)</span>
+              <input id="builder-basket-size" type="number" value="1000000" step="10000" min="0">
+            </label>
+            <div class="builder-field" style="margin-bottom:0;flex:1;min-width:280px;">
+              <span>Weighting method</span>
+              <div class="builder-seg" id="builder-method-seg">
+                <button type="button" data-method="equal" class="active">Equal</button>
+                <button type="button" data-method="ev_weighted">Conviction (EV)</button>
+                <button type="button" data-method="rating_weighted">Rating-tiered</button>
+              </div>
+              <span id="builder-method-explain" style="font-size:10px;color:var(--text-tertiary,#64748b);text-transform:none;letter-spacing:0;font-weight:500;">
+                1/N across every selected stock — no price targets needed.
+              </span>
+            </div>
+            <label class="builder-field" style="margin-bottom:0;width:120px;">
+              <span>Max per stock (%)</span>
+              <input id="builder-max-per-stock" type="number" value="10" step="1" min="1" max="100">
+            </label>
+            <label class="builder-field" style="margin-bottom:0;width:150px;" title="Optional — 0 disables the sector cap">
+              <span>Max per sector (%) <em style="text-transform:none;font-style:normal;font-weight:500;">(opt.)</em></span>
+              <input id="builder-max-sector-pct" type="number" value="0" step="5" min="0" max="100" placeholder="0 = none">
+            </label>
+            <button id="builder-construct-btn" class="builder-btn-primary" style="width:auto;padding:10px 24px;">⚡ Build</button>
           </div>
+          <div id="builder-status" style="margin-top:8px;font-size:11px;color:#94a3b8;min-height:16px;"></div>
         </div>
       </section>
     </div>
@@ -3623,6 +3779,72 @@ End with the sleeve block at this account's real market value so I can push it t
         <div id="builder-scenarios-list"></div>
       </div>
     </section>
+
+    <!-- ── ADVANCED: legacy sector-target allocator (moved inside a
+         collapsed <details>; all original IDs + logic preserved) ──── -->
+    <details id="builder-advanced" style="margin-top:18px;">
+      <summary style="cursor:pointer;font-size:11.5px;font-weight:700;color:var(--text-secondary);padding:8px 2px;user-select:none;">
+        ⚙️ Advanced: sector-target mode
+        <span style="font-weight:500;color:var(--text-tertiary,#64748b);">— set explicit sector weights; highest-EV names per sector get the largest weights (legacy allocator)</span>
+      </summary>
+      <div class="builder-grid" style="margin-top:12px;">
+        <!-- LEFT: weight controls -->
+        <section class="builder-card">
+          <header class="builder-card-head">Sector Weights</header>
+          <div class="builder-card-body">
+            <div id="builder-sectors-list"></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+              <select id="builder-add-sector" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;">
+                <option value="">+ Add sector…</option>
+              </select>
+              <button id="builder-add-sector-btn" class="builder-btn-sec">Add</button>
+            </div>
+            <div id="builder-weight-total" style="margin-top:12px;padding:8px 10px;background:#f8fafc;border-radius:4px;font-size:11px;color:#475569;display:flex;justify-content:space-between;">
+              <span>Total weight:</span>
+              <strong id="builder-weight-total-val" style="color:var(--text-primary);">0%</strong>
+            </div>
+          </div>
+        </section>
+
+        <!-- CENTER: options + build -->
+        <section class="builder-card">
+          <header class="builder-card-head">Options</header>
+          <div class="builder-card-body">
+            <div style="font-size:10px;color:var(--text-tertiary,#64748b);margin-bottom:10px;line-height:1.5;">
+              Uses the <strong>basket size</strong> and <strong>max per stock %</strong> from the Construction bar above.
+            </div>
+            <label class="builder-field">
+              <span>Allocation method</span>
+              <select id="builder-method">
+                <option value="ev_weighted" selected>EV-weighted (softmax by upside)</option>
+                <option value="equal">Equal-weight top N</option>
+              </select>
+            </label>
+            <label class="builder-field">
+              <span>Max stocks per sector</span>
+              <input id="builder-max-per-sector" type="number" value="6" step="1" min="1" max="20">
+            </label>
+            <label class="builder-field-inline">
+              <input id="builder-redistribute" type="checkbox" checked>
+              <span>Redistribute empty sectors</span>
+            </label>
+            <button id="builder-run-btn" class="builder-btn-primary" style="margin-top:14px;">⚡ Build Basket (sector-target)</button>
+          </div>
+        </section>
+
+        <!-- RIGHT: candidate pool summary -->
+        <section class="builder-card">
+          <header class="builder-card-head">
+            <span>Sector Summary</span>
+          </header>
+          <div class="builder-card-body">
+            <div id="builder-sectors-summary" style="font-size:11.5px;color:#475569;">
+              <div style="opacity:0.6;font-style:italic;">Loading saved reports…</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </details>
   </div>
 </div><!-- #tab-builder -->
 
@@ -4155,6 +4377,29 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div id="intel-content" class="tab-loading">Loading…</div>
     </section>
+
+    <!-- 📰 Daily Morning Brief — latest brief inline on Ideas (ui377).
+         Loads /api/daily-brief/latest on tab activation; NEVER auto-runs. -->
+    <section class="panel" id="ideas-brief-panel" style="margin-top:14px;">
+      <header class="panel-head">
+        <span class="panel-title">📰 Daily Morning Brief</span>
+        <button type="button" class="info-star" id="ideas-brief-info"
+          title="Portfolio-aware morning digest: your positions, watchlist, macro calendar, and overnight moves — generated by AI on your Settings → Automation schedule or via the Run button. Costs money to run.">*</button>
+        <span class="panel-badge tab-meta" id="ideas-brief-meta">—</span>
+        <button id="ideas-brief-run" class="tab-btn" style="margin-left:auto;font-size:9px;">📰 Run</button>
+      </header>
+      <div class="info-explainer" id="ideas-brief-exp">
+        The Daily Morning Brief is a portfolio-aware digest generated by AI (Grok live search):
+        it covers your positions, your watchlist, the macro calendar, and overnight moves.
+        It runs on your schedule (Settings → Automation) or when you click Run — never automatically on page load.
+      </div>
+      <div id="ideas-brief-content" style="padding:14px 16px;max-height:420px;overflow-y:auto;font-size:12px;line-height:1.6;">
+        <div class="tab-loading">Loading…</div>
+      </div>
+    </section>
+
+    <!-- 🌡️ Market Pulse — same shared card module as the Research tab -->
+    <div id="ideas-pulse-mount" style="margin-top:14px;"></div>
 
   </div>
 </div><!-- #tab-ideas -->
@@ -5098,6 +5343,25 @@ End with the sleeve block at this account's real market value so I can push it t
         </div>
       </section>
 
+      <!-- Demo Sandbox -->
+      <section class="panel" data-collapsible="1">
+        <header class="panel-head">
+          <span class="panel-title">🎭 Demo Sandbox</span>
+          <span class="panel-badge">PROSPECTS</span>
+        </header>
+        <div style="padding:14px;font-size:12px;color:var(--text-secondary);line-height:1.55;">
+          Shareable demo logins over a fully <strong>synthetic</strong> fund + two managed
+          accounts (real tickers &amp; live prices, fictitious everything else). Demo sessions
+          can never see real data; AI outputs are pre-generated samples (zero token cost).
+          <div id="demo-sandbox-status" style="margin:8px 0;color:var(--text-tertiary);">—</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button id="demo-reseed-btn" type="button" class="btn-primary"
+                    style="padding:0 14px;height:28px;font-size:11.5px;">↻ Seed / Reset demo data</button>
+            <span id="demo-reseed-note" style="font-size:11px;color:var(--text-tertiary);"></span>
+          </div>
+        </div>
+      </section>
+
       <!-- Automation Schedule -->
       <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
         <header class="panel-head">
@@ -5405,7 +5669,9 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   // ── Generic job poller ────────────────────────────────────────
-  function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail, onProgress) {
+  // onCanceled (optional): called when the job reports status 'canceled'
+  // (user hit a Cancel button — server discards the result, nothing saved).
+  function pollJob(jobId, pollPath, btn, idleLabel, onDone, onFail, onProgress, onCanceled) {
     async function tick() {
       try {
         const r = await window.dgaFetch(pollPath + jobId);
@@ -5423,6 +5689,10 @@ End with the sleeve block at this account's real market value so I can push it t
         }
         if (job.status === 'done')   { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; onDone(job); }
         if (job.status === 'failed') { clearInterval(iv); btn.disabled=false; btn.textContent='❌ Failed'; setTimeout(()=>btn.textContent=idleLabel,3000); if(onFail) onFail(job); }
+        if (job.status === 'canceled' || job.status === 'cancelled') {
+          clearInterval(iv); btn.disabled = false; btn.textContent = idleLabel;
+          if (typeof onCanceled === 'function') onCanceled(job);
+        }
       } catch { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; }
     }
     tick(); // immediate first check
@@ -5435,7 +5705,13 @@ End with the sleeve block at this account's real market value so I can push it t
   const TAB_LOADERS = {
     positions: () => loadGPPositions(),
     options:   () => loadOptionsTab(),
-    research:  () => { loadBrief(); loadIdeaFeed(true); },
+    research:  () => {
+      loadBrief(); loadIdeaFeed(true);
+      // Market Pulse card (ui377): mount once, then only GET the latest
+      // persisted results — a scan NEVER auto-runs from tab activation.
+      _pulseMount('research-pulse-mount', 'rpulse');
+      _pulseLoadLatest();
+    },
     builder:   () => _initBuilderTab(),
     lab:       () => _initLabTab(),
     ideas:     () => loadIdeasTab(),
@@ -8449,6 +8725,17 @@ End with the sleeve block at this account's real market value so I can push it t
     if ($heroProgLbl && lbl) $heroProgLbl.textContent = lbl;
   }
 
+  // Cancel support (ui377): track the active job id so the Cancel button can
+  // POST /api/jobs/{id}/cancel. Server-side the cancel is cooperative — the
+  // worker stops at the next checkpoint and NOTHING is saved.
+  const $heroCancelBtn = document.getElementById('hero-cancel-btn');
+  let _heroActiveJobId = null;
+  function _heroShowCancel(on) {
+    if (!$heroCancelBtn) return;
+    $heroCancelBtn.style.display = on ? '' : 'none';
+    if (on) { $heroCancelBtn.disabled = false; $heroCancelBtn.textContent = '✕ Cancel'; }
+  }
+
   async function runAnalysis() {
     const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
     if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
@@ -8469,8 +8756,11 @@ End with the sleeve block at this account's real market value so I can push it t
       });
       if (!r.ok) throw new Error('analyze ' + r.status);
       const job = await r.json();
+      _heroActiveJobId = job.job_id;
+      _heroShowCancel(true);
       pollJob(job.job_id, '/api/jobs/', $heroBtn, '⚡ RUN',
         (j) => {
+          _heroActiveJobId = null; _heroShowCancel(false);
           _heroProgSet(100, 'Complete');
           setTimeout(() => _heroProgShow(false), 650);
           loadReports();
@@ -8482,14 +8772,23 @@ End with the sleeve block at this account's real market value so I can push it t
           $heroHint.textContent = `✅ ${ticker} analysis complete${costTxt}${tgt} — see Saved Reports below`;
         },
         () => {
+          _heroActiveJobId = null; _heroShowCancel(false);
           _heroProgShow(false);
           $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.';
         },
-        (pctInt, lbl) => _heroProgSet(pctInt, lbl)   // polished progress renderer
+        (pctInt, lbl) => _heroProgSet(pctInt, lbl),   // polished progress renderer
+        () => {
+          // Canceled — quiet reset, nothing was persisted server-side.
+          _heroActiveJobId = null; _heroShowCancel(false);
+          _heroProgShow(false);
+          $heroHint.style.color = 'var(--dim)';
+          $heroHint.textContent = 'Analysis canceled — nothing saved.';
+        }
       );
     } catch (e) {
       $heroBtn.disabled = false;
       $heroBtn.textContent = '⚡ RUN';
+      _heroActiveJobId = null; _heroShowCancel(false);
       _heroProgShow(false);
       $heroHint.style.color = 'var(--red)';
       $heroHint.textContent = 'Error: ' + (e.message || 'unknown');
@@ -8497,6 +8796,39 @@ End with the sleeve block at this account's real market value so I can push it t
   }
   $heroBtn.addEventListener('click', runAnalysis);
   $heroTicker.addEventListener('keydown', e => { if (e.key === 'Enter') runAnalysis(); });
+
+  // Cancel a running analysis. The poll loop notices status 'canceled' and
+  // resets the UI; here we just flag the job and show "Canceling…".
+  if ($heroCancelBtn) {
+    $heroCancelBtn.addEventListener('click', async () => {
+      if (!_heroActiveJobId) { _heroShowCancel(false); return; }
+      $heroCancelBtn.disabled = true;
+      $heroCancelBtn.textContent = '⏳ Canceling…';
+      _heroProgSet(null, 'Canceling…');
+      try {
+        const r = await window.dgaFetch('/api/jobs/' + encodeURIComponent(_heroActiveJobId) + '/cancel', { method: 'POST' });
+        if (!r.ok) throw new Error('cancel ' + r.status);
+        // Poll loop takes it from here (status → 'canceled').
+      } catch (e) {
+        // Job may have already finished (404) — let the poll loop resolve it.
+        $heroCancelBtn.disabled = false;
+        $heroCancelBtn.textContent = '✕ Cancel';
+      }
+    });
+  }
+
+  // Engine chips → drive the hidden #hero-llm select (value contract preserved)
+  document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const sel = document.getElementById('hero-llm');
+      if (sel) {
+        sel.value = chip.dataset.llm || 'grok';
+        sel.dispatchEvent(new Event('change'));   // refresh the cost estimate
+      }
+      document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(c =>
+        c.classList.toggle('active', c === chip));
+    });
+  });
 
   // ── Per-run cost estimate (mirrors the LLM Lab's inline price tags) ──
   // Ranges derived from real pricing: a full single-ticker DGA report is
@@ -8614,10 +8946,23 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   // ══════════════════════════════════════════════════════════════
-  // IDEAS TAB — Market Intelligence only (Daily Brief is now on Research tab)
+  // IDEAS TAB — Market Intelligence + Daily Morning Brief + Market Pulse
+  // (ui377). Loads LATEST data only — no AI runs on tab activation.
   // ══════════════════════════════════════════════════════════════
   async function loadIdeasTab() {
     loadIntel();
+    _ideasLoadBrief();
+    _pulseMount('ideas-pulse-mount', 'ipulse');
+    _pulseLoadLatest();
+    // One-time wiring for the brief card's Run button + (*) explainer
+    const runBtn = document.getElementById('ideas-brief-run');
+    if (runBtn && !runBtn._wired) { runBtn._wired = true; runBtn.addEventListener('click', _ideasRunBrief); }
+    const info = document.getElementById('ideas-brief-info');
+    const exp  = document.getElementById('ideas-brief-exp');
+    if (info && exp && !info._wired) {
+      info._wired = true;
+      info.addEventListener('click', function() { exp.classList.toggle('open'); });
+    }
   }
 
   // ── Idea Generator ────────────────────────────────────────────────────────
@@ -8916,11 +9261,24 @@ End with the sleeve block at this account's real market value so I can push it t
   // Pre-defined sector taxonomy (matches the backend's _builder_classify_sector
   // canonical labels). User picks weights → backend allocates by EV.
   var _builderCandidatesCache = null;
-  var _builderSectorWeights   = {};   // {sectorName: percentValue}
+  var _builderSectorWeights   = {};   // {sectorName: percentValue} (legacy sector-target mode)
   var _builderInitialized     = false;
-  var _builderLastRequest     = null; // the most recent allocate request body
-  var _builderLastResult      = null; // the most recent allocate response
+  var _builderLastRequest     = null; // the most recent allocate/construct request body
+  var _builderLastResult      = null; // the most recent allocate/construct response
   var _builderLastScenarioId  = null; // id of the saved scenario, if any
+  // Pool-first picker state (ui377)
+  var _builderPoolSel        = {};    // ticker → checked?
+  var _builderPoolFilter     = '';    // search box text
+  var _builderIncludeComps   = false; // comps hidden/off by default
+  var _builderConstructMethod = 'equal';
+  const _BUILDER_METHOD_EXPLAIN = {
+    equal:           '1/N across every selected stock — no price targets needed.',
+    ev_weighted:     'Softmax by upside-to-target — bigger upside gets more weight; names without a stored target use the pool median (marked ~).',
+    rating_weighted: 'Weight by rating tier: Buy-family 1.5× · Hold 1.0× · Sell-family 0.4× · unrated 1.0×, normalized.',
+  };
+  const _BUILDER_METHOD_LABEL = {
+    equal: 'Equal', ev_weighted: 'Conviction (EV)', rating_weighted: 'Rating-tiered',
+  };
 
   const BUILDER_SECTOR_OPTIONS = [
     "Technology", "Energy", "Financials", "Healthcare", "Consumer Cyclical",
@@ -9044,6 +9402,12 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!r.ok) throw new Error('candidates ' + r.status);
       const data = await r.json();
       _builderCandidatesCache = data;
+      // Pool-first picker (ui377): default-check report subjects; comps stay
+      // OFF behind the "include comps" toggle. User picks survive a refresh.
+      (data.candidates || []).forEach(function(c) {
+        if (_builderPoolSel[c.ticker] == null) _builderPoolSel[c.ticker] = (c.source === 'report');
+      });
+      _renderBuilderPool();
       if (meta) meta.textContent = data.total + ' candidates · ' + (data.sectors || []).length + ' sectors';
       if (sumEl) {
         if (!data.sectors || !data.sectors.length) {
@@ -9074,7 +9438,210 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch (e) {
       console.warn('[builder]', e);
       if (sumEl) sumEl.innerHTML = '<div style="font-size:11.5px;color:#dc2626;">Could not load candidates: ' + _builderEsc(e.message) + '</div>';
+      const pl = document.getElementById('builder-pool-list');
+      if (pl) pl.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#dc2626;">Could not load candidates: ' + _builderEsc(e.message) + '</div>';
     }
+  }
+
+  // ── Pool-first picker + construct (ui377) ──────────────────────────────────
+  function _builderVisibleCandidates() {
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    const q = (_builderPoolFilter || '').toLowerCase();
+    return cands
+      .filter(function(c) { return _builderIncludeComps || c.source !== 'comp'; })
+      .filter(function(c) {
+        if (!q) return true;
+        return (c.ticker + ' ' + (c.name || '') + ' ' + (c.sector || '')).toLowerCase().indexOf(q) !== -1;
+      });
+  }
+  function _builderSelectedTickers() {
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    return cands
+      .filter(function(c) { return (_builderIncludeComps || c.source !== 'comp') && _builderPoolSel[c.ticker]; })
+      .map(function(c) { return c.ticker; });
+  }
+  function _updateBuilderPoolCount() {
+    const countEl = document.getElementById('builder-pool-count');
+    if (!countEl) return;
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    const eligible = cands.filter(function(c) { return _builderIncludeComps || c.source !== 'comp'; });
+    countEl.textContent = _builderSelectedTickers().length + ' / ' + eligible.length + ' selected';
+  }
+
+  function _renderBuilderPool() {
+    const list = document.getElementById('builder-pool-list');
+    if (!list) return;
+    const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+    if (!cands.length) {
+      list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#94a3b8;font-style:italic;">'
+        + 'No candidates yet — save some research first, or hit ↻ Refresh.</div>';
+      _updateBuilderPoolCount();
+      return;
+    }
+    const visible = _builderVisibleCandidates();
+    if (!visible.length) {
+      list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:#94a3b8;font-style:italic;">No matches for the current filter.</div>';
+      _updateBuilderPoolCount();
+      return;
+    }
+    list.innerHTML = visible.map(function(c) {
+      const up = c.upside_pct;
+      const upCls = up == null ? 'none' : (up >= 0 ? 'pos' : 'neg');
+      // No-target reports show "—" but are NEVER hidden from the pool.
+      const upTxt = up == null ? '—' : ((up >= 0 ? '+' : '') + Number(up).toFixed(1) + '%');
+      const comp = c.source === 'comp'
+        ? '<span class="builder-src-chip builder-src-comp" title="Comp ticker extracted from a saved report'
+          + (c.from_report ? ' (' + _builderEsc(c.from_report) + ')' : '') + '">COMP</span>'
+        : '';
+      return '<label class="builder-pool-item" data-tk="' + _builderEsc(c.ticker) + '">'
+        + '<input type="checkbox"' + (_builderPoolSel[c.ticker] ? ' checked' : '') + '>'
+        + '<span class="bp-tk">' + _builderEsc(c.ticker) + '</span>' + comp
+        + '<span class="bp-name">' + _builderEsc(c.name || '') + '</span>'
+        + '<span class="builder-sec-chip">' + _builderEsc(c.sector || 'Unknown') + '</span>'
+        + '<span class="bp-rating">' + _builderEsc(c.rating || '') + '</span>'
+        + '<span class="bp-up ' + upCls + '" title="'
+        +   (up == null ? 'No stored price target — stays in the pool; EV weighting median-fills it' : 'Upside to stored target')
+        + '">' + upTxt + '</span>'
+        + '</label>';
+    }).join('');
+    list.querySelectorAll('.builder-pool-item input[type="checkbox"]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        const tk = inp.closest('.builder-pool-item').dataset.tk;
+        _builderPoolSel[tk] = inp.checked;
+        _updateBuilderPoolCount();
+      });
+    });
+    _updateBuilderPoolCount();
+  }
+
+  async function buildConstruct() {
+    const btn  = document.getElementById('builder-construct-btn');
+    const stat = document.getElementById('builder-status');
+    const tickers = _builderSelectedTickers();
+    if (!tickers.length) { if (stat) stat.textContent = 'Select at least one stock in the pool.'; return; }
+    const body = {
+      tickers:             tickers,
+      basket_size:         parseFloat(document.getElementById('builder-basket-size').value) || 0,
+      method:              _builderConstructMethod,
+      max_per_stock_pct:   parseFloat(document.getElementById('builder-max-per-stock').value) || 10,
+      max_per_sector_pct:  parseFloat(document.getElementById('builder-max-sector-pct')?.value) || 0,
+      softmax_temperature: 1.0,
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+    if (stat) stat.textContent = '';
+    try {
+      const r = await window.dgaFetch('/api/v2/builder/construct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error('construct ' + r.status + ': ' + txt);
+      }
+      const data = await r.json();
+      _builderLastRequest = body;
+      // Compat shim: /scenarios/{id}/to-watchlist walks
+      // result.sectors[].positions[].ticker — mirror the flat rows into that
+      // shape so Save Scenario + Send-to-Watchlist keep working unchanged.
+      data.sectors = [{ sector: 'Pool', positions: (data.rows || []).map(function(rr) { return { ticker: rr.ticker }; }) }];
+      _builderLastResult     = data;
+      _builderLastScenarioId = null;
+      _renderConstructResult(data);
+      if (stat) stat.textContent = 'Done.';
+    } catch (e) {
+      console.warn('[builder-construct]', e);
+      if (stat) stat.textContent = 'Error: ' + e.message;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Build'; }
+    }
+  }
+
+  function _renderConstructResult(data) {
+    const wrap   = document.getElementById('builder-result');
+    const body   = document.getElementById('builder-result-body');
+    const sumEl  = document.getElementById('builder-result-summary');
+    const warnEl = document.getElementById('builder-warnings');
+    if (!wrap || !body) return;
+    wrap.style.display = 'block';
+
+    const sm = data.summary || {};
+    if (sumEl) {
+      const up = sm.expected_upside_pct;
+      sumEl.innerHTML =
+        (sm.positions != null ? sm.positions + ' positions' : '—')
+        + ' · allocated ' + _builderFmtUSD(sm.allocated)
+        + ' · residual cash ' + _builderFmtUSD(sm.residual_cash)
+        + (up != null
+            ? ' · <strong style="color:' + (up >= 0 ? '#16a34a' : '#dc2626') + ';">'
+              + _builderFmtPct(up, 2) + ' expected upside</strong>'
+            : '')
+        + (sm.method ? ' · ' + (_BUILDER_METHOD_LABEL[sm.method] || sm.method) : '');
+    }
+    if (warnEl) {
+      const miss = data.missing_from_pool || [];
+      if (miss.length) {
+        warnEl.style.display = 'block';
+        warnEl.innerHTML = '⚠ Not in the candidate pool (skipped): ' + miss.map(_builderEsc).join(', ');
+      } else {
+        warnEl.style.display = 'none';
+      }
+    }
+
+    const rows = data.rows || [];
+    if (!rows.length) {
+      body.innerHTML = '<div style="padding:24px;color:#94a3b8;text-align:center;font-size:12px;">No allocation produced.</div>';
+      return;
+    }
+    const anyFilled = rows.some(function(r) { return r.upside_filled; });
+    let html = '<table class="builder-result-table">'
+      + '<thead><tr><th>Ticker</th><th style="text-align:left;">Name</th><th>Sector</th>'
+      + '<th>Weight</th><th>$ Alloc</th><th>Shares @ Price</th><th>Upside</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+      const upCls = (r.upside_pct || 0) >= 0 ? 'upside-up' : 'upside-down';
+      const upTxt = r.upside_pct == null ? '—' : _builderFmtPct(r.upside_pct, 1);
+      const filled = r.upside_filled
+        ? '<sup title="No stored target — pool median upside used for weighting" style="cursor:help;">~</sup>'
+        : '';
+      const sharesTxt = (r.shares != null && r.price != null)
+        ? Number(r.shares).toLocaleString() + ' @ $' + Number(r.price).toFixed(2)
+        : '—';
+      html += '<tr>'
+        + '<td><span class="tk">' + _builderEsc(r.ticker) + '</span>'
+        +   (r.rating ? ' <span style="font-size:9px;color:#64748b;">' + _builderEsc(r.rating) + '</span>' : '')
+        + '</td>'
+        + '<td style="text-align:left;font-size:10.5px;color:#64748b;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+        +   _builderEsc(r.name || '') + '</td>'
+        + '<td><span class="builder-sec-chip">' + _builderEsc(r.sector || '') + '</span></td>'
+        + '<td><strong>' + Number(r.weight_pct).toFixed(2) + '%</strong></td>'
+        + '<td>' + _builderFmtUSD(r.actual_dollars != null ? r.actual_dollars : r.dollars) + '</td>'
+        + '<td>' + sharesTxt + '</td>'
+        + '<td class="' + upCls + '">' + upTxt + filled + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table>';
+    if (anyFilled) {
+      html += '<div style="padding:6px 16px;font-size:10px;color:#94a3b8;border-top:1px solid var(--panel-edge);">'
+        + '~ no stored target — pool median used</div>';
+    }
+    // Sector breakdown — small horizontal bars
+    const sb = sm.sector_breakdown || {};
+    const sbKeys = Object.keys(sb);
+    if (sbKeys.length) {
+      const maxV = Math.max.apply(null, sbKeys.map(function(k) { return sb[k]; })) || 1;
+      html += '<div style="padding:8px 0 10px;border-top:1px solid var(--panel-edge);">'
+        + '<div style="padding:2px 16px 4px;font-size:9px;font-weight:800;letter-spacing:0.8px;color:#64748b;text-transform:uppercase;">Sector breakdown</div>'
+        + sbKeys.map(function(k) {
+            return '<div class="builder-bars-row">'
+              + '<span class="bb-name">' + _builderEsc(k) + '</span>'
+              + '<span class="bb-track"><span class="bb-fill" style="display:block;width:'
+              +   Math.min(100, sb[k] / maxV * 100).toFixed(1) + '%;"></span></span>'
+              + '<span class="bb-pct">' + Number(sb[k]).toFixed(1) + '%</span>'
+              + '</div>';
+          }).join('')
+        + '</div>';
+    }
+    body.innerHTML = html;
   }
 
   function _renderBuilderResult(data) {
@@ -9280,7 +9847,49 @@ End with the sleeve block at this account's real market value so I can push it t
 
   async function _builderRestoreScenario(sc) {
     if (!sc || !sc.request) return;
-    // Apply the scenario's inputs back into the controls
+
+    if (Array.isArray(sc.request.tickers)) {
+      // ── Pool-first construct scenario (ui377) ──────────────────────────
+      const req = sc.request;
+      const sizeEl = document.getElementById('builder-basket-size');
+      const capEl  = document.getElementById('builder-max-per-stock');
+      const secEl  = document.getElementById('builder-max-sector-pct');
+      if (sizeEl && req.basket_size) sizeEl.value = req.basket_size;
+      if (capEl  && req.max_per_stock_pct) capEl.value = req.max_per_stock_pct;
+      if (secEl) secEl.value = req.max_per_sector_pct || 0;
+      _builderConstructMethod = req.method || 'equal';
+      const seg = document.getElementById('builder-method-seg');
+      if (seg) seg.querySelectorAll('button[data-method]').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.method === _builderConstructMethod);
+      });
+      const ex = document.getElementById('builder-method-explain');
+      if (ex) ex.textContent = _BUILDER_METHOD_EXPLAIN[_builderConstructMethod] || '';
+      // Re-apply the pool selection
+      Object.keys(_builderPoolSel).forEach(function(k) { _builderPoolSel[k] = false; });
+      req.tickers.forEach(function(t) { _builderPoolSel[t] = true; });
+      // If the scenario used comps, surface them
+      const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+      if (!_builderIncludeComps && cands.some(function(c) { return c.source === 'comp' && _builderPoolSel[c.ticker]; })) {
+        _builderIncludeComps = true;
+        const cb = document.getElementById('builder-include-comps');
+        if (cb) cb.checked = true;
+      }
+      _renderBuilderPool();
+      _builderLastRequest    = req;
+      _builderLastResult     = sc.result;
+      _builderLastScenarioId = sc.id;
+      _renderConstructResult(sc.result);
+      _setBuilderActionStatus('Restored "' + sc.name + '" (saved ' + _builderFmtAge(sc.created_at) + ').', true);
+      setTimeout(function() {
+        const wrap = document.getElementById('builder-result');
+        if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+      return;
+    }
+
+    // ── Legacy sector-target scenario — restore into the Advanced panel ──
+    const adv = document.getElementById('builder-advanced');
+    if (adv) adv.open = true;
     _builderSectorWeights = Object.assign({}, sc.request.sector_weights || {});
     const sizeEl  = document.getElementById('builder-basket-size');
     const methEl  = document.getElementById('builder-method');
@@ -9349,12 +9958,19 @@ End with the sleeve block at this account's real market value so I can push it t
       panel.style.display = 'block';
       list.innerHTML = arr.map(function(sc) {
         const sm = (sc.result && sc.result.summary) || {};
-        const projRet = sm.projected_return_pct;
+        // Two scenario shapes coexist: legacy sector-target allocations
+        // (projected_return_pct / total_positions / sector_weights) and
+        // pool-first constructs (expected_upside_pct / positions / tickers).
+        const isConstruct = !!(sc.request && Array.isArray(sc.request.tickers));
+        const projRet = sm.projected_return_pct != null ? sm.projected_return_pct : sm.expected_upside_pct;
         const projColor = (projRet || 0) >= 0 ? '#16a34a' : '#dc2626';
         const projTxt = projRet == null ? '—' : (projRet >= 0 ? '+' : '') + projRet.toFixed(2) + '%';
-        const tickerCount = (sm.total_positions != null) ? sm.total_positions : '?';
+        const tickerCount = (sm.total_positions != null) ? sm.total_positions
+          : (sm.positions != null ? sm.positions : '?');
         const sw = sc.request && sc.request.sector_weights || {};
-        const sectorSummary = Object.keys(sw).slice(0, 3).join(', ');
+        const sectorSummary = isConstruct
+          ? ((_BUILDER_METHOD_LABEL[sc.request.method] || sc.request.method || 'pool') + ' · pool of ' + sc.request.tickers.length)
+          : Object.keys(sw).slice(0, 3).join(', ');
         const wl = sc.watchlist_synced
           ? '<span class="builder-scenario-synced" title="Tickers added to your watchlist '
             + (sc.watchlist_synced_at ? _builderFmtAge(sc.watchlist_synced_at) : '') + '">📌 WATCHLIST</span>'
@@ -9365,7 +9981,7 @@ End with the sleeve block at this account's real market value so I can push it t
           +   '<div class="builder-scenario-meta">'
           +     _builderFmtAge(sc.created_at) + ' · ' + tickerCount + ' positions · '
           +     '<span style="color:' + projColor + ';font-weight:700;">' + projTxt + '</span> proj. return'
-          +     (sectorSummary ? ' · sectors: ' + _builderEsc(sectorSummary) : '')
+          +     (sectorSummary ? (isConstruct ? ' · ' : ' · sectors: ') + _builderEsc(sectorSummary) : '')
           +   '</div>'
           + '</div>'
           + '<div class="builder-scenario-actions">'
@@ -9451,9 +10067,44 @@ End with the sleeve block at this account's real market value so I can push it t
         dd.value = '';
       });
     }
-    // Wire build button
+    // Wire build button (legacy sector-target allocator, inside Advanced)
     const runBtn = document.getElementById('builder-run-btn');
     if (runBtn) runBtn.addEventListener('click', buildBasket);
+    // ── Pool-first controls (ui377) ─────────────────────────────────────
+    const cBtn = document.getElementById('builder-construct-btn');
+    if (cBtn) cBtn.addEventListener('click', buildConstruct);
+    const seg = document.getElementById('builder-method-seg');
+    if (seg) seg.querySelectorAll('button[data-method]').forEach(function(b) {
+      b.addEventListener('click', function() {
+        _builderConstructMethod = b.dataset.method || 'equal';
+        seg.querySelectorAll('button').forEach(function(x) { x.classList.toggle('active', x === b); });
+        const ex = document.getElementById('builder-method-explain');
+        if (ex) ex.textContent = _BUILDER_METHOD_EXPLAIN[_builderConstructMethod] || '';
+      });
+    });
+    const poolSearch = document.getElementById('builder-pool-search');
+    if (poolSearch) poolSearch.addEventListener('input', function() {
+      _builderPoolFilter = poolSearch.value.trim();
+      _renderBuilderPool();
+    });
+    const compsCb = document.getElementById('builder-include-comps');
+    if (compsCb) compsCb.addEventListener('change', function() {
+      _builderIncludeComps = compsCb.checked;
+      // Opting in checks the comps; opting out unchecks + hides them.
+      const cands = (_builderCandidatesCache && _builderCandidatesCache.candidates) || [];
+      cands.forEach(function(c) { if (c.source === 'comp') _builderPoolSel[c.ticker] = compsCb.checked; });
+      _renderBuilderPool();
+    });
+    const allBtn  = document.getElementById('builder-pool-all');
+    const noneBtn = document.getElementById('builder-pool-none');
+    if (allBtn)  allBtn.addEventListener('click', function() {
+      _builderVisibleCandidates().forEach(function(c) { _builderPoolSel[c.ticker] = true; });
+      _renderBuilderPool();
+    });
+    if (noneBtn) noneBtn.addEventListener('click', function() {
+      _builderVisibleCandidates().forEach(function(c) { _builderPoolSel[c.ticker] = false; });
+      _renderBuilderPool();
+    });
     // Wire save-scenario + watchlist buttons
     const saveBtn = document.getElementById('builder-save-btn');
     const wlBtn   = document.getElementById('builder-watchlist-btn');
@@ -11660,6 +12311,263 @@ End with the sleeve block at this account's real market value so I can push it t
     return iv;
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🌡️ MARKET PULSE — shared card module (Research + Ideas, ui377)
+  // One render pipeline mounted into both tabs. Loading the card only ever
+  // GETs /api/scan/latest — a scan (which costs money) starts ONLY from the
+  // Run Pulse button, after a cost-estimate confirm.
+  // ══════════════════════════════════════════════════════════════
+  const _PULSE_EXPLAIN = 'Market Pulse runs a Grok live web/X sentiment scan on EVERY watchlist ticker, '
+    + 'tagging each Bullish / Bearish / Neutral with a one-line driver. Results persist until the next run '
+    + '— scheduled in Settings → Automation, or run manually with the Run Pulse button. '
+    + 'Opening this card never starts a scan.';
+  const _PULSE_COST_PER_TICKER = 0.02;   // ~$0.02/ticker Grok live-search (estimate)
+  const _PULSE_PREFIXES = [];            // mounted card id-prefixes
+  let _pulseLatest    = {};              // merged ticker → result
+  let _pulseScannedAt = null;
+  let _pulseWlCount   = null;            // cached watchlist size for the estimate
+  let _pulseRunning   = false;
+
+  function _pulseMount(mountId, prefix) {
+    const mount = document.getElementById(mountId);
+    if (!mount || mount.dataset.mounted === '1') return;
+    mount.dataset.mounted = '1';
+    _PULSE_PREFIXES.push(prefix);
+    mount.innerHTML =
+      '<section class="panel" id="' + prefix + '-panel">'
+      + '<header class="panel-head">'
+      +   '<span class="panel-title">🌡️ Market Pulse</span>'
+      +   '<button type="button" class="info-star" id="' + prefix + '-info" title="' + _sieEsc(_PULSE_EXPLAIN) + '">*</button>'
+      +   '<span class="panel-badge" id="' + prefix + '-ts">—</span>'
+      +   '<span id="' + prefix + '-est" style="margin-left:auto;font-size:9.5px;color:var(--mid);font-weight:600;"></span>'
+      +   '<button id="' + prefix + '-run" class="tab-btn" style="margin-left:8px;font-size:9px;white-space:nowrap;">🌡️ Run Pulse</button>'
+      + '</header>'
+      + '<div class="info-explainer" id="' + prefix + '-exp">' + _sieEsc(_PULSE_EXPLAIN) + '</div>'
+      + '<div id="' + prefix + '-status" style="display:none;padding:6px 14px;font-size:10.5px;color:var(--mid);border-bottom:1px solid var(--panel-edge);"></div>'
+      + '<div id="' + prefix + '-rows" style="max-height:420px;overflow-y:auto;">'
+      +   '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading latest pulse…</div>'
+      + '</div>'
+      + '</section>';
+    // (*) info star — hover shows the title attr; click toggles the inline
+    // explainer paragraph (touch devices have no hover).
+    const info = document.getElementById(prefix + '-info');
+    const exp  = document.getElementById(prefix + '-exp');
+    if (info && exp) info.addEventListener('click', function() { exp.classList.toggle('open'); });
+    const runBtn = document.getElementById(prefix + '-run');
+    if (runBtn) runBtn.addEventListener('click', function() { _pulseRun(prefix); });
+    _pulseCostEstimate(prefix);
+  }
+
+  async function _pulseCostEstimate(prefix, fresh) {
+    const el = document.getElementById(prefix + '-est');
+    if (!el) return;
+    try {
+      if (_pulseWlCount == null || fresh) {
+        // Same endpoint the Watchlist panel uses — count drives the estimate.
+        const r = await window.dgaFetch('/api/watchlist');
+        if (!r.ok) throw new Error(r.status);
+        const d = await r.json();
+        _pulseWlCount = (d.tickers || []).length;
+      }
+      const n = _pulseWlCount;
+      el.textContent = '≈ ' + n + ' ticker' + (n === 1 ? '' : 's') + ' · est. $' + (n * _PULSE_COST_PER_TICKER).toFixed(2);
+      el.title = 'Estimate only — ~$0.02 per ticker for the Grok live-search scan. Actual cost varies with how much the model searches.';
+    } catch { el.textContent = ''; }
+  }
+
+  // "Today's Move:" line from the scan markdown; fallback = first substantive line.
+  function _pulseSummary(md) {
+    if (!md) return '';
+    const lines = String(md).split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    let line = lines.find(function(l) { return /today'?s move\s*:/i.test(l); });
+    if (line) line = line.replace(/^[-*#>\s]*\**\s*today'?s move\s*:?\**\s*:?\s*/i, '');
+    if (!line) {
+      line = lines.find(function(l) {
+        return !/^#{1,4}\s/.test(l) && l.replace(/[*_\-#>\s]/g, '').length > 12;
+      });
+    }
+    return (line || '').replace(/\*\*?/g, '').slice(0, 170);
+  }
+
+  // Minimal markdown → HTML for the expanded pulse detail (same dialect the
+  // pulse-detail modal uses; kept small on purpose).
+  function _pulseMdHtml(text) {
+    const LINK_STYLE = 'color:#5BB8D4;text-decoration:underline;font-weight:600;';
+    return String(text || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<div style="font-size:11px;font-weight:800;color:var(--blue);letter-spacing:1px;margin:8px 0 3px;text-transform:uppercase;">$1</div>')
+      .replace(/^## (.+)$/gm,  '<div style="font-size:12px;font-weight:800;color:var(--text-primary);margin:9px 0 3px;">$1</div>')
+      .replace(/^# (.+)$/gm,   '<div style="font-size:13px;font-weight:800;color:var(--text-primary);margin:9px 0 3px;">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer" style="' + LINK_STYLE + '">$1</a>')
+      .replace(/^- (.+)$/gm, '<div style="padding:2px 0 2px 12px;border-left:2px solid var(--blue);margin:3px 0;">$1</div>')
+      .replace(/\n{2,}/g, '<div style="height:7px;"></div>')
+      .replace(/\n/g, ' ');
+  }
+
+  function _pulseRenderRows(prefix) {
+    const rows = document.getElementById(prefix + '-rows');
+    const ts   = document.getElementById(prefix + '-ts');
+    if (!rows) return;
+    if (ts) {
+      if (_pulseScannedAt) {
+        const age = Math.round((Date.now() - new Date(_pulseScannedAt)) / 60000);
+        ts.textContent = isNaN(age) ? '—'
+          : (age < 60 ? '⟳ ' + age + 'm ago'
+             : age < 60 * 48 ? '⟳ ' + Math.round(age / 60) + 'h ago'
+             : '⟳ ' + Math.round(age / 1440) + 'd ago');
+      } else ts.textContent = '—';
+    }
+    const entries = Object.entries(_pulseLatest || {});
+    if (!entries.length) {
+      rows.innerHTML = '<div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">'
+        + 'No pulse yet — click Run Pulse to scan your watchlist.</div>';
+      return;
+    }
+    entries.sort(function(a, b) { return a[0] < b[0] ? -1 : 1; });
+    rows.innerHTML = entries.map(function(pair) {
+      const tk = pair[0], res = pair[1] || {};
+      const sent = String(res.sentiment || 'UNKNOWN').toUpperCase();
+      const sentCls = (sent === 'BULLISH' || sent === 'BEARISH' || sent === 'NEUTRAL') ? sent : 'UNKNOWN';
+      const sum = res.error ? ('⚠ ' + res.error) : (_pulseSummary(res.markdown) || 'Scan result available.');
+      const day = res.pct_change;
+      return '<div class="pulse-row" data-pulse-tk="' + _sieEsc(tk) + '" title="Click to expand the full scan">'
+        +   '<span class="pulse-tk">' + _sieEsc(tk) + '</span>'
+        +   '<span class="pulse-pill ' + sentCls + '">' + sentCls + '</span>'
+        +   (day != null ? '<span class="pulse-day ' + cssClass(day) + '">' + fmtPct(day) + '</span>' : '')
+        +   '<span class="pulse-sum">' + _sieEsc(sum) + '</span>'
+        + '</div>'
+        + '<div class="pulse-detail"></div>';
+    }).join('');
+    // Row click → toggle full markdown inline (accordion)
+    rows.querySelectorAll('.pulse-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        const det = row.nextElementSibling;
+        if (!det || !det.classList.contains('pulse-detail')) return;
+        if (det.classList.contains('open')) { det.classList.remove('open'); return; }
+        if (!det.dataset.filled) {
+          const res = (_pulseLatest || {})[row.getAttribute('data-pulse-tk')] || {};
+          det.innerHTML = _pulseMdHtml(res.markdown || res.error || 'No detail available.');
+          det.dataset.filled = '1';
+        }
+        det.classList.add('open');
+      });
+    });
+  }
+
+  function _pulseRenderAll() { _PULSE_PREFIXES.forEach(_pulseRenderRows); }
+
+  async function _pulseLoadLatest() {
+    try {
+      const r = await window.dgaFetch('/api/scan/latest');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      _pulseLatest    = (d.exists && d.results) ? d.results : {};
+      _pulseScannedAt = d.scanned_at || null;
+    } catch (e) { console.warn('[pulse]', e); }
+    _pulseRenderAll();
+  }
+
+  function _pulseSetRunState(running, label) {
+    _PULSE_PREFIXES.forEach(function(px) {
+      const btn = document.getElementById(px + '-run');
+      if (btn) { btn.disabled = running; btn.textContent = running ? '⏳ Scanning…' : '🌡️ Run Pulse'; }
+      const st = document.getElementById(px + '-status');
+      if (st) {
+        st.style.display = label ? 'block' : 'none';
+        st.textContent = label || '';
+      }
+    });
+  }
+
+  async function _pulseRun(prefix) {
+    if (_pulseRunning) return;
+    // Refresh the count so the confirm shows the real spend.
+    await _pulseCostEstimate(prefix, true);
+    const n = _pulseWlCount || 0;
+    if (!n) {
+      _pulseSetRunState(false, 'Watchlist is empty — add tickers first.');
+      return;
+    }
+    const est = (n * _PULSE_COST_PER_TICKER).toFixed(2);
+    const okGo = await dgaConfirm({
+      title: 'Run Market Pulse',
+      message: 'Scan ' + n + ' watchlist ticker' + (n === 1 ? '' : 's') + ' with Grok live web/X search? '
+        + 'Estimated cost ≈ $' + est + ' (~$0.02/ticker — estimate only; actual varies with search volume).',
+      confirmLabel: 'Run scan',
+      danger: false,
+    });
+    if (!okGo) return;
+    _pulseRunning = true;
+    _pulseSetRunState(true, 'Queuing scan…');
+    try {
+      const r = await window.dgaFetch('/api/scan', { method: 'POST' });   // empty body → watchlist union server-side
+      if (!r.ok) { const e = await r.json().catch(function(){return {};}); throw new Error(e.detail || ('HTTP ' + r.status)); }
+      const job = await r.json();
+      const total = (job.tickers || []).length || n;
+      const seen = new Set();   // tickers finished in THIS run
+      _pollScanJob(job.job_id,
+        function(tk, res) {
+          // Stream: merge each finished ticker into the shared card(s).
+          seen.add(tk);
+          _pulseLatest[tk] = res;
+          _pulseScannedAt = new Date().toISOString();
+          _pulseSetRunState(true, 'Scanning… ' + seen.size + '/' + total + ' tickers done');
+          _pulseRenderAll();
+        },
+        function() {
+          _pulseRunning = false;
+          _pulseSetRunState(false, '');
+          _pulseLoadLatest();   // reload the merged persisted pulse
+        },
+        function(err) {
+          _pulseRunning = false;
+          _pulseSetRunState(false, '❌ ' + err);
+        });
+    } catch (e) {
+      _pulseRunning = false;
+      _pulseSetRunState(false, '❌ ' + (e.message || e));
+    }
+  }
+
+  // ── 📰 Daily Morning Brief on the Ideas tab (ui377) ──────────────
+  // Latest brief only on load — generating a new one is ALWAYS a button click.
+  async function _ideasLoadBrief() {
+    const el   = document.getElementById('ideas-brief-content');
+    const meta = document.getElementById('ideas-brief-meta');
+    if (!el) return;
+    el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Loading…</div>';
+    try {
+      const r = await window.dgaFetch('/api/daily-brief/latest');
+      const d = await r.json();
+      if (!d.exists || !d.markdown) {
+        el.innerHTML = '<div class="tab-empty">No brief yet — click Run to generate one (never runs automatically).</div>';
+        return;
+      }
+      if (meta) meta.textContent = fmtDate(d.generated_at);
+      renderMd(el, d.markdown);
+    } catch { el.innerHTML = '<div class="tab-error">Failed to load brief.</div>'; }
+  }
+
+  async function _ideasRunBrief() {
+    const btn = document.getElementById('ideas-brief-run');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true; btn.textContent = '⏳ Running…';
+    const el = document.getElementById('ideas-brief-content');
+    if (el) el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Generating today’s brief (live search · ~30–60s)…</div>';
+    try {
+      const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const job = await r.json();
+      // Refresh BOTH brief views (Ideas card + the Research-tab Daily Pulse card).
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function() { _ideasLoadBrief(); loadBrief(); });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '📰 Run';
+      if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
+    }
+  }
+
   // ── Per-row scan buttons in Saved Reports ────────────────────────
   // Called after renderReports() re-builds the tbody
   function _wireRepScanButtons() {
@@ -12426,15 +13334,22 @@ End with the sleeve block at this account's real market value so I can push it t
 
     tbody.innerHTML = html;
 
-    // Click row → analyze in Research
+    // Click row → FREE inline stock-info expander (ui377). This used to jump
+    // to Research and auto-fire the hero AI analyze flow — an accidental
+    // single click cost real tokens. The AI run is now a deliberate
+    // "⚡ Run AI analysis" button INSIDE the expander.
     tbody.querySelectorAll('tr[data-ticker]').forEach(function(row) {
+      row.classList.add('sie-clickable');
       row.addEventListener('click', function() {
         const tk = row.dataset.ticker;
         if (!tk) return;
-        showTab('research');
-        const heroInput = document.getElementById('hero-ticker');
-        const heroBtn   = document.getElementById('hero-run-btn');
-        if (heroInput && heroBtn) { heroInput.value = tk; setTimeout(function() { heroBtn.click(); }, 200); }
+        const p  = sorted.find(function(x) { return x.symbol === tk; }) || {};
+        const mv = p.market_value;
+        _sieToggleRow(row, tk, {
+          qty:    p.total_qty != null ? p.total_qty : p.quantity,
+          value:  mv,
+          weight: (mv != null && acctTotalForPct > 0) ? mv / acctTotalForPct * 100 : null,
+        });
       });
     });
   }
@@ -14139,6 +15054,13 @@ End with the sleeve block at this account's real market value so I can push it t
   // column index. Pinned rows (data-pin="bottom") are always kept at the end.
   // Returns the new sort direction ('asc'|'desc').
   function _sortTableByCol(tbody, colIndex, dir) {
+    // Close any open stock-info expander rows first — they're synthetic rows
+    // that must not participate in the sort.
+    tbody.querySelectorAll('tr.sie-row').forEach(function(r) {
+      const p = r.previousElementSibling;
+      if (p) p.classList.remove('sie-open');
+      r.remove();
+    });
     const rows = Array.from(tbody.querySelectorAll('tr:not([data-pin])'));
     const pinned = Array.from(tbody.querySelectorAll('tr[data-pin="bottom"]'));
     rows.sort(function(a, b) {
@@ -14178,6 +15100,185 @@ End with the sleeve block at this account's real market value so I can push it t
     return function() { th.removeEventListener('click', onClick); };
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // FREE stock-info inline expander (ui377)
+  // Clicking a positions row NO LONGER funnels into the hero AI analyze flow
+  // (which spends tokens). It toggles an inline accordion under the row that
+  // renders GET /api/stock-info/{ticker} — zero-LLM, pure local market-data
+  // store, ~instant. The AI run stays available as a deliberate
+  // "⚡ Run AI analysis" text button INSIDE the expander.
+  // ══════════════════════════════════════════════════════════════
+  const _sieCache = {};   // ticker → {ts, data}; server caches 120s too
+
+  function _sieEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  }
+  function _sieFmtCompact(v) {
+    if (v == null || isNaN(v)) return null;
+    const a = Math.abs(v), sign = v < 0 ? '−' : '';
+    if (a >= 1e12) return sign + '$' + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return sign + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return sign + '$' + (a / 1e6).toFixed(1) + 'M';
+    if (a >= 1e3)  return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+    return sign + '$' + a.toFixed(2);
+  }
+  function _sieSignedPct(v) {
+    if (v == null || isNaN(v)) return null;
+    return '<span class="' + cssClass(v) + '">' + (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%</span>';
+  }
+  function _sieStat(label, val) {
+    if (val == null || val === '') return '';
+    return '<div><div class="sie-stat">' + label + '</div><div class="sie-val">' + val + '</div></div>';
+  }
+  // Simple inline-SVG polyline from ~52 weekly closes [{d, c}] — no library.
+  function _sieSparkline(points) {
+    if (!points || points.length < 2) return '';
+    const closes = points.map(p => p.c).filter(c => c != null);
+    if (closes.length < 2) return '';
+    const min = Math.min(...closes), max = Math.max(...closes);
+    const range = (max - min) || 1;
+    const W = 140, H = 34, PAD = 2;
+    const pts = closes.map((c, i) => {
+      const x = PAD + i * (W - PAD * 2) / (closes.length - 1);
+      const y = PAD + (H - PAD * 2) * (1 - (c - min) / range);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const color = closes[closes.length - 1] >= closes[0] ? 'var(--green, #16a34a)' : 'var(--red, #dc2626)';
+    return '<svg width="140" height="34" viewBox="0 0 140 34" style="flex:none;" aria-label="52-week sparkline">'
+      + '<polyline points="' + pts + '" fill="none" stroke="' + color
+      + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  }
+
+  // Build the expander body from the /api/stock-info payload.
+  // ctx (optional, from the clicked row): {qty, value, weight}
+  function _sieHTML(tk, d, ctx) {
+    const q = d.quote || {}, m = d.meta || {}, w = d.range52w || {};
+    const fin = d.financials || {}, dv = d.derived || {};
+    const name = m.name || fin.entity_name || tk;
+    const chips = [m.sector, m.industry].filter(Boolean);
+    const chipHtml = chips.length
+      ? '<span class="sie-chip">' + chips.map(_sieEsc).join(' · ') + '</span>' : '';
+    const pxHtml = q.price != null
+      ? '<span class="sie-px">$' + fmtPx(q.price)
+        + (q.pct_change != null
+            ? ' <span class="' + cssClass(q.pct_change) + '">' + fmtPct(q.pct_change) + '</span>' : '')
+        + '</span>'
+      : '';
+
+    let stats = '';
+    stats += _sieStat('52w High', w.high != null ? '$' + fmtPx(w.high) : null);
+    stats += _sieStat('52w Low',  w.low  != null ? '$' + fmtPx(w.low)  : null);
+    stats += _sieStat('Off High', _sieSignedPct(w.off_high_pct));
+    stats += _sieStat('YTD',      _sieSignedPct(w.ytd_pct));
+    stats += _sieStat('1Y',       _sieSignedPct(w.one_year_pct));
+    stats += _sieStat('Realized Vol', q.realized_vol != null ? Number(q.realized_vol).toFixed(1) + '%' : null);
+    stats += _sieStat('Mkt Cap',  _sieFmtCompact(dv.market_cap));
+    stats += _sieStat('P/E',      dv.pe != null ? Number(dv.pe).toFixed(1) : null);
+    stats += _sieStat('FCF Yield', dv.fcf_yield_pct != null ? Number(dv.fcf_yield_pct).toFixed(2) + '%' : null);
+    stats += _sieStat('Net Cash', _sieFmtCompact(dv.net_cash));
+    stats += _sieStat('Debt/Equity', dv.debt_to_equity != null ? Number(dv.debt_to_equity).toFixed(2) : null);
+    const fy = fin.fy ? ' FY' + String(fin.fy).slice(-2) : '';
+    stats += _sieStat('Revenue' + fy,    _sieFmtCompact(fin.revenue));
+    stats += _sieStat('Net Income' + fy, _sieFmtCompact(fin.net_income));
+    stats += _sieStat('EBITDA' + fy,     _sieFmtCompact(fin.ebitda));
+    // Margins stored as fractions (0–1) in company_financials — same convention
+    // as the Financials tab's _finPct.
+    stats += _sieStat('Gross Margin', fin.gross_margin     != null ? (fin.gross_margin     * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Op Margin',    fin.operating_margin != null ? (fin.operating_margin * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Net Margin',   fin.net_margin       != null ? (fin.net_margin       * 100).toFixed(1) + '%' : null);
+    stats += _sieStat('Diluted EPS',  fin.diluted_eps != null ? '$' + Number(fin.diluted_eps).toFixed(2) : null);
+    stats += _sieStat('FCF' + fy,     _sieFmtCompact(fin.free_cash_flow));
+    if (ctx) {
+      stats += _sieStat('Position Qty', ctx.qty != null
+        ? Number(ctx.qty).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null);
+      stats += _sieStat('Position Value', _sieFmtCompact(ctx.value));
+      stats += _sieStat('Weight', ctx.weight != null ? Number(ctx.weight).toFixed(2) + '%' : null);
+    }
+
+    // Saved-report chip ONLY when a report actually exists — no chip otherwise.
+    const sr = d.saved_report || {};
+    const repChip = sr.exists
+      ? '<button type="button" class="sie-report-chip" data-sie-report title="Open the saved research report'
+        + (sr.generated_at ? ' (generated ' + _sieEsc(fmtDate(sr.generated_at)) + ')' : '') + '">📄 Saved report'
+        + (sr.rating ? ' · ' + _sieEsc(sr.rating) : '')
+        + (sr.price_target != null ? ' · PT $' + fmtPx(sr.price_target) : '')
+        + '</button>'
+      : '';
+
+    return (
+      '<div class="sie-head">'
+        + '<span class="sie-name">' + _sieEsc(name) + '</span>'
+        + chipHtml + pxHtml + _sieSparkline(d.sparkline)
+      + '</div>'
+      + (stats
+          ? '<div class="sie-grid">' + stats + '</div>'
+          : '<div style="font-size:11px;color:var(--dim);font-style:italic;padding:2px 0;">No stored data for '
+            + _sieEsc(tk) + ' yet — the market-data store syncs on demand.</div>')
+      + '<div class="sie-actions">'
+        + repChip
+        + '<button type="button" class="sie-run-ai" data-sie-run '
+        +   'title="Runs the full AI research pipeline (~$0.30–0.60) — deliberate click, never automatic">⚡ Run AI analysis</button>'
+      + '</div>'
+    );
+  }
+
+  // Toggle the expander row under `tr`. Accordion: only one open per tbody.
+  async function _sieToggleRow(tr, tk, ctx) {
+    if (!tr || !tk) return;
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains('sie-row')) {
+      next.remove();
+      tr.classList.remove('sie-open');
+      return;
+    }
+    const tbody = tr.parentElement;
+    if (tbody) tbody.querySelectorAll('tr.sie-row').forEach(function(x) {
+      const p = x.previousElementSibling;
+      if (p) p.classList.remove('sie-open');
+      x.remove();
+    });
+    const colspan = tr.children.length || 1;
+    const exp = document.createElement('tr');
+    exp.className = 'sie-row';
+    exp.innerHTML = '<td class="sie-cell" colspan="' + colspan + '"><div class="sie-wrap">'
+      + '<div style="font-size:11px;color:var(--dim);padding:4px 0;"><span class="spin">↻</span> Loading '
+      + _sieEsc(tk) + ' snapshot…</div></div></td>';
+    tr.insertAdjacentElement('afterend', exp);
+    tr.classList.add('sie-open');
+    const wrap = exp.querySelector('.sie-wrap');
+    try {
+      let data;
+      const hit = _sieCache[tk];
+      if (hit && Date.now() - hit.ts < 120000) {
+        data = hit.data;
+      } else {
+        const r = await window.dgaFetch('/api/stock-info/' + encodeURIComponent(tk));
+        if (!r.ok) throw new Error('stock-info ' + r.status);
+        data = await r.json();
+        _sieCache[tk] = { ts: Date.now(), data: data };
+      }
+      if (!exp.isConnected) return;   // row was closed / table re-rendered
+      wrap.innerHTML = _sieHTML(tk, data, ctx);
+      const rep = wrap.querySelector('[data-sie-report]');
+      if (rep) rep.addEventListener('click', function(e) { e.stopPropagation(); openReport(tk); });
+      const run = wrap.querySelector('[data-sie-run]');
+      if (run) run.addEventListener('click', function(e) {
+        e.stopPropagation();
+        // Deliberate AI run — uses the existing hero analyze flow.
+        showTab('research');
+        const input = document.getElementById('hero-ticker');
+        const btn   = document.getElementById('hero-run-btn');
+        if (input) input.value = tk;
+        if (btn) setTimeout(function() { btn.click(); }, 150);
+        if (input && input.scrollIntoView) input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    } catch (e) {
+      if (wrap) wrap.innerHTML = '<div style="font-size:11px;color:var(--red);padding:4px 0;">Could not load info: '
+        + _sieEsc(e.message || e) + '</div>';
+    }
+  }
+
   function renderPositionsPanel(rows) {
     const totalMv   = rows.reduce((s, p) => s + (p.market_value || 0), 0);
     const totalCost = rows.reduce((s, p) => s + (p.total_cost || 0), 0);
@@ -14213,7 +15314,12 @@ End with the sleeve block at this account's real market value so I can push it t
                 const curPct = p.market_weight_pct != null
                   ? p.market_weight_pct
                   : (p.market_value && totalMv > 0 ? (p.market_value / totalMv * 100) : (p.weight_pct || null));
-                return '<tr>' +
+                // Row click → FREE stock-info expander (ui377). Position ctx
+                // travels via data-attrs so the delegated handler can pass it.
+                return '<tr class="sie-clickable" data-ticker="' + _gfEsc(p.symbol || '') + '"' +
+                  ' data-qty="' + (p.total_qty != null ? p.total_qty : '') + '"' +
+                  ' data-mv="' + (p.market_value != null ? p.market_value : '') + '"' +
+                  ' data-wt="' + (curPct != null ? curPct.toFixed(4) : '') + '">' +
                   '<td style="font-weight:800;color:var(--blue);" title="' + _gfEsc(p.name || '') + '">' + (p.symbol || '—') + '</td>' +
                   '<td class="num">' + (p.total_qty || 0).toFixed(2) + '</td>' +
                   '<td class="num">' + (p.avg_cost != null ? fmtUSD(p.avg_cost) : '—') + '</td>' +
@@ -14234,6 +15340,21 @@ End with the sleeve block at this account's real market value so I can push it t
       const th    = document.getElementById('pos-th-curpct');
       const tbody = document.getElementById('pos-tbody');
       if (th && tbody) _wireColumnSort(th, tbody, 6, 'desc');
+      // Row click → FREE inline info expander (no AI spend, ui377).
+      // Delegated so it survives sorts; re-render creates a fresh tbody.
+      if (tbody && !tbody._sieWired) {
+        tbody._sieWired = true;
+        tbody.addEventListener('click', function(e) {
+          const row = e.target.closest('tr[data-ticker]');
+          if (!row || !tbody.contains(row)) return;
+          const num = function(v) { const n = parseFloat(v); return isNaN(n) ? null : n; };
+          _sieToggleRow(row, row.dataset.ticker, {
+            qty:    num(row.dataset.qty),
+            value:  num(row.dataset.mv),
+            weight: num(row.dataset.wt),
+          });
+        });
+      }
     });
 
     return html;
@@ -15388,6 +16509,50 @@ End with the sleeve block at this account's real market value so I can push it t
     _settingsPanel('snaptrade',   loadSnapTrade);
     _settingsPanel('plaid',       loadPlaid);
     _settingsPanel('mfa',         loadMfa);
+    _settingsPanel('demo',        loadDemoSandbox);
+  }
+
+  // ── 🎭 Demo Sandbox: status + seed/reset (real GP only; server enforces) ──
+  var _demoWired = false;
+  async function loadDemoSandbox() {
+    const $st = document.getElementById('demo-sandbox-status');
+    const $btn = document.getElementById('demo-reseed-btn');
+    const $note = document.getElementById('demo-reseed-note');
+    if (!$st || !$btn) return;
+    if (!_demoWired) {
+      _demoWired = true;
+      $btn.addEventListener('click', async () => {
+        if (!confirm('Seed / reset the demo sandbox?\n\nRebuilds the demo fund, both demo accounts, sample AI content, and the demo logins. Takes a few seconds. No real data is touched.')) return;
+        $btn.disabled = true; $btn.textContent = '⏳ Seeding…';
+        try {
+          const r = await window.dgaFetch('/api/v2/admin/demo/reseed', { method: 'POST' });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d?.detail || ('HTTP ' + r.status));
+          $note.textContent = '✓ Seeded ' + (d.tickers?.length || '?') + ' tickers'
+            + (d.warnings?.length ? (' · ' + d.warnings.length + ' warnings') : '');
+          loadDemoSandbox();
+        } catch (e) {
+          $note.textContent = '✗ ' + (e.message || e);
+        } finally {
+          $btn.disabled = false; $btn.textContent = '↻ Seed / Reset demo data';
+        }
+      });
+    }
+    try {
+      const r = await window.dgaFetch('/api/v2/admin/demo/status');
+      const d = await r.json();
+      if (d.seeded) {
+        const c = d.credentials || {};
+        $st.innerHTML = '<span style="color:var(--green,#16a34a);font-weight:700;">● Seeded</span>'
+          + (d.registry?.seeded_at ? ' · ' + String(d.registry.seeded_at).slice(0, 16).replace('T', ' ') + ' UTC' : '')
+          + (c.gp ? '<br>GP: <code>' + c.gp.email + '</code> / <code>' + c.gp.password + '</code>'
+                  + '<br>LP: <code>' + c.lp.email + '</code> / <code>' + c.lp.password + '</code>' : '');
+      } else {
+        $st.innerHTML = '<span style="color:var(--text-tertiary);">○ Not seeded yet — click the button below.</span>';
+      }
+    } catch (e) {
+      $st.textContent = 'Status unavailable: ' + (e.message || e);
+    }
   }
 
   // ── 🖥 System Info: surfaces app build + backend/DB health ──
