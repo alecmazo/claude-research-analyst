@@ -29936,13 +29936,16 @@ def _demo_reseed() -> dict:
     for tk in tickers[:8]:
         m = meta.get(tk) or {}
         sent = ["BULLISH", "NEUTRAL", "BEARISH"][hash(tk) % 3]
+        # NOTE: no newlines inside f-string braces — Railway's Python (<3.12)
+        # rejects PEP-701 multi-line f-string expressions.
+        move = ("gaining on constructive chatter" if sent == "BULLISH"
+                else "drifting with the tape" if sent == "NEUTRAL"
+                else "soft on sector rotation")
         pulse_results[tk] = {
             "ticker": tk, "ok": True, "price": px_map.get(tk),
             "pct_change": round((hash(tk) % 500 - 220) / 100.0, 2),
             "sentiment": sent,
-            "markdown": (f"**Today's Move:** {tk} {'gaining on constructive chatter'
-                          if sent == 'BULLISH' else 'drifting with the tape'
-                          if sent == 'NEUTRAL' else 'soft on sector rotation'} "
+            "markdown": (f"**Today's Move:** {tk} {move} "
                          f"(demo sample — live scans read X/news in real time)."),
         }
     _kv_put("demo.samples.pulse", {"exists": True, "results": pulse_results,
