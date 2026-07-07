@@ -6265,7 +6265,8 @@ def call_claude(system_prompt: str, user_content: str,
 
 
 def call_llm(provider: str, system_prompt: str, user_content: str,
-             *, live_search: bool = False, on_delta=None, usage_capture=None) -> str:
+             *, live_search: bool = False, on_delta=None, usage_capture=None,
+             should_cancel=None) -> str:
     """Provider-routed LLM call. ``provider`` ∈ {'grok', 'claude'}.
 
     ``on_delta`` is forwarded to providers that support streaming (Claude).
@@ -6279,9 +6280,13 @@ def call_llm(provider: str, system_prompt: str, user_content: str,
     p = (provider or "grok").lower().strip()
     if p == "claude":
         return call_claude(system_prompt, user_content, on_delta=on_delta,
-                           usage_capture=usage_capture)
+                           usage_capture=usage_capture,
+                           should_cancel=should_cancel)
     if p == "grok":
-        # call_grok is non-streaming; on_delta is ignored.
+        # call_grok is non-streaming: honor a cancel that arrived before the
+        # call; one in flight lands at the caller's next checkpoint instead.
+        if should_cancel is not None and should_cancel():
+            raise ClaudeCancelled("cancelled before LLM call")
         return call_grok(system_prompt, user_content, live_search=live_search,
                         usage_capture=usage_capture)
     raise ValueError(f"Unknown LLM provider: {provider!r}")
@@ -6703,8 +6708,11 @@ def _gamma_generate(input_text: str, num_cards: int,
 def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
                    verbose: bool = True, reuse_existing: bool = False,
                    on_progress=None, llm_provider: str = "grok",
-                   on_delta=None, reuse_user_msg: bool = False) -> dict:
-    """Public wrapper around :func:`_analyze_ticker_impl` that never raises.
+                   on_delta=None, reuse_user_msg: bool = False,
+                   should_cancel=None) -> dict:
+    """Public wrapper around :func:`_analyze_ticker_impl` that never raises —
+    EXCEPT :class:`ClaudeCancelled`, which passes through so callers can
+    distinguish a user cancel from a failure.
 
     Any uncaught exception inside the pipeline is converted to a structured
     ``{"ok": False, "error": "<msg>", "traceback": "..."}`` result and the
@@ -6731,7 +6739,10 @@ def analyze_ticker(ticker: str, *, system_prompt: str, generate_gamma: bool,
             llm_provider=llm_provider,
             on_delta=on_delta,
             reuse_user_msg=reuse_user_msg,
+            should_cancel=should_cancel,
         )
+    except ClaudeCancelled:
+        raise
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
         print(f"\n❌ analyze_ticker({ticker}) CRASHED:\n{tb_str}", flush=True)
@@ -6763,16 +6774,32 @@ def _emit_progress(on_progress, step: str, pct: float, label: str = "") -> None:
 def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: bool,
                          verbose: bool = True, reuse_existing: bool = False,
                          on_progress=None, llm_provider: str = "grok",
-                         on_delta=None, reuse_user_msg: bool = False) -> dict:
+                         on_delta=None, reuse_user_msg: bool = False,
+                         should_cancel=None) -> dict:
     """Analyze a single ticker end-to-end.
 
     When ``reuse_existing`` is True and a cached markdown report already exists
     in /stocks, we load it instead of re-calling Grok. This is what the
     portfolio-rebalance flow uses by default so we don't burn 20+ API calls
     every time we re-optimize weights.
+
+    ``should_cancel`` is an optional callable() → bool polled at each pipeline
+    checkpoint (and every ~5 streamed chunks inside the Claude call): when it
+    returns True the pipeline raises :class:`ClaudeCancelled`. Grok's HTTP
+    call is non-streaming, so a cancel during it takes effect at the next
+    checkpoint instead of mid-call.
     """
     ticker = ticker.strip().upper()
     result = {"ticker": ticker, "ok": False}
+
+    def _ck() -> None:
+        if should_cancel is not None:
+            try:
+                cancelled = bool(should_cancel())
+            except Exception:  # noqa: BLE001
+                cancelled = False
+            if cancelled:
+                raise ClaudeCancelled("cancelled by user")
 
     # --- Fast path: reuse an existing report if present and requested.
     md_path = STOCKS_FOLDER / f"{ticker}_DGA_Report.md"
@@ -6931,6 +6958,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         # This parses the actual XBRL instance documents from each filing, so the
         # columns we read later map 1-to-1 onto the filing's own period contexts.
         print(f"\n🚀 {ticker}: downloading latest 10-K + 10-Q Excel workbooks…")
+        _ck()
         _emit_progress(on_progress, "sec_filings", 0.05,
                        "Downloading SEC filings (10-K, 10-Q)")
         data: dict | None = None
@@ -6941,6 +6969,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             print("   Falling back to existing workbooks (if any) or companyfacts API.")
 
         # --- Step 2: read the Excel workbooks and build the verified data dict
+        _ck()
         _emit_progress(on_progress, "financials", 0.20,
                        "Extracting filing-accurate financials")
         # Two-source extraction with completeness check. The primary path
@@ -7056,6 +7085,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
             print(verified_block)
 
         # Current price
+        _ck()
         _emit_progress(on_progress, "market_data", 0.30,
                        "Fetching live price + analyst ratings")
         mkt = fetch_market_snapshot(ticker)
@@ -7137,6 +7167,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     _model_label = GROK_MODEL if llm_provider == "grok" else (CLAUDE_MODEL if llm_provider == "claude" else llm_provider)
     print(f"   🧠 Calling {llm_provider.upper()} ({_model_label})"
           + (" with live X/news/web search…" if llm_provider == "grok" else "…"))
+    _ck()
     _emit_progress(on_progress, "grok", 0.40,
                    f"{llm_provider.title()} ({_model_label}) — analyzing"
                    + (" + live X/news search" if llm_provider == "grok" else ""))
@@ -7145,7 +7176,10 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
         report_text = call_llm(llm_provider, system_prompt, user_msg,
                                live_search=(llm_provider == "grok"),
                                on_delta=on_delta,
-                               usage_capture=lambda u: _usage.update(u or {}))
+                               usage_capture=lambda u: _usage.update(u or {}),
+                               should_cancel=should_cancel)
+    except ClaudeCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001
         print(f"   ❌ {llm_provider.upper()} API error: {exc}")
         result["error"] = f"{llm_provider.title()}: {exc}"
@@ -7156,6 +7190,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     md_path.write_text(report_text)
 
     # Render Word
+    _ck()
     _emit_progress(on_progress, "rendering", 0.85,
                    "Rendering Word document")
     out_docx = STOCKS_FOLDER / f"{ticker}_DGA_Report{_suffix}.docx"
@@ -7178,6 +7213,7 @@ def _analyze_ticker_impl(ticker: str, *, system_prompt: str, generate_gamma: boo
     gamma_credits = 0
     gamma_error: str | None = None
     if generate_gamma:
+        _ck()
         _emit_progress(on_progress, "gamma", 0.92, "Generating Gamma presentation")
         # 1. Reuse a fresh existing deck if one was generated < GAMMA_FRESH_DAYS
         #    ago — saves credits and avoids piling up duplicate decks in the

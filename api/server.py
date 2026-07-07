@@ -4531,6 +4531,17 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             if job_id in _jobs:
                 _jobs[job_id]["progress"] = {"step": step, "pct": pct, "label": label}
 
+    def _cancel_requested() -> bool:
+        with _jobs_lock:
+            return bool(_jobs.get(job_id, {}).get("cancel_requested"))
+
+    def _mark_canceled() -> None:
+        with _jobs_lock:
+            if _jobs.get(job_id):
+                _jobs[job_id]["status"] = "canceled"
+                _jobs[job_id]["progress"] = {"step": "canceled", "pct": 1.0,
+                                              "label": "Canceled"}
+
     # ── Phase 1: Grok ─────────────────────────────────────────────────
     result_g: dict = {}
     try:
@@ -4542,7 +4553,11 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             on_progress=lambda s,p,l: _phase(s, p * 0.5, f"Grok: {l}"),
             llm_provider="grok",
             reuse_user_msg=False,
+            should_cancel=_cancel_requested,
         )
+    except analyst.ClaudeCancelled:
+        _mark_canceled()
+        return
     except BaseException as exc:  # noqa: BLE001
         result_g = {"ok": False, "error": str(exc)[:300]}
     persisted_g, _ = _persist_analysis_text(
@@ -4557,6 +4572,9 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
         except Exception: pass
 
     # ── Phase 2: Claude (uses Grok's cached user_msg) ──────────────────
+    if _cancel_requested():
+        _mark_canceled()
+        return
     _phase("grok", 0.55, "Both: Grok done · starting Claude…")
     result_c: dict = {}
     try:
@@ -4568,7 +4586,11 @@ def _run_analysis_both(job_id: str, ticker: str, generate_gamma: bool) -> None:
             on_progress=lambda s,p,l: _phase(s, 0.5 + p * 0.5, f"Claude: {l}"),
             llm_provider="claude",
             reuse_user_msg=True,            # identical inputs to Grok
+            should_cancel=_cancel_requested,
         )
+    except analyst.ClaudeCancelled:
+        _mark_canceled()
+        return
     except BaseException as exc:  # noqa: BLE001
         result_c = {"ok": False, "error": str(exc)[:300]}
     persisted_c, _ = _persist_analysis_text(
@@ -4643,6 +4665,10 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
     # Run the analysis. We capture exceptions defensively so the persist
     # helper can still try to save whatever text we have — even when the
     # outer pipeline crashed (rendering, drive upload, etc.).
+    def _cancel_requested() -> bool:
+        with _jobs_lock:
+            return bool(_jobs.get(job_id, {}).get("cancel_requested"))
+
     result: dict = {}
     try:
         system_prompt = analyst.load_system_prompt()
@@ -4656,7 +4682,16 @@ def _run_analysis(job_id: str, ticker: str, generate_gamma: bool,
             on_progress=_record_progress,
             llm_provider=provider,
             reuse_user_msg=(provider == "claude"),
+            should_cancel=_cancel_requested,
         )
+    except analyst.ClaudeCancelled:
+        print(f"[run_analysis] job {job_id} ({ticker}) cancelled by user", flush=True)
+        with _jobs_lock:
+            if _jobs.get(job_id):
+                _jobs[job_id]["status"] = "canceled"
+                _jobs[job_id]["progress"] = {"step": "canceled", "pct": 1.0,
+                                              "label": "Canceled — no report saved"}
+        return
     except BaseException as exc:  # noqa: BLE001
         tb_str = traceback.format_exc()
         print(f"\n❌ Single-ticker job {job_id} ({ticker}) analyze_ticker raised:\n{tb_str}", flush=True)
@@ -5604,6 +5639,30 @@ def get_job_status(job_id: str):
     raise HTTPException(status_code=404, detail="Job not found")
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Cancel a queued/running analysis job. Cooperative: the worker checks
+    the flag at every pipeline checkpoint and (for Claude) every few streamed
+    chunks, so the stream is closed and no report is persisted. A Grok HTTP
+    call already in flight can't be aborted mid-request — the cancel lands at
+    the next checkpoint (the report is still discarded)."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found (it may have already finished).")
+        if job.get("status") in ("done", "failed", "canceled"):
+            return job
+        job["cancel_requested"] = True
+        if job.get("status") == "queued":
+            job["status"] = "canceled"
+            job["progress"] = {"step": "canceled", "pct": 1.0, "label": "Canceled"}
+        else:
+            job["progress"] = {"step": job.get("progress", {}).get("step") or "running",
+                               "pct": job.get("progress", {}).get("pct") or 0.0,
+                               "label": "Canceling…"}
+        return job
+
+
 @app.get("/api/jobs")
 def list_jobs():
     """Return all jobs (newest first), without full result payloads."""
@@ -6086,6 +6145,127 @@ def get_benchmark_annual(key: str = "sp500", years: str = ""):
 # ── Per-ticker sector + recent headline (for rebalance table columns) ─────────
 _ticker_meta_cache: dict[str, dict] = {}   # ticker → {"sector", "industry", "recent_dev", "ts"}
 _TICKER_META_TTL = 900                     # 15 min — same as price/SPY caches
+
+
+_STOCK_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+@app.get("/api/stock-info/{ticker}")
+def get_stock_info(ticker: str):
+    """FREE (zero-LLM) one-stop stock snapshot for the positions expander:
+    quote + meta + 52-week stats + latest-fiscal-year fundamentals + derived
+    valuation ratios + saved-report pointer. Everything comes from the local
+    market-data store and company_financials — no external calls, no tokens.
+    Cached 120s per ticker."""
+    tk = (ticker or "").strip().upper()
+    if not tk or len(tk) > 12:
+        raise HTTPException(status_code=422, detail="Invalid ticker")
+    hit = _STOCK_INFO_CACHE.get(tk)
+    if hit and time.time() - hit[0] < 120:
+        return hit[1]
+    out: dict = {"ticker": tk}
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return out
+    try:
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            alias = _resolve_ticker_alias(tk)
+            cur.execute("SELECT price, prev_close, pct_change, realized_vol, updated_at "
+                        "FROM market_quotes WHERE symbol IN (%s, %s) "
+                        "ORDER BY updated_at DESC LIMIT 1", (tk, alias))
+            q = cur.fetchone()
+            if q:
+                out["quote"] = {
+                    "price": q["price"], "prev_close": q["prev_close"],
+                    "pct_change": q["pct_change"], "realized_vol": q["realized_vol"],
+                    "as_of": q["updated_at"].isoformat() if q["updated_at"] else None,
+                }
+            cur.execute("SELECT name, sector, industry, analyst_target "
+                        "FROM security_meta WHERE symbol IN (%s, %s) LIMIT 1", (tk, alias))
+            m = cur.fetchone()
+            if m:
+                out["meta"] = dict(m)
+            # 52-week stats + weekly sparkline from the price store.
+            cur.execute("""
+                SELECT d, close FROM price_history
+                 WHERE symbol IN (%s, %s) AND d >= (CURRENT_DATE - INTERVAL '370 days')
+                 ORDER BY d
+            """, (tk, alias))
+            bars = [(r["d"], float(r["close"])) for r in cur.fetchall() if r["close"] is not None]
+            if bars:
+                closes = [c for _, c in bars]
+                px_now = (out.get("quote") or {}).get("price") or closes[-1]
+                jan1 = [c for (d, c) in bars if d.month == 1 and d.year == datetime.utcnow().year]
+                out["range52w"] = {
+                    "high": round(max(closes), 2), "low": round(min(closes), 2),
+                    "off_high_pct": round((px_now / max(closes) - 1) * 100, 2) if max(closes) else None,
+                    "ytd_pct": round((px_now / jan1[0] - 1) * 100, 2) if jan1 and jan1[0] else None,
+                    "one_year_pct": round((px_now / closes[0] - 1) * 100, 2) if closes[0] else None,
+                }
+                # ~weekly points for a small sparkline
+                step = max(1, len(bars) // 52)
+                out["sparkline"] = [{"d": d.isoformat(), "c": round(c, 2)}
+                                    for d, c in bars[::step]][-60:]
+            # Latest fiscal-year fundamentals (+ derived ratios).
+            cur.execute("""
+                SELECT fy, period_end, revenue, net_income, ebitda, diluted_eps,
+                       free_cash_flow, operating_cash_flow, gross_margin,
+                       operating_margin, net_margin, total_debt, cash,
+                       shares_outstanding, stockholders_equity, entity_name
+                  FROM company_financials
+                 WHERE ticker = %s AND period_type = 'annual'
+                 ORDER BY period_end DESC LIMIT 1
+            """, (tk,))
+            f = cur.fetchone()
+            if f:
+                fin = {k: (float(v) if isinstance(v, (int, float)) or
+                           (v is not None and str(v).replace('.', '', 1).replace('-', '', 1).isdigit())
+                           else v) for k, v in dict(f).items()}
+                for k in ("revenue", "net_income", "ebitda", "free_cash_flow",
+                          "operating_cash_flow", "total_debt", "cash",
+                          "shares_outstanding", "stockholders_equity", "diluted_eps",
+                          "gross_margin", "operating_margin", "net_margin"):
+                    try:
+                        fin[k] = float(f[k]) if f[k] is not None else None
+                    except (TypeError, ValueError):
+                        fin[k] = None
+                out["financials"] = fin
+                px = (out.get("quote") or {}).get("price")
+                sh = fin.get("shares_outstanding")
+                eps = fin.get("diluted_eps")
+                if px and sh:
+                    mcap = px * sh
+                    out["derived"] = {
+                        "market_cap": round(mcap, 0),
+                        "pe": round(px / eps, 1) if eps else None,
+                        "fcf_yield_pct": (round(fin["free_cash_flow"] / mcap * 100, 2)
+                                          if fin.get("free_cash_flow") else None),
+                        "net_cash": (round(fin["cash"] - fin["total_debt"], 0)
+                                     if fin.get("cash") is not None and fin.get("total_debt") is not None
+                                     else None),
+                        "debt_to_equity": (round(fin["total_debt"] / fin["stockholders_equity"], 2)
+                                           if fin.get("total_debt") and fin.get("stockholders_equity")
+                                           else None),
+                    }
+            # Saved-report pointer — UI links ONLY when one exists.
+            cur.execute("""
+                SELECT generated_at, rating, price_target, upside_pct
+                  FROM analyst_reports
+                 WHERE ticker = %s AND archived IS NOT TRUE AND report_md IS NOT NULL
+            """, (tk,))
+            r = cur.fetchone()
+            out["saved_report"] = ({
+                "exists": True,
+                "generated_at": r["generated_at"].isoformat() if r["generated_at"] else None,
+                "rating": r["rating"],
+                "price_target": float(r["price_target"]) if r["price_target"] is not None else None,
+                "upside_pct": float(r["upside_pct"]) if r["upside_pct"] is not None else None,
+            } if r else {"exists": False})
+    except Exception as e:
+        out["warning"] = str(e)[:160]
+    _STOCK_INFO_CACHE[tk] = (time.time(), out)
+    if len(_STOCK_INFO_CACHE) > 400:
+        _STOCK_INFO_CACHE.pop(next(iter(_STOCK_INFO_CACHE)), None)
+    return out
 
 
 @app.get("/api/market/ticker-meta/{ticker}")
@@ -6895,27 +7075,29 @@ def _builder_fetch_candidates() -> list[dict]:
          ORDER BY COALESCE(LEAST(upside_pct, claude_upside_pct),
                            upside_pct, claude_upside_pct) DESC NULLS LAST
     """
-    relaxed_sql = """
+    # EVERY saved report is Builder-eligible (Alec's rule) — a report whose
+    # target didn't extract still names a researched stock. Targets/upside
+    # stay NULL on those rows; the construct allocator median-fills for
+    # EV-weighting and equal-weighting never needed them at all.
+    all_sql = """
         SELECT ticker, rating, price_target, upside_pct, generated_at, report_md,
                claude_price_target, claude_upside_pct, claude_rating
           FROM analyst_reports
-         WHERE archived IS NOT TRUE
-           AND (price_target IS NOT NULL OR claude_price_target IS NOT NULL)
-         ORDER BY generated_at DESC NULLS LAST
+         WHERE archived IS NOT TRUE AND report_md IS NOT NULL
+         ORDER BY COALESCE(LEAST(upside_pct, claude_upside_pct),
+                           upside_pct, claude_upside_pct) DESC NULLS LAST
     """
     try:
         with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
             cur.execute("SELECT COUNT(*) AS n FROM analyst_reports WHERE archived IS NOT TRUE")
             total_reports = (cur.fetchone() or {}).get("n", 0)
             cur.execute(strict_sql)
+            strict_n = len(cur.fetchall() or [])
+            cur.execute(all_sql)
             rows = cur.fetchall() or []
-            strict_n = len(rows)
-            if not rows:
-                cur.execute(relaxed_sql)
-                rows = cur.fetchall() or []
             _BUILDER_CANDIDATES_DIAG.update(total_unarchived=total_reports,
                                             strict_rows=strict_n, used_rows=len(rows),
-                                            relaxed=(strict_n == 0 and len(rows) > 0))
+                                            no_target_rows=len(rows) - strict_n)
     except Exception as e:
         print(f"[builder] candidates query failed: {e!s:.200}", flush=True)
         _BUILDER_CANDIDATES_DIAG.update(error=f"query failed: {e!s:.150}")
@@ -6925,7 +7107,7 @@ def _builder_fetch_candidates() -> list[dict]:
           f"strict={_BUILDER_CANDIDATES_DIAG.get('strict_rows')} "
           f"used={_BUILDER_CANDIDATES_DIAG.get('used_rows')}", flush=True)
     if not rows:
-        _BUILDER_CANDIDATES_DIAG.update(error="no non-archived reports with a price target")
+        _BUILDER_CANDIDATES_DIAG.update(error="no non-archived saved reports")
         return []
 
     # ── 2. Walk each report and extract comp tickers from the markdown ───
@@ -7188,6 +7370,146 @@ class BuilderAllocateRequest(BaseModel):
     max_stocks_per_sector: int   = 6
     redistribute_empty:    bool  = True            # if a sector has no candidates, push its weight into the others
     softmax_temperature:   float = 1.0             # for ev_weighted; >1 flattens, <1 sharpens
+
+
+class BuilderConstructRequest(BaseModel):
+    tickers: list[str]                      # selected pool (from /candidates)
+    basket_size: float = 100_000.0
+    method: str = "equal"                   # equal | ev_weighted | rating_weighted
+    max_per_stock_pct: float = 10.0         # cap vs basket
+    max_per_sector_pct: float = 0.0         # 0 = no sector cap
+    softmax_temperature: float = 1.0        # ev_weighted spread control
+
+
+@app.post("/api/v2/builder/construct")
+def builder_construct(request: Request, body: BuilderConstructRequest):
+    """Pool-first Builder: the user picks tickers (default = ALL saved
+    reports), a weighting method, and caps — no sector-weight form required.
+
+    Methods:
+      equal           — 1/N across the pool
+      ev_weighted     — softmax(upside / T); tickers with no stored upside get
+                        the POOL MEDIAN upside so research without an
+                        extractable target is never dropped
+      rating_weighted — Buy-family 1.5× · Hold 1.0× · Sell-family 0.4× ·
+                        unrated 1.0×, normalized
+
+    Caps run after weighting: per-stock cap (vs basket) then optional
+    per-sector cap, trimmed pro-rata and redistributed (3 passes — converges
+    for any sane caps). Shares are floored at store prices; the remainder is
+    reported as residual cash. Zero LLM calls, pure DB."""
+    _claims_or_401(request)
+    picks = [t.strip().upper() for t in (body.tickers or []) if t and t.strip()]
+    if not picks:
+        raise HTTPException(400, "tickers is required — select at least one saved-report stock")
+    basket = max(0.0, float(body.basket_size or 0))
+    method = body.method if body.method in ("equal", "ev_weighted", "rating_weighted") else "equal"
+    cap_stock  = max(0.0, min(100.0, float(body.max_per_stock_pct or 0))) / 100.0
+    cap_sector = max(0.0, min(100.0, float(body.max_per_sector_pct or 0))) / 100.0
+    temp = max(0.1, float(body.softmax_temperature or 1.0))
+
+    by_tk = {c["ticker"]: c for c in _builder_fetch_candidates()}
+    rows = [by_tk[t] for t in picks if t in by_tk]
+    missing = [t for t in picks if t not in by_tk]
+    if not rows:
+        raise HTTPException(400, "None of the selected tickers are in the candidate pool.")
+
+    ups = [c["upside_pct"] for c in rows if c.get("upside_pct") is not None]
+    median_up = sorted(ups)[len(ups) // 2] if ups else 0.0
+
+    def _rating_mult(rt: str | None) -> float:
+        r = (rt or "").strip().upper()
+        if any(k in r for k in ("BUY", "OVERWEIGHT", "OUTPERFORM", "ACCUMULATE")):
+            return 1.5
+        if any(k in r for k in ("SELL", "UNDERWEIGHT", "UNDERPERFORM", "REDUCE")):
+            return 0.4
+        return 1.0
+
+    import math as _math
+    if method == "equal":
+        raw = {c["ticker"]: 1.0 for c in rows}
+    elif method == "rating_weighted":
+        raw = {c["ticker"]: _rating_mult(c.get("rating")) for c in rows}
+    else:  # ev_weighted
+        raw = {}
+        for c in rows:
+            up = c["upside_pct"] if c.get("upside_pct") is not None else median_up
+            raw[c["ticker"]] = _math.exp(max(-200.0, min(200.0, up / (10.0 * temp))))
+    tot = sum(raw.values()) or 1.0
+    w = {t: v / tot for t, v in raw.items()}
+
+    sec_of = {c["ticker"]: (c.get("sector") or "Unknown") for c in rows}
+    for _ in range(3):
+        # per-stock cap
+        if cap_stock > 0:
+            over = {t: v - cap_stock for t, v in w.items() if v > cap_stock}
+            if over:
+                spill = sum(over.values())
+                for t in over:
+                    w[t] = cap_stock
+                room = {t: v for t, v in w.items() if t not in over and v < cap_stock}
+                rt = sum(room.values())
+                for t in room:
+                    w[t] += spill * (room[t] / rt) if rt else 0.0
+        # per-sector cap
+        if cap_sector > 0:
+            sec_tot: dict[str, float] = {}
+            for t, v in w.items():
+                sec_tot[sec_of[t]] = sec_tot.get(sec_of[t], 0.0) + v
+            over_secs = {s: v - cap_sector for s, v in sec_tot.items() if v > cap_sector}
+            if over_secs:
+                spill = sum(over_secs.values())
+                for s, ov in over_secs.items():
+                    scale = cap_sector / sec_tot[s]
+                    for t in w:
+                        if sec_of[t] == s:
+                            w[t] *= scale
+                room = {t: v for t, v in w.items()
+                        if sec_of[t] not in over_secs}
+                rt = sum(room.values())
+                for t in room:
+                    w[t] += spill * (room[t] / rt) if rt else 0.0
+
+    out_rows, alloc_total = [], 0.0
+    for c in sorted(rows, key=lambda x: -w.get(x["ticker"], 0)):
+        t = c["ticker"]
+        wt = w.get(t, 0.0)
+        px = c.get("current_price")
+        dollars = basket * wt
+        shares = int(dollars / px) if px and px > 0 else None
+        actual = (shares * px) if shares is not None else dollars
+        alloc_total += actual
+        out_rows.append({
+            "ticker": t, "name": c.get("name"), "sector": sec_of[t],
+            "weight_pct": round(wt * 100, 2),
+            "dollars": round(dollars, 2),
+            "shares": shares,
+            "actual_dollars": round(actual, 2),
+            "price": px,
+            "rating": c.get("rating"),
+            "upside_pct": c.get("upside_pct"),
+            "upside_filled": c.get("upside_pct") is None and method == "ev_weighted",
+        })
+    sec_break: dict[str, float] = {}
+    for r in out_rows:
+        sec_break[r["sector"]] = sec_break.get(r["sector"], 0.0) + r["weight_pct"]
+    exp_ups = [(r["upside_pct"] if r["upside_pct"] is not None else median_up) * r["weight_pct"] / 100.0
+               for r in out_rows]
+    return {
+        "rows": out_rows,
+        "summary": {
+            "positions": len(out_rows),
+            "basket_size": basket,
+            "allocated": round(alloc_total, 2),
+            "residual_cash": round(basket - alloc_total, 2),
+            "expected_upside_pct": round(sum(exp_ups), 2) if ups else None,
+            "median_upside_fill": round(median_up, 2) if ups else None,
+            "method": method,
+            "sector_breakdown": {s: round(v, 2) for s, v in
+                                 sorted(sec_break.items(), key=lambda kv: -kv[1])},
+        },
+        "missing_from_pool": missing,
+    }
 
 
 @app.post("/api/v2/builder/allocate")
