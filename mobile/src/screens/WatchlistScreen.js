@@ -7,7 +7,7 @@
  * Data source: GET /api/v2/lp/me/positions
  * Auto-refreshes every 30 seconds. Pull-to-refresh supported.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -20,8 +20,10 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { v2Fetch, getV2User } from '../api/client';
 import { colors } from '../components/theme';
+import { useTheme } from '../design';
 
 const VIEW_CONFIG_KEY = 'positions_view_config_v1';
 
@@ -83,18 +85,17 @@ function fmtUSDFull(v) {
 
 // ── Position row ──────────────────────────────────────────────────────────────
 
-function PositionRow({ item, onPress }) {
+function PositionRow({ item, onPress, t, ts }) {
   const pct    = item.day_change_pct;
   const abs    = item.day_change_abs;
-  const isUp   = pct != null ? pct >= 0 : true;
-  const pillBg = pct == null ? 'rgba(255,255,255,0.08)' : isUp ? GREEN : RED;
+  const up     = pct == null ? null : pct >= 0;
+  const pillBg = pct == null ? t.pillFlatBg : up ? t.pillUpBg : t.pillDownBg;
+  const pillFg = pct == null ? t.pillFlatFg : up ? t.pillUpFg : t.pillDownFg;
 
-  const absStr = abs != null ? fmtAbs(abs) : (pct != null ? fmtPct(pct) : '—');
-  const pctStr = fmtPct(pct);
+  // Company name — second line, only when we actually have one (never invent)
+  const name     = item.name != null ? String(item.name).trim() : '';
+  const showName = !!name && name.toUpperCase() !== String(item.symbol || '').toUpperCase();
 
-  const gainColor = item.unrealized_gain != null
-    ? (item.unrealized_gain >= 0 ? '#4ade80' : '#f87171')
-    : GREY_DIM;
   // Use full dollar format (not abbreviated) for gains to match web ui84 behaviour
   const gainTxt = item.unrealized_gain != null
     ? (item.unrealized_gain >= 0 ? '+' : '') + fmtUSDFull(item.unrealized_gain)
@@ -108,27 +109,33 @@ function PositionRow({ item, onPress }) {
     ? (item._acct_weight_pct ?? item.market_weight_pct).toFixed(1) + '% of acct'
     : null;
 
+  // Third line — keeps every detail the old row showed (weight, P/L $, day $)
+  const detail = [
+    wt,
+    gainTxt ? 'P/L ' + gainTxt : null,
+    abs != null ? 'Day ' + fmtAbs(abs) : null,
+  ].filter(Boolean).join('  ·  ');
+
   return (
-    <TouchableOpacity style={styles.row} onPress={() => onPress(item)} activeOpacity={0.6}>
-      {/* Left: ticker + name + weight */}
-      <View style={styles.rowLeft}>
-        <Text style={styles.ticker} numberOfLines={1}>{item.symbol}</Text>
-        <Text style={styles.company} numberOfLines={1}>{item.name || ''}</Text>
-        {wt ? <Text style={styles.weight}>{wt}</Text> : null}
-      </View>
-
-      {/* Center: price + unrealized */}
-      <View style={styles.rowCenter}>
-        <Text style={styles.price}>{fmtPrice(item.last_price)}</Text>
-        {gainTxt ? (
-          <Text style={[styles.gain, { color: gainColor }]} numberOfLines={1}>{gainTxt}</Text>
+    <TouchableOpacity style={ts.row} onPress={() => onPress(item)} activeOpacity={0.6}>
+      {/* Left: big ticker + muted company name + dim detail line */}
+      <View style={ts.rowLeft}>
+        <Text style={ts.ticker} numberOfLines={1}>{item.symbol}</Text>
+        {showName ? (
+          <Text style={ts.company} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
         ) : null}
+        {detail ? <Text style={ts.detail}>{detail}</Text> : null}
       </View>
 
-      {/* Right: pill */}
-      <View style={[styles.pill, { backgroundColor: pillBg }]}>
-        <Text style={styles.pillAbs}>{absStr}</Text>
-        {pctStr ? <Text style={styles.pillPct}>{pctStr}</Text> : null}
+      {/* Right: big price + day-% pill */}
+      <View style={ts.rowRight}>
+        <Text style={ts.price}>{fmtPrice(item.last_price)}</Text>
+        <View style={[ts.pill, { backgroundColor: pillBg }]}>
+          {pct != null && (
+            <Ionicons name={up ? 'arrow-up' : 'arrow-down'} size={13} color={pillFg} />
+          )}
+          <Text style={[ts.pillTxt, { color: pillFg }]}>{pct != null ? fmtPct(pct) : '—'}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -139,20 +146,22 @@ function PositionRow({ item, onPress }) {
 function AccountSection({
   title, positions, navSum, daySum, dayValid, onPressRow,
   sourceType, stakePct,
+  // theming
+  t, ts,
   // view-config props
   open, onToggle,
   editMode, onMoveUp, onMoveDown, canMoveUp, canMoveDown,
 }) {
   const isFund    = sourceType === 'lp_fund';
-  const chgColor  = dayValid ? (daySum >= 0 ? '#4ade80' : '#f87171') : GREY;
+  const chgColor  = dayValid ? (daySum >= 0 ? t.green : t.red) : t.textDim;
   const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSDFull(daySum) : null;
   const showStake = isFund && stakePct != null && stakePct < 99.99;
 
   return (
-    <View style={styles.card}>
+    <View style={ts.card}>
       {/* Header — tap to collapse, or reorder in edit mode */}
       <TouchableOpacity
-        style={styles.cardHdr}
+        style={[styles.cardHdr, ts.cardHdr]}
         onPress={onToggle}
         activeOpacity={0.75}
       >
@@ -165,7 +174,7 @@ function AccountSection({
               hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
               style={[styles.reorderBtn, !canMoveUp && { opacity: 0.25 }]}
             >
-              <Text style={styles.reorderArrow}>▲</Text>
+              <Text style={[styles.reorderArrow, ts.reorderArrow]}>▲</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={onMoveDown}
@@ -173,22 +182,22 @@ function AccountSection({
               hitSlop={{ top: 4, bottom: 8, left: 8, right: 8 }}
               style={[styles.reorderBtn, !canMoveDown && { opacity: 0.25 }]}
             >
-              <Text style={styles.reorderArrow}>▼</Text>
+              <Text style={[styles.reorderArrow, ts.reorderArrow]}>▼</Text>
             </TouchableOpacity>
           </View>
         )}
 
         <View style={styles.cardHdrLeft}>
-          <Text style={styles.cardName} numberOfLines={1}>{title}</Text>
+          <Text style={[styles.cardName, ts.cardName]} numberOfLines={1}>{title}</Text>
           {showStake && (
-            <Text style={styles.stakeBadge}>{stakePct.toFixed(2)}% STAKE</Text>
+            <Text style={[styles.stakeBadge, ts.stakeBadge]}>{stakePct.toFixed(2)}% STAKE</Text>
           )}
         </View>
-        <Text style={styles.cardNav}>{fmtUSD(navSum, true)}</Text>
+        <Text style={[styles.cardNav, ts.cardNav]}>{fmtUSD(navSum, true)}</Text>
         {chgTxt ? (
           <Text style={[styles.cardChg, { color: chgColor }]}>{chgTxt}</Text>
         ) : null}
-        <Text style={[styles.cardChevron, { transform: [{ rotate: open ? '0deg' : '-90deg' }] }]}>
+        <Text style={[styles.cardChevron, ts.cardChevron, { transform: [{ rotate: open ? '0deg' : '-90deg' }] }]}>
           ▾
         </Text>
       </TouchableOpacity>
@@ -196,8 +205,8 @@ function AccountSection({
       {/* Collapsible body */}
       {open && positions.map((item, idx) => (
         <View key={`${item.symbol}-${idx}`}>
-          {idx > 0 && <View style={styles.rowSep} />}
-          <PositionRow item={item} onPress={onPressRow} />
+          {idx > 0 && <View style={ts.rowSep} />}
+          <PositionRow item={item} onPress={onPressRow} t={t} ts={ts} />
         </View>
       ))}
     </View>
@@ -207,6 +216,10 @@ function AccountSection({
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function WatchlistScreen({ navigation }) {
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  const { theme: t } = useTheme();
+  const ts = useMemo(() => makeThemedStyles(t), [t]);
+
   // ── Data ──────────────────────────────────────────────────────────────────
   const [groupMap,     setGroupMap]     = useState({});   // key → group data
   const [totalValue,   setTotalValue]   = useState(null);
@@ -418,16 +431,16 @@ export default function WatchlistScreen({ navigation }) {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
+      <View style={[styles.centered, { backgroundColor: t.bg }]}>
         <ActivityIndicator color={BLUE} size="large" />
-        <Text style={styles.loadingText}>Loading positions…</Text>
+        <Text style={[styles.loadingText, { color: t.textSecondary }]}>Loading positions…</Text>
       </View>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.centered}>
+      <View style={[styles.centered, { backgroundColor: t.bg }]}>
         <Text style={styles.errorText}>{error}</Text>
         <TouchableOpacity style={styles.retryBtn} onPress={() => fetchPositions(false)}>
           <Text style={styles.retryTxt}>Retry</Text>
@@ -438,9 +451,9 @@ export default function WatchlistScreen({ navigation }) {
 
   if (!groups.length) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.emptyTitle}>No Positions Found</Text>
-        <Text style={styles.emptyBody}>Your holdings will appear here once positions are imported.</Text>
+      <View style={[styles.centered, { backgroundColor: t.bg }]}>
+        <Text style={[styles.emptyTitle, { color: t.textPrimary }]}>No Positions Found</Text>
+        <Text style={[styles.emptyBody, { color: t.textSecondary }]}>Your holdings will appear here once positions are imported.</Text>
         <TouchableOpacity style={styles.retryBtn} onPress={() => fetchPositions(true)}>
           <Text style={styles.retryTxt}>Refresh</Text>
         </TouchableOpacity>
@@ -454,7 +467,7 @@ export default function WatchlistScreen({ navigation }) {
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: t.bg }]}
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
       refreshControl={
@@ -526,7 +539,7 @@ export default function WatchlistScreen({ navigation }) {
         <View style={styles.toolbar}>
           {editMode ? (
             <>
-              <Text style={styles.toolbarHint}>↑↓ to reorder · tap headers to collapse</Text>
+              <Text style={[styles.toolbarHint, { color: t.textDim }]}>↑↓ to reorder · tap headers to collapse</Text>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSaveView} activeOpacity={0.75}>
                 <Text style={styles.saveBtnText}>💾  Save View</Text>
               </TouchableOpacity>
@@ -535,7 +548,7 @@ export default function WatchlistScreen({ navigation }) {
             <>
               {saveFlash
                 ? <Text style={styles.savedFlash}>✓ View saved</Text>
-                : <Text style={styles.toolbarHint}>Tap sections to expand · hold to reorder</Text>
+                : <Text style={[styles.toolbarHint, { color: t.textDim }]}>Tap sections to expand · hold to reorder</Text>
               }
               <TouchableOpacity
                 style={styles.editBtn}
@@ -559,6 +572,8 @@ export default function WatchlistScreen({ navigation }) {
           daySum={grp.daySum}
           dayValid={grp.dayValid}
           onPressRow={handleRowPress}
+          t={t}
+          ts={ts}
           sourceType={grp.sourceType}
           stakePct={grp.stakePct}
           open={openMap[grp.key] !== false}
@@ -759,19 +774,13 @@ const styles = StyleSheet.create({
   },
 
   // ── Account card ──
-  card: {
-    backgroundColor: NAVY,
-    borderRadius: 13,
-    overflow: 'hidden',
-    marginBottom: 10,
-  },
+  // (card container + rows are themed — see makeThemedStyles below)
   cardHdr: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(255,255,255,0.07)',
     gap: 8,
   },
   cardHdrLeft: {
@@ -780,7 +789,6 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   cardName: {
-    color: 'rgba(255,255,255,0.55)',
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.6,
@@ -790,12 +798,10 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     fontSize: 9,
     fontWeight: '800',
-    color: BLUE,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   cardNav: {
-    color: '#fff',
     fontSize: 13,
     fontWeight: '700',
   },
@@ -804,49 +810,73 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cardChevron: {
-    color: 'rgba(255,255,255,0.30)',
     fontSize: 12,
   },
+});
 
-  // ── Position row ──
+// ── Themed styles — brokerage-style ticker rows (light/dark via useTheme) ────
+
+const makeThemedStyles = (t) => StyleSheet.create({
+  // Account card container (flat list inside — no per-row boxes)
+  card: {
+    backgroundColor: t.surface,
+    borderRadius: 13,
+    overflow: 'hidden',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  cardHdr:      { borderBottomColor: t.borderSubtle },
+  cardName:     { color: t.textSecondary },
+  cardNav:      { color: t.textPrimary },
+  cardChevron:  { color: t.textDim },
+  stakeBadge:   { color: t.primary },
+  reorderArrow: { color: t.primary },
+
+  // ── Ticker row ──
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 11,
-    backgroundColor: NAVY,
-    gap: 10,
+    paddingVertical: 14,
+    gap: 12,
   },
   rowSep: {
-    height: 0.5,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.border,
     marginLeft: 16,
   },
   rowLeft: {
     flex: 1,
     justifyContent: 'center',
   },
-  ticker:  { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.3, marginBottom: 1 },
-  company: { color: GREY, fontSize: 11, fontWeight: '400', marginBottom: 1 },
-  weight:  { color: GREY_DIM, fontSize: 10 },
+  ticker:  { color: t.textPrimary, fontSize: 19, fontWeight: '800', letterSpacing: 0.3 },
+  company: { color: t.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 1 },
+  detail:  { color: t.textDim, fontSize: 11, marginTop: 2 },
 
-  rowCenter: {
-    alignItems: 'flex-end',
-    minWidth: 72,
-    marginRight: 2,
+  rowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  price: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  gain:  { fontSize: 10, fontWeight: '600', marginTop: 1 },
+  price: {
+    color: t.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+  },
 
-  // ── Pill ──
+  // ── % pill ──
   pill: {
-    minWidth: 84,
+    minWidth: 86,
     borderRadius: 8,
+    paddingHorizontal: 10,
     paddingVertical: 5,
-    paddingHorizontal: 8,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 3,
   },
-  pillAbs: { color: '#fff', fontSize: 12, fontWeight: '800', lineHeight: 16, textAlign: 'center' },
-  pillPct: { color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: '700', lineHeight: 14, textAlign: 'center' },
+  pillTxt: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
 });
