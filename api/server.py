@@ -5454,7 +5454,8 @@ def build_version():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat(),
+            "py": f"{sys.version_info.major}.{sys.version_info.minor}"}
 
 
 @app.get("/api/health/data")

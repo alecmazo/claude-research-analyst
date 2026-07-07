@@ -5,4 +5,6 @@
 # Without this, pydub raises "Couldn't find ffprobe or ffmpeg" at runtime.
 
 [phases.setup]
-nixPkgs = ["python311", "ffmpeg"]
+# python312: keep prod's parser in step with local dev (a 3.12-only
+# f-string passed local checks on 3.13 and failed the 3.11 build — ui383).
+nixPkgs = ["python312", "ffmpeg"]
