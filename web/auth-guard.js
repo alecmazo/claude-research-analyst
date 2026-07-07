@@ -96,11 +96,13 @@
           renderRoleBar();
           _handleMustChange(me);
           if (me.impersonated) _renderImpersonationBanner(me);
+          if (me.demo_mode) _renderDemoRibbon();
         });
       } else {
         renderRoleBar();
         _handleMustChange(me);
         if (me.impersonated) _renderImpersonationBanner(me);
+        if (me.demo_mode) _renderDemoRibbon();
       }
     } catch (err) {
       console.warn('[auth-guard] verification failed:', err);
@@ -109,6 +111,24 @@
       window.location.replace('/');
     }
   })();
+
+  // Fixed ribbon shown on every page for demo_mode sessions: sample data,
+  // AI outputs are pre-generated, writes are sandboxed server-side.
+  function _renderDemoRibbon() {
+    if (document.getElementById('dga-demo-ribbon')) return;
+    var bar = document.createElement('div');
+    bar.id = 'dga-demo-ribbon';
+    bar.setAttribute('style',
+      'position:fixed;bottom:0;left:0;right:0;z-index:99999;' +
+      'background:linear-gradient(90deg,#0A1628,#1e3a5f);color:#F5C242;' +
+      'font:700 11.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
+      'letter-spacing:0.6px;text-align:center;padding:7px 12px;' +
+      'box-shadow:0 -2px 10px rgba(0,0,0,0.25);');
+    bar.textContent = 'DEMO MODE — fictitious portfolio with live market data. ' +
+      'AI outputs are pre-generated samples; imports and account linking are disabled.';
+    document.body.appendChild(bar);
+    document.body.style.paddingBottom = '34px';
+  }
 
   function renderRoleBar() {
     if (document.getElementById('dga-role-bar')) return;
