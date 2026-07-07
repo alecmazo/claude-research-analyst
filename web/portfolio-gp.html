@@ -191,6 +191,9 @@
     max-width: 1700px;
     margin: 0 auto;
   }
+  /* Grid children default to min-width:auto — one unbreakable line inside any
+     panel would stretch its whole column past the track (page goes wide). */
+  .col-left, .col-center, aside.col-right { min-width: 0; }
   @media (max-width: 1200px) {
     .shell { grid-template-columns: 240px 1fr 320px; }
   }
@@ -603,6 +606,7 @@
     display: none; padding: 8px 16px 12px; border-bottom: 1px solid var(--panel-edge);
     font-size: 11.5px; line-height: 1.65; color: var(--text-secondary);
     background: rgba(91,184,212,0.04);
+    overflow-x: auto; word-break: break-word;
   }
   .pulse-detail.open { display: block; }
 
@@ -3557,9 +3561,24 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- 🌡️ Market Pulse — shared card module (also on Ideas tab); markup is
-         injected by _pulseMount() so both tabs render the same card. -->
-    <div id="research-pulse-mount"></div>
+    <!-- 🌡️ Market Pulse — REAL data-wid widget (movable via the dashboard
+         drag system, width-constrained by the column like every sibling).
+         The shared module (_pulseMount) only WIRES this static markup; the
+         Ideas tab still gets its copy injected. -->
+    <section class="panel" data-wid="market-pulse" id="rpulse-panel">
+      <header class="panel-head">
+        <span class="panel-title">🌡️ Market Pulse</span>
+        <button type="button" class="info-star" id="rpulse-info" title="">*</button>
+        <span class="panel-badge" id="rpulse-ts">—</span>
+        <span id="rpulse-est" style="margin-left:auto;font-size:9.5px;color:var(--mid);font-weight:600;"></span>
+        <button id="rpulse-run" class="tab-btn" style="margin-left:8px;font-size:9px;white-space:nowrap;">🌡️ Run Pulse</button>
+      </header>
+      <div class="info-explainer" id="rpulse-exp"></div>
+      <div id="rpulse-status" style="display:none;padding:6px 14px;font-size:10.5px;color:var(--mid);border-bottom:1px solid var(--panel-edge);"></div>
+      <div id="rpulse-rows" style="max-height:420px;overflow-y:auto;">
+        <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading latest pulse…</div>
+      </div>
+    </section>
   </section>
 
   <!-- ─── RIGHT COLUMN ──────────────────────────────────────── -->
@@ -5709,7 +5728,7 @@ End with the sleeve block at this account's real market value so I can push it t
       loadBrief(); loadIdeaFeed(true);
       // Market Pulse card (ui377): mount once, then only GET the latest
       // persisted results — a scan NEVER auto-runs from tab activation.
-      _pulseMount('research-pulse-mount', 'rpulse');
+      _pulseMount('rpulse-panel', 'rpulse');
       _pulseLoadLatest();
     },
     builder:   () => _initBuilderTab(),
@@ -12333,7 +12352,14 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!mount || mount.dataset.mounted === '1') return;
     mount.dataset.mounted = '1';
     _PULSE_PREFIXES.push(prefix);
-    mount.innerHTML =
+    if (mount.id === prefix + '-panel') {
+      // STATIC panel (Research: a real data-wid widget the drag system owns).
+      // Markup already exists — just fill the explainer + wire events below.
+      const _info = document.getElementById(prefix + '-info');
+      const _exp  = document.getElementById(prefix + '-exp');
+      if (_info) _info.title = _PULSE_EXPLAIN;
+      if (_exp)  _exp.textContent = _PULSE_EXPLAIN;
+    } else mount.innerHTML =
       '<section class="panel" id="' + prefix + '-panel">'
       + '<header class="panel-head">'
       +   '<span class="panel-title">🌡️ Market Pulse</span>'
@@ -20872,6 +20898,17 @@ End with the sleeve block at this account's real market value so I can push it t
           if (panel) col.appendChild(panel);
         });
       });
+      // A widget added AFTER the layout was saved isn't in `saved`, so the
+      // append-reorder above shoves it to the top of its column. Pin Market
+      // Pulse below Saved Reports until the user drags it (which persists it).
+      var _mpKnown = COL_SELECTORS.some(function(s) {
+        return Array.isArray(saved[s]) && saved[s].indexOf('market-pulse') >= 0;
+      });
+      if (!_mpKnown) {
+        var _mp = RESEARCH.querySelector('section.panel[data-wid="market-pulse"]');
+        var _sr = RESEARCH.querySelector('section.panel[data-wid="saved-reports"]');
+        if (_mp && _sr && _sr.parentElement) _sr.parentElement.insertBefore(_mp, _sr.nextSibling);
+      }
     }
 
     function _initPanel(panel) {
