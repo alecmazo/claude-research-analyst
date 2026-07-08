@@ -10,7 +10,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
-  Image, ScrollView,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { loginV2 } from '../api/client';
@@ -137,13 +137,11 @@ export default function LoginScreen({ onLoggedIn }) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        {/* Logo */}
-        <View style={styles.logoWrap}>
-          <Image
-            source={require('../../assets/icon.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
+        {/* Wordmark — typographic, matches the gold-italic-serif splash identity */}
+        <View style={styles.wordmark}>
+          <Text style={styles.wmDga}>DGA</Text>
+          <View style={styles.wmDivider} />
+          <Text style={styles.wmCapital}>CAPITAL</Text>
         </View>
 
         <Text style={styles.subtitle}>Portfolio Access · Authentication Required</Text>
@@ -247,20 +245,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoWrap: {
-    width: 120, height: 120,
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center',
+  wordmark: {
+    alignItems: 'center',
     marginBottom: 26,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 18,
-    elevation: 10,
-    overflow: 'hidden',
   },
-  logo: { width: 96, height: 96 },
+  wmDga: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontStyle: 'italic',
+    fontWeight: '600',
+    fontSize: 52,
+    color: colors.gold,
+    letterSpacing: 1.5,
+  },
+  wmDivider: {
+    width: 60,
+    height: 1,
+    backgroundColor: colors.gold,
+    opacity: 0.5,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  wmCapital: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontStyle: 'italic',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    letterSpacing: 6,
+  },
   subtitle: {
     color: 'rgba(255,255,255,0.55)',
     fontSize: 10,

@@ -5373,11 +5373,26 @@ End with the sleeve block at this account's real market value so I can push it t
           accounts (real tickers &amp; live prices, fictitious everything else). Demo sessions
           can never see real data; AI outputs are pre-generated samples (zero token cost).
           <div id="demo-sandbox-status" style="margin:8px 0;color:var(--text-tertiary);">—</div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
+              LP funds
+              <input id="demo-n-funds" type="number" min="1" max="4" value="1"
+                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
+              Managed accounts
+              <input id="demo-n-managed" type="number" min="0" max="6" value="2"
+                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
+              Watchlist size
+              <input id="demo-wl-count" type="number" min="0" max="25" value="10"
+                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+          </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button id="demo-reseed-btn" type="button" class="btn-primary"
                     style="padding:0 14px;height:28px;font-size:11.5px;">↻ Seed / Reset demo data</button>
             <span id="demo-reseed-note" style="font-size:11px;color:var(--text-tertiary);"></span>
           </div>
+          <div style="margin-top:6px;font-size:10.5px;color:var(--text-tertiary);">Re-running overrides the previous demo entirely (e.g. switch 1 fund / 2 accounts → 2 funds / 3 accounts).</div>
         </div>
       </section>
 
@@ -16548,13 +16563,22 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!_demoWired) {
       _demoWired = true;
       $btn.addEventListener('click', async () => {
-        if (!confirm('Seed / reset the demo sandbox?\n\nRebuilds the demo fund, both demo accounts, sample AI content, and the demo logins. Takes a few seconds. No real data is touched.')) return;
+        const nf = Math.max(1, Math.min(4, parseInt(document.getElementById('demo-n-funds')?.value || '1', 10)));
+        const nm = Math.max(0, Math.min(6, parseInt(document.getElementById('demo-n-managed')?.value || '2', 10)));
+        const wl = Math.max(0, Math.min(25, parseInt(document.getElementById('demo-wl-count')?.value || '10', 10)));
+        if (!confirm('Seed / reset the demo sandbox as ' + nf + ' fund(s) + ' + nm + ' managed account(s)?\n\nThis OVERRIDES any existing demo data (rebuilds funds, accounts, watchlist, sample AI, and the demo logins). No real data is touched.')) return;
         $btn.disabled = true; $btn.textContent = '⏳ Seeding…';
         try {
-          const r = await window.dgaFetch('/api/v2/admin/demo/reseed', { method: 'POST' });
+          const r = await window.dgaFetch('/api/v2/admin/demo/reseed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ n_funds: nf, n_managed: nm, wl_count: wl }),
+          });
           const d = await r.json();
           if (!r.ok) throw new Error(d?.detail || ('HTTP ' + r.status));
-          $note.textContent = '✓ Seeded ' + (d.tickers?.length || '?') + ' tickers'
+          $note.textContent = '✓ Seeded ' + (d.fund_ids?.length || 0) + ' fund(s), '
+            + (d.managed_ids?.length || 0) + ' account(s), ' + (d.watchlist || 0) + ' watchlist, '
+            + (d.reports || 0) + ' reports'
             + (d.warnings?.length ? (' · ' + d.warnings.length + ' warnings') : '');
           loadDemoSandbox();
         } catch (e) {

@@ -104,6 +104,7 @@ export default function MarketsScreen() {
   // explicit, confirmed tap of the Scan button (AI cost — never auto-run).
   const [pulse, setPulse]           = useState(undefined); // undefined=loading, null=none, obj={scanned_at, results}
   const [pulseInfoOpen, setPulseInfoOpen] = useState(false);
+  const [pulseExpanded, setPulseExpanded] = useState({}); // ticker → bool
   const [pulseBusy, setPulseBusy]   = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const moversRef = useRef([]);
@@ -371,22 +372,45 @@ export default function MarketsScreen() {
           ) : (
             Object.keys(pulse.results).sort().map((tk, i, arr) => {
               const r = pulse.results[tk] || {};
-              const line = r.ok === false
+              const failed = r.ok === false;
+              const line = failed
                 ? (r.error ? `Scan failed: ${String(r.error).slice(0, 120)}` : 'Scan failed.')
                 : pulseSummary(r.markdown);
-              return (
-                <View key={tk} style={[s.pulseRow, i < arr.length - 1 && s.divider]}>
+              const canExpand = !failed && !!r.markdown;
+              const open = !!pulseExpanded[tk];
+              const head = (
+                <>
                   <View style={s.pulseHead}>
                     <Text style={s.pulseTk}>{tk}</Text>
-                    <SentimentPill sentiment={r.ok === false ? 'UNKNOWN' : r.sentiment} t={t} />
+                    <SentimentPill sentiment={failed ? 'UNKNOWN' : r.sentiment} t={t} />
                     <View style={{ flex: 1 }} />
                     {r.pct_change != null && (
                       <Text style={[s.pulsePct, { color: r.pct_change >= 0 ? t.pillUpFg : t.pillDownFg }]}>
                         {fmtPct(r.pct_change)}
                       </Text>
                     )}
+                    {canExpand && (
+                      <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={t.textDim} style={{ marginLeft: 6 }} />
+                    )}
                   </View>
-                  {!!line && <Text style={s.pulseTxt} numberOfLines={2}>{line}</Text>}
+                  {!!line && <Text style={s.pulseTxt} numberOfLines={open ? 0 : 2}>{line}</Text>}
+                </>
+              );
+              return (
+                <View key={tk} style={[s.pulseRow, i < arr.length - 1 && s.divider]}>
+                  {canExpand ? (
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => { haptics.onPressPrimary?.(); setPulseExpanded(e => ({ ...e, [tk]: !e[tk] })); }}
+                    >
+                      {head}
+                    </TouchableOpacity>
+                  ) : head}
+                  {canExpand && open && (
+                    <View style={{ marginTop: 6 }}>
+                      <Markdown style={md}>{r.markdown}</Markdown>
+                    </View>
+                  )}
                 </View>
               );
             })
