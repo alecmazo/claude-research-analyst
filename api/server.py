@@ -1355,6 +1355,13 @@ async def _invalidate_cache_on_mutation(request: Request, call_next):
 # samples for demo tokens (never a paid LLM call). Data is seeded synthetic —
 # real positions never enter these rows, so nothing can leak by construction.
 # ─────────────────────────────────────────────────────────────────────────────
+# KILL SWITCH (2026-07-08): the in-prod demo bled between real and demo
+# sessions (the registry-cache partition failed OPEN on the real side).
+# While True: demo logins are rejected outright, DEMO% funds are excluded
+# from fund_list for EVERYONE unconditionally, reseed returns 410, and a
+# boot task purges every demo row from the DB. Real functionality only.
+_DEMO_DISABLED = True
+
 _DEMO_REG_KEY = "demo.registry"
 _DEMO_REG_CACHE: dict = {"t": 0.0, "reg": None}
 _FUND_DIR_CACHE: dict = {"t": 0.0, "by_key": {}}   # uuid/short_name(lower) → is_demo
@@ -1441,6 +1448,10 @@ async def _demo_sandbox_check(request: Request):
     if not path.startswith("/api/"):
         return None
     is_demo = _request_is_demo(request)
+    if _DEMO_DISABLED and is_demo:
+        # Kill switch: no demo session touches anything.
+        return JSONResponse(status_code=403, content={
+            "detail": "The demo environment is currently offline."})
     try:
         if time.time() - min(_DEMO_REG_CACHE["t"], _FUND_DIR_CACHE["t"]) > 60:
             import anyio as _anyio
@@ -11704,12 +11715,16 @@ def fund_list(request: Request, fund_type: str = None):
                      ORDER BY inception_date ASC
                 """)
             funds = [dict(r) for r in cur.fetchall()]
-            # DEMO PARTITION: demo sessions see ONLY demo funds; real sessions
-            # never see them (belt to the middleware's braces).
-            _demo_fund_set = {str(x).lower() for x in
-                              ((_demo_registry() or {}).get("fund_ids") or [])}
-            funds = [f for f in funds
-                     if (str(f["id"]).lower() in _demo_fund_set) == _is_demo]
+            # HARD EXCLUSION, no registry dependency: DEMO% short-name funds
+            # never appear in a real session. (The registry-based partition
+            # failed OPEN when the kv cache came up empty — the 2026-07-08
+            # bleed. Short-name matching depends on nothing.)
+            if _DEMO_DISABLED or not _is_demo:
+                funds = [f for f in funds
+                         if not str(f.get("short_name") or "").upper().startswith("DEMO")]
+            else:
+                funds = [f for f in funds
+                         if str(f.get("short_name") or "").upper().startswith("DEMO")]
             if not funds:
                 return []
 
@@ -30095,9 +30110,94 @@ def _demo_instant_analysis(ticker: str) -> dict:
     return job
 
 
+def _demo_purge_all() -> dict:
+    """Remove EVERY demo artifact from production: DEMO% funds + all dependent
+    rows, demo-* snaptrade rows, demo users + their watchlists, demo kv keys.
+    Idempotent; safe to run on every boot while the kill switch is on."""
+    out = {"ok": True, "purged_funds": 0}
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return {"ok": False, "error": "no DB"}
+    reg_uids = list((_demo_registry(force=True) or {}).get("user_ids") or [])
+    with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+        cur.execute("DELETE FROM snaptrade_activities WHERE account_id LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_balances   WHERE account_id LIKE 'demo-%'")
+        cur.execute("DELETE FROM snaptrade_accounts   WHERE account_id LIKE 'demo-%'")
+        if reg_uids:
+            cur.execute("DELETE FROM watchlists WHERE lp_id = ANY(%s)", (reg_uids,))
+        cur.execute("SELECT id FROM funds WHERE UPPER(short_name) LIKE 'DEMO%'")
+        ids = [str(r["id"]) for r in cur.fetchall()]
+        out["purged_funds"] = len(ids)
+        if ids:
+            for sql in (
+                "DELETE FROM transaction_lines WHERE transaction_id IN "
+                "  (SELECT id FROM transactions WHERE fund_id = ANY(%s::uuid[]))",
+                "DELETE FROM tax_lots         WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM transactions     WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM commitments      WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM lps              WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM nav_snapshots    WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM accounts         WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM account_balance_history   WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM account_ytd_baseline      WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM managed_account_ytd_cache WHERE fund_id = ANY(%s::uuid[])",
+                "DELETE FROM funds            WHERE id = ANY(%s::uuid[])",
+            ):
+                try:
+                    cur.execute(sql, (ids,))
+                except Exception as _e:
+                    conn.rollback()
+                    out.setdefault("errors", []).append(f"{sql[:40]}: {_e!s:.120}")
+                    break
+        conn.commit()
+    # Demo users out of the auth overlay → their tokens/logins die.
+    try:
+        import auth_v2 as _av2
+        for email in (_DEMO_GP_EMAIL, _DEMO_LP_EMAIL):
+            u = _av2.find_user_by_email(email)
+            if u:
+                _av2.delete_user(u["lp_id"])
+    except Exception as _e:
+        out.setdefault("errors", []).append(f"users: {_e!s:.120}")
+    for k in ("demo.registry", "demo.reports", "demo.samples.daily_brief",
+              "demo.samples.pulse", "demo.samples.agentic"):
+        try:
+            _kv_put(k, {})
+        except Exception:
+            pass
+    _DEMO_REG_CACHE.update(t=time.time(), reg={})
+    return out
+
+
+def _demo_boot_purge_worker() -> None:
+    """While the kill switch is on, strip demo artifacts on every boot."""
+    import time as _t
+    _t.sleep(20)                      # let the app finish booting first
+    try:
+        res = _demo_purge_all()
+        print(f"[demo] boot purge: {res}", flush=True)
+    except Exception as _e:
+        print(f"[demo] boot purge failed: {_e}", flush=True)
+
+
+if _DEMO_DISABLED:
+    threading.Thread(target=_demo_boot_purge_worker, daemon=True,
+                     name="demo-purge").start()
+
+
+@app.post("/api/v2/admin/demo/purge")
+def demo_purge_endpoint(request: Request):
+    """REAL-GP-only: remove every demo artifact immediately."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin") or claims.get("demo_mode"):
+        raise HTTPException(403, "Real GP role required")
+    return _demo_purge_all()
+
+
 @app.post("/api/v2/admin/demo/reseed")
 def demo_reseed_endpoint(request: Request):
     """REAL-GP-only: (re)build the demo sandbox. Demo tokens can't call this."""
+    if _DEMO_DISABLED:
+        raise HTTPException(410, "Demo sandbox is disabled while isolation is being reworked.")
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin") or claims.get("demo_mode"):
         raise HTTPException(403, "Real GP role required")
