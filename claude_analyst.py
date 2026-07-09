@@ -5894,6 +5894,11 @@ GROK_PRICING_PER_MTOK = {
     "grok-latest":         (1.25, 2.50),
     "grok-4.20-reasoning": (1.25, 2.50),
     "grok-4.20-0309-reasoning": (1.25, 2.50),
+    # grok-4.5: $2.00 in / $6.00 out per Mtok ($0.50 cached in), 500k ctx —
+    # from xAI's published comparison table (Alec, 2026-07-09).
+    "grok-4.5":            (2.00, 6.00),
+    "grok-4.5-latest":     (2.00, 6.00),
+    "grok-4.5-reasoning":  (2.00, 6.00),
     "grok-4-reasoning":    (5.0, 15.0),
     "grok-beta":           (5.0, 15.0),
 }
@@ -5901,11 +5906,26 @@ GROK_PRICING_PER_MTOK = {
 GROK_LIVE_SEARCH_PER_CALL = 0.025
 
 
+def grok_rates(model: str) -> tuple:
+    """(input, output) $/Mtok for a Grok model id. Exact match first, then
+    LONGEST-PREFIX match so dated snapshots ('grok-4.5-0219-reasoning') and
+    alias forms price like their family. Unknown ids assume newest-gen
+    (grok-4.5) rates — better slightly high than the old 4x-overstated $5/$15."""
+    m = (model or "").lower().strip()
+    if m in GROK_PRICING_PER_MTOK:
+        return GROK_PRICING_PER_MTOK[m]
+    best = None
+    for k, v in GROK_PRICING_PER_MTOK.items():
+        if m.startswith(k) and (best is None or len(k) > best[0]):
+            best = (len(k), v)
+    return best[1] if best else (2.00, 6.00)
+
+
 def estimate_grok_cost(model: str, input_tokens: int, output_tokens: int,
                        live_search_count: int = 0) -> float:
     """Estimate USD cost for a Grok call. live_search_count adds the search
     surcharge (xAI bills per search invocation on top of the LLM tokens)."""
-    inp_rate, out_rate = GROK_PRICING_PER_MTOK.get(model, (5.0, 15.0))
+    inp_rate, out_rate = grok_rates(model)
     token_cost = (input_tokens * inp_rate + output_tokens * out_rate) / 1_000_000.0
     search_cost = live_search_count * GROK_LIVE_SEARCH_PER_CALL
     return token_cost + search_cost

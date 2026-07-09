@@ -5452,14 +5452,36 @@ def health():
 
 @app.get("/api/config/models")
 def config_models():
-    """Zero-cost: the LLM model ids actually configured right now, so UI labels
-    reflect the live GROK_MODEL/CLAUDE_MODEL/AGENTIC_MODEL env values instead of
-    hardcoded strings. Pure attribute read — no API calls, no tokens."""
-    return {
-        "grok":    getattr(analyst, "GROK_MODEL", "grok"),
-        "claude":  getattr(analyst, "CLAUDE_MODEL", "claude"),
+    """Zero-cost: the LLM model ids actually configured right now (live env
+    values, not hardcoded strings) PLUS cost estimates computed from the
+    pricing tables so UI chips re-price themselves on any model change.
+    Pure local math — no API calls, no tokens."""
+    g_model = getattr(analyst, "GROK_MODEL", "grok")
+    c_model = getattr(analyst, "CLAUDE_MODEL", "claude")
+    out = {
+        "grok":    g_model,
+        "claude":  c_model,
         "agentic": _AGENTIC_MODEL,
     }
+    try:
+        # Single-ticker report envelope: ~30-45K input, 6-10K output,
+        # 2-4 live searches (Grok only). Claude thinks more → longer output.
+        g_lo = analyst.estimate_grok_cost(g_model, 30_000, 6_000, 2)
+        g_hi = analyst.estimate_grok_cost(g_model, 45_000, 10_000, 4)
+        c_in, c_out = analyst.CLAUDE_PRICING_PER_MTOK.get(c_model, (5.0, 25.0))
+        c_lo = (30_000 * c_in + 8_000 * c_out) / 1e6
+        c_hi = (45_000 * c_in + 16_000 * c_out) / 1e6
+        # Market-pulse per ticker: tiny prompt + ~1-2 searches dominate.
+        p_est = analyst.estimate_grok_cost(g_model, 2_500, 700, 1.5)
+        out["est"] = {
+            "grok_report":   [round(g_lo, 2), round(g_hi, 2)],
+            "claude_report": [round(c_lo, 2), round(c_hi, 2)],
+            "both_report":   [round(g_lo + c_lo, 2), round(g_hi + c_hi, 2)],
+            "pulse_per_ticker": round(p_est, 3),
+        }
+    except Exception:
+        pass    # estimates are optional — UI falls back to its static strings
+    return out
 
 
 @app.get("/api/health/data")

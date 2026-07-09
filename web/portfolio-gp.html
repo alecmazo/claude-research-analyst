@@ -8889,19 +8889,29 @@ End with the sleeve block at this account's real market value so I can push it t
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
       if (gc) gc.title = _HERO_MODELS.grok || 'Grok';
       if (cc) cc.title = _HERO_MODELS.claude || 'Claude';
+      const est = _HERO_MODELS.est;
+      if (est) {
+        const rng = a => '$' + a[0].toFixed(2) + '–' + a[1].toFixed(2);
+        if (est.grok_report)   _HERO_COST_EST.grok   = rng(est.grok_report);
+        if (est.claude_report) _HERO_COST_EST.claude = rng(est.claude_report);
+        if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
+        if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
+        if (typeof _updateHeroCost === 'function') _updateHeroCost();
+        _PULSE_PREFIXES.forEach(function(pfx) { _pulseCostEstimate(pfx, true); });
+      }
       _updateHeroModelTag();
     } catch (e) { /* leave the em-dash placeholder */ }
   })();
 
-  // ── Per-run cost estimate (mirrors the LLM Lab's inline price tags) ──
-  // Ranges derived from real pricing: a full single-ticker DGA report is
-  // ~25-45K input + a long output. Grok-4.20 = $5/$15 per Mtok + ~$0.025/live
-  // search (it searches the live web/X); Claude Opus 4.8 = $5/$25 per Mtok and
-  // thinks more (adaptive). "Both" runs the two sequentially.
+  // ── Per-run cost estimate ──────────────────────────────────────────────
+  // Static fallbacks only — /api/config/models returns live estimates computed
+  // from the server's pricing tables for the ACTUAL configured models, and
+  // _loadHeroModels overwrites these on load (so a GROK_MODEL swap re-prices
+  // every chip with zero UI changes).
   const $heroLlm   = document.getElementById('hero-llm');
   const $heroGamma2 = document.getElementById('hero-gamma');
   const $heroCost  = document.getElementById('hero-cost-est');
-  const _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', both: '$0.80–1.60' };
+  let _HERO_COST_EST = { grok: '$0.30–0.60', claude: '$0.50–1.00', both: '$0.80–1.60' };
   function _updateHeroCost() {
     if (!$heroCost) return;
     const eng = ($heroLlm && $heroLlm.value) || 'grok';
@@ -12384,7 +12394,7 @@ End with the sleeve block at this account's real market value so I can push it t
     + 'tagging each Bullish / Bearish / Neutral with a one-line driver. Results persist until the next run '
     + '— scheduled in Settings → Automation, or run manually with the Run Pulse button. '
     + 'Opening this card never starts a scan.';
-  const _PULSE_COST_PER_TICKER = 0.02;   // ~$0.02/ticker Grok live-search (estimate)
+  let _PULSE_COST_PER_TICKER = 0.02;   // ~$0.02/ticker Grok live-search (estimate)
   const _PULSE_PREFIXES = [];            // mounted card id-prefixes
   let _pulseLatest    = {};              // merged ticker → result
   let _pulseScannedAt = null;
