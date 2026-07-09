@@ -5,12 +5,16 @@
  * POST /api/auth/v2/login; on success the token is cached in
  * AsyncStorage and we tell the parent (App.js) to re-evaluate the
  * navigator (which branches GP vs LP).
+ *
+ * Identity mirrors the desktop login: navy #0A1628 screen, the official
+ * DGA wordmark (assets/dga_logo_small.png) on a white chip with an
+ * ice-blue border, "PORTFOLIO INTELLIGENCE" subtitle, ice-blue CTA.
  */
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
-  ScrollView,
+  ScrollView, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { loginV2 } from '../api/client';
@@ -137,19 +141,20 @@ export default function LoginScreen({ onLoggedIn }) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        {/* Wordmark — typographic, matches the gold-italic-serif splash identity */}
-        <View style={styles.wordmark}>
-          <Text style={styles.wmDga}>DGA</Text>
-          <View style={styles.wmDivider} />
-          <Text style={styles.wmCapital}>CAPITAL</Text>
+        {/* Official DGA wordmark on a white chip — the ONE brand identity */}
+        <View style={styles.logoChip}>
+          <Image
+            source={require('../../assets/dga_logo_small.png')}
+            style={styles.logoImg}
+          />
         </View>
 
-        <Text style={styles.subtitle}>Portfolio Access · Authentication Required</Text>
+        <Text style={styles.subtitle}>PORTFOLIO INTELLIGENCE</Text>
 
         <TextInput
           style={styles.input}
           placeholder="Email"
-          placeholderTextColor="rgba(255,255,255,0.30)"
+          placeholderTextColor="rgba(255,255,255,0.5)"
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
@@ -163,7 +168,7 @@ export default function LoginScreen({ onLoggedIn }) {
           ref={pwRef}
           style={[styles.input, styles.inputPassword]}
           placeholder="Password"
-          placeholderTextColor="rgba(255,255,255,0.30)"
+          placeholderTextColor="rgba(255,255,255,0.5)"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -184,7 +189,7 @@ export default function LoginScreen({ onLoggedIn }) {
           <TextInput
             style={[styles.input, styles.inputPassword]}
             placeholder="6-digit code"
-            placeholderTextColor="rgba(255,255,255,0.30)"
+            placeholderTextColor="rgba(255,255,255,0.5)"
             value={code}
             onChangeText={setCode}
             keyboardType="number-pad"
@@ -221,7 +226,7 @@ export default function LoginScreen({ onLoggedIn }) {
             <Ionicons
               name={bioLabel === 'Touch ID' ? 'finger-print' : 'scan-circle-outline'}
               size={20}
-              color={colors.gold}
+              color={colors.goldLight}
             />
             <Text style={styles.bioBtnText}>Sign in with {bioLabel}</Text>
           </TouchableOpacity>
@@ -236,7 +241,7 @@ export default function LoginScreen({ onLoggedIn }) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.navy },
+  flex: { flex: 1, backgroundColor: '#0A1628' },
   scroll: {
     flexGrow: 1,
     paddingHorizontal: 28,
@@ -245,37 +250,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordmark: {
-    alignItems: 'center',
-    marginBottom: 26,
+  // White chip holding the official wordmark — it sits on navy, so it needs
+  // its own white background (the PNG is dark-on-transparent).
+  logoChip: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(91,184,212,0.55)',
+    marginBottom: 18,
   },
-  wmDga: {
-    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
-    fontStyle: 'italic',
-    fontWeight: '600',
-    fontSize: 52,
-    color: colors.gold,
-    letterSpacing: 1.5,
-  },
-  wmDivider: {
-    width: 60,
-    height: 1,
-    backgroundColor: colors.gold,
-    opacity: 0.5,
-    marginTop: 10,
-    marginBottom: 10,
-  },
-  wmCapital: {
-    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
-    fontStyle: 'italic',
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.85)',
-    letterSpacing: 6,
+  logoImg: {
+    width: 170,
+    height: 34,
+    resizeMode: 'contain',
   },
   subtitle: {
-    color: 'rgba(255,255,255,0.55)',
-    fontSize: 10,
-    letterSpacing: 1.8,
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 10.5,
+    letterSpacing: 2,
     textTransform: 'uppercase',
     marginBottom: 28,
     textAlign: 'center',
@@ -283,10 +277,10 @@ const styles = StyleSheet.create({
   input: {
     width: '100%',
     height: 52,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 11,
+    backgroundColor: '#132040',
+    borderWidth: 1,
+    borderColor: 'rgba(91,184,212,0.25)',
+    borderRadius: 9,
     color: '#fff',
     fontSize: 15,
     paddingHorizontal: 16,
@@ -300,16 +294,14 @@ const styles = StyleSheet.create({
   btn: {
     width: '100%',
     height: 54,
-    backgroundColor: colors.primary,
-    borderRadius: 11,
+    backgroundColor: colors.gold,   // ice-blue #5BB8D4 (legacy token name)
+    borderRadius: 9,
     alignItems: 'center', justifyContent: 'center',
     marginTop: 6,
     marginBottom: 16,
-    borderTopWidth: 1, borderTopColor: colors.primaryLight,
-    borderBottomWidth: 2, borderBottomColor: colors.primaryDark,
-    shadowColor: colors.primary,
+    shadowColor: colors.gold,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.55,
+    shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 8,
   },
@@ -317,19 +309,20 @@ const styles = StyleSheet.create({
   btnInner: { flexDirection: 'row', alignItems: 'center' },
   bioBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    width: '100%', height: 50, borderRadius: 11,
-    borderWidth: 1.5, borderColor: 'rgba(212,175,55,0.4)',
-    backgroundColor: 'rgba(212,175,55,0.07)',
+    width: '100%', height: 50, borderRadius: 9,
+    borderWidth: 1.5, borderColor: 'rgba(91,184,212,0.4)',
+    backgroundColor: 'rgba(91,184,212,0.07)',
     marginBottom: 16,
   },
   bioBtnText: {
-    color: colors.gold, fontSize: 13, fontWeight: '700',
+    color: colors.goldLight,   // #84CCE3
+    fontSize: 13, fontWeight: '700',
     letterSpacing: 0.6, marginLeft: 8,
   },
   btnText: {
-    color: colors.navy,
+    color: colors.navy,   // navy #0A1628 on ice-blue — the desktop pattern
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
     letterSpacing: 2.2,
   },
   error: {
@@ -341,7 +334,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   hint: {
-    color: 'rgba(255,255,255,0.30)',
+    color: 'rgba(255,255,255,0.25)',
     fontSize: 10,
     letterSpacing: 0.8,
     textTransform: 'uppercase',

@@ -880,9 +880,9 @@ export default function FundScreen({ navigation }) {
   // ── Account Detail View ──────────────────────────────────────────────────
   function AccountDetailView() {
     const ov = acctOverview;
-    const gainColor = (ov?.total_gain ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+    const gainColor = (ov?.total_gain ?? 0) >= 0 ? colors.gold : '#e05a4e';
     const ytdPct = ytdResult?.md_return_pct ?? null;
-    const ytdColor = (ytdPct ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+    const ytdColor = (ytdPct ?? 0) >= 0 ? colors.gold : '#e05a4e';
 
     return (
       <View style={{ flex: 1 }}>
@@ -1106,7 +1106,7 @@ export default function FundScreen({ navigation }) {
             const accId = acc.id;
             const isRenaming = renamingId === accId;
             let ytdVal = acc.ytd_pct ?? null;
-            const ytdColor2 = (ytdVal ?? 0) >= 0 ? '#c9a84c' : '#e05a4e';
+            const ytdColor2 = (ytdVal ?? 0) >= 0 ? colors.gold : '#e05a4e';
             return (
               <View key={accId}>
                 <TouchableOpacity

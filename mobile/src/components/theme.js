@@ -2,7 +2,9 @@
  * DGA Capital — design tokens (aligned with web portfolio-gp.html)
  *
  * Rule:
- *   gold / goldLight / goldDark  →  header, logo border, tab bar ONLY (dark navy bg)
+ *   gold / goldLight / goldDark  →  LEGACY token names, now mapped to the DGA
+ *                                   ice-blue brand accent (gold is banned app-wide).
+ *                                   Used by header, logo border, tab bar (dark navy bg).
  *   primary / accentBlue         →  every interactive element in screens (buttons,
  *                                   active chips, links, icons) — matches web --blue
  *
@@ -14,10 +16,11 @@ export const colors = {
   navyLight:   '#1e293b',   // --navy-light (was #132040)
   navyCard:    '#0e1e35',   // slightly lighter card on dark screens
 
-  // ── Gold — ONLY for header title, logo border ring, tab bar active pill ──
-  gold:        '#c9a84c',
-  goldLight:   '#d9bc76',
-  goldDark:    '#a88a3a',
+  // ── Brand accent (legacy "gold" token names — now ICE-BLUE, gold is banned) ──
+  // header title, logo border ring, tab bar active pill
+  gold:        '#5BB8D4',   // == primary / web --blue
+  goldLight:   '#84CCE3',   // == blueLight / web --blue-light
+  goldDark:    '#3E9AB8',   // == blueDark / web --blue-dark
 
   // ── DGA brand blue — PRIMARY interactive accent, matches web --blue ───────
   primary:     '#5BB8D4',   // web: --blue  (was accentBlue)
@@ -101,7 +104,7 @@ const SHARED = {
   chromeNavy: colors.navy,   // header + tab bar bg (navy in both modes)
   onChrome:   '#FFFFFF',
   primary:    colors.primary,
-  gold:       colors.gold,
+  gold:       colors.gold,  // legacy name — ice-blue accent (see colors.gold)
   green:      colors.green,
   red:        colors.red,
   amber:      colors.amber,

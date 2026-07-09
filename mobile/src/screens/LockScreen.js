@@ -100,8 +100,8 @@ const styles = StyleSheet.create({
   },
   bioBtn: {
     width: 96, height: 96, borderRadius: 48,
-    borderWidth: 1.5, borderColor: 'rgba(212,175,55,0.4)',
-    backgroundColor: 'rgba(212,175,55,0.08)',
+    borderWidth: 1.5, borderColor: 'rgba(91,184,212,0.4)',
+    backgroundColor: 'rgba(91,184,212,0.08)',
     alignItems: 'center', justifyContent: 'center', marginBottom: 16,
   },
   bioLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '600', marginBottom: 8 },

@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Animated,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,6 +27,7 @@ import { colors } from '../components/theme';
 import { useTheme } from '../design';
 
 const VIEW_CONFIG_KEY = 'positions_view_config_v1';
+const BLOTTER_CONFIG_KEY = 'positions_blotter_config_v1';
 
 const AUTO_REFRESH_MS = 30_000;
 const NAVY     = '#0A1628';
@@ -98,202 +100,86 @@ function fmtPlPct(n, decimals = 1) {
   return sign + Number(n).toFixed(decimals) + '%';
 }
 
-// ── Position row — VALUE + P&L first, tap to expand (ui377 design) ───────────
-// Line 1: TICKER | MARKET VALUE.  Line 2: company name | P/L $ · P/L %.
-// Tap toggles an inline detail block; "View report ›" lives inside the expander.
-function PosRow({ p, t, rs, onPressReport }) {
-  const [open, setOpen] = useState(false);
-
-  const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
-  const pct = p.unrealized_gain_pct != null
-    ? Number(p.unrealized_gain_pct)
-    : (gain != null && p.total_cost
-        ? (gain / Number(p.total_cost)) * 100
-        : null);
-  const plRef   = gain != null ? gain : pct;
-  const plColor = plRef == null ? t.textDim : (plRef >= 0 ? t.pillUpFg : t.pillDownFg);
-  const plParts = [];
-  if (gain != null) plParts.push((gain >= 0 ? '+' : '') + fmt$(gain));
-  if (pct != null)  plParts.push(fmtPlPct(pct, 1));
-
-  // Company name — only when genuinely present (cache fallback sets name=ticker)
-  const name     = p.name != null ? String(p.name).trim() : '';
-  const showName = !!name && name.toUpperCase() !== String(p.symbol || '').toUpperCase();
-
+// ── Blotter row — dense one-liner: TICKER + weight | day % | value ──────────
+// (Option A design, approved from mockups: professional tape, tap for sheet.)
+function BlotterRow({ p, t, onPress }) {
+  const day = p.day_change_pct != null ? Number(p.day_change_pct) : null;
+  const dayColor = day == null ? t.textDim : (day >= 0 ? GREEN : RED);
   const mv = p.market_value != null
     ? fmt$(p.market_value)
     : (p.last_price != null && p.total_qty != null
         ? fmt$(Number(p.last_price) * Number(p.total_qty))
         : '—');
-
-  // Expanded detail — render only the fields this list's rows actually carry
-  const fields = [];
-  if (p.total_qty != null)  fields.push(['Shares', Number(p.total_qty).toLocaleString('en-US')]);
-  if (p.last_price != null) fields.push(['Last price', fmtPrice(p.last_price)]);
-  if (p.day_change_abs != null) {
-    // day_change_abs is per-share; scale to the position when qty is known
-    const dayAbs = p.total_qty != null
-      ? Number(p.day_change_abs) * Number(p.total_qty)
-      : Number(p.day_change_abs);
-    const dayTxt = fmtAbs(dayAbs)
-      + (p.day_change_pct != null ? '  ·  ' + fmtPct(p.day_change_pct) : '');
-    fields.push(['Day change', dayTxt]);
-  }
-  const wt = p._acct_weight_pct ?? p.market_weight_pct;
-  if (wt != null) fields.push(['Acct weight', Number(wt).toFixed(1) + '%']);
-  if (gain != null || pct != null) {
-    fields.push(['Unrealized P/L', plParts.join('  ·  ')]);
-  }
-
   return (
-    <View>
-      <TouchableOpacity style={rs.row} onPress={() => setOpen(o => !o)} activeOpacity={0.7}>
-        <View style={rs.left}>
-          <Text style={rs.ticker} numberOfLines={1}>{p.symbol}</Text>
-          {showName
-            ? <Text style={rs.name} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
-            : null}
-        </View>
-        <View style={rs.right}>
-          <Text style={rs.mktVal}>{mv}</Text>
-          <Text style={[rs.plTxt, { color: plColor }]}>
-            {plParts.length ? plParts.join(' · ') : '—'}
+    <TouchableOpacity style={bl.row} onPress={() => onPress(p)} activeOpacity={0.6}>
+      <View style={bl.rowLeft}>
+        <Text style={[bl.rowTicker, { color: t.textPrimary }]} numberOfLines={1}>{p.symbol}</Text>
+        {p._scope_weight_pct != null ? (
+          <Text style={[bl.rowWeight, { color: t.textDim }]}>
+            {Number(p._scope_weight_pct).toFixed(1)}% of book
           </Text>
-        </View>
-        <Ionicons
-          name="chevron-down" size={14} color={t.textDim}
-          style={[rs.chev, open && { transform: [{ rotate: '180deg' }] }]}
-        />
-      </TouchableOpacity>
-      {open && (
-        <View style={rs.detailBlock}>
-          {fields.map(([k, v]) => (
-            <View key={k} style={rs.detailRow}>
-              <Text style={rs.detailKey}>{k}</Text>
-              <Text style={rs.detailVal}>{v}</Text>
-            </View>
-          ))}
-          {onPressReport ? (
-            <TouchableOpacity
-              style={rs.reportBtn}
-              onPress={() => onPressReport(p)}
-              activeOpacity={0.7}
-            >
-              <Text style={rs.reportBtnTxt}>View report ›</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      )}
-    </View>
-  );
-}
-
-// Summary strip at the TOP of a positions card — count, total value, total P/L.
-function PosSummary({ rows, t, rs }) {
-  const cost = rows.reduce((acc, p) => acc + (
-    p.total_cost != null
-      ? Number(p.total_cost)
-      : (p.market_value != null && p.unrealized_gain != null
-          ? Number(p.market_value) - Number(p.unrealized_gain)
-          : 0)
-  ), 0);
-  const mkt  = rows.reduce((acc, p) => acc + (Number(p.market_value) || 0), 0);
-  const gain = rows.reduce((acc, p) => acc + (Number(p.unrealized_gain) || 0), 0);
-  const pct  = cost > 0 ? (gain / cost) * 100 : null;
-  const plColor = gain >= 0 ? t.pillUpFg : t.pillDownFg;
-  return (
-    <View style={rs.summaryStrip}>
-      <View style={{ flex: 1 }}>
-        <Text style={rs.summaryLabel}>
-          {rows.length} POSITION{rows.length === 1 ? '' : 'S'}
-        </Text>
-        <Text style={rs.summaryValue}>{fmt$(mkt)}</Text>
-      </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={rs.summaryLabel}>TOTAL P/L</Text>
-        <Text style={[rs.summaryPl, { color: plColor }]}>
-          {(gain >= 0 ? '+' : '') + fmt$(gain)}
-          {pct != null ? '  ·  ' + fmtPlPct(pct, 1) : ''}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-// ── Collapsible account / fund section ───────────────────────────────────────
-
-function AccountSection({
-  title, positions, navSum, daySum, dayValid, onPressRow,
-  sourceType, stakePct,
-  // theming
-  t, ts, rs,
-  // view-config props
-  open, onToggle,
-  editMode, onMoveUp, onMoveDown, canMoveUp, canMoveDown,
-}) {
-  const isFund    = sourceType === 'lp_fund';
-  const chgColor  = dayValid ? (daySum >= 0 ? t.green : t.red) : t.textDim;
-  const chgTxt    = dayValid ? (daySum >= 0 ? '+' : '') + fmtUSDFull(daySum) : null;
-  const showStake = isFund && stakePct != null && stakePct < 99.99;
-
-  return (
-    <View style={ts.card}>
-      {/* Header — tap to collapse, or reorder in edit mode */}
-      <TouchableOpacity
-        style={[styles.cardHdr, ts.cardHdr]}
-        onPress={onToggle}
-        activeOpacity={0.75}
-      >
-        {/* Drag handle (edit mode only) */}
-        {editMode && (
-          <View style={styles.reorderHandle}>
-            <TouchableOpacity
-              onPress={onMoveUp}
-              disabled={!canMoveUp}
-              hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
-              style={[styles.reorderBtn, !canMoveUp && { opacity: 0.25 }]}
-            >
-              <Text style={[styles.reorderArrow, ts.reorderArrow]}>▲</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={onMoveDown}
-              disabled={!canMoveDown}
-              hitSlop={{ top: 4, bottom: 8, left: 8, right: 8 }}
-              style={[styles.reorderBtn, !canMoveDown && { opacity: 0.25 }]}
-            >
-              <Text style={[styles.reorderArrow, ts.reorderArrow]}>▼</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <View style={styles.cardHdrLeft}>
-          <Text style={[styles.cardName, ts.cardName]} numberOfLines={1}>{title}</Text>
-          {showStake && (
-            <Text style={[styles.stakeBadge, ts.stakeBadge]}>{stakePct.toFixed(2)}% STAKE</Text>
-          )}
-        </View>
-        <Text style={[styles.cardNav, ts.cardNav]}>{fmtUSD(navSum, true)}</Text>
-        {chgTxt ? (
-          <Text style={[styles.cardChg, { color: chgColor }]}>{chgTxt}</Text>
         ) : null}
-        <Text style={[styles.cardChevron, ts.cardChevron, { transform: [{ rotate: open ? '0deg' : '-90deg' }] }]}>
-          ▾
-        </Text>
-      </TouchableOpacity>
+      </View>
+      <Text style={[bl.rowDay, { color: dayColor }]}>
+        {day != null ? fmtPct(day) : '—'}
+      </Text>
+      <Text style={[bl.rowValue, { color: t.textPrimary }]}>{mv}</Text>
+    </TouchableOpacity>
+  );
+}
 
-      {/* Collapsible body — summary strip + two-line expandable rows */}
-      {open && (
-        <>
-          <PosSummary rows={positions} t={t} rs={rs} />
-          {positions.map((item, idx) => (
-            <View key={`${item.symbol}-${idx}`}>
-              {idx > 0 && <View style={rs.sep} />}
-              <PosRow p={item} t={t} rs={rs} onPressReport={onPressRow} />
-            </View>
-          ))}
-        </>
-      )}
-    </View>
+// ── Bottom-sheet detail for one position ─────────────────────────────────────
+function PositionSheet({ p, t, onClose, onReport }) {
+  if (!p) return null;
+  const gain = p.unrealized_gain != null ? Number(p.unrealized_gain) : null;
+  const pct = p.unrealized_gain_pct != null
+    ? Number(p.unrealized_gain_pct)
+    : (gain != null && p.total_cost ? (gain / Number(p.total_cost)) * 100 : null);
+  const plColor = (gain ?? pct ?? 0) >= 0 ? GREEN : RED;
+  const plTxt = [
+    gain != null ? (gain >= 0 ? '+' : '') + fmt$(gain) : null,
+    pct != null ? fmtPlPct(pct, 1) : null,
+  ].filter(Boolean).join(' · ');
+  const qty = p.total_qty != null ? Number(p.total_qty) : null;
+  const avgCost = (p.total_cost != null && qty)
+    ? Number(p.total_cost) / qty : null;
+  const dayAbs = (p.day_change_abs != null && qty != null)
+    ? Number(p.day_change_abs) * qty : null;
+  const name = p.name && String(p.name).trim().toUpperCase() !== String(p.symbol || '').toUpperCase()
+    ? String(p.name).trim() : null;
+  const meta = [
+    qty != null ? qty.toLocaleString('en-US') + ' sh' : null,
+    p.last_price != null ? '@ ' + fmtPrice(p.last_price) : null,
+    avgCost != null ? 'avg ' + fmtPrice(avgCost) : null,
+    p._acct_title || null,
+  ].filter(Boolean).join('  ·  ');
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={bl.sheetBackdrop} activeOpacity={1} onPress={onClose} />
+      <View style={[bl.sheet, { backgroundColor: t.surface }]}>
+        <View style={bl.sheetGrab} />
+        <View style={bl.sheetHead}>
+          <Text style={[bl.sheetTicker, { color: t.textPrimary }]} numberOfLines={1}>
+            {p.symbol}{name ? '  ·  ' + name : ''}
+          </Text>
+          {plTxt ? <Text style={[bl.sheetPl, { color: plColor }]}>P/L {plTxt}</Text> : null}
+        </View>
+        {meta ? <Text style={[bl.sheetMeta, { color: t.textSecondary }]}>{meta}</Text> : null}
+        {dayAbs != null ? (
+          <Text style={[bl.sheetDay, { color: dayAbs >= 0 ? GREEN : RED }]}>
+            Today {fmtAbs(dayAbs)}{p.day_change_pct != null ? '  ·  ' + fmtPct(p.day_change_pct) : ''}
+          </Text>
+        ) : null}
+        <View style={bl.sheetBtns}>
+          <TouchableOpacity style={bl.sheetBtnPrimary} onPress={() => onReport(p)} activeOpacity={0.75}>
+            <Text style={bl.sheetBtnPrimaryTxt}>View report</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[bl.sheetBtn, { borderColor: t.border }]} onPress={onClose} activeOpacity={0.75}>
+            <Text style={[bl.sheetBtnTxt, { color: t.textSecondary }]}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -303,7 +189,6 @@ export default function WatchlistScreen({ navigation }) {
   // ── Theme ─────────────────────────────────────────────────────────────────
   const { theme: t } = useTheme();
   const ts = useMemo(() => makeThemedStyles(t), [t]);
-  const rs = useMemo(() => makePosRowStyles(t), [t]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const [groupMap,     setGroupMap]     = useState({});   // key → group data
@@ -317,10 +202,12 @@ export default function WatchlistScreen({ navigation }) {
   const [error,        setError]        = useState(null);
 
   // ── View config (persisted) ───────────────────────────────────────────────
-  const [orderedKeys,  setOrderedKeys]  = useState([]);   // display order
-  const [openMap,      setOpenMap]      = useState({});   // key → bool
-  const [editMode,     setEditMode]     = useState(false);
-  const [saveFlash,    setSaveFlash]    = useState(false);// brief "Saved!" feedback
+  const [orderedKeys,  setOrderedKeys]  = useState([]);   // account chip order
+  const [openMap,      setOpenMap]      = useState({});   // retained for config compat
+  // ── Blotter controls (persisted via BLOTTER_CONFIG_KEY) ───────────────────
+  const [acctFilter,   setAcctFilter]   = useState('all'); // 'all' | group key
+  const [sortBy,       setSortBy]       = useState('value'); // value|day|pl|az
+  const [sheetItem,    setSheetItem]    = useState(null);  // bottom-sheet position
 
   // ── Impersonation ─────────────────────────────────────────────────────────
   const [impersonated, setImpersonated] = useState(false);
@@ -357,29 +244,21 @@ export default function WatchlistScreen({ navigation }) {
     } catch {}
   }, []);
 
-  // ── Save View button handler ──────────────────────────────────────────────
-  const handleSaveView = useCallback(async () => {
-    await saveViewConfig(orderedKeys, openMap);
-    setEditMode(false);
-    setSaveFlash(true);
-    setTimeout(() => setSaveFlash(false), 2000);
-  }, [orderedKeys, openMap, saveViewConfig]);
-
-  // ── Reorder: move a key up or down ───────────────────────────────────────
-  const moveGroup = useCallback((idx, dir) => {
-    setOrderedKeys(prev => {
-      const next = [...prev];
-      const target = idx + dir;
-      if (target < 0 || target >= next.length) return prev;
-      [next[idx], next[target]] = [next[target], next[idx]];
-      return next;
-    });
+  // ── Blotter filter/sort persistence ───────────────────────────────────────
+  useEffect(() => {
+    AsyncStorage.getItem(BLOTTER_CONFIG_KEY).then(raw => {
+      if (!raw) return;
+      try {
+        const c = JSON.parse(raw);
+        if (c.sortBy) setSortBy(c.sortBy);
+        if (c.acctFilter) setAcctFilter(c.acctFilter);
+      } catch {}
+    }).catch(() => {});
   }, []);
-
-  // ── Toggle open/closed ────────────────────────────────────────────────────
-  const toggleOpen = useCallback((key) => {
-    setOpenMap(prev => ({ ...prev, [key]: !prev[key] }));
-  }, []);
+  useEffect(() => {
+    AsyncStorage.setItem(BLOTTER_CONFIG_KEY,
+      JSON.stringify({ acctFilter, sortBy })).catch(() => {});
+  }, [acctFilter, sortBy]);
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
@@ -501,6 +380,36 @@ export default function WatchlistScreen({ navigation }) {
     try { navigation?.navigate('Report', { ticker: item.symbol }); } catch {}
   }, [navigation]);
 
+  // ── Blotter scope: filter → weight → sort ─────────────────────────────────
+  const scopeGroups = acctFilter === 'all'
+    ? groups : groups.filter(g => g.key === acctFilter);
+  const scopeRows = useMemo(() => {
+    const rows = [];
+    scopeGroups.forEach(g => g.positions.forEach(p =>
+      rows.push({ ...p, _acct_title: g.title })));
+    const total = rows.reduce((a, p) => a + (Number(p.market_value) || 0), 0);
+    rows.forEach(p => {
+      p._scope_weight_pct = total > 0 && p.market_value != null
+        ? (Number(p.market_value) / total) * 100 : null;
+    });
+    const day = p => (p.day_change_pct != null ? Number(p.day_change_pct) : -Infinity);
+    const pl  = p => (p.unrealized_gain_pct != null ? Number(p.unrealized_gain_pct) : -Infinity);
+    const mv  = p => (Number(p.market_value) || 0);
+    if (sortBy === 'day')      rows.sort((a, b) => day(b) - day(a));
+    else if (sortBy === 'pl')  rows.sort((a, b) => pl(b) - pl(a));
+    else if (sortBy === 'az')  rows.sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
+    else                       rows.sort((a, b) => mv(b) - mv(a));
+    return rows;
+  }, [scopeGroups, sortBy]);
+  const scopeValue = scopeRows.reduce((a, p) => a + (Number(p.market_value) || 0), 0);
+  let scopeDayAbs = 0, scopeDayPrev = 0;
+  scopeRows.forEach(p => {
+    const q = Number(p.total_qty) || 0, c = Number(p.day_change_abs) || 0;
+    scopeDayAbs  += c * q;
+    scopeDayPrev += (Number(p.market_value) || 0) - c * q;
+  });
+  const scopeDayPct = scopeDayPrev ? (scopeDayAbs / scopeDayPrev) * 100 : null;
+
   // ── Summary values ────────────────────────────────────────────────────────
 
   const dayUp     = (dayChange.abs ?? 0) >= 0;
@@ -546,7 +455,6 @@ export default function WatchlistScreen({ navigation }) {
     );
   }
 
-  const hasMultipleGroups = groups.length > 1;
 
   // ── Main render ────────────────────────────────────────────────────────────
 
@@ -619,63 +527,152 @@ export default function WatchlistScreen({ navigation }) {
         )}
       </View>
 
-      {/* ── View config toolbar ── */}
-      {groups.length > 0 && (
-        <View style={styles.toolbar}>
-          {editMode ? (
-            <>
-              <Text style={[styles.toolbarHint, { color: t.textDim }]}>↑↓ to reorder · tap headers to collapse</Text>
-              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveView} activeOpacity={0.75}>
-                <Text style={styles.saveBtnText}>💾  Save View</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              {saveFlash
-                ? <Text style={styles.savedFlash}>✓ View saved</Text>
-                : <Text style={[styles.toolbarHint, { color: t.textDim }]}>Tap sections to expand · hold to reorder</Text>
-              }
-              <TouchableOpacity
-                style={styles.editBtn}
-                onPress={() => setEditMode(true)}
-                activeOpacity={0.75}
-              >
-                <Text style={styles.editBtnText}>Edit Layout</Text>
-              </TouchableOpacity>
-            </>
-          )}
+      {/* ── Account filter chips ── */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={bl.chipBar}>
+        {[{ key: 'all', title: 'All' }, ...groups].map(g => {
+          const active = acctFilter === g.key;
+          return (
+            <TouchableOpacity
+              key={g.key}
+              style={[bl.chip, active ? bl.chipActive : bl.chipIdle]}
+              onPress={() => setAcctFilter(g.key)}
+              activeOpacity={0.75}
+            >
+              <Text style={active ? bl.chipTxtActive : bl.chipTxtIdle} numberOfLines={1}>
+                {g.title}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* ── Scope strip (filtered account) ── */}
+      {acctFilter !== 'all' && (
+        <View style={[bl.scopeStrip, { backgroundColor: t.surface, borderColor: t.border }]}>
+          <Text style={[bl.scopeTxt, { color: t.textSecondary }]} numberOfLines={1}>
+            {(scopeGroups[0] && scopeGroups[0].title) || ''} · {fmt$(scopeValue)}
+          </Text>
+          {scopeDayPct != null ? (
+            <Text style={[bl.scopeDay, { color: scopeDayAbs >= 0 ? GREEN : RED }]}>
+              {fmtAbs(scopeDayAbs)} · {fmtPct(scopeDayPct)} today
+            </Text>
+          ) : null}
         </View>
       )}
 
-      {/* ── Per-account collapsible cards ── */}
-      {groups.map((grp, i) => (
-        <AccountSection
-          key={grp.key}
-          title={grp.title}
-          positions={grp.positions}
-          navSum={grp.navSum}
-          daySum={grp.daySum}
-          dayValid={grp.dayValid}
-          onPressRow={handleRowPress}
+      {/* ── Sort chips ── */}
+      <View style={bl.sortBar}>
+        {[['value', 'Value ↓'], ['day', 'Day %'], ['pl', 'P/L %'], ['az', 'A–Z']].map(([k, label]) => {
+          const active = sortBy === k;
+          return (
+            <TouchableOpacity
+              key={k}
+              style={[bl.sortChip,
+                      { borderColor: active ? BLUE : t.border },
+                      active && { backgroundColor: 'rgba(91,184,212,0.10)' }]}
+              onPress={() => setSortBy(k)}
+              activeOpacity={0.75}
+            >
+              <Text style={[bl.sortChipTxt, { color: active ? (t.isDark ? '#84CCE3' : '#3E9AB8') : t.textDim }]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ── Blotter ── */}
+      <View style={[bl.list, { backgroundColor: t.surface, borderColor: t.border }]}>
+        {scopeRows.map((p, idx) => (
+          <View key={`${p.symbol}-${p._acct_title || ''}-${idx}`}>
+            {idx > 0 && <View style={[bl.sep, { backgroundColor: t.border }]} />}
+            <BlotterRow p={p} t={t} onPress={setSheetItem} />
+          </View>
+        ))}
+      </View>
+
+      {/* ── Bottom-sheet detail ── */}
+      {sheetItem ? (
+        <PositionSheet
+          p={sheetItem}
           t={t}
-          ts={ts}
-          rs={rs}
-          sourceType={grp.sourceType}
-          stakePct={grp.stakePct}
-          open={openMap[grp.key] !== false}
-          onToggle={() => toggleOpen(grp.key)}
-          editMode={editMode}
-          onMoveUp={() => moveGroup(i, -1)}
-          onMoveDown={() => moveGroup(i, 1)}
-          canMoveUp={i > 0}
-          canMoveDown={i < groups.length - 1}
+          onClose={() => setSheetItem(null)}
+          onReport={(pp) => { setSheetItem(null); handleRowPress(pp); }}
         />
-      ))}
+      ) : null}
 
       <View style={{ height: 32 }} />
     </ScrollView>
   );
 }
+
+// ── Blotter styles ────────────────────────────────────────────────────────────
+const bl = StyleSheet.create({
+  chipBar: { marginBottom: 8, flexGrow: 0 },
+  chip: { borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6, marginRight: 6 },
+  chipActive: { backgroundColor: BLUE },
+  chipIdle:   { backgroundColor: NAVY3 },
+  chipTxtActive: { color: NAVY, fontSize: 11, fontWeight: '800', maxWidth: 160 },
+  chipTxtIdle:   { color: '#84CCE3', fontSize: 11, fontWeight: '600', maxWidth: 160 },
+
+  scopeStrip: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderRadius: 10, borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12, paddingVertical: 7, marginBottom: 8,
+  },
+  scopeTxt: { fontSize: 11, fontWeight: '700', flexShrink: 1, marginRight: 8 },
+  scopeDay: { fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+
+  sortBar: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  sortChip: {
+    borderWidth: 1, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  sortChipTxt: { fontSize: 10.5, fontWeight: '700' },
+
+  list: {
+    borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden',
+  },
+  sep: { height: StyleSheet.hairlineWidth, marginLeft: 12 },
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 12, minHeight: 46,
+  },
+  rowLeft: { flex: 1, minWidth: 0, paddingRight: 8 },
+  rowTicker: { fontSize: 13.5, fontWeight: '800', letterSpacing: 0.3 },
+  rowWeight: { fontSize: 9, marginTop: 1 },
+  rowDay: {
+    width: 66, textAlign: 'right', fontSize: 12, fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  rowValue: {
+    width: 88, textAlign: 'right', fontSize: 12.5, fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
+
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: {
+    borderTopLeftRadius: 16, borderTopRightRadius: 16,
+    borderTopWidth: 2, borderTopColor: BLUE,
+    paddingHorizontal: 18, paddingTop: 8, paddingBottom: 30,
+  },
+  sheetGrab: {
+    width: 34, height: 4, borderRadius: 2, backgroundColor: 'rgba(128,140,155,0.45)',
+    alignSelf: 'center', marginBottom: 10,
+  },
+  sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap' },
+  sheetTicker: { fontSize: 15, fontWeight: '800', flexShrink: 1, marginRight: 8 },
+  sheetPl: { fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  sheetMeta: { fontSize: 11.5, marginTop: 7 },
+  sheetDay: { fontSize: 11.5, fontWeight: '700', marginTop: 5, fontVariant: ['tabular-nums'] },
+  sheetBtns: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  sheetBtnPrimary: {
+    borderWidth: 1.5, borderColor: BLUE, borderRadius: 9,
+    paddingHorizontal: 16, paddingVertical: 8,
+  },
+  sheetBtnPrimaryTxt: { color: '#3E9AB8', fontSize: 12.5, fontWeight: '800' },
+  sheetBtn: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 16, paddingVertical: 8 },
+  sheetBtnTxt: { fontSize: 12.5, fontWeight: '700' },
+});
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -921,84 +918,3 @@ const makeThemedStyles = (t) => StyleSheet.create({
 });
 
 // ── Themed position-row styles (ui377 value/P&L-first design) ────────────────
-// Built per-theme via useMemo(() => makePosRowStyles(t), [t]) in WatchlistScreen.
-const makePosRowStyles = (t) => StyleSheet.create({
-  // Summary strip — sits at the top of the positions card
-  summaryStrip: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: t.border,
-    backgroundColor: t.surfaceAlt,
-  },
-  summaryLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.0, color: t.textDim, marginBottom: 2 },
-  summaryValue: { fontSize: 20, fontWeight: '800', color: t.textPrimary, fontVariant: ['tabular-nums'] },
-  summaryPl:    { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'], lineHeight: 24 },
-
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-  },
-  sep: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: t.border,
-    marginLeft: 14,
-  },
-  left: { flex: 1, justifyContent: 'center', flexShrink: 1 },
-  ticker: { color: t.textPrimary, fontSize: 16.5, fontWeight: '800', letterSpacing: 0.3 },
-  name:   { color: t.textSecondary, fontSize: 12, fontWeight: '500', marginTop: 2, flexShrink: 1 },
-
-  right: { alignItems: 'flex-end', justifyContent: 'center' },
-  mktVal: {
-    color: t.textPrimary,
-    fontSize: 16,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums'],
-    textAlign: 'right',
-  },
-  plTxt: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    marginTop: 2,
-    textAlign: 'right',
-  },
-  chev: { marginLeft: 2 },
-
-  // Inline expanded detail block (collapsed by default)
-  detailBlock: {
-    paddingHorizontal: 14,
-    paddingBottom: 12,
-    paddingTop: 2,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 3,
-  },
-  detailKey: { fontSize: 11.5, fontWeight: '600', color: t.textDim },
-  detailVal: { fontSize: 12.5, fontWeight: '700', color: t.textSecondary, fontVariant: ['tabular-nums'] },
-
-  // "View report ›" action inside the expander (absorbs the old row tap → Report)
-  reportBtn: {
-    alignSelf: 'flex-start',
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: t.border,
-  },
-  reportBtnTxt: {
-    color: t.primary,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-});
