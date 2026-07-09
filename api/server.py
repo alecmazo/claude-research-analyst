@@ -28531,6 +28531,44 @@ def _snaptrade_run_sync() -> dict:
     import snaptrade_link as _st
     _snaptrade_sync_stage("Contacting SnapTrade…")
     uid, secret = _snaptrade_ensure_user()
+
+    # ── Stage 0: freshness. Our sync reads SNAPTRADE'S cache of Fidelity,
+    # which they re-pull ~daily on their own schedule — same-day money moves
+    # (settled cash, intraday trades) aren't in it yet. So every sync FIRST
+    # asks SnapTrade to re-pull the brokerage, waits for the async refresh,
+    # then imports. One button, fresh data. A 10-min kv cooldown keeps
+    # repeated clicks from spamming SnapTrade's refresh API; the wait is
+    # skipped entirely when the cooldown says data was just refreshed.
+    try:
+        _last = _kv_get("snaptrade.last_refresh")
+        _last_ts = float(_last) if _last else 0.0
+    except Exception:
+        _last_ts = 0.0
+    if time.time() - _last_ts > 600:
+        _snaptrade_sync_stage("Asking Fidelity for fresh data…")
+        _refreshed = 0
+        try:
+            with _fund_conn() as _rconn, _rconn.cursor() as _rcur:
+                _rcur.execute("SELECT DISTINCT connection_id FROM snaptrade_accounts "
+                              "WHERE status='active' AND connection_id IS NOT NULL "
+                              "AND account_id NOT LIKE 'demo-%'")
+                _conn_ids = [r[0] for r in _rcur.fetchall()]
+            for _cid in _conn_ids:
+                try:
+                    _st.refresh_connection(uid, secret, _cid)
+                    _refreshed += 1
+                except Exception as _re:
+                    print(f"[snaptrade] refresh {_cid} failed: {_snaptrade_error_detail(_re)}", flush=True)
+        except Exception as _re:
+            print(f"[snaptrade] refresh stage skipped: {_re!s:.150}", flush=True)
+        if _refreshed:
+            _kv_put("snaptrade.last_refresh", time.time())
+            # SnapTrade's brokerage re-pull is async — give it time to land
+            # before importing. Background job, so the wait costs nothing.
+            for _w in range(45, 0, -15):
+                _snaptrade_sync_stage(f"Fidelity refresh in flight… importing in {_w}s")
+                time.sleep(15)
+
     accts = _st.list_accounts(uid, secret)
     if isinstance(accts, dict):
         accts = accts.get("accounts") or accts.get("data") or []
