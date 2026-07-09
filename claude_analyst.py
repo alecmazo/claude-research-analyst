@@ -184,9 +184,11 @@ def _optional_env(name: str, default: str = "") -> str:
 
 
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
-# All analysis, research, intelligence, and daily brief runs on grok-4.20-reasoning.
+# All analysis, research, intelligence, and daily brief runs on grok-4.3
+# (xAI's newest; also aliased grok-latest — verified against /v1/models
+# 2026-07-08; no grok-4.5 exists on this account).
 # Override via GROK_MODEL in .env to pin a specific version.
-GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.20-reasoning")
+GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3")
 # Intelligence / Daily Brief use the same model as analysis.
 GROK_INTEL_MODEL = GROK_MODEL
 
@@ -5884,9 +5886,16 @@ def _extract_responses_text(resp) -> str:
 # live_search adds a per-call surcharge on top (Grok bills per search invocation).
 GROK_PRICING_PER_MTOK = {
     # model_id        : (input $/Mtok, output $/Mtok)
-    "grok-4-reasoning": (5.0, 15.0),
-    "grok-4.20-reasoning": (5.0, 15.0),
-    "grok-beta":        (5.0, 15.0),
+    # Verified against /v1/models price fields 2026-07-08 (units: 1/10000 c/tok):
+    # 4.20 and 4.3 both bill $1.25 in / $2.50 out (2x past 200k context —
+    # our reports never get near that). Old (5.0, 15.0) rows were grok-beta
+    # pricing and overstated every cost panel.
+    "grok-4.3":            (1.25, 2.50),
+    "grok-latest":         (1.25, 2.50),
+    "grok-4.20-reasoning": (1.25, 2.50),
+    "grok-4.20-0309-reasoning": (1.25, 2.50),
+    "grok-4-reasoning":    (5.0, 15.0),
+    "grok-beta":           (5.0, 15.0),
 }
 # Approximate per-search-call cost (the model may invoke 1-3 searches per request)
 GROK_LIVE_SEARCH_PER_CALL = 0.025
