@@ -3650,10 +3650,12 @@ End with the sleeve block at this account's real market value so I can push it t
             <option value="both">Both (sequential ~5 min)</option>
           </select>
           <span id="hero-llm-chips" style="display:inline-flex;gap:4px;">
-            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok 4.20 (default)">Grok</button>
-            <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude Opus 4.8">Claude</button>
+            <button type="button" class="hero-llm-chip active" data-llm="grok" title="Grok (default)">Grok</button>
+            <button type="button" class="hero-llm-chip" data-llm="claude" title="Claude">Claude</button>
             <button type="button" class="hero-llm-chip" data-llm="both" title="Both (sequential ~5 min)">Both</button>
           </span>
+          <span id="hero-model-tag" title="The exact model this engine will call (live from server config)"
+                style="font-size:8.5px;font-weight:700;color:var(--mid);background:rgba(0,0,0,0.04);border-radius:4px;padding:1px 6px;white-space:nowrap;">—</span>
         </label>
         <span id="hero-cost-est"
               title="Estimated LLM cost for one report run (input/output tokens + live-search). Actual varies with report length and how much the model searches."
@@ -8861,8 +8863,35 @@ End with the sleeve block at this account's real market value so I can push it t
       }
       document.querySelectorAll('#hero-llm-chips .hero-llm-chip').forEach(c =>
         c.classList.toggle('active', c === chip));
+      _updateHeroModelTag();
     });
   });
+
+  // ── Live model ids (from server config, not hardcoded) ──────────────────
+  // Fetch once; label the Grok/Claude chips with the exact model that will run
+  // and show the active engine's model in #hero-model-tag so the card always
+  // states which Grok (or Claude) version it's using.
+  var _HERO_MODELS = null;
+  function _updateHeroModelTag() {
+    const tag = document.getElementById('hero-model-tag');
+    if (!tag || !_HERO_MODELS) return;
+    const sel = document.getElementById('hero-llm');
+    const eng = (sel && sel.value) || 'grok';
+    const g = _HERO_MODELS.grok || 'grok', c = _HERO_MODELS.claude || 'claude';
+    tag.textContent = eng === 'claude' ? c : eng === 'both' ? (g + ' + ' + c) : g;
+  }
+  (async function _loadHeroModels() {
+    try {
+      const r = await window.dgaFetch('/api/config/models');
+      if (!r.ok) return;
+      _HERO_MODELS = await r.json();
+      const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
+      const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
+      if (gc) gc.title = _HERO_MODELS.grok || 'Grok';
+      if (cc) cc.title = _HERO_MODELS.claude || 'Claude';
+      _updateHeroModelTag();
+    } catch (e) { /* leave the em-dash placeholder */ }
+  })();
 
   // ── Per-run cost estimate (mirrors the LLM Lab's inline price tags) ──
   // Ranges derived from real pricing: a full single-ticker DGA report is

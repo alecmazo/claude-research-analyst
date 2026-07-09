@@ -5450,6 +5450,18 @@ def health():
             "py": f"{sys.version_info.major}.{sys.version_info.minor}"}
 
 
+@app.get("/api/config/models")
+def config_models():
+    """Zero-cost: the LLM model ids actually configured right now, so UI labels
+    reflect the live GROK_MODEL/CLAUDE_MODEL/AGENTIC_MODEL env values instead of
+    hardcoded strings. Pure attribute read — no API calls, no tokens."""
+    return {
+        "grok":    getattr(analyst, "GROK_MODEL", "grok"),
+        "claude":  getattr(analyst, "CLAUDE_MODEL", "claude"),
+        "agentic": _AGENTIC_MODEL,
+    }
+
+
 @app.get("/api/health/data")
 def health_data():
     """Data-freshness health for uptime monitors + the GP Data Health card.
