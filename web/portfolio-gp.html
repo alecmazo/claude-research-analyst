@@ -3181,7 +3181,7 @@
     <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="memos">Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
-    <a class="topbar-link" href="/sliw/" title="Edyta Sliwinska corporate desk" style="text-decoration:none">Sliw</a>
+    <a class="topbar-link" id="nav-sliw-link" href="/sliw/" title="Sliw Agent — Edyta corporate desk" style="text-decoration:none;display:none">Sliw</a>
     <button id="theme-toggle" type="button" title="Toggle dark mode" aria-label="Toggle theme">🌙</button>
     <span class="status-dot" title="API online"></span>
   </nav>
@@ -17781,6 +17781,26 @@ End with the sleeve block at this account's real market value so I can push it t
   document.addEventListener('DOMContentLoaded', function () {
     if (window.DGA_USER && window.DGA_USER.demo_mode) _renderDemoBanner();
   });
+
+  // Sliw Agent nav: ONLY alecmazo1@gmail.com + edytasliw@gmail.com (hidden for all other DGA logins)
+  (function _showSliwNavIfAllowed() {
+    var ALLOWED = ['alecmazo1@gmail.com', 'edytasliw@gmail.com'];
+    function apply() {
+      var me = window.DGA_USER || {};
+      var email = String(me.email || '').toLowerCase().trim();
+      var link = document.getElementById('nav-sliw-link');
+      if (link && ALLOWED.indexOf(email) >= 0) {
+        link.style.display = '';
+      }
+    }
+    apply();
+    var n = 0;
+    var t = setInterval(function () {
+      n += 1;
+      if (window.DGA_USER) { apply(); clearInterval(t); }
+      if (n > 50) clearInterval(t);
+    }, 100);
+  })();
 
   function _renderDemoBanner() {
     if (document.getElementById('dga-demo-banner')) return;

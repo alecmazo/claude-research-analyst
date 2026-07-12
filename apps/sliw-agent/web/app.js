@@ -7,6 +7,9 @@ const API_BASE = (window.SLIW_API_BASE || "/api").replace(/\/$/, "");
 const TOKEN_KEY = "dga_v2_token";
 const USER_KEY = "dga_v2_user";
 
+/** Must match server default SLIW_ALLOWED_EMAILS (Alec + Edyta only). */
+const SLIW_ALLOWED_EMAILS = ["alecmazo1@gmail.com", "edytasliw@gmail.com"];
+
 const state = {
   prospects: [],
   summary: null,
@@ -17,16 +20,47 @@ const state = {
   user: null,
 };
 
+function isSliwAllowedEmail(email) {
+  return SLIW_ALLOWED_EMAILS.includes(String(email || "").toLowerCase().trim());
+}
+
+function setBrandUser(name, email) {
+  const el = $("#brand-user");
+  if (!el) return;
+  if (name) {
+    el.textContent = name;
+    el.title = email || name;
+  } else {
+    el.textContent = "Representation desk";
+  }
+}
+
 /** Ensure DGA portfolio login when hosted on Railway under /sliw */
 function ensureAuth() {
-  if (!window.SLIW_REQUIRE_DGA_LOGIN) return true;
+  if (!window.SLIW_REQUIRE_DGA_LOGIN) {
+    // Local standalone — no portal gate
+    setBrandUser("Local desk", "");
+    return true;
+  }
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) {
-    // Bounce to portfolio login; return here after login
     const next = encodeURIComponent(window.location.pathname + window.location.search);
     window.location.replace("/?next=" + next);
     return false;
   }
+  // Client-side gate using cached user (server still enforces on every API call)
+  try {
+    const cached = JSON.parse(localStorage.getItem(USER_KEY) || "null");
+    if (cached) {
+      setBrandUser(cached.name || cached.email, cached.email);
+      if (cached.email && !isSliwAllowedEmail(cached.email)) {
+        toast("Sliw Agent is not available for this account");
+        const dest = (cached.role === "gp" || cached.role === "admin") ? "/gp" : "/lp";
+        setTimeout(() => { window.location.replace(dest); }, 600);
+        return false;
+      }
+    }
+  } catch (_) {}
   return true;
 }
 
@@ -698,14 +732,33 @@ function boot() {
   $("#filter-search")?.addEventListener("input", renderPipeline);
   bindForm();
 
-  // Show signed-in user when available
+  // Confirm desk access + show signed-in name under "Sliw Agent"
   api("/me")
     .then((me) => {
       state.user = me;
-      const sub = document.querySelector(".brand-sub");
-      if (sub && me?.name) sub.textContent = me.name;
+      setBrandUser(me?.name || me?.email || "Desk", me?.email);
+      // Keep localStorage user in sync for portal nav
+      try {
+        if (me?.email) {
+          const prev = JSON.parse(localStorage.getItem(USER_KEY) || "{}");
+          localStorage.setItem(USER_KEY, JSON.stringify({ ...prev, ...me }));
+        }
+      } catch (_) {}
     })
-    .catch(() => {});
+    .catch((e) => {
+      const msg = String(e.message || e);
+      setBrandUser("Access denied", "");
+      if (window.SLIW_REQUIRE_DGA_LOGIN) {
+        toast(msg || "Not authorized for Sliw Agent");
+        let dest = "/";
+        try {
+          const cached = JSON.parse(localStorage.getItem(USER_KEY) || "null");
+          if (cached?.role === "gp" || cached?.role === "admin") dest = "/gp";
+          else if (cached?.role === "lp") dest = "/lp";
+        } catch (_) {}
+        setTimeout(() => { window.location.replace(dest); }, 900);
+      }
+    });
 
   refresh().catch((e) => toast(e.message));
 }

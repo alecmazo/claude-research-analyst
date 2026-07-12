@@ -17,4 +17,5 @@ echo ""
 # Open browser shortly after server binds
 (sleep 1.5 && open "http://127.0.0.1:8787") &
 
+export SLIW_STANDALONE=1
 python3 -m uvicorn sliw_agent.server:app --host 127.0.0.1 --port 8787

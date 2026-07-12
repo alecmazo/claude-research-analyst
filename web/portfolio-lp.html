@@ -591,6 +591,7 @@
     <span class="topbar-link" data-tab="documents">Documents</span>
     <span class="topbar-link" data-tab="lp-reports" id="nav-lp-reports-link">Reports</span>
     <span class="topbar-link" data-tab="account" id="nav-account-link" style="display:none;">⚙ Account</span>
+    <a class="topbar-link" id="nav-sliw-link" href="/sliw/" title="Sliw Agent — corporate desk" style="text-decoration:none;display:none">Sliw</a>
     <span class="status-dot" title="API online"></span>
   </nav>
 </header>
@@ -2988,6 +2989,26 @@ async function loadLpReportsTab() {
     </div>
   </div>
 </div>
+
+<script>
+// Sliw Agent nav: ONLY alecmazo1@gmail.com + edytasliw@gmail.com
+(function _showSliwNavIfAllowed() {
+  var ALLOWED = ['alecmazo1@gmail.com', 'edytasliw@gmail.com'];
+  function apply() {
+    var me = window.DGA_USER || {};
+    var email = String(me.email || '').toLowerCase().trim();
+    var link = document.getElementById('nav-sliw-link');
+    if (link && ALLOWED.indexOf(email) >= 0) link.style.display = '';
+  }
+  apply();
+  var n = 0;
+  var t = setInterval(function () {
+    n += 1;
+    if (window.DGA_USER) { apply(); clearInterval(t); }
+    if (n > 50) clearInterval(t);
+  }, 100);
+})();
+</script>
 
 </body>
 </html>

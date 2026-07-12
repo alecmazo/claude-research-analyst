@@ -68,47 +68,38 @@ class StageRequest(BaseModel):
 
 
 # ── Access control (Railway / shared login) ───────────────────────────────────
+# Hard default: ONLY Alec + Edyta. Override with SLIW_ALLOWED_EMAILS if needed.
+# Being GP/admin alone is NOT enough — other DGA logins must not use this desk.
+
+_DEFAULT_SLIW_EMAILS = "alecmazo1@gmail.com,edytasliw@gmail.com"
+
 
 def _allowed_emails() -> set[str]:
-    raw = os.environ.get(
-        "SLIW_ALLOWED_EMAILS",
-        "edytasliw@gmail.com,alecmazo1@gmail.com,admin@edytasliwinska.com",
-    )
+    raw = os.environ.get("SLIW_ALLOWED_EMAILS", _DEFAULT_SLIW_EMAILS)
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
-def _allowed_lp_ids() -> set[str]:
-    raw = os.environ.get("SLIW_ALLOWED_LP_IDS", "lp_edyta_sliwinska,gp_alec")
-    return {e.strip() for e in raw.split(",") if e.strip()}
-
-
 def require_sliw_access(request: Request) -> dict[str, Any]:
-    """
-    Enforce who may use the Sliw desk.
-
-    - GP / admin roles: always
-    - lp_id / email allowlists (defaults include Edyta + Alec)
-    - Legacy v1 portfolio token (no claims): allowed
-    """
+    """Allow only allowlisted emails (default: Alec + Edyta)."""
     claims = getattr(request.state, "auth_claims", None)
     if not claims:
-        return {"role": "legacy", "name": "Desk"}
+        # Local double-click desk (no DGA auth middleware). Never on Railway.
+        if (os.environ.get("SLIW_STANDALONE") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        ):
+            return {"role": "local", "name": "Local desk", "email": ""}
+        raise HTTPException(
+            status_code=403,
+            detail="Sliw Agent requires a DGA email login (Alec or Edyta only).",
+        )
 
-    role = (claims.get("role") or "").lower()
-    if role in ("gp", "admin"):
-        return claims
-
-    email = (claims.get("email") or "").lower()
-    lp_id = claims.get("lp_id") or ""
-    if email in _allowed_emails() or lp_id in _allowed_lp_ids():
+    email = (claims.get("email") or "").lower().strip()
+    if email and email in _allowed_emails():
         return claims
 
     raise HTTPException(
         status_code=403,
-        detail=(
-            "Sliw Agent is not enabled for this account. "
-            "Ask the GP to add your email to SLIW_ALLOWED_EMAILS."
-        ),
+        detail="Sliw Agent is only available to authorized desk accounts.",
     )
 
 
