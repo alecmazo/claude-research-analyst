@@ -452,6 +452,27 @@ a:hover { text-decoration: underline; }
   color: var(--mist);
 }
 
+.email-step-card {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.email-step-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.email-step-head .eyebrow {
+  color: var(--champagne);
+  margin-bottom: 0;
+}
+
 .materials-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

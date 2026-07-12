@@ -202,10 +202,11 @@ async function focusLead(id, { autoAgent = true } = {}) {
           body: JSON.stringify({ live_gamma: false, build_sequences: false }),
         });
         toast(`Agent ready: ${result.primary_contact?.email || result.primary_contact?.name || "contact"} · mode ${result.marketing_mode}`);
-        state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
         state._lastAgent = result;
-        renderWorkstream();
-        showAgentResult(result);
+        state._lastEmail = result.email_preview; // cold_1 only
+        state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+        // One render: contacts + single labeled first-touch (no duplicate body)
+        await renderWorkstream();
       } catch (e) {
         toast("Agent: " + e.message);
       }
@@ -263,29 +264,27 @@ function contactCardHtml(primary, contacts, research, diagnostics) {
     </div>`;
 }
 
-function showAgentResult(result) {
-  if (!result) return;
-  const out = $("#ws-output");
-  if (!out) return;
-  const c = result.primary_contact || {};
-  const contacts = result.contacts || [];
-  state._lastAgent = result;
-  state._lastEmail = result.email_preview;
-  out.hidden = false;
-  out.innerHTML = `
-    ${contactCardHtml(c, contacts, result.contact_research, result.hunter_diagnostics)}
-    <div class="agent-card">
-      <p class="eyebrow">Pitch</p>
-      <p><strong>Mode:</strong> ${esc(result.marketing_mode || "—")}
-        ${result.pitch_url || result.master_deck_url
-          ? ` · <a href="${esc(result.pitch_url || result.master_deck_url)}" target="_blank" rel="noopener">open deck / page</a>`
-          : ""}</p>
-      ${result.email_preview?.body ? `<div class="email-preview"><strong>${esc(result.email_preview.subject || "")}</strong>\n\n${esc(result.email_preview.body)}</div>` : ""}
-      <p class="muted" style="margin-top:10px">${esc(result.next_human_step || "")}</p>
+function emailBlockHtml(stepLabel, stepHint, email, copyAct) {
+  if (!email?.body) return "";
+  return `
+    <div class="email-step-card">
+      <div class="email-step-head">
+        <div>
+          <p class="eyebrow">${esc(stepLabel)}</p>
+          <p class="muted" style="margin-top:2px">${esc(stepHint)}</p>
+        </div>
+        ${copyAct ? `<button type="button" class="btn ghost sm" data-act="${esc(copyAct)}">Copy this email</button>` : ""}
+      </div>
+      <div class="email-preview"><strong>${esc(email.subject || "")}</strong>\n\n${esc(email.body)}</div>
     </div>`;
 }
 
-function renderWorkstream() {
+/**
+ * One clear panel: contacts once, then email sequence steps (not the same body twice).
+ * cold_1 = first touch only until you send.
+ * follow_2 = only after mark contacted + "Create follow-up".
+ */
+async function renderWorkstream() {
   const ws = state.workstream;
   if (!ws) return;
   $("#work-empty").hidden = true;
@@ -310,7 +309,6 @@ function renderWorkstream() {
 
   const n = ws.next_step || {};
   $("#ws-next-title").textContent = n.title || "Done";
-  // Always show who we're emailing in the next-step detail
   const toLine = primary.email
     ? `To: ${primary.name || "Contact"} <${primary.email}>`
     : (primary.name ? `Contact: ${primary.name} (no email yet)` : (n.detail || ""));
@@ -332,7 +330,6 @@ function renderWorkstream() {
     showReplyForm();
   }
 
-  // ALWAYS show contacts first (do not let draft preview wipe them)
   const out = $("#ws-output");
   out.hidden = false;
   out.innerHTML = contactCardHtml(
@@ -341,35 +338,94 @@ function renderWorkstream() {
     p.contact_research || state._lastAgent?.contact_research || "",
     p.hunter_diagnostics || state._lastAgent?.hunter_diagnostics || null
   );
-  // Append draft if we have it
-  loadDraftPreview(p, true);
+
+  // Pitch meta (no email body here — body lives only in sequence section below)
+  const agent = state._lastAgent;
+  const pitchUrl = agent?.pitch_url || agent?.master_deck_url || p.master_deck_url || p.gamma_url;
+  out.innerHTML += `
+    <div class="agent-card">
+      <p class="eyebrow">Assets (links in the email — not attachments)</p>
+      <p class="muted">
+        ${pitchUrl ? `<a href="${esc(pitchUrl)}" target="_blank" rel="noopener">Packages overview</a>` : "—"}
+        · <a href="https://edytasliwinska.com/corporate" target="_blank" rel="noopener">Corporate page</a>
+      </p>
+      <p class="muted" style="margin-top:8px">
+        <strong>Email sequence:</strong> only <em>Email 1 — first touch</em> until you send.
+        Email 2 appears after you mark contacted and create a follow-up. They are different messages.
+      </p>
+    </div>
+    <div id="email-sequence-panel"></div>`;
+
+  await loadEmailSequence(p.id);
 }
 
-async function loadDraftPreview(p, append) {
-  if (!p?.id) return;
+async function loadEmailSequence(prospectId) {
+  const panel = $("#email-sequence-panel");
+  if (!panel || !prospectId) return;
   try {
-    const full = await api(`/prospects/${encodeURIComponent(p.id)}`);
-    const email = full.outreach?.email;
-    const out = $("#ws-output");
-    if (!out) return;
-    if (email?.body) {
-      state._lastEmail = email;
-      const block = `<div class="email-preview" style="margin-top:12px"><strong>${esc(email.subject || "")}</strong>\n\n${esc(email.body)}</div>`;
-      if (append) out.innerHTML += block;
-      else {
-        out.hidden = false;
-        out.innerHTML = block;
-      }
-    }
-    if (full.brief_md && append) {
-      out.innerHTML += `<div class="brief-box" style="margin-top:12px">${esc(full.brief_md)}</div>`;
-    }
+    const full = await api(`/prospects/${encodeURIComponent(prospectId)}`);
     state._focusFull = full;
-    // Refresh contact card from full prospect if richer
-    if (full.contacts?.length && !append) {
-      /* no-op when not append */
+
+    // Cold = primary outreach file (always first touch)
+    let cold = full.outreach?.email || null;
+    if (cold) {
+      cold = { ...cold, sequence_step: full.outreach?.sequence_step || "cold_1" };
+      state._lastEmail = cold;
+      state._coldEmail = cold;
+    } else if (state._lastAgent?.email_preview?.body) {
+      cold = { ...state._lastAgent.email_preview, sequence_step: "cold_1" };
+      state._coldEmail = cold;
+      state._lastEmail = cold;
     }
-  } catch (_) {}
+
+    // Follow-up only if stored separately (not the same as cold)
+    let follow = null;
+    const followPath = full.outreach_follow_2 || (full.sequence_paths && full.sequence_paths.follow_2);
+    // If API embeds follow email later; for now check outreach_follow_2_email or similar
+    if (full.followup_email?.body) {
+      follow = { ...full.followup_email, sequence_step: "follow_2" };
+    }
+    if (state._followEmail?.body) {
+      follow = state._followEmail;
+    }
+
+    // Never show the same body twice
+    if (follow && cold && follow.body === cold.body) {
+      follow = null;
+    }
+
+    let html = "";
+    if (cold?.body) {
+      html += emailBlockHtml(
+        "Email 1 — First touch (send this now)",
+        "Cold open. Do not send a follow-up until this one goes out.",
+        cold,
+        "copy_cold"
+      );
+    } else {
+      html += `<p class="muted">No first-touch draft yet — run the sales agent.</p>`;
+    }
+    if (follow?.body) {
+      html += emailBlockHtml(
+        "Email 2 — Follow-up (only after Email 1 was sent)",
+        "Gentle bump. Create this after you mark contacted.",
+        follow,
+        "copy_follow"
+      );
+    } else if ((full.stage === "contacted" || full.stage === "replied") && !follow) {
+      html += `<p class="muted" style="margin-top:12px">No follow-up draft yet. Use <strong>Create follow-up email</strong> when ready.</p>`;
+    }
+
+    if (full.brief_md) {
+      html += `<div class="brief-box" style="margin-top:12px">${esc(full.brief_md)}</div>`;
+    }
+    panel.innerHTML = html;
+    panel.querySelectorAll("[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => runAction(btn.dataset.act));
+    });
+  } catch (_) {
+    panel.innerHTML = "";
+  }
 }
 
 function showContactForm() {
@@ -411,10 +467,11 @@ async function runAction(act) {
       });
       state._lastAgent = result;
       state._lastEmail = result.email_preview;
+      state._coldEmail = result.email_preview;
+      state._followEmail = null; // clear any old follow-up view
       state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
-      renderWorkstream();
-      showAgentResult(result);
-      toast(`Contacts + pitch ready (${result.marketing_mode})`);
+      await renderWorkstream();
+      toast(`First-touch ready (${result.marketing_mode})`);
     } else if (act === "mark_contacted") {
       busy(true);
       await api(`/prospects/${encodeURIComponent(id)}/stage`, {
@@ -425,34 +482,33 @@ async function runAction(act) {
       renderWorkstream();
       await softRefresh();
     } else if (act === "copy_cold" || act === "copy_draft") {
-      let body = state._lastEmail?.body || state._lastAgent?.email_preview?.body;
-      let subj = state._lastEmail?.subject || state._lastAgent?.email_preview?.subject || "";
+      const email = state._coldEmail || state._lastAgent?.email_preview || state._lastEmail;
+      let body = email?.body;
+      let subj = email?.subject || "";
       if (!body) {
         const full = await api(`/prospects/${encodeURIComponent(id)}`);
         body = full.outreach?.email?.body;
         subj = full.outreach?.email?.subject || "";
-        state._lastEmail = full.outreach?.email;
+        state._coldEmail = full.outreach?.email;
       }
       if (!body) return toast("No first-touch draft — run sales agent first");
-      // Copy full email ready for Gmail: subject then body
-      const fullText = (subj ? `Subject: ${subj}\n\n` : "") + body;
-      await navigator.clipboard.writeText(fullText);
-      const to = state._lastAgent?.primary_contact?.email || state._lastEmail?.to_email || "";
-      toast(to ? `First-touch copied — To: ${to}` : "First-touch email copied");
+      await navigator.clipboard.writeText((subj ? `Subject: ${subj}\n\n` : "") + body);
+      const to = state._lastAgent?.primary_contact?.email || state.workstream?.primary_contact?.email || "";
+      toast(to ? `Email 1 (first touch) copied → ${to}` : "Email 1 (first touch) copied");
+    } else if (act === "copy_follow") {
+      const email = state._followEmail;
+      if (!email?.body) return toast("No follow-up yet — create one after marking contacted");
+      await navigator.clipboard.writeText(
+        (email.subject ? `Subject: ${email.subject}\n\n` : "") + email.body
+      );
+      toast("Email 2 (follow-up) copied");
     } else if (act === "prepare_followup") {
       busy(true, "Creating follow-up (only after cold was sent)…");
       const out = await api(`/prospects/${encodeURIComponent(id)}/followup`, { method: "POST" });
-      state._lastEmail = out.email_preview;
-      showAgentResult({
-        marketing_mode: "follow_2",
-        pitch_url: out.email_preview?.pitch_url,
-        primary_contact: state._lastAgent?.primary_contact || {},
-        contacts: [],
-        contact_research: "Follow-up draft — use only after first email was sent.",
-        email_preview: out.email_preview,
-        next_human_step: "This is a gentle bump, not a first touch. Copy and send.",
-      });
-      toast("Follow-up draft ready — different from first-touch");
+      state._followEmail = { ...out.email_preview, sequence_step: "follow_2" };
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      await renderWorkstream();
+      toast("Email 2 (follow-up) ready — different from first touch");
     } else if (act === "qualify_reply") {
       const reply_text = $("#c-reply")?.value?.trim();
       if (!reply_text) return toast("Paste their reply first");
