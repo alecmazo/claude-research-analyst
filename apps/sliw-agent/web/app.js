@@ -170,9 +170,26 @@ function renderMaterials() {
     }
   }
   if (storage) {
-    storage.textContent = m.data_dir
-      ? `Storage: ${m.data_dir} (must be on Railway volume / STOCKS_FOLDER to survive redeploys)`
-      : "";
+    const parts = [];
+    if (m.data_dir) {
+      parts.push(`Local: ${m.data_dir}`);
+    }
+    const dbx = m.dropbox || {};
+    const dbxPath = m.dropbox_path || dbx.path || "/Apps/Sliw/master_packages.pdf";
+    if (dbx.ok || m.dropbox_ok) {
+      parts.push(`Dropbox: ${dbxPath} ✓`);
+    } else if (dbx.configured || dbx.folder) {
+      const err = dbx.error || m.dropbox_error;
+      parts.push(err
+        ? `Dropbox: ${dbxPath} (mirror error: ${err})`
+        : `Dropbox: ${dbxPath} (mirrored on next upload)`);
+    } else {
+      parts.push(`Dropbox: ${dbxPath} (set DROPBOX_* env to enable)`);
+    }
+    if (m.dropbox_shared_url) {
+      parts.push("Shared link ready");
+    }
+    storage.textContent = parts.join(" · ");
   }
   if (m.gamma_site && $("#gamma-site-link")) {
     $("#gamma-site-link").href = m.gamma_site;

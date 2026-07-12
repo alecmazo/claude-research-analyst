@@ -29455,7 +29455,8 @@ def _mount_sliw_agent() -> None:
                 from sliw_agent.master_deck import master_pdf_exists, master_pdf_path
             except Exception:
                 raise HTTPException(status_code=404, detail="PDF module unavailable")
-            if not master_pdf_exists():
+            # master_pdf_exists hydrates from Dropbox /Apps/Sliw when local miss
+            if not master_pdf_exists(hydrate=True):
                 raise HTTPException(
                     status_code=404,
                     detail="No master PDF uploaded yet. Upload in Sliw → Materials.",
