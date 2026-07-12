@@ -405,6 +405,43 @@ a:hover { text-decoration: underline; }
   border-color: rgba(61, 154, 106, 0.4);
 }
 
+.contact-card.hunter {
+  border-color: rgba(91, 184, 212, 0.45);
+}
+
+.contact-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+.contact-card-head .eyebrow {
+  margin-bottom: 0;
+}
+
+.hunter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: #0a1628;
+  background: linear-gradient(135deg, #84cce3, #5bb8d4);
+  border-radius: 999px;
+  padding: 2px 8px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.hunter-badge-lg {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .contact-primary .contact-name {
   font-family: var(--font-display);
   font-size: 26px;

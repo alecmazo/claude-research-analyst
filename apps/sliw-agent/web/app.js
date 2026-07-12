@@ -167,24 +167,37 @@ async function focusLead(id, { autoAgent = true } = {}) {
   }
 }
 
+function isHunterSource(src) {
+  return String(src || "") === "hunter.io";
+}
+
+function hunterBadge(src) {
+  if (!isHunterSource(src)) return "";
+  return `<span class="hunter-badge" title="Verified via Hunter.io API">Hunter ✓</span>`;
+}
+
 function contactCardHtml(primary, contacts, research) {
   const c = primary || {};
   const list = (contacts || []).filter((x) => x && (x.email || x.name));
+  const hasHunter = isHunterSource(c.source) || list.some((x) => isHunterSource(x.source));
   const hasReal = list.some((x) => x.email && x.source !== "role_inbox_guess" && x.source !== "hunter.io_error");
   return `
-    <div class="contact-card ${hasReal ? "found" : "weak"}">
-      <p class="eyebrow">Send to</p>
+    <div class="contact-card ${hasReal ? "found" : "weak"} ${hasHunter ? "hunter" : ""}">
+      <div class="contact-card-head">
+        <p class="eyebrow">Send to</p>
+        ${hasHunter ? `<span class="hunter-badge hunter-badge-lg" title="Contact found via Hunter.io API">Hunter ✓</span>` : ""}
+      </div>
       <div class="contact-primary">
-        <div class="contact-name">${esc(c.name || "No name found")}</div>
+        <div class="contact-name">${esc(c.name || "No name found")}${isHunterSource(c.source) ? " " + hunterBadge(c.source) : ""}</div>
         <div class="contact-email">${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "<span class='muted'>No email yet</span>"}</div>
         ${c.title ? `<div class="contact-title">${esc(c.title)}</div>` : ""}
       </div>
       ${research ? `<p class="muted" style="margin-top:8px">${esc(research)}</p>` : ""}
-      ${list.length > 1 ? `
-        <p class="eyebrow" style="margin-top:12px">Other contacts</p>
+      ${list.length ? `
+        <p class="eyebrow" style="margin-top:12px">Contacts found</p>
         <ul class="contact-list">${list.slice(0, 6).map((x) => `
           <li>
-            <strong>${esc(x.name || "—")}</strong>
+            <strong>${esc(x.name || "—")}</strong>${isHunterSource(x.source) ? " " + hunterBadge(x.source) : ""}
             ${x.email ? ` · <a href="mailto:${esc(x.email)}">${esc(x.email)}</a>` : " · <span class='muted'>no email</span>"}
             ${x.title ? `<div class="muted">${esc(x.title)}</div>` : ""}
             <div class="muted" style="font-size:11px">${esc(x.source || "")}${x.confidence ? ` · ${x.confidence}%` : ""}</div>
