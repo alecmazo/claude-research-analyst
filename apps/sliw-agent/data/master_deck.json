@@ -1,0 +1,10 @@
+{
+  "updated_at": "2026-07-12T20:42:35.384041",
+  "prompt_path": "/Users/dplvideo/Library/CloudStorage/Dropbox/Mac/Desktop/Claude_Research_Analyst/apps/sliw-agent/data/decks/MASTER_corporate_packages_prompt.txt",
+  "corporate_page": "https://edytasliwinska.com/corporate",
+  "status": "ready",
+  "gamma_url": "https://gamma.app/docs/jk6b492p7fvmjhq",
+  "note": "Master deck ready \u2014 use gamma_url in email body (not attachment).",
+  "pptx_path": "/Users/dplvideo/Library/CloudStorage/Dropbox/Mac/Desktop/Claude_Research_Analyst/apps/sliw-agent/data/decks/MASTER_Edyta_Corporate_Packages.pptx",
+  "credits": 51
+}

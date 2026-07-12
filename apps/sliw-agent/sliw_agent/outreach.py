@@ -2,6 +2,11 @@
 Outreach drafting & Edyta call-brief generation.
 
 CRITICAL: drafts only. Never auto-sends. Human approval required.
+
+Sequence rules:
+  cold_1  — first touch only (never "closing the loop")
+  follow_2 — only after cold was marked contacted
+  break_3 — only after follow-up was sent and still no reply
 """
 
 from __future__ import annotations
@@ -14,15 +19,28 @@ from typing import Any
 from .crm import BRIEFS_DIR, OUTREACH_DIR, ensure_dirs, update_prospect
 from .talent_bible import TALENT
 
+CORPORATE = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
+
 
 def subject_variants(*, company: str, package_name: str = "The Icebreaker") -> list[str]:
-    """A/B subject lines for corporate cold outreach."""
+    """Short, human subject lines — not campaign slogans."""
     return [
-        f"{company} × Edyta Śliwińska (DWTS) — team experience worth remembering",
-        f"A better all-hands moment for {company} (DWTS pro)",
-        f"{package_name} for {company} — 15 minutes with Edyta?",
-        f"Not another trust fall — {company} × Edyta Śliwińska",
+        f"Quick idea for {company}'s next team gathering",
+        f"{company} — team experience with Edyta (DWTS)",
+        f"Edyta Śliwińska for {company}?",
+        f"Something different for your next offsite / all-hands",
     ]
+
+
+def _first_name(contact_name: str) -> str:
+    name = (contact_name or "").strip()
+    if not name:
+        return ""
+    # Skip role-inbox labels
+    low = name.lower()
+    if any(low.startswith(x) for x in ("people", "events", "hr ", "culture", "team")):
+        return ""
+    return name.split()[0]
 
 
 def draft_cold_email(
@@ -36,61 +54,56 @@ def draft_cold_email(
     gamma_url: str | None = None,
     signals: list[str] | None = None,
     subject_override: str | None = None,
+    master_deck_url: str | None = None,
 ) -> dict[str, str]:
-    """Return subject + body for a short, premium cold email."""
-    first = (contact_name or "there").split()[0]
-    if first.lower() in ("there", "team", "hi"):
-        greeting = "Hi there"
+    """Warm first-touch email. Never uses 'closing the loop' language."""
+    first = _first_name(contact_name)
+    greeting = f"Hi {first}," if first else "Hi,"
+
+    # One natural opening — not a feature dump
+    if custom_hook and custom_hook.strip() and len(custom_hook.strip()) < 220:
+        open_line = custom_hook.strip().rstrip(".") + "."
+    elif signals:
+        open_line = (
+            f"I came across {company} while looking for teams that invest in culture "
+            f"(saw notes around {signals[0]}) and thought of Edyta."
+        )
     else:
-        greeting = f"Hi {first}"
-
-    if custom_hook and custom_hook.strip():
-        hook_para = custom_hook.strip().rstrip(".") + "."
-    else:
-        hook_para = (
-            f"Teams at {company} that invest in culture still often end up with "
-            "icebreakers nobody remembers by Friday."
-        )
-    signal_bit = ""
-    if signals:
-        signal_bit = (
-            f"\n\nI noticed signals around {signals[0]} — that's exactly when a "
-            "shared, high-energy experience lands hardest."
+        open_line = (
+            f"I've been putting together a short list of Bay Area companies that "
+            f"might enjoy something different for a team gathering — {company} made the list."
         )
 
-    deck_bit = ""
-    if gamma_url:
-        deck_bit = (
-            f"\n\nI put together a short custom proposal for {company} here:\n{gamma_url}\n"
-        )
-
-    one_liner = package_one_liner or (
-        "a 60–90 minute zero-judgment team bonding experience that actually creates connection"
-    )
+    deck = master_deck_url or gamma_url or CORPORATE
+    one = package_one_liner or "a high-energy, zero-judgment session people actually talk about afterward"
 
     subject = subject_override or subject_variants(company=company, package_name=package_name)[0]
-    body = f"""{greeting},
 
-I'm reaching out on behalf of Edyta Śliwińska — Dancing with the Stars professional and corporate team-experience producer.
+    body = f"""{greeting}
 
-{hook_para}{signal_bit}
+{open_line}
 
-Rather than another trust-fall offsite module, Edyta brings a DWTS-caliber session — **{package_name}** ({one_liner}) — designed for teams of 5–500. Lunch hour, retreat kickoff, leadership lab, or full gala: same star power, zero judgment.
-{deck_bit}
-Would you or the right person on your People / Events team take a complimentary 15-minute discovery call with Edyta to see if there's a fit for an upcoming gathering?
+I'm writing for Edyta Śliwińska — you may know her from Dancing with the Stars. She now runs corporate experiences for teams (all-hands, offsites, leadership groups, holiday parties). Think less "forced icebreaker," more shared moment that sticks.
 
-Happy to work around your calendar.
+For {company}, the fit that stood out was {package_name.lower() if not package_name.startswith("The") else package_name} — {one}.
 
-Warmly,
-Sliw Agent desk (for Edyta Śliwińska)
-{TALENT['email_public']} · {TALENT['phone_primary']}
-{TALENT['website']} · Corporate: {TALENT['corporate_page']}
+Here's a simple overview of what she offers (open in the browser — nothing to download):
+{deck}
+
+If useful, she's happy to do a quick 15-minute call and see whether there's a natural fit. No pressure either way.
+
+Best,
+{TALENT.get('stage_name') or 'Edyta'}'s team
+{TALENT['email_public']}
+{CORPORATE}
 """
+    # Prefer signing as human desk without "Sliw Agent desk" robotic branding
     return {
         "subject": subject,
         "body": body.strip() + "\n",
         "to_name": contact_name,
         "to_title": contact_title,
+        "sequence_step": "cold_1",
         "subject_variants": subject_variants(company=company, package_name=package_name),
     }
 
@@ -100,25 +113,32 @@ def draft_followup_email(
     company: str,
     contact_name: str = "",
     gamma_url: str | None = None,
+    master_deck_url: str | None = None,
     days_since: int = 5,
 ) -> dict[str, str]:
-    first = (contact_name or "there").split()[0]
-    greeting = f"Hi {first}" if first.lower() != "there" else "Hi there"
-    deck = f"\nCustom deck again for convenience: {gamma_url}\n" if gamma_url else "\n"
-    subject = f"Re: {company} × Edyta — quick bump"
-    body = f"""{greeting},
+    """Second touch — only after cold was sent. Friendly bump, not a breakup."""
+    first = _first_name(contact_name)
+    greeting = f"Hi {first}," if first else "Hi,"
+    deck = master_deck_url or gamma_url or CORPORATE
+    subject = f"Re: {company} — following up gently"
+    body = f"""{greeting}
 
-Floating this back up in case it got buried — happy to make a 15-minute intro with Edyta painless if team connection or a year-end event is on your radar.
+Just bumping this in case it got buried. No worries if the timing isn't right.
 
-Corporate page: {TALENT.get('corporate_page') or 'https://edytasliwinska.com/corporate'}
+Edyta (Dancing with the Stars) hosts team experiences for companies — offsites, all-hands, holiday gatherings. Overview here:
 {deck}
-If the timing is off, just say the word and I'll close the loop.
+
+If you want intros, I can set up 15 minutes. If not, all good.
 
 Best,
-Sliw Agent desk (for Edyta Śliwińska)
+{TALENT.get('stage_name') or 'Edyta'}'s team
 {TALENT['email_public']}
 """
-    return {"subject": subject, "body": body.strip() + "\n"}
+    return {
+        "subject": subject,
+        "body": body.strip() + "\n",
+        "sequence_step": "follow_2",
+    }
 
 
 def draft_breakup_email(
@@ -126,22 +146,25 @@ def draft_breakup_email(
     company: str,
     contact_name: str = "",
 ) -> dict[str, str]:
-    first = (contact_name or "there").split()[0]
-    greeting = f"Hi {first}" if first.lower() != "there" else "Hi there"
-    subject = f"Closing the loop — {company} × Edyta"
-    body = f"""{greeting},
+    """Final touch — only after cold AND follow-up were sent with no reply."""
+    first = _first_name(contact_name)
+    greeting = f"Hi {first}," if first else "Hi,"
+    subject = f"Last note from me — {company}"
+    body = f"""{greeting}
 
-I'll close the loop on my note about bringing Edyta Śliwińska (Dancing with the Stars) in for a team experience at {company}.
+I'll leave this here so I'm not filling your inbox.
 
-If a retreat, all-hands, leadership offsite, or holiday moment comes up later, I'm easy to reach — happy to reopen.
+If a team event, offsite, or holiday gathering comes up later and you want a DWTS-caliber experience, you can always reach us at {TALENT['email_public']}.
 
-Wishing your team a great quarter.
+All the best to the {company} team.
 
-Best,
-Sliw Agent desk (for Edyta Śliwińska)
-{TALENT['email_public']}
+{TALENT.get('stage_name') or 'Edyta'}'s team
 """
-    return {"subject": subject, "body": body.strip() + "\n"}
+    return {
+        "subject": subject,
+        "body": body.strip() + "\n",
+        "sequence_step": "break_3",
+    }
 
 
 def save_outreach_draft(
@@ -165,34 +188,35 @@ def save_outreach_draft(
         "company": company,
         "sequence_step": sequence_step,
         "contact_email": contact_email,
-        "status": "draft",  # draft | approved | sent
+        "status": "draft",
         "created_at": datetime.utcnow().isoformat(),
         "email": email,
         "approval_required": True,
         "send_instructions": (
-            "HUMAN APPROVAL REQUIRED. Review subject/body, then either: "
-            "(1) send manually from Edyta's or the desk Gmail, or "
-            "(2) mark approved in CRM and use gmail draft tools if connected. "
-            "The agent must never auto-send cold outreach."
+            "HUMAN SEND. Copy into Gmail, send yourself. "
+            "Do not send follow_2 until cold_1 is marked contacted. "
+            "Do not send break_3 until follow_2 was sent."
         ),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    # also human-readable .md
     md_path = path.with_suffix(".md")
     md_path.write_text(
-        f"# Outreach draft — {company}\n\n"
-        f"**Status:** DRAFT (approval required)\n"
-        f"**To:** {contact_email or '(add contact email)'}\n"
+        f"# {sequence_step} — {company}\n\n"
+        f"**To:** {contact_email or '(add contact)'}\n"
         f"**Subject:** {email.get('subject', '')}\n\n"
         f"---\n\n{email.get('body', '')}\n",
         encoding="utf-8",
     )
-    update_prospect(
-        prospect_id,
-        book=book,
-        outreach_path=str(path),
-        stage="drafted",
-    )
+    # Only cold_1 sets primary outreach_path / drafted stage
+    if sequence_step == "cold_1":
+        update_prospect(
+            prospect_id,
+            book=book,
+            outreach_path=str(path),
+            stage="drafted",
+        )
+    else:
+        update_prospect(prospect_id, book=book, **{f"outreach_{sequence_step}": str(path)})
     return path
 
 
@@ -250,32 +274,28 @@ def write_edyta_brief(
 - **Alternates:** {', '.join(p.get('name', '') for p in pkgs[1:]) or '—'}
 
 ## Marketing assets
-- **Gamma deck:** {prospect.get('gamma_url') or 'not generated yet'}
-- **Local PPTX:** {prospect.get('gamma_pptx') or '—'}
+- **Corporate page:** {CORPORATE}
+- **Deck / Gamma:** {prospect.get('gamma_url') or prospect.get('master_deck_url') or '—'}
 
 ## Their reply / interest signal
-{reply_summary or prospect.get('reply_summary') or '(none yet — if cold outreach converted, summarize their email here)'}
+{reply_summary or prospect.get('reply_summary') or '(none yet)'}
 
 ## Call goal
 {call_goal}
 
-## Questions for you to ask
-1. What's the event or team moment you're planning (date / window)?
+## Questions to ask
+1. What's the event or team moment (date / window)?
 2. Approx headcount and in-person vs hybrid?
-3. Who else is involved in the decision / budget?
-4. What would make this a home run for your culture team?
-5. Any constraints (space, accessibility, executive participation)?
-
-## Your ask
-Propose the primary package, offer a custom quote after discovery, and if fit is clear, suggest 2–3 date options for the engagement itself.
+3. Who else is in the decision / budget?
+4. What would make this a home run?
+5. Any constraints (space, accessibility, exec participation)?
 
 ## Brand guardrails
-- Premium experiential talent, not "cheap team activity vendor"
-- Zero judgment, star power, science-backed connection
-- CTA remains warm and easy — no hard close pressure
+- Premium experiential talent, not cheap activity vendor
+- Zero judgment, star power, easy next step
 
 ---
-*Generated by Sliw Agent · {TALENT['email_public']}*
+*Sliw desk · {TALENT['email_public']}*
 """
     path.write_text(md, encoding="utf-8")
     update_prospect(prospect["id"], book=book, edyta_brief_path=str(path))
@@ -287,10 +307,7 @@ def qualify_reply(
     reply_text: str,
     company: str = "",
 ) -> dict[str, Any]:
-    """
-    Heuristic interest filter. Returns stage recommendation + reasons.
-    (LLM enrichment can wrap this later.)
-    """
+    """Heuristic interest filter."""
     t = (reply_text or "").lower()
     positive = [
         "interested", "love this", "sounds great", "let's talk", "lets talk",
@@ -313,20 +330,15 @@ def qualify_reply(
     nur_hits = [n for n in nurture if n in t]
 
     if neg_hits and not pos_hits:
-        stage = "lost"
-        label = "not_interested"
+        stage, label = "lost", "not_interested"
     elif pos_hits:
-        stage = "interested"
-        label = "warm_lead"
+        stage, label = "interested", "warm_lead"
     elif nur_hits:
-        stage = "nurture"
-        label = "nurture"
+        stage, label = "nurture", "nurture"
     elif len(t.strip()) < 5:
-        stage = "replied"
-        label = "unclear"
+        stage, label = "replied", "unclear"
     else:
-        stage = "replied"
-        label = "needs_human_read"
+        stage, label = "replied", "needs_human_read"
 
     ready_for_edyta = stage == "interested"
     return {

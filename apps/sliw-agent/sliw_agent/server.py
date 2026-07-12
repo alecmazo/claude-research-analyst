@@ -38,8 +38,9 @@ from .lead_engine import (
     workstream_for_prospect,
     top_ready_to_contact,
 )
-from .sales_agent import run_sales_agent, run_sales_agent_batch, escalate_to_edyta
+from .sales_agent import run_sales_agent, run_sales_agent_batch, escalate_to_edyta, prepare_followup
 from .contact_finder import find_contacts
+from .master_deck import ensure_master_deck, get_master_deck_meta, get_master_deck_url
 from .wedding_agent import (
     import_wedding_library,
     run_wedding_pipeline,
@@ -517,6 +518,31 @@ def create_api_router() -> APIRouter:
             )
         except KeyError:
             raise HTTPException(404, "Prospect not found") from None
+
+    @r.post("/prospects/{prospect_id}/followup")
+    def api_followup(prospect_id: str, request: Request) -> dict[str, Any]:
+        """Second email only after cold was marked contacted."""
+        require_sliw_access(request)
+        try:
+            return prepare_followup(prospect_id)
+        except KeyError:
+            raise HTTPException(404, "Prospect not found") from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @r.get("/master-deck")
+    def api_master_deck(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return get_master_deck_meta()
+
+    @r.post("/master-deck")
+    def api_master_deck_build(request: Request, live: bool = False) -> dict[str, Any]:
+        """Build/refresh master packages deck for email body links."""
+        require_sliw_access(request)
+        try:
+            return ensure_master_deck(live=live)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @r.post("/prospects/bulk")
     def bulk_import(body: BulkImportRequest, request: Request) -> dict[str, Any]:

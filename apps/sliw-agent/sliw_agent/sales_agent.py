@@ -22,24 +22,22 @@ from typing import Any
 from . import crm
 from .contact_finder import find_contacts
 from .gamma_packages import generate_marketing_package, build_package_prompt, DECKS_DIR, ensure_dirs
+from .master_deck import ensure_master_deck, get_master_deck_url
 from .outreach import (
     draft_cold_email,
     draft_followup_email,
     draft_breakup_email,
     save_outreach_draft,
-    subject_variants,
     write_edyta_brief,
     qualify_reply,
 )
 from .scoring import score_prospect
-from .talent_bible import TALENT, PACKAGES
+from .talent_bible import TALENT
 
 
-# Primary public link for outreach (official site — not the Gamma deck URL)
+# Primary public link for outreach
 PORTFOLIO_URL = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
 CORPORATE_URL = PORTFOLIO_URL
-# Optional deeper package deck (only used when we generate a custom Gamma link)
-PACKAGE_DECK_URL = TALENT.get("package_site") or ""
 
 
 def choose_marketing_mode(
@@ -70,15 +68,25 @@ def run_sales_agent(
     *,
     marketing_mode: str | None = None,
     live_gamma: bool = False,
-    build_sequences: bool = True,
+    build_sequences: bool = False,  # only cold_1 by default — no premature follow/break
     find_people: bool = True,
+    ensure_master: bool = True,
 ) -> dict[str, Any]:
-    """Automate contact find + marketing package choice + outreach drafts."""
+    """Automate contact find + marketing package choice + first-touch draft only."""
     p = crm.get_prospect(prospect_id)
     if not p:
         raise KeyError(prospect_id)
     book = p.get("book") or "corporate"
     company = p.get("company") or ""
+
+    # Ensure we have a master packages deck link for email body
+    master_url = get_master_deck_url()
+    if ensure_master:
+        try:
+            meta = ensure_master_deck(live=False)
+            master_url = meta.get("gamma_url") or master_url
+        except Exception:
+            master_url = get_master_deck_url()
 
     # 1. Score if missing
     if p.get("score") is None:
@@ -209,19 +217,31 @@ def run_sales_agent(
 
     p = crm.get_prospect(prospect_id) or p
 
-    # 4. Draft outreach (portfolio link always in body)
-    pitch_url = gamma_url or PORTFOLIO_URL
-    email = draft_agent_pitch(
+    # 4. First-touch draft only (warm human voice)
+    # Body link = master deck if ready, else corporate page. Custom Gamma only as extra.
+    deck_for_body = master_url
+    if mode in ("light", "full") and gamma_url and "gamma.app" in str(gamma_url):
+        deck_for_body = gamma_url  # personalized live deck in body
+    elif master_url:
+        deck_for_body = master_url
+    else:
+        deck_for_body = PORTFOLIO_URL
+
+    email = draft_cold_email(
         company=company,
-        contact=primary_contact,
+        contact_name=primary_contact.get("name") or "",
+        contact_title=primary_contact.get("title") or "",
         package_name=primary.get("name") or "The Icebreaker",
         package_one_liner=primary.get("one_liner") or "",
-        all_packages=pkgs[:5],
-        custom_hook=p.get("notes") or p.get("agent_note") or "",
+        custom_hook=_human_hook(company, p.get("notes") or "", p.get("signals") or []),
+        gamma_url=deck_for_body,
         signals=p.get("signals") or [],
-        pitch_url=pitch_url,
-        marketing_mode=mode,
+        master_deck_url=deck_for_body,
     )
+    email["to_email"] = primary_contact.get("email") or ""
+    email["marketing_mode"] = mode
+    email["pitch_url"] = deck_for_body
+
     path = save_outreach_draft(
         prospect_id=prospect_id,
         company=company,
@@ -232,23 +252,17 @@ def run_sales_agent(
     )
 
     seq_paths = {"cold_1": str(path)}
+    # follow_2 / break_3 are NOT pre-created — only after cold is marked contacted
     if build_sequences:
+        # explicit opt-in only (not default)
         follow = draft_followup_email(
             company=company,
             contact_name=primary_contact.get("name") or "",
-            gamma_url=pitch_url,
-        )
-        brk = draft_breakup_email(
-            company=company,
-            contact_name=primary_contact.get("name") or "",
+            master_deck_url=deck_for_body,
         )
         seq_paths["follow_2"] = str(save_outreach_draft(
             prospect_id=prospect_id, company=company, email=follow,
             sequence_step="follow_2", contact_email=primary_contact.get("email") or "", book=book,
-        ))
-        seq_paths["break_3"] = str(save_outreach_draft(
-            prospect_id=prospect_id, company=company, email=brk,
-            sequence_step="break_3", contact_email=primary_contact.get("email") or "", book=book,
         ))
 
     p = crm.update_prospect(
@@ -257,6 +271,7 @@ def run_sales_agent(
         sequence_paths=seq_paths,
         stage="drafted",
         agent_status="ready_to_send",
+        master_deck_url=deck_for_body,
         sales_agent_ran_at=__import__("datetime").datetime.utcnow().isoformat(),
     )
 
@@ -266,8 +281,9 @@ def run_sales_agent(
         "tier": tier,
         "score": score,
         "marketing_mode": mode,
-        "pitch_url": pitch_url,
+        "pitch_url": deck_for_body,
         "portfolio_url": PORTFOLIO_URL,
+        "master_deck_url": deck_for_body,
         "contacts": contacts[:5],
         "primary_contact": primary_contact,
         "contact_research": contact_result.get("method_summary") if contact_result else None,
@@ -277,94 +293,55 @@ def run_sales_agent(
         "email_preview": email,
         "gamma": gamma_meta,
         "next_human_step": (
-            "Review draft, send from Gmail to primary contact (or LinkedIn if no email), "
-            "then mark contacted. When they reply, qualify → Edyta pipeline."
+            "Copy the first-touch email, send from Gmail, then mark contacted. "
+            "Only then create a follow-up. Never send a 'closing the loop' note as first touch."
         ),
         "prospect": p,
     }
 
 
-def draft_agent_pitch(
-    *,
-    company: str,
-    contact: dict[str, Any],
-    package_name: str,
-    package_one_liner: str,
-    all_packages: list[dict[str, Any]],
-    custom_hook: str,
-    signals: list[str],
-    pitch_url: str,
-    marketing_mode: str,
-) -> dict[str, str]:
-    """Sales pitch email — portfolio-first, package-led."""
-    name = (contact.get("name") or "").strip()
-    first = name.split()[0] if name and not name.lower().startswith(("people", "events", "hr ", "culture")) else ""
-    greeting = f"Hi {first}," if first else "Hi there,"
-
-    hook = (custom_hook or "").strip().rstrip(".")
-    if not hook:
-        hook = (
-            f"teams at {company} that care about culture still often settle for "
-            "icebreakers nobody remembers by Friday"
-        )
-    else:
-        hook = hook[0].lower() + hook[1:] if len(hook) > 1 else hook
-
-    signal_bit = ""
+def _human_hook(company: str, notes: str, signals: list[str]) -> str:
+    """One short human opening — not a slogan dump."""
+    notes = (notes or "").strip()
+    if notes and len(notes) < 180 and "Priority" not in notes and "tier" not in notes.lower():
+        return notes
     if signals:
-        signal_bit = f" I noticed momentum around {signals[0]} — that's when a shared, high-energy experience lands hardest."
-
-    # Portfolio menu (short)
-    menu = ""
-    if all_packages and marketing_mode in ("portfolio", "light", "full"):
-        lines = []
-        for pkg in all_packages[:5]:
-            n = pkg.get("name") or ""
-            if n:
-                lines.append(f"  · {n}")
-        if lines:
-            menu = "\n\nExperiences teams book most:\n" + "\n".join(lines) + "\n"
-
-    email_line = contact.get("email") or ""
-    conf = contact.get("confidence")
-    conf_note = ""
-    if contact.get("source") == "role_inbox_guess":
-        conf_note = (
-            "\n\n(If this isn't the right inbox, happy to be pointed to your People / Events lead.)"
+        return (
+            f"I was looking at companies that might want something fresher than the usual "
+            f"offsite icebreaker — {company} stood out ({signals[0]})."
         )
+    return (
+        f"I put together a short list of companies that might enjoy a different kind of "
+        f"team gathering, and {company} made that list."
+    )
 
-    subject = subject_variants(company=company, package_name=package_name)[0]
-    body = f"""{greeting}
 
-I'm reaching out on behalf of Edyta Śliwińska — Dancing with the Stars professional and producer of corporate team experiences — because {hook}.{signal_bit}
-
-Rather than another trust-fall module, Edyta runs DWTS-caliber sessions that actually bond teams: zero judgment, 5–500 people, lunch hour through full gala.
-
-**Recommended for {company}:** {package_name}
-{package_one_liner}
-{menu}
-Corporate experiences & packages:
-{PORTFOLIO_URL}
-{"Custom proposal deck: " + pitch_url if pitch_url and pitch_url.rstrip("/") != PORTFOLIO_URL.rstrip("/") else ""}
-{conf_note}
-
-Would you (or the right person on People / Events / L&D) take a complimentary 15-minute discovery call with Edyta?
-
-Warmly,
-Sliw Agent desk — for Edyta Śliwińska
-{TALENT['email_public']} · {TALENT['phone_primary']}
-{CORPORATE_URL}
-"""
-    return {
-        "subject": subject,
-        "body": body.strip() + "\n",
-        "to_name": contact.get("name") or "",
-        "to_title": contact.get("title") or "",
-        "to_email": email_line,
-        "subject_variants": subject_variants(company=company, package_name=package_name),
-        "marketing_mode": marketing_mode,
-        "pitch_url": pitch_url,
-    }
+def prepare_followup(prospect_id: str) -> dict[str, Any]:
+    """Create follow_2 only after cold was sent (stage contacted+)."""
+    p = crm.get_prospect(prospect_id)
+    if not p:
+        raise KeyError(prospect_id)
+    stage = p.get("stage") or ""
+    if stage not in ("contacted", "replied", "nurture"):
+        raise ValueError(
+            f"Follow-up only after cold is sent (stage is '{stage}'). Mark contacted first."
+        )
+    contact = (p.get("contacts") or [{}])[0]
+    deck = p.get("master_deck_url") or p.get("gamma_url") or get_master_deck_url()
+    email = draft_followup_email(
+        company=p.get("company") or "",
+        contact_name=contact.get("name") or "",
+        master_deck_url=deck,
+    )
+    path = save_outreach_draft(
+        prospect_id=prospect_id,
+        company=p.get("company") or "",
+        email=email,
+        sequence_step="follow_2",
+        contact_email=contact.get("email") or "",
+        book=p.get("book") or "corporate",
+    )
+    return {"outreach_path": str(path), "email_preview": email, "sequence_step": "follow_2"}
 
 
 def run_sales_agent_batch(

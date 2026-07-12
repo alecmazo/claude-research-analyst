@@ -149,7 +149,7 @@ async function focusLead(id, { autoAgent = true } = {}) {
       try {
         const result = await api(`/prospects/${encodeURIComponent(id)}/sales-agent`, {
           method: "POST",
-          body: JSON.stringify({ live_gamma: false, build_sequences: true }),
+          body: JSON.stringify({ live_gamma: false, build_sequences: false }),
         });
         toast(`Agent ready: ${result.primary_contact?.email || result.primary_contact?.name || "contact"} · mode ${result.marketing_mode}`);
         state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
@@ -221,11 +221,6 @@ function renderWorkstream() {
     `<button type="button" class="btn ${a.id.includes("live") || a.id === "mark_contacted" || a.id === "build_sequences" || a.id === "qualify_reply" || a.id === "save_contact" ? "primary" : "ghost"} sm" data-act="${esc(a.id)}">${esc(a.label)}</button>`
   ).join("") || `<span class="muted">No actions — pick another lead or mark won.</span>`;
 
-  // Always show copy if draft exists
-  if (p.outreach_path || p.sequence_paths) {
-    actions.innerHTML += ` <button type="button" class="btn ghost sm" data-act="copy_draft">Copy draft email</button>`;
-  }
-
   actions.querySelectorAll("[data-act]").forEach((btn) => {
     btn.addEventListener("click", () => runAction(btn.dataset.act));
   });
@@ -295,7 +290,7 @@ async function runAction(act) {
         method: "POST",
         body: JSON.stringify({
           live_gamma: act === "run_sales_agent_live_gamma",
-          build_sequences: true,
+          build_sequences: false,
         }),
       });
       state._lastAgent = result;
@@ -313,17 +308,35 @@ async function runAction(act) {
       toast("Marked contacted — waiting on reply");
       renderWorkstream();
       await softRefresh();
-    } else if (act === "copy_draft") {
+    } else if (act === "copy_cold" || act === "copy_draft") {
       let body = state._lastEmail?.body || state._lastAgent?.email_preview?.body;
+      let subj = state._lastEmail?.subject || state._lastAgent?.email_preview?.subject || "";
       if (!body) {
         const full = await api(`/prospects/${encodeURIComponent(id)}`);
         body = full.outreach?.email?.body;
+        subj = full.outreach?.email?.subject || "";
         state._lastEmail = full.outreach?.email;
       }
-      if (!body) return toast("No draft — run sales agent first");
-      await navigator.clipboard.writeText(body);
+      if (!body) return toast("No first-touch draft — run sales agent first");
+      // Copy full email ready for Gmail: subject then body
+      const fullText = (subj ? `Subject: ${subj}\n\n` : "") + body;
+      await navigator.clipboard.writeText(fullText);
       const to = state._lastAgent?.primary_contact?.email || state._lastEmail?.to_email || "";
-      toast(to ? `Copied — send to ${to}` : "Copied — paste into Gmail");
+      toast(to ? `First-touch copied — To: ${to}` : "First-touch email copied");
+    } else if (act === "prepare_followup") {
+      busy(true, "Creating follow-up (only after cold was sent)…");
+      const out = await api(`/prospects/${encodeURIComponent(id)}/followup`, { method: "POST" });
+      state._lastEmail = out.email_preview;
+      showAgentResult({
+        marketing_mode: "follow_2",
+        pitch_url: out.email_preview?.pitch_url,
+        primary_contact: state._lastAgent?.primary_contact || {},
+        contacts: [],
+        contact_research: "Follow-up draft — use only after first email was sent.",
+        email_preview: out.email_preview,
+        next_human_step: "This is a gentle bump, not a first touch. Copy and send.",
+      });
+      toast("Follow-up draft ready — different from first-touch");
     } else if (act === "qualify_reply") {
       const reply_text = $("#c-reply")?.value?.trim();
       if (!reply_text) return toast("Paste their reply first");

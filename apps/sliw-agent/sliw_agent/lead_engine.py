@@ -262,12 +262,15 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
         ]
     elif nid == "send":
         actions = [
-            {"id": "copy_draft", "label": "Copy pitch email", "type": "button"},
+            {"id": "copy_cold", "label": "Copy first-touch email", "type": "button"},
             {"id": "mark_contacted", "label": "I sent it — mark contacted", "type": "button"},
             {"id": "run_sales_agent", "label": "Re-run sales agent", "type": "button"},
         ]
+        # follow-up only after contacted — shown on reply step too
     elif nid == "reply":
         actions = [
+            {"id": "copy_cold", "label": "Copy first-touch (resend)", "type": "button"},
+            {"id": "prepare_followup", "label": "Create follow-up email", "type": "button"},
             {"id": "qualify_reply", "label": "Qualify reply → Edyta if warm", "type": "form_reply"},
             {"id": "escalate_edyta", "label": "Force to Edyta pipeline", "type": "button"},
         ]
@@ -418,67 +421,16 @@ def bulk_import_rows(
 
 
 def build_sequences_for_prospect(prospect_id: str) -> dict[str, Any]:
-    """Create cold + follow-up + break-up drafts with A/B subjects."""
-    p = crm.get_prospect(prospect_id)
-    if not p:
-        raise KeyError(prospect_id)
-    company = p.get("company", "")
-    pkgs = p.get("recommended_packages") or []
-    primary = pkgs[0] if pkgs else {}
-    contact = (p.get("contacts") or [{}])[0]
-    variants = subject_variants(
-        company=company,
-        package_name=primary.get("name") or "The Icebreaker",
-    )
-    cold = draft_cold_email(
-        company=company,
-        contact_name=contact.get("name", ""),
-        contact_title=contact.get("title", ""),
-        package_name=primary.get("name") or "The Icebreaker",
-        package_one_liner=primary.get("one_liner", ""),
-        custom_hook=p.get("notes") or p.get("agent_note") or "",
-        gamma_url=p.get("gamma_url"),
-        signals=p.get("signals") or [],
-        subject_override=variants[0] if variants else None,
-    )
-    cold["subject_variants"] = variants
-    follow = draft_followup_email(
-        company=company,
-        contact_name=contact.get("name", ""),
-        gamma_url=p.get("gamma_url"),
-    )
-    brk = draft_breakup_email(
-        company=company,
-        contact_name=contact.get("name", ""),
-    )
-    paths = {
-        "cold_1": str(save_outreach_draft(
-            prospect_id=prospect_id,
-            company=company,
-            email=cold,
-            sequence_step="cold_1",
-            contact_email=contact.get("email", ""),
-            book="corporate",
-        )),
-        "follow_2": str(save_outreach_draft(
-            prospect_id=prospect_id,
-            company=company,
-            email=follow,
-            sequence_step="follow_2",
-            contact_email=contact.get("email", ""),
-            book="corporate",
-        )),
-        "break_3": str(save_outreach_draft(
-            prospect_id=prospect_id,
-            company=company,
-            email=brk,
-            sequence_step="break_3",
-            contact_email=contact.get("email", ""),
-            book="corporate",
-        )),
+    """Create first-touch cold draft only (follow-up is a separate step after send)."""
+    from .sales_agent import run_sales_agent
+    result = run_sales_agent(prospect_id, build_sequences=False, live_gamma=False)
+    return {
+        "prospect_id": prospect_id,
+        "company": result.get("company"),
+        "paths": result.get("sequence_paths"),
+        "email_preview": result.get("email_preview"),
+        "note": "Only cold_1 created. Follow-up after mark contacted.",
     }
-    crm.update_prospect(prospect_id, sequence_paths=paths, stage="drafted")
-    return {"prospect_id": prospect_id, "company": company, "paths": paths, "subjects": variants}
 
 
 def this_week_checklist() -> dict[str, Any]:
