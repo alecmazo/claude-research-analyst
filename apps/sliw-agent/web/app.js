@@ -1,46 +1,23 @@
-/* Sliw Agent desk UI — Corporate Lead Engine + Wedding Agent */
+/* Sliw Agent — free-flow desk: library + one-lead step pipeline */
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const API_BASE = (window.SLIW_API_BASE || "/api").replace(/\/$/, "");
+const API = (window.SLIW_API_BASE || "/api").replace(/\/$/, "");
 const TOKEN_KEY = "dga_v2_token";
 const USER_KEY = "dga_v2_user";
-const SLIW_ALLOWED_EMAILS = ["alecmazo1@gmail.com", "edytasliw@gmail.com"];
-
-const STAGE_ORDER = [
-  "research", "scored", "packaged", "drafted", "approved", "contacted",
-  "replied", "interested", "discovery_booked", "won", "nurture", "lost",
-];
-
-const VIEW_META = {
-  edyta: { title: "Edyta’s desk", eyebrow: "Warm leads only" },
-  week: { title: "This week", eyebrow: "Desk cadence" },
-  dashboard: { title: "Dashboard", eyebrow: "Corporate book" },
-  engine: { title: "Lead Engine", eyebrow: "Grow the pipeline" },
-  pipeline: { title: "Pipeline", eyebrow: "Corporate CRM" },
-  run: { title: "New outreach", eyebrow: "Corporate" },
-  outreach: { title: "Drafts", eyebrow: "Approval required" },
-  packages: { title: "Packages", eyebrow: "What we sell" },
-  weddings: { title: "Weddings", eyebrow: "Wedding Agent" },
-  "wedding-run": { title: "New wedding lead", eyebrow: "Wedding Agent" },
-  partners: { title: "Partnerships", eyebrow: "Channels" },
-  talent: { title: "Talent bible", eyebrow: "Source of truth" },
-};
+const ALLOWED = ["alecmazo1@gmail.com", "edytasliw@gmail.com"];
 
 const state = {
-  prospects: [],
-  weddingProspects: [],
-  summary: null,
-  talent: null,
-  outreach: [],
-  leads: [],
+  library: [],
+  ready: [],
+  workstream: null,
+  focusId: null,
+  edyta: null,
+  wedding: [],
   partners: [],
-  edytaHome: null,
-  thisWeek: null,
-  user: null,
 };
 
-function toast(msg, ms = 3400) {
+function toast(msg, ms = 3200) {
   const el = $("#toast");
   el.textContent = msg;
   el.hidden = false;
@@ -48,7 +25,14 @@ function toast(msg, ms = 3400) {
   toast._t = setTimeout(() => { el.hidden = true; }, ms);
 }
 
-function escapeHtml(s) {
+function busy(on, text = "Working…") {
+  const el = $("#busy");
+  if (!el) return;
+  el.hidden = !on;
+  if (on) el.querySelector(".busy-card").textContent = text;
+}
+
+function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -58,76 +42,48 @@ function tierClass(t) {
   return `pill tier-${(t || "c").toLowerCase()}`;
 }
 
-function primaryPackage(p) {
-  return (p.recommended_packages || [])[0]?.name || "—";
-}
-
-function authHeaders() {
+function headers() {
   const h = { "Content-Type": "application/json" };
-  const v2 = localStorage.getItem(TOKEN_KEY);
-  if (v2) h["x-auth-v2-token"] = v2;
-  try {
-    const v1 = localStorage.getItem("dga_token") || sessionStorage.getItem("dga_token");
-    if (v1) h["x-auth-token"] = v1;
-  } catch (_) {}
+  const t = localStorage.getItem(TOKEN_KEY);
+  if (t) h["x-auth-v2-token"] = t;
   return h;
 }
 
 async function api(path, opts = {}) {
-  const url = path.startsWith("http") ? path : `${API_BASE}${path.startsWith("/") ? path : "/" + path}`;
-  const res = await fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  const res = await fetch(`${API}${path.startsWith("/") ? path : "/" + path}`, {
+    ...opts,
+    headers: { ...headers(), ...(opts.headers || {}) },
+  });
   if (res.status === 401 && window.SLIW_REQUIRE_DGA_LOGIN) {
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    window.location.replace("/?next=" + encodeURIComponent(window.location.pathname));
+    window.location.replace("/?next=" + encodeURIComponent(location.pathname));
     throw new Error("Session expired");
   }
   if (!res.ok) {
     let msg = res.statusText;
-    try {
-      const j = await res.json();
-      msg = j.detail || JSON.stringify(j);
-    } catch (_) {
-      try { msg = await res.text(); } catch (__) {}
-    }
+    try { msg = (await res.json()).detail || msg; } catch (_) {}
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
-  if (res.status === 204) return null;
-  return res.json();
-}
-
-function isSliwAllowedEmail(email) {
-  return SLIW_ALLOWED_EMAILS.includes(String(email || "").toLowerCase().trim());
-}
-
-function setBrandUser(name, email) {
-  const el = $("#brand-user");
-  if (!el) return;
-  el.textContent = name || "Representation desk";
-  el.title = email || name || "";
+  return res.status === 204 ? null : res.json();
 }
 
 function ensureAuth() {
   if (!window.SLIW_REQUIRE_DGA_LOGIN) {
-    setBrandUser("Local desk", "");
+    $("#brand-user").textContent = "Local desk";
     return true;
   }
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) {
-    window.location.replace("/?next=" + encodeURIComponent(window.location.pathname));
+  const tok = localStorage.getItem(TOKEN_KEY);
+  if (!tok) {
+    location.replace("/?next=" + encodeURIComponent(location.pathname));
     return false;
   }
   try {
-    const cached = JSON.parse(localStorage.getItem(USER_KEY) || "null");
-    if (cached) {
-      setBrandUser(cached.name || cached.email, cached.email);
-      if (cached.email && !isSliwAllowedEmail(cached.email)) {
-        toast("Sliw Agent is not available for this account");
-        setTimeout(() => {
-          window.location.replace(
-            cached.role === "gp" || cached.role === "admin" ? "/gp" : "/lp"
-          );
-        }, 500);
+    const u = JSON.parse(localStorage.getItem(USER_KEY) || "null");
+    if (u) {
+      $("#brand-user").textContent = u.name || u.email || "Desk";
+      if (u.email && !ALLOWED.includes(String(u.email).toLowerCase())) {
+        toast("Not authorized for Sliw");
+        setTimeout(() => location.replace(u.role === "lp" ? "/lp" : "/gp"), 600);
         return false;
       }
     }
@@ -138,556 +94,476 @@ function ensureAuth() {
 function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  const meta = VIEW_META[name] || { title: name, eyebrow: "Sliw" };
-  $("#view-title").textContent = meta.title;
-  $("#view-eyebrow").textContent = meta.eyebrow;
-  if (name === "pipeline") renderPipeline();
+  const titles = {
+    work: ["Work", "Free flow — next step only"],
+    library: ["Lead library", "All qualified companies"],
+    edyta: ["Edyta’s desk", "Warm leads only"],
+    weddings: ["Weddings", "Parallel book"],
+    partners: ["Partners", "Channels"],
+  };
+  const [t, e] = titles[name] || [name, ""];
+  $("#view-title").textContent = t;
+  $("#view-eyebrow").textContent = e;
+  if (name === "library") renderLibrary();
   if (name === "edyta") renderEdyta();
-  if (name === "week") renderWeek();
   if (name === "weddings") renderWeddings();
   if (name === "partners") renderPartners();
-  if (name === "packages") renderPackages();
-  if (name === "talent" && state.talent) renderTalent();
-  if (name === "outreach") renderOutreach();
-  if (name === "engine") renderEngine();
+  if (name === "work") renderReady();
 }
 
-function renderDashboard() {
-  const s = state.summary;
-  if (!s) return;
-  $("#hero-stats").innerHTML = `
-    <div class="stat-tile"><div class="n">${s.total}</div><div class="l">Prospects</div></div>
-    <div class="stat-tile"><div class="n">${s.leads}</div><div class="l">Warm leads</div></div>
-    <div class="stat-tile"><div class="n">${s.tiers?.A || 0}</div><div class="l">Tier A</div></div>
-    <div class="stat-tile"><div class="n">${s.avg_score || 0}</div><div class="l">Avg score</div></div>`;
-  $("#kpi-row").innerHTML = `
-    <div class="kpi"><div class="label">Drafted</div><div class="value">${s.stages?.drafted || 0}</div><div class="sub">Awaiting approval</div></div>
-    <div class="kpi"><div class="label">Contacted</div><div class="value">${(s.stages?.contacted || 0) + (s.stages?.replied || 0)}</div><div class="sub">In motion</div></div>
-    <div class="kpi"><div class="label">Won</div><div class="value">${s.stages?.won || 0}</div><div class="sub">Booked</div></div>`;
-  const stages = s.stages || {};
-  $("#stage-flow").innerHTML = STAGE_ORDER.map((st) => {
-    const n = stages[st] || 0;
-    return `<div class="stage-chip ${n ? "has" : ""}"><div class="count">${n}</div><div class="name">${st.replace(/_/g, " ")}</div></div>`;
-  }).join("");
-  const top = [...state.prospects].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 10);
-  const tbody = $("#dash-table tbody");
-  tbody.innerHTML = top.map((p) => `
-    <tr data-id="${escapeHtml(p.id)}">
-      <td class="company-cell">${escapeHtml(p.company)}</td>
-      <td><span class="${tierClass(p.tier)}">${escapeHtml(p.tier || "—")}</span></td>
-      <td>${p.score ?? "—"}</td>
-      <td>${escapeHtml((p.stage || "").replace(/_/g, " "))}</td>
-      <td>${escapeHtml(primaryPackage(p))}</td>
-    </tr>`).join("") || `<tr><td colspan="5" class="muted">Import from Lead Engine</td></tr>`;
-  tbody.querySelectorAll("tr[data-id]").forEach((tr) => {
-    tr.addEventListener("click", () => openProspect(tr.dataset.id));
+/* ── Work queue + step panel ─────────────────────────────────────────────── */
+
+function renderReady() {
+  const list = $("#ready-list");
+  const items = state.ready || [];
+  if (!items.length) {
+    list.innerHTML = `<p class="muted">No A/B leads in CRM yet. Open <strong>Lead library</strong> or hit <strong>Refresh leads</strong>.</p>`;
+    return;
+  }
+  list.innerHTML = items.map((p) => `
+    <button type="button" class="ready-item ${state.focusId === p.id ? "active" : ""}" data-id="${esc(p.id)}">
+      <div class="ready-top">
+        <strong>${esc(p.company)}</strong>
+        <span class="${tierClass(p.tier)}">${esc(p.tier)}</span>
+      </div>
+      <div class="ready-meta">Score ${p.score ?? "—"} · ${esc(p.package || "—")}</div>
+      <div class="ready-next">${esc(p.next_step?.title || p.stage || "")}</div>
+    </button>`).join("");
+  list.querySelectorAll(".ready-item").forEach((b) => {
+    b.addEventListener("click", () => focusLead(b.dataset.id));
   });
-  const badge = $("#leads-badge");
-  const leadN = (state.edytaHome?.count) || s.leads || 0;
-  if (leadN > 0) { badge.hidden = false; badge.textContent = leadN; }
-  else badge.hidden = true;
+}
+
+async function focusLead(id) {
+  state.focusId = id;
+  renderReady();
+  busy(true, "Loading pipeline…");
+  try {
+    const ws = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+    state.workstream = ws;
+    renderWorkstream();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    busy(false);
+  }
+}
+
+function renderWorkstream() {
+  const ws = state.workstream;
+  if (!ws) return;
+  $("#work-empty").hidden = true;
+  $("#work-panel").hidden = false;
+
+  const p = ws.prospect || {};
+  $("#ws-company").textContent = p.company || "—";
+  $("#ws-tier").textContent = `Tier ${p.tier || "—"} · score ${p.score ?? "—"}`;
+  $("#ws-meta").textContent = [
+    p.industry, p.geo, (p.recommended_packages || [])[0]?.name,
+  ].filter(Boolean).join(" · ");
+  $("#ws-pct").textContent = `${ws.progress?.pct ?? 0}%`;
+
+  $("#ws-steps").innerHTML = (ws.steps || []).map((s, i) => `
+    <li class="${s.done ? "done" : ""} ${ws.next_step?.id === s.id ? "current" : ""}">
+      <span class="step-n">${s.done ? "✓" : i + 1}</span>
+      <span class="step-t">${esc(s.title)}</span>
+    </li>`).join("");
+
+  const n = ws.next_step || {};
+  $("#ws-next-title").textContent = n.title || "Done";
+  $("#ws-next-detail").textContent = n.detail || "";
+  $("#ws-output").hidden = true;
+  $("#ws-form").hidden = true;
+  $("#ws-form").innerHTML = "";
+
+  const actions = $("#ws-actions");
+  actions.innerHTML = (ws.actions || []).map((a) =>
+    `<button type="button" class="btn ${a.id.includes("live") || a.id === "mark_contacted" || a.id === "build_sequences" || a.id === "qualify_reply" || a.id === "save_contact" ? "primary" : "ghost"} sm" data-act="${esc(a.id)}">${esc(a.label)}</button>`
+  ).join("") || `<span class="muted">No actions — pick another lead or mark won.</span>`;
+
+  // Always show copy if draft exists
+  if (p.outreach_path || p.sequence_paths) {
+    actions.innerHTML += ` <button type="button" class="btn ghost sm" data-act="copy_draft">Copy draft email</button>`;
+  }
+
+  actions.querySelectorAll("[data-act]").forEach((btn) => {
+    btn.addEventListener("click", () => runAction(btn.dataset.act));
+  });
+
+  // Pre-load form for contact / reply
+  if ((ws.actions || []).some((a) => a.type === "form_contact")) {
+    showContactForm();
+  }
+  if ((ws.actions || []).some((a) => a.type === "form_reply")) {
+    showReplyForm();
+  }
+
+  // Show draft preview if available
+  loadDraftPreview(p);
+}
+
+function showContactForm() {
+  const f = $("#ws-form");
+  f.hidden = false;
+  const c = (state.workstream?.prospect?.contacts || [])[0] || {};
+  f.innerHTML = `
+    <div class="form-row">
+      <label>Name<input id="c-name" value="${esc(c.name || "")}" placeholder="Jordan Lee" /></label>
+      <label>Title<input id="c-title" value="${esc(c.title || "")}" placeholder="Head of People" /></label>
+    </div>
+    <div class="form-row">
+      <label>Email<input id="c-email" value="${esc(c.email || "")}" type="email" placeholder="jordan@company.com" /></label>
+      <label>LinkedIn<input id="c-li" value="${esc(c.linkedin || "")}" placeholder="https://linkedin.com/in/…" /></label>
+    </div>`;
+}
+
+function showReplyForm() {
+  const f = $("#ws-form");
+  f.hidden = false;
+  f.innerHTML = `
+    <label>Paste their reply
+      <textarea id="c-reply" rows="4" placeholder="Thanks — can we talk next week?"></textarea>
+    </label>`;
+}
+
+async function loadDraftPreview(p) {
+  if (!p?.id) return;
+  try {
+    const full = await api(`/prospects/${encodeURIComponent(p.id)}`);
+    const email = full.outreach?.email;
+    const out = $("#ws-output");
+    if (email?.body) {
+      out.hidden = false;
+      out.innerHTML = `<div class="email-preview"><strong>${esc(email.subject || "")}</strong>\n\n${esc(email.body)}</div>`;
+      state._lastEmail = email;
+    }
+    if (full.brief_md) {
+      out.hidden = false;
+      out.innerHTML = (out.innerHTML || "") + `<div class="brief-box" style="margin-top:12px">${esc(full.brief_md)}</div>`;
+    }
+    state._focusFull = full;
+  } catch (_) {}
+}
+
+async function runAction(act) {
+  const id = state.focusId;
+  if (!id) return;
+  try {
+    if (act === "save_contact") {
+      const body = {
+        name: $("#c-name")?.value || "",
+        title: $("#c-title")?.value || "",
+        email: $("#c-email")?.value || "",
+        linkedin: $("#c-li")?.value || "",
+      };
+      if (!body.name && !body.email && !body.linkedin) {
+        return toast("Add at least a name, email, or LinkedIn");
+      }
+      busy(true, "Saving contact…");
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/contact`, {
+        method: "POST", body: JSON.stringify(body),
+      });
+      toast("Contact saved");
+      renderWorkstream();
+    } else if (act === "gamma_dry" || act === "gamma_live") {
+      const p = state.workstream.prospect;
+      busy(true, act === "gamma_live" ? "Generating Gamma…" : "Building prompt…");
+      await api("/prospects/pipeline", {
+        method: "POST",
+        body: JSON.stringify({
+          company: p.company,
+          industry: p.industry || "",
+          geo: p.geo || "",
+          employee_range: p.employee_range || "",
+          website: p.website || "",
+          notes: p.notes || "",
+          signals: p.signals || [],
+          custom_hook: p.notes || "",
+          generate_gamma: true,
+          live_gamma: act === "gamma_live",
+          draft_email: false,
+          book: "corporate",
+        }),
+      });
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      toast(act === "gamma_live" ? "Gamma deck ready" : "Gamma prompt saved");
+      renderWorkstream();
+    } else if (act === "skip_gamma" || act === "draft_cold" || act === "build_sequences") {
+      busy(true, "Drafting…");
+      if (act === "build_sequences" || act === "skip_gamma") {
+        await api(`/prospects/${encodeURIComponent(id)}/sequences`, { method: "POST", body: "{}" });
+      } else {
+        const p = state.workstream.prospect;
+        await api("/prospects/pipeline", {
+          method: "POST",
+          body: JSON.stringify({
+            company: p.company,
+            industry: p.industry || "",
+            geo: p.geo || "",
+            signals: p.signals || [],
+            draft_email: true,
+            generate_gamma: false,
+            book: "corporate",
+            contact_name: (p.contacts || [])[0]?.name || "",
+            contact_email: (p.contacts || [])[0]?.email || "",
+            contact_title: (p.contacts || [])[0]?.title || "",
+          }),
+        });
+      }
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      toast("Draft ready — copy and send from Gmail");
+      renderWorkstream();
+    } else if (act === "mark_contacted") {
+      busy(true);
+      await api(`/prospects/${encodeURIComponent(id)}/stage`, {
+        method: "POST", body: JSON.stringify({ stage: "contacted", note: "Sent by desk" }),
+      });
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      toast("Marked contacted");
+      renderWorkstream();
+      await softRefresh();
+    } else if (act === "copy_draft") {
+      let body = state._lastEmail?.body;
+      if (!body && state._focusFull?.outreach?.email?.body) {
+        body = state._focusFull.outreach.email.body;
+      }
+      if (!body) {
+        const full = await api(`/prospects/${encodeURIComponent(id)}`);
+        body = full.outreach?.email?.body;
+        state._lastEmail = full.outreach?.email;
+      }
+      if (!body) return toast("No draft yet — build sequence first");
+      await navigator.clipboard.writeText(body);
+      toast("Email copied — paste into Gmail, then mark contacted");
+    } else if (act === "qualify_reply") {
+      const reply_text = $("#c-reply")?.value?.trim();
+      if (!reply_text) return toast("Paste their reply first");
+      busy(true, "Qualifying…");
+      const out = await api(`/prospects/${encodeURIComponent(id)}/interested`, {
+        method: "POST", body: JSON.stringify({ reply_text }),
+      });
+      toast(out.qualification?.ready_for_edyta ? "Warm lead — Edyta brief ready" : `→ ${out.qualification?.recommended_stage}`);
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      renderWorkstream();
+      await softRefresh();
+    } else if (act === "open_brief") {
+      const full = await api(`/prospects/${encodeURIComponent(id)}`);
+      if (full.brief_md) {
+        $("#ws-output").hidden = false;
+        $("#ws-output").innerHTML = `<div class="brief-box">${esc(full.brief_md)}</div>`;
+      } else toast("No brief yet");
+    } else if (act === "rescore") {
+      const p = state.workstream.prospect;
+      busy(true, "Re-scoring…");
+      await api("/prospects/pipeline", {
+        method: "POST",
+        body: JSON.stringify({
+          company: p.company,
+          industry: p.industry || "",
+          geo: p.geo || "",
+          signals: p.signals || [],
+          draft_email: false,
+          book: "corporate",
+        }),
+      });
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      renderWorkstream();
+      toast("Re-scored");
+    }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    busy(false);
+  }
+}
+
+/* ── Library ─────────────────────────────────────────────────────────────── */
+
+function renderLibrary() {
+  const q = ($("#lib-search")?.value || "").toLowerCase();
+  const tier = $("#lib-tier")?.value || "";
+  const status = $("#lib-status")?.value || "";
+  let rows = state.library || [];
+  if (q) rows = rows.filter((r) => (r.company || "").toLowerCase().includes(q));
+  if (tier) rows = rows.filter((r) => r.qualification?.tier === tier);
+  if (status === "pending") rows = rows.filter((r) => !r.in_crm);
+  if (status === "in_crm") rows = rows.filter((r) => r.in_crm);
+
+  const tbody = $("#lib-table tbody");
+  tbody.innerHTML = rows.map((r) => {
+    const qual = r.qualification || {};
+    return `<tr>
+      <td class="company-cell">${esc(r.company)}</td>
+      <td><span class="${tierClass(qual.tier)}">${esc(qual.tier || "—")}</span></td>
+      <td>${qual.score ?? "—"}</td>
+      <td>${esc(qual.primary_package || "—")}</td>
+      <td class="muted" style="max-width:180px;font-size:12px">${esc((qual.matched_signals || r.signals || []).slice(0, 3).join(", "))}</td>
+      <td>${r.in_crm ? `<span class="pill">CRM · ${esc((r.crm_stage || "").replace(/_/g, " "))}</span>` : `<span class="pill tier-c">Pending</span>`}</td>
+      <td>${r.prospect_id
+        ? `<button class="btn text sm" data-work="${esc(r.prospect_id)}">Work →</button>`
+        : `<span class="muted">Sync first</span>`}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" class="muted">Library empty — hit Refresh leads</td></tr>`;
+
+  tbody.querySelectorAll("[data-work]").forEach((b) => {
+    b.addEventListener("click", () => {
+      showView("work");
+      focusLead(b.dataset.work);
+    });
+  });
 }
 
 function renderEdyta() {
-  const home = state.edytaHome || { corporate_leads: [], wedding_leads: [], message: "" };
+  const home = state.edyta || {};
   $("#edyta-message").textContent = home.message || "";
   const all = [
-    ...(home.corporate_leads || []).map((p) => ({ ...p, _book: "corporate" })),
-    ...(home.wedding_leads || []).map((p) => ({ ...p, _book: "wedding" })),
+    ...(home.corporate_leads || []),
+    ...(home.wedding_leads || []),
   ];
+  const badge = $("#leads-badge");
+  if (all.length) { badge.hidden = false; badge.textContent = all.length; }
+  else badge.hidden = true;
+
   const list = $("#edyta-list");
   if (!all.length) {
-    list.innerHTML = `<div class="panel empty-state"><div class="empty-icon">★</div><h3>No warm leads yet</h3><p>When corporations or couples reply with interest, they appear here with a call brief.</p></div>`;
+    list.innerHTML = `<div class="panel empty-state"><h3>No warm leads</h3><p>When a reply is interested, it lands here with a brief.</p></div>`;
     return;
   }
   list.innerHTML = all.map((p) => `
     <article class="lead-card">
-      <div style="display:flex;justify-content:space-between;gap:12px">
-        <div>
-          <h4>${escapeHtml(p.company)}</h4>
-          <p class="muted">${escapeHtml(p._book)} · ${escapeHtml(p.stage || "")} · score ${p.score ?? "—"}</p>
-        </div>
-        <span class="${tierClass(p.tier)}">${escapeHtml(p.tier || "—")}</span>
-      </div>
-      <p style="margin-top:10px;color:var(--cream);font-size:14px">${escapeHtml(p.reply_summary || p.agent_note || "")}</p>
-      <div class="actions">
-        <button class="btn primary sm" data-open="${escapeHtml(p.id)}">Open brief</button>
-        ${p.gamma_url ? `<a class="btn ghost sm" href="${escapeHtml(p.gamma_url)}" target="_blank" rel="noopener">Gamma</a>` : ""}
-      </div>
+      <h4>${esc(p.company)}</h4>
+      <p class="muted">${esc(p.stage)} · score ${p.score ?? "—"}</p>
+      <p style="margin-top:8px;color:var(--cream)">${esc(p.reply_summary || p.agent_note || "")}</p>
+      <button class="btn primary sm" style="margin-top:10px" data-work="${esc(p.id)}">Open in Work</button>
     </article>`).join("");
-  list.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openProspect(b.dataset.open)));
-}
-
-function renderWeek() {
-  const tw = state.thisWeek;
-  if (!tw) return;
-  $("#week-totals").textContent =
-    `${tw.totals?.prospects || 0} prospects · ${tw.totals?.tier_ab || 0} A/B · ${tw.totals?.interested || 0} warm`;
-  $("#week-tasks").innerHTML = (tw.tasks || []).map((t) => `
-    <div class="week-card ${t.done_hint ? "done" : ""}">
-      <div class="week-day">${escapeHtml(t.day)}</div>
-      <h4>${escapeHtml(t.title)}</h4>
-      <p class="muted">${escapeHtml(t.target)} · <strong>${t.count}</strong></p>
-      ${(t.items || []).slice(0, 6).map((i) =>
-        `<button class="btn text sm" data-open="${escapeHtml(i.id)}">${escapeHtml(i.company || i.id)}</button>`
-      ).join(" ")}
-      ${t.action === "import_library" ? `<div style="margin-top:10px"><button class="btn primary sm" data-action="import">Import library</button></div>` : ""}
-      ${t.action === "sequences" && (t.items || []).length ? `<div style="margin-top:10px"><button class="btn ghost sm" data-action="seq-batch" data-ids="${(t.items || []).slice(0, 5).map((i) => i.id).join(",")}">Build sequences (top 5)</button></div>` : ""}
-    </div>`).join("");
-  $("#week-tasks").querySelectorAll("[data-open]").forEach((b) =>
-    b.addEventListener("click", () => openProspect(b.dataset.open)));
-  $("#week-tasks").querySelectorAll("[data-action=import]").forEach((b) =>
-    b.addEventListener("click", () => runLibraryImport(40)));
-  $("#week-tasks").querySelectorAll("[data-action=seq-batch]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const ids = (b.dataset.ids || "").split(",").filter(Boolean);
-      for (const id of ids) {
-        try { await api(`/prospects/${encodeURIComponent(id)}/sequences`, { method: "POST", body: "{}" }); }
-        catch (e) { toast(e.message); }
-      }
-      toast(`Sequences built for ${ids.length}`);
-      await refresh();
-      showView("week");
-    }));
-}
-
-function renderEngine() {
-  /* stats filled on refresh */
-}
-
-function renderPipeline() {
-  const stage = $("#filter-stage")?.value || "";
-  const tier = $("#filter-tier")?.value || "";
-  const q = ($("#filter-search")?.value || "").toLowerCase().trim();
-  const sel = $("#filter-stage");
-  if (sel && sel.options.length <= 1) {
-    sel.innerHTML = `<option value="">All stages</option>` +
-      STAGE_ORDER.map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`).join("");
-  }
-  let rows = state.prospects;
-  if (stage) rows = rows.filter((p) => p.stage === stage);
-  if (tier) rows = rows.filter((p) => p.tier === tier);
-  if (q) rows = rows.filter((p) => (p.company || "").toLowerCase().includes(q));
-  const grid = $("#prospect-grid");
-  if (!rows.length) {
-    grid.innerHTML = `<div class="panel empty-state" style="grid-column:1/-1"><h3>No matches</h3><p>Use Lead Engine to import prospects.</p></div>`;
-    return;
-  }
-  grid.innerHTML = rows.map((p) => `
-    <article class="prospect-card" data-id="${escapeHtml(p.id)}">
-      <div class="top"><h4>${escapeHtml(p.company)}</h4><span class="${tierClass(p.tier)}">${escapeHtml(p.tier || "—")}</span></div>
-      <div class="meta">${escapeHtml(p.industry || "—")}<br/>${escapeHtml(p.geo || "")}</div>
-      <div class="foot"><span>${escapeHtml((p.stage || "").replace(/_/g, " "))}</span><span class="score-ring">${p.score ?? "—"}</span></div>
-      <div class="meta" style="margin-top:8px;font-size:12px">${escapeHtml(primaryPackage(p))}</div>
-    </article>`).join("");
-  grid.querySelectorAll(".prospect-card").forEach((c) =>
-    c.addEventListener("click", () => openProspect(c.dataset.id)));
+  list.querySelectorAll("[data-work]").forEach((b) =>
+    b.addEventListener("click", () => { showView("work"); focusLead(b.dataset.work); }));
 }
 
 function renderWeddings() {
-  const rows = state.weddingProspects || [];
-  $("#wedding-stats").textContent = `${rows.length} in wedding book`;
+  const rows = state.wedding || [];
   const grid = $("#wedding-grid");
   if (!rows.length) {
-    grid.innerHTML = `<div class="panel empty-state" style="grid-column:1/-1"><h3>No wedding leads</h3><p>Import library or add a couple / planner.</p></div>`;
+    grid.innerHTML = `<div class="panel empty-state" style="grid-column:1/-1"><h3>No wedding leads</h3></div>`;
     return;
   }
   grid.innerHTML = rows.map((p) => `
-    <article class="prospect-card" data-id="${escapeHtml(p.id)}">
-      <div class="top"><h4>${escapeHtml(p.company)}</h4><span class="pill">${escapeHtml(p.industry || "wedding")}</span></div>
-      <div class="meta">${escapeHtml(p.geo || "")}<br/>${escapeHtml(primaryPackage(p))}</div>
-      <div class="foot"><span>${escapeHtml((p.stage || "").replace(/_/g, " "))}</span></div>
+    <article class="prospect-card">
+      <h4>${esc(p.company)}</h4>
+      <p class="meta">${esc(p.industry)} · ${esc(p.stage)}</p>
     </article>`).join("");
-  grid.querySelectorAll(".prospect-card").forEach((c) =>
-    c.addEventListener("click", () => openProspect(c.dataset.id)));
 }
 
 function renderPartners() {
-  const list = $("#partner-list");
   const rows = state.partners || [];
-  if (!rows.length) {
-    list.innerHTML = `<div class="panel empty-state"><h3>No partners yet</h3><p>Load seeds or add a channel partner.</p></div>`;
-    return;
-  }
-  list.innerHTML = rows.map((p) => `
-    <article class="lead-card">
-      <h4>${escapeHtml(p.name)}</h4>
-      <p class="muted">${escapeHtml(p.type || "")} · ${escapeHtml(p.geo || "")} · ${escapeHtml(p.status || "")}</p>
-      <p style="margin-top:8px;color:var(--cream);font-size:14px">${escapeHtml(p.notes || "")}</p>
-    </article>`).join("");
+  $("#partner-list").innerHTML = rows.length
+    ? rows.map((p) => `<article class="lead-card"><h4>${esc(p.name)}</h4><p class="muted">${esc(p.type)} · ${esc(p.geo)}</p><p style="margin-top:6px;color:var(--cream)">${esc(p.notes || "")}</p></article>`).join("")
+    : `<div class="panel empty-state"><h3>No partners</h3></div>`;
 }
 
-function renderPackages() {
-  const pkgs = state.talent?.packages || [];
-  $("#package-grid").innerHTML = pkgs.map((p, i) => `
-    <article class="package-card">
-      <div class="num">Corp 0${i + 1}</div>
-      <h3>${escapeHtml(p.name)}</h3>
-      <div class="duration">${escapeHtml(p.duration)}</div>
-      <p class="one-liner">${escapeHtml(p.one_liner)}</p>
-    </article>`).join("");
-  const wp = state.talent?.wedding_packages || [];
-  $("#wedding-package-grid").innerHTML = wp.map((p) => `
-    <article class="package-card">
-      <div class="num">${escapeHtml(p.price_label || "")}</div>
-      <h3>${escapeHtml(p.name)}</h3>
-      <p class="one-liner">${escapeHtml(p.one_liner)}</p>
-    </article>`).join("");
-}
-
-function renderTalent() {
-  const t = state.talent;
-  if (!t) return;
-  const talent = t.talent || {};
-  $("#talent-layout").innerHTML = `
-    <div class="talent-hero">
-      <p class="eyebrow">Representing</p>
-      <h2>${escapeHtml(talent.legal_name || "Edyta")}</h2>
-      <p>${escapeHtml(talent.headline || "")}</p>
-      <p>${escapeHtml(talent.brand_promise || "")}</p>
-      <div class="talent-meta">
-        <div><span>Studio</span><br/><strong>${escapeHtml(talent.studio_address || "")}</strong></div>
-        <div><span>Contact</span><br/><strong>${escapeHtml(talent.email_public || "")}</strong></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><h3>Credentials</h3></div>
-      <ul class="credential-list">${(t.credentials || []).map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>
-    </div>`;
-}
-
-function renderOutreach() {
-  const list = $("#outreach-list");
-  if (!state.outreach?.length) {
-    list.innerHTML = `<div class="panel empty-state"><h3>No drafts</h3><p>Run outreach or sequences.</p></div>`;
-    return;
-  }
-  list.innerHTML = state.outreach.map((d) => {
-    const email = d.email || {};
-    return `<article class="draft-card">
-      <h4>${escapeHtml(d.company || "—")}</h4>
-      <p class="muted">${escapeHtml(d.sequence_step || "")} · ${escapeHtml(d.status || "draft")}</p>
-      <p style="margin-top:10px;color:var(--champagne-light);font-weight:600">${escapeHtml(email.subject || "")}</p>
-      <div class="email-preview">${escapeHtml(email.body || "")}</div>
-      <div class="actions">
-        <button class="btn ghost sm" data-copy-body>Copy body</button>
-        ${d.prospect_id ? `<button class="btn primary sm" data-open="${escapeHtml(d.prospect_id)}">Open</button>` : ""}
-      </div>
-    </article>`;
-  }).join("");
-  list.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openProspect(b.dataset.open)));
-  list.querySelectorAll("[data-copy-body]").forEach((b, i) => {
-    b.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(state.outreach[i]?.email?.body || "");
-      toast("Copied");
-    });
-  });
-}
-
-function closeDrawer(ev) {
-  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-  ["drawer", "drawer-backdrop"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) { el.hidden = true; el.setAttribute("hidden", ""); }
-  });
-}
-
-async function openProspect(id) {
-  try {
-    const p = await api(`/prospects/${encodeURIComponent(id)}`);
-    $("#drawer-title").textContent = p.company || "Prospect";
-    const pkgs = (p.recommended_packages || [])
-      .map((x) => `<li><strong>${escapeHtml(x.name)}</strong> — ${escapeHtml(x.one_liner || x.price_label || "")}</li>`)
-      .join("");
-    const contacts = (p.contacts || [])
-      .map((c) => `<li>${escapeHtml(c.name || "")}${c.title ? " · " + escapeHtml(c.title) : ""}${c.email ? " · " + escapeHtml(c.email) : ""}${c.linkedin ? " · LI" : ""}</li>`)
-      .join("") || "<li class='muted'>Add contact before send</li>";
-    const emailBody = p.outreach?.email?.body || "";
-    const brief = p.brief_md || "";
-
-    $("#drawer-body").innerHTML = `
-      <div class="drawer-section"><h5>Fit</h5>
-        <p><span class="${tierClass(p.tier)}">${escapeHtml(p.tier || "—")}</span> score <strong>${p.score ?? "—"}</strong> · ${escapeHtml((p.stage || "").replace(/_/g, " "))} · ${escapeHtml(p.book || "corporate")}</p>
-        <p style="margin-top:8px;color:var(--mist)">${escapeHtml(p.agent_note || "")}</p>
-      </div>
-      <div class="drawer-section"><h5>Packages</h5><ul>${pkgs || "<li>—</li>"}</ul></div>
-      <div class="drawer-section"><h5>Contacts</h5><ul>${contacts}</ul></div>
-      ${p.gamma_url ? `<div class="drawer-section"><h5>Gamma</h5><p><a href="${escapeHtml(p.gamma_url)}" target="_blank" rel="noopener">Open deck</a></p></div>` : ""}
-      ${emailBody ? `<div class="drawer-section"><h5>Draft</h5><div class="email-preview">${escapeHtml((p.outreach?.email?.subject ? "Subject: " + p.outreach.email.subject + "\n\n" : "") + emailBody)}</div>
-        <button class="btn ghost sm" id="copy-outreach" style="margin-top:8px">Copy email</button></div>` : ""}
-      ${brief ? `<div class="drawer-section"><h5>Edyta brief</h5><div class="brief-box">${escapeHtml(brief)}</div></div>` : ""}
-      <div class="drawer-section">
-        <h5>Sequences</h5>
-        <button class="btn ghost sm" id="btn-seq">Build cold / follow / break drafts</button>
-      </div>
-      <div class="drawer-section qualify-box">
-        <h5>Qualify a reply</h5>
-        <textarea id="reply-text" placeholder="Paste their reply…"></textarea>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn primary sm" id="btn-qualify">Qualify → brief</button>
-          <button class="btn ghost sm" id="btn-contacted">Mark contacted</button>
-          <button class="btn ghost sm" id="btn-nurture">Nurture</button>
-          <button class="btn ghost sm" id="btn-lost">Lost</button>
-        </div>
-      </div>`;
-
-    const drawer = $("#drawer");
-    const backdrop = $("#drawer-backdrop");
-    drawer.hidden = false; drawer.removeAttribute("hidden");
-    backdrop.hidden = false; backdrop.removeAttribute("hidden");
-
-    $("#btn-seq")?.addEventListener("click", async () => {
-      try {
-        await api(`/prospects/${encodeURIComponent(id)}/sequences`, { method: "POST", body: "{}" });
-        toast("Sequence drafts created");
-        await refresh();
-        openProspect(id);
-      } catch (e) { toast(e.message); }
-    });
-    $("#btn-qualify")?.addEventListener("click", async () => {
-      const reply_text = $("#reply-text").value.trim();
-      if (!reply_text) return toast("Paste a reply first");
-      try {
-        const out = await api(`/prospects/${encodeURIComponent(id)}/interested`, {
-          method: "POST", body: JSON.stringify({ reply_text }),
-        });
-        toast(out.qualification?.ready_for_edyta ? "Warm — brief ready" : `→ ${out.qualification?.recommended_stage}`);
-        await refresh();
-        openProspect(id);
-      } catch (e) { toast(e.message); }
-    });
-    const stageBtn = async (stage) => {
-      await api(`/prospects/${encodeURIComponent(id)}/stage`, {
-        method: "POST", body: JSON.stringify({ stage }),
-      });
-      toast(`Marked ${stage}`);
-      await refresh();
-      openProspect(id);
-    };
-    $("#btn-contacted")?.addEventListener("click", () => stageBtn("contacted"));
-    $("#btn-nurture")?.addEventListener("click", () => stageBtn("nurture"));
-    $("#btn-lost")?.addEventListener("click", () => stageBtn("lost"));
-    $("#copy-outreach")?.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(p.outreach?.email?.body || "");
-      toast("Copied");
-    });
-  } catch (e) {
-    toast(e.message);
-  }
-}
-
-async function runLibraryImport(limit) {
-  try {
-    toast("Lead Engine running…");
-    const draft = $("#engine-draft")?.checked || false;
-    const res = await api("/library/import", {
-      method: "POST",
-      body: JSON.stringify({ limit: limit || Number($("#engine-limit")?.value || 40), draft_email: draft }),
-    });
-    $("#engine-result").textContent =
-      `Imported ${res.imported}. Remaining in library after filter: ${res.library_remaining}`;
-    toast(`Imported ${res.imported} prospects`);
-    await refresh();
-  } catch (e) {
-    toast(e.message);
-  }
-}
-
-function bindForms() {
-  $("#pipeline-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const signals = String(fd.get("signals") || "").split(",").map((s) => s.trim()).filter(Boolean);
-    try {
-      const result = await api("/prospects/pipeline", {
-        method: "POST",
-        body: JSON.stringify({
-          company: fd.get("company"),
-          industry: fd.get("industry") || "",
-          geo: fd.get("geo") || "",
-          employee_range: fd.get("employee_range") || "",
-          website: fd.get("website") || "",
-          notes: "",
-          custom_hook: fd.get("custom_hook") || "",
-          signals,
-          contact_name: fd.get("contact_name") || "",
-          contact_title: fd.get("contact_title") || "",
-          contact_email: fd.get("contact_email") || "",
-          contact_linkedin: fd.get("contact_linkedin") || "",
-          generate_gamma: !!fd.get("generate_gamma"),
-          live_gamma: !!fd.get("live_gamma"),
-          draft_email: !!fd.get("draft_email"),
-          book: "corporate",
-        }),
-      });
-      await refresh();
-      const sc = result.score || {};
-      $("#run-result").innerHTML = `
-        <div class="result-block">
-          <h3>${escapeHtml(result.company)}</h3>
-          <div class="row"><span class="${tierClass(sc.tier)}">Tier ${escapeHtml(sc.tier || "—")}</span>
-          <span class="pill">Score ${sc.score ?? "—"}</span></div>
-          <p style="color:var(--mist);margin-top:10px">${escapeHtml(sc.agent_note || "")}</p>
-          <button class="btn primary sm" style="margin-top:14px" id="run-open">Open prospect</button>
-        </div>`;
-      $("#run-open")?.addEventListener("click", () => openProspect(result.prospect_id));
-      toast("Pipeline complete");
-    } catch (err) {
-      toast(err.message);
-    }
-  });
-
-  $("#wedding-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const signals = String(fd.get("signals") || "").split(",").map((s) => s.trim()).filter(Boolean);
-    try {
-      const result = await api("/wedding/pipeline", {
-        method: "POST",
-        body: JSON.stringify({
-          name: fd.get("name"),
-          industry: fd.get("industry") || "Wedding couple",
-          geo: fd.get("geo") || "",
-          notes: fd.get("notes") || "",
-          signals,
-          package_hint: fd.get("package_hint") || "",
-          contact_name: fd.get("contact_name") || "",
-          contact_email: fd.get("contact_email") || "",
-          draft_email: !!fd.get("draft_email"),
-          generate_gamma: !!fd.get("generate_gamma"),
-          live_gamma: !!fd.get("live_gamma"),
-        }),
-      });
-      await refresh();
-      $("#wedding-run-result").innerHTML = `
-        <div class="result-block">
-          <h3>${escapeHtml(result.company)}</h3>
-          <p class="muted">Wedding book · ${escapeHtml(result.prospect_id)}</p>
-          <ul style="margin-top:12px;list-style:none">${(result.packages || []).map((p) =>
-            `<li style="margin-bottom:6px"><strong>${escapeHtml(p.name)}</strong> ${escapeHtml(p.price_label || "")}</li>`
-          ).join("")}</ul>
-          <button class="btn primary sm" id="w-open">Open</button>
-        </div>`;
-      $("#w-open")?.addEventListener("click", () => openProspect(result.prospect_id));
-      toast("Wedding pipeline complete");
-    } catch (err) {
-      toast(err.message);
-    }
-  });
-
-  $("#partner-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      await api("/partnerships", {
-        method: "POST",
-        body: JSON.stringify({
-          name: fd.get("name"),
-          type: fd.get("type"),
-          geo: fd.get("geo") || "",
-          notes: fd.get("notes") || "",
-          contact_email: fd.get("contact_email") || "",
-          status: "prospect",
-        }),
-      });
-      e.target.reset();
-      toast("Partner saved");
-      await refresh();
-      showView("partners");
-    } catch (err) {
-      toast(err.message);
-    }
-  });
-}
-
-async function refresh() {
-  const [
-    summary, prospects, talent, outreach, edytaHome, thisWeek,
-    weddingProspects, partners, libStats,
-  ] = await Promise.all([
-    api("/pipeline/summary"),
-    api("/prospects"),
-    api("/talent"),
-    api("/outreach"),
+async function softRefresh() {
+  const [ready, edyta, lib] = await Promise.all([
+    api("/work/ready?limit=8"),
     api("/edyta-home"),
-    api("/this-week"),
-    api("/wedding/prospects"),
-    api("/partnerships"),
-    api("/library/stats").catch(() => ({ total: 0 })),
+    api("/library"),
   ]);
-  state.summary = summary;
-  state.prospects = prospects;
-  state.talent = talent;
-  state.outreach = outreach;
-  state.edytaHome = edytaHome;
-  state.thisWeek = thisWeek;
-  state.weddingProspects = weddingProspects;
-  state.partners = partners;
-  if ($("#lib-count")) $("#lib-count").textContent = `${libStats.total || 0} in library`;
-  renderDashboard();
-  const active = $(".nav-item.active")?.dataset.view || "edyta";
-  if (active !== "dashboard") showView(active);
-  else renderDashboard();
+  state.ready = ready.items || [];
+  state.edyta = edyta;
+  state.library = lib.rows || [];
+  $("#lib-summary").textContent =
+    `${lib.total} qualified · ${lib.in_crm} in CRM · ${lib.pending} pending · ${lib.tier_a} tier A`;
+  renderReady();
+}
+
+async function fullRefresh() {
+  busy(true, "Loading desk…");
+  try {
+    // Auto-import anything pending so leads never linger
+    try {
+      const imp = await api("/library/import-all", { method: "POST" });
+      if (imp.imported > 0) toast(`Synced ${imp.imported} new leads into CRM`);
+    } catch (_) {}
+
+    const [ready, edyta, lib, wedding, partners, me] = await Promise.all([
+      api("/work/ready?limit=8"),
+      api("/edyta-home"),
+      api("/library"),
+      api("/wedding/prospects").catch(() => []),
+      api("/partnerships").catch(() => []),
+      api("/me").catch(() => null),
+    ]);
+    state.ready = ready.items || [];
+    state.edyta = edyta;
+    state.library = lib.rows || [];
+    state.wedding = wedding;
+    state.partners = partners;
+    if (me?.name) $("#brand-user").textContent = me.name;
+    $("#lib-summary").textContent =
+      `${lib.total} qualified · ${lib.in_crm} in CRM · ${lib.pending} pending · ${lib.tier_a} tier A`;
+    renderReady();
+    renderEdyta();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    busy(false);
+  }
 }
 
 function boot() {
   if (!ensureAuth()) return;
 
-  $$(".nav-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
-  $$("[data-goto]").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.goto)));
-  $("#drawer-close")?.addEventListener("click", closeDrawer);
-  $("#drawer-backdrop")?.addEventListener("click", closeDrawer);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && $("#drawer") && !$("#drawer").hidden) closeDrawer(e);
-  });
-  $("#btn-refresh")?.addEventListener("click", async () => {
-    try { await refresh(); toast("Refreshed"); } catch (e) { toast(e.message); }
-  });
-  $("#btn-engine-run")?.addEventListener("click", () => runLibraryImport(40));
-  $("#btn-lib-import")?.addEventListener("click", () => runLibraryImport(Number($("#engine-limit")?.value || 40)));
-  $("#btn-bulk")?.addEventListener("click", async () => {
+  $$(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+
+  $("#btn-sync-all")?.addEventListener("click", async () => {
+    busy(true, "Importing all pending…");
     try {
-      const rows = JSON.parse($("#bulk-json").value || "[]");
-      const res = await api("/prospects/bulk", { method: "POST", body: JSON.stringify({ rows, draft_email: true }) });
-      toast(`Bulk imported ${res.imported}`);
-      await refresh();
+      const r = await api("/library/import-all", { method: "POST" });
+      toast(`Imported ${r.imported} into CRM`);
+      await fullRefresh();
     } catch (e) { toast(e.message); }
+    finally { busy(false); }
   });
+
+  $("#btn-refresh-leads")?.addEventListener("click", async () => {
+    busy(true, "Discovery agent searching for companies…");
+    try {
+      const r = await api("/leads/refresh", {
+        method: "POST",
+        body: JSON.stringify({ auto_import: true, draft_email: false }),
+      });
+      toast(`+${r.discovery_added} discovered · ${r.imported_to_crm} imported · ${r.qualified_tier_a} tier A`);
+      await fullRefresh();
+      showView("library");
+    } catch (e) { toast(e.message); }
+    finally { busy(false); }
+  });
+
+  $("#lib-search")?.addEventListener("input", renderLibrary);
+  $("#lib-tier")?.addEventListener("change", renderLibrary);
+  $("#lib-status")?.addEventListener("change", renderLibrary);
+
   $("#btn-wedding-import")?.addEventListener("click", async () => {
     try {
       const r = await api("/wedding/library/import", { method: "POST" });
-      toast(`Wedding library: ${r.imported}`);
-      await refresh();
-      showView("weddings");
+      toast(`Wedding +${r.imported}`);
+      state.wedding = await api("/wedding/prospects");
+      renderWeddings();
     } catch (e) { toast(e.message); }
   });
+
   $("#btn-partner-seed")?.addEventListener("click", async () => {
     try {
-      const r = await api("/partnerships/seed", { method: "POST" });
-      toast(`Partners +${r.added}`);
-      await refresh();
-      showView("partners");
+      await api("/partnerships/seed", { method: "POST" });
+      state.partners = await api("/partnerships");
+      renderPartners();
+      toast("Partners loaded");
     } catch (e) { toast(e.message); }
   });
-  $("#filter-stage")?.addEventListener("change", renderPipeline);
-  $("#filter-tier")?.addEventListener("change", renderPipeline);
-  $("#filter-search")?.addEventListener("input", renderPipeline);
-  bindForms();
 
-  api("/me")
-    .then((me) => {
-      state.user = me;
-      setBrandUser(me?.name || me?.email || "Desk", me?.email);
-    })
-    .catch((e) => {
-      setBrandUser("Access denied", "");
-      if (window.SLIW_REQUIRE_DGA_LOGIN) {
-        toast(e.message);
-        setTimeout(() => { window.location.replace("/"); }, 900);
-      }
-    });
-
-  refresh().catch((e) => toast(e.message));
+  fullRefresh().then(() => {
+    // Auto-open first ready lead for immediate flow
+    if (state.ready?.[0]?.id) focusLead(state.ready[0].id);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", boot);

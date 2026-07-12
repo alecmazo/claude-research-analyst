@@ -47,12 +47,294 @@ def library_stats() -> dict[str, Any]:
         by_industry[ind] = by_industry.get(ind, 0) + 1
         geo = (row.get("geo") or "Unknown").split(",")[0].strip()
         by_geo[geo] = by_geo.get(geo, 0) + 1
+    existing = {p.get("company", "").lower() for p in crm.list_prospects(book="corporate")}
+    pending = sum(1 for r in lib if (r.get("company") or "").lower() not in existing)
     return {
         "total": len(lib),
+        "in_crm": len(lib) - pending,
+        "pending_import": pending,
         "by_industry": by_industry,
         "by_geo_top": dict(sorted(by_geo.items(), key=lambda x: -x[1])[:15]),
         "path": str(LIBRARY_PATH),
     }
+
+
+def list_library_with_status() -> list[dict[str, Any]]:
+    """Full library with live ICP score + CRM status (qualified view)."""
+    lib = load_library()
+    crm_by_name = {
+        (p.get("company") or "").lower(): p
+        for p in crm.list_prospects(book="corporate")
+    }
+    out = []
+    for row in lib:
+        name = row.get("company") or ""
+        key = name.lower()
+        in_crm = crm_by_name.get(key)
+        scored = score_prospect(
+            company=name,
+            industry=row.get("industry", ""),
+            geo=row.get("geo", ""),
+            employee_range=str(row.get("employee_range") or row.get("employees") or ""),
+            signals=row.get("signals") or [],
+            notes=row.get("notes", ""),
+            website=row.get("website", ""),
+        )
+        out.append({
+            **row,
+            "qualification": {
+                "score": scored["score"],
+                "tier": scored["tier"],
+                "primary_package": (scored.get("primary_package") or {}).get("name"),
+                "matched_signals": scored.get("matched_signals") or [],
+                "agent_note": scored.get("agent_note"),
+                "breakdown": scored.get("breakdown"),
+            },
+            "in_crm": bool(in_crm),
+            "prospect_id": in_crm.get("id") if in_crm else None,
+            "crm_stage": in_crm.get("stage") if in_crm else None,
+            "crm_score": in_crm.get("score") if in_crm else None,
+        })
+    out.sort(
+        key=lambda r: (
+            -(r.get("qualification") or {}).get("score") or 0,
+            -(int(r.get("priority") or 0)),
+            r.get("company") or "",
+        )
+    )
+    return out
+
+
+def import_all_pending(*, draft_email: bool = False) -> dict[str, Any]:
+    """Import every library row not yet in CRM (no artificial batch limit)."""
+    return import_from_library(
+        limit=10_000,
+        min_priority=0,
+        draft_email=draft_email,
+        generate_gamma_dry=False,
+    )
+
+
+def append_to_library(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Add new company rows to the persistent library (dedupe by company name)."""
+    lib = load_library()
+    existing = {(r.get("company") or "").lower() for r in lib}
+    added = 0
+    for row in rows:
+        name = (row.get("company") or "").strip()
+        if not name or name.lower() in existing:
+            continue
+        lib.append(row)
+        existing.add(name.lower())
+        added += 1
+    if added:
+        LIBRARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LIBRARY_PATH.write_text(json.dumps(lib, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"added": added, "total": len(lib)}
+
+
+# Extra discovery pack — used by "Refresh leads" agent to grow the library
+_DISCOVERY_PACK: list[dict[str, Any]] = [
+    {"company": "Coinbase", "industry": "Financial services / fintech", "geo": "San Francisco, CA", "employee_range": "4000", "website": "https://www.coinbase.com", "signals": ["engineering culture", "offsite", "employee engagement"], "notes": "Crypto exchange — eng culture + offsights", "priority": 7},
+    {"company": "Robinhood", "industry": "Financial services / fintech", "geo": "Menlo Park, CA", "employee_range": "2500", "website": "https://robinhood.com", "signals": ["engineering culture", "all-hands"], "notes": "Consumer fintech eng culture", "priority": 6},
+    {"company": "Affirm", "industry": "Financial services / fintech", "geo": "San Francisco, CA", "employee_range": "2500", "website": "https://www.affirm.com", "signals": ["employee experience", "culture"], "notes": "Fintech culture programs", "priority": 6},
+    {"company": "Discord", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "600", "website": "https://discord.com", "signals": ["engineering culture", "employee engagement"], "notes": "Community product → team community moment", "priority": 7},
+    {"company": "Notion", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "500", "website": "https://www.notion.so", "signals": ["culture", "offsite", "employee experience"], "notes": "Productivity culture brand", "priority": 7},
+    {"company": "Figma", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "1000", "website": "https://www.figma.com", "signals": ["creative culture", "employee experience"], "notes": "Design culture experiential fit", "priority": 8},
+    {"company": "Airtable", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "800", "website": "https://www.airtable.com", "signals": ["employee experience", "offsite"], "notes": "SF SaaS culture", "priority": 6},
+    {"company": "Flexport", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "2000", "website": "https://www.flexport.com", "signals": ["engineering culture", "all-hands"], "notes": "Logistics tech culture", "priority": 5},
+    {"company": "Samsara", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "2000", "website": "https://www.samsara.com", "signals": ["engineering culture", "employee engagement"], "notes": "IoT growth culture", "priority": 6},
+    {"company": "C3.ai", "industry": "Technology / SaaS / AI", "geo": "Redwood City, CA", "employee_range": "1000", "website": "https://c3.ai", "signals": ["enterprise", "leadership development"], "notes": "Enterprise AI leadership labs", "priority": 5},
+    {"company": "UiPath", "industry": "Technology / SaaS / AI", "geo": "Bay Area / NY", "employee_range": "4000", "website": "https://www.uipath.com", "signals": ["employee experience", "offsite"], "notes": "Automation software culture", "priority": 5},
+    {"company": "DocuSign", "industry": "Technology / SaaS / AI", "geo": "San Francisco, CA", "employee_range": "7000", "website": "https://www.docusign.com", "signals": ["employee experience", "holiday party"], "notes": "SF enterprise SaaS events", "priority": 6},
+    {"company": "Workday", "industry": "Technology / SaaS / AI", "geo": "Pleasanton, CA", "employee_range": "18000", "website": "https://www.workday.com", "signals": ["employee experience", "wellness", "leadership development"], "notes": "HR platform — people-first pitch", "priority": 8},
+    {"company": "Intuit", "industry": "Technology / SaaS / AI", "geo": "Mountain View, CA", "employee_range": "17000", "website": "https://www.intuit.com", "signals": ["employee experience", "wellness", "leadership development"], "notes": "Peninsula campus culture", "priority": 7},
+    {"company": "Electronic Arts", "industry": "Media / entertainment", "geo": "Redwood City, CA", "employee_range": "13000", "website": "https://www.ea.com", "signals": ["creative culture", "employee engagement", "holiday party"], "notes": "Gaming studio culture energy", "priority": 7},
+    {"company": "Zynga", "industry": "Media / entertainment", "geo": "San Francisco, CA", "employee_range": "2000", "website": "https://www.zynga.com", "signals": ["creative culture", "holiday party"], "notes": "SF gaming culture", "priority": 5},
+    {"company": "Pixar", "industry": "Media / entertainment", "geo": "Emeryville, CA", "employee_range": "1200", "website": "https://www.pixar.com", "signals": ["creative culture", "employee engagement"], "notes": "East Bay creative campus", "priority": 7},
+    {"company": "Lucasfilm", "industry": "Media / entertainment", "geo": "San Francisco, CA", "employee_range": "2000", "website": "https://www.lucasfilm.com", "signals": ["creative culture", "gala"], "notes": "SF entertainment prestige", "priority": 6},
+    {"company": "Salesforce.org / Nonprofit Cloud teams", "industry": "Nonprofits & foundations running galas", "geo": "San Francisco, CA", "employee_range": "500", "website": "https://www.salesforce.com", "signals": ["gala", "nonprofit", "employee engagement"], "notes": "Nonprofit-adjacent culture events", "priority": 5},
+    {"company": "Morrison Foerster", "industry": "Professional services (law, consulting)", "geo": "San Francisco, CA", "employee_range": "1000", "website": "https://www.mofo.com", "signals": ["holiday party", "associate wellness"], "notes": "Biglaw holiday + wellness", "priority": 7},
+    {"company": "Orrick", "industry": "Professional services (law, consulting)", "geo": "San Francisco, CA", "employee_range": "1000", "website": "https://www.orrick.com", "signals": ["holiday party", "professional services culture"], "notes": "SF law firm events", "priority": 6},
+    {"company": "Latham & Watkins SF", "industry": "Professional services (law, consulting)", "geo": "San Francisco, CA", "employee_range": "500", "website": "https://www.lw.com", "signals": ["holiday party", "associate wellness"], "notes": "Premium biglaw events", "priority": 6},
+    {"company": "Accenture Bay Area", "industry": "Professional services (law, consulting)", "geo": "San Francisco / San Jose", "employee_range": "5000", "website": "https://www.accenture.com", "signals": ["leadership development", "employee engagement"], "notes": "Consulting L&D scale", "priority": 6},
+    {"company": "PG&E", "industry": "Healthcare systems & health-tech", "geo": "Oakland, CA", "employee_range": "20000", "website": "https://www.pge.com", "signals": ["employee engagement", "wellness", "leadership development"], "notes": "Large East Bay employer wellness", "priority": 5},
+    {"company": "Clorox", "industry": "Consumer brands with strong culture teams", "geo": "Oakland, CA", "employee_range": "8000", "website": "https://www.thecloroxcompany.com", "signals": ["employee experience", "culture"], "notes": "East Bay consumer brand culture", "priority": 5},
+]
+
+
+def refresh_leads_agent(*, auto_import: bool = True, draft_email: bool = False) -> dict[str, Any]:
+    """
+    Discovery pass: expand library with new suitable companies, re-qualify,
+    and immediately import anything not yet in CRM.
+    """
+    discovery = append_to_library([
+        {**row, "custom_hook": row.get("notes", ""), "contacts": []}
+        for row in _DISCOVERY_PACK
+    ])
+    imported = {"imported": 0, "results": []}
+    if auto_import:
+        imported = import_all_pending(draft_email=draft_email)
+    lib_view = list_library_with_status()
+    tier_a = [r for r in lib_view if (r.get("qualification") or {}).get("tier") == "A"]
+    return {
+        "discovery_added": discovery.get("added", 0),
+        "library_total": discovery.get("total", 0),
+        "imported_to_crm": imported.get("imported", 0),
+        "import_detail": imported,
+        "qualified_tier_a": len(tier_a),
+        "qualified_total": len(lib_view),
+        "top_new": [
+            {
+                "company": r["company"],
+                "tier": r["qualification"]["tier"],
+                "score": r["qualification"]["score"],
+                "package": r["qualification"].get("primary_package"),
+                "in_crm": r["in_crm"],
+                "prospect_id": r.get("prospect_id"),
+            }
+            for r in lib_view[:15]
+        ],
+        "at": _now(),
+    }
+
+
+def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
+    """
+    Free-flow step model for ONE client (not day-of-week).
+
+    Steps advance based on CRM fields — operator does next action now.
+    """
+    p = crm.get_prospect(prospect_id)
+    if not p:
+        raise KeyError(prospect_id)
+
+    contacts = p.get("contacts") or []
+    has_contact = any((c.get("email") or c.get("linkedin") or c.get("name")) for c in contacts)
+    has_email = any(c.get("email") for c in contacts)
+    has_draft = bool(p.get("outreach_path") or p.get("sequence_paths"))
+    has_gamma = bool(p.get("gamma_url") or p.get("gamma_pptx"))
+    stage = p.get("stage") or "research"
+
+    steps = [
+        {
+            "id": "qualify",
+            "title": "Qualified",
+            "done": p.get("score") is not None,
+            "detail": f"Score {p.get('score')} · tier {p.get('tier')} · {(p.get('recommended_packages') or [{}])[0].get('name', '—')}",
+        },
+        {
+            "id": "contact",
+            "title": "Buyer contact",
+            "done": has_contact,
+            "detail": "Name + email or LinkedIn for People/Events/L&D",
+            "needs": ["name", "title", "email", "linkedin"],
+        },
+        {
+            "id": "package",
+            "title": "Package + optional deck",
+            "done": has_gamma or stage in ("packaged", "drafted", "approved", "contacted", "replied", "interested", "discovery_booked", "won"),
+            "detail": "Gamma dry-run or live deck (optional before first email)",
+        },
+        {
+            "id": "draft",
+            "title": "Outreach draft",
+            "done": has_draft or stage in ("drafted", "approved", "contacted", "replied", "interested", "won"),
+            "detail": "Cold email ready to copy — human sends from Gmail",
+        },
+        {
+            "id": "send",
+            "title": "Mark sent",
+            "done": stage in ("contacted", "replied", "interested", "discovery_booked", "won"),
+            "detail": "After you send, mark contacted",
+        },
+        {
+            "id": "reply",
+            "title": "Qualify reply",
+            "done": stage in ("interested", "discovery_booked", "won", "nurture", "lost"),
+            "detail": "Paste reply → auto brief if warm",
+        },
+        {
+            "id": "edyta",
+            "title": "Edyta handoff",
+            "done": bool(p.get("edyta_brief_path")) or stage in ("discovery_booked", "won"),
+            "detail": "Warm lead brief for Edyta’s call",
+        },
+    ]
+
+    next_step = next((s for s in steps if not s["done"]), None)
+    if not next_step:
+        next_step = {"id": "done", "title": "Complete / nurture", "done": True, "detail": "Pipeline finished for this lead"}
+
+    actions = []
+    nid = next_step["id"]
+    if nid == "contact":
+        actions = [{"id": "save_contact", "label": "Save contact", "type": "form_contact"}]
+    elif nid == "package":
+        actions = [
+            {"id": "gamma_dry", "label": "Build Gamma prompt", "type": "button"},
+            {"id": "gamma_live", "label": "Live Gamma deck", "type": "button"},
+            {"id": "skip_gamma", "label": "Skip deck → draft", "type": "button"},
+        ]
+    elif nid == "draft":
+        actions = [
+            {"id": "build_sequences", "label": "Build email sequence", "type": "button"},
+            {"id": "draft_cold", "label": "Draft cold email only", "type": "button"},
+        ]
+    elif nid == "send":
+        actions = [
+            {"id": "mark_contacted", "label": "I sent it — mark contacted", "type": "button"},
+            {"id": "copy_draft", "label": "Copy latest draft", "type": "button"},
+        ]
+    elif nid == "reply":
+        actions = [{"id": "qualify_reply", "label": "Qualify reply", "type": "form_reply"}]
+    elif nid == "edyta":
+        actions = [{"id": "open_brief", "label": "View Edyta brief", "type": "button"}]
+    elif nid == "qualify":
+        actions = [{"id": "rescore", "label": "Re-score", "type": "button"}]
+
+    return {
+        "prospect": p,
+        "steps": steps,
+        "next_step": next_step,
+        "actions": actions,
+        "progress": {
+            "done": sum(1 for s in steps if s["done"]),
+            "total": len(steps),
+            "pct": round(100 * sum(1 for s in steps if s["done"]) / max(1, len(steps))),
+        },
+        "ready_to_contact_now": bool(
+            p.get("tier") in ("A", "B") and has_draft and stage in ("drafted", "approved", "scored", "packaged")
+        ),
+    }
+
+
+def top_ready_to_contact(limit: int = 5) -> list[dict[str, Any]]:
+    """Highest-score prospects the desk can work right now."""
+    prospects = crm.list_prospects(book="corporate")
+    ranked = [
+        p for p in prospects
+        if p.get("tier") in ("A", "B")
+        and p.get("stage") not in ("won", "lost", "interested", "discovery_booked")
+    ]
+    ranked.sort(key=lambda p: (-(p.get("score") or 0), p.get("company") or ""))
+    out = []
+    for p in ranked[:limit]:
+        try:
+            ws = workstream_for_prospect(p["id"])
+        except Exception:
+            ws = None
+        out.append({
+            "id": p["id"],
+            "company": p.get("company"),
+            "score": p.get("score"),
+            "tier": p.get("tier"),
+            "stage": p.get("stage"),
+            "package": (p.get("recommended_packages") or [{}])[0].get("name"),
+            "next_step": (ws or {}).get("next_step"),
+            "progress": (ws or {}).get("progress"),
+        })
+    return out
 
 
 def import_from_library(

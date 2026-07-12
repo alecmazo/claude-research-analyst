@@ -29,9 +29,14 @@ from .lead_engine import (
     build_sequences_for_prospect,
     edyta_home,
     import_from_library,
+    import_all_pending,
     library_stats,
+    list_library_with_status,
     this_week_checklist,
     bulk_import_rows,
+    refresh_leads_agent,
+    workstream_for_prospect,
+    top_ready_to_contact,
 )
 from .wedding_agent import (
     import_wedding_library,
@@ -73,9 +78,21 @@ class PipelineRequest(BaseModel):
 
 
 class LibraryImportRequest(BaseModel):
-    limit: int = 40
+    limit: int = 10000
     min_priority: int = 0
     draft_email: bool = False
+
+
+class RefreshLeadsRequest(BaseModel):
+    auto_import: bool = True
+    draft_email: bool = False
+
+
+class ContactUpdateRequest(BaseModel):
+    name: str = ""
+    title: str = ""
+    email: str = ""
+    linkedin: str = ""
 
 
 class BulkImportRequest(BaseModel):
@@ -305,7 +322,7 @@ def create_api_router() -> APIRouter:
         """Legacy small seed + prefer Lead Engine library import."""
         require_sliw_access(request)
         results = batch_score_seed()
-        eng = import_from_library(limit=40, draft_email=False)
+        eng = import_all_pending(draft_email=False)
         return {
             "count": len(results) + eng.get("imported", 0),
             "legacy_seed": len(results),
@@ -349,14 +366,76 @@ def create_api_router() -> APIRouter:
         require_sliw_access(request)
         return library_stats()
 
+    @r.get("/library")
+    def lib_list(request: Request) -> dict[str, Any]:
+        """Full qualified library with scores + CRM status."""
+        require_sliw_access(request)
+        rows = list_library_with_status()
+        return {
+            "total": len(rows),
+            "in_crm": sum(1 for r in rows if r.get("in_crm")),
+            "pending": sum(1 for r in rows if not r.get("in_crm")),
+            "tier_a": sum(1 for r in rows if (r.get("qualification") or {}).get("tier") == "A"),
+            "rows": rows,
+        }
+
     @r.post("/library/import")
     def lib_import(body: LibraryImportRequest, request: Request) -> dict[str, Any]:
         require_sliw_access(request)
+        # Default: import everything pending (no linger)
+        if body.limit >= 1000:
+            return import_all_pending(draft_email=body.draft_email)
         return import_from_library(
             limit=body.limit,
             min_priority=body.min_priority,
             draft_email=body.draft_email,
         )
+
+    @r.post("/library/import-all")
+    def lib_import_all(request: Request, draft_email: bool = False) -> dict[str, Any]:
+        require_sliw_access(request)
+        return import_all_pending(draft_email=draft_email)
+
+    @r.post("/leads/refresh")
+    def leads_refresh(body: RefreshLeadsRequest, request: Request) -> dict[str, Any]:
+        """Launch discovery agent: find more companies → qualify → import to CRM."""
+        require_sliw_access(request)
+        return refresh_leads_agent(
+            auto_import=body.auto_import,
+            draft_email=body.draft_email,
+        )
+
+    @r.get("/work/ready")
+    def work_ready(request: Request, limit: int = 5) -> dict[str, Any]:
+        require_sliw_access(request)
+        return {"items": top_ready_to_contact(limit=limit)}
+
+    @r.get("/prospects/{prospect_id}/workstream")
+    def workstream(prospect_id: str, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        try:
+            return workstream_for_prospect(prospect_id)
+        except KeyError:
+            raise HTTPException(404, "Prospect not found") from None
+
+    @r.post("/prospects/{prospect_id}/contact")
+    def save_contact(prospect_id: str, body: ContactUpdateRequest, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        p = crm.get_prospect(prospect_id)
+        if not p:
+            raise HTTPException(404, "Prospect not found")
+        contact = {
+            "name": body.name,
+            "title": body.title,
+            "email": body.email,
+            "linkedin": body.linkedin,
+        }
+        crm.update_prospect(
+            prospect_id,
+            book=p.get("book") or "corporate",
+            contacts=[contact],
+        )
+        return workstream_for_prospect(prospect_id)
 
     @r.post("/prospects/bulk")
     def bulk_import(body: BulkImportRequest, request: Request) -> dict[str, Any]:
