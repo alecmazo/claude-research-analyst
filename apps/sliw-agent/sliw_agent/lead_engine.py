@@ -211,10 +211,10 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
 
     contacts = p.get("contacts") or []
     has_contact = any((c.get("email") or c.get("linkedin") or c.get("name")) for c in contacts)
-    has_email = any(c.get("email") for c in contacts)
-    has_draft = bool(p.get("outreach_path") or p.get("sequence_paths"))
-    has_gamma = bool(p.get("gamma_url") or p.get("gamma_pptx"))
+    has_draft = bool(p.get("outreach_path") or p.get("sequence_paths") or p.get("agent_status") == "ready_to_send")
+    has_gamma = bool(p.get("gamma_url") or p.get("gamma_pptx") or p.get("marketing_mode"))
     stage = p.get("stage") or "research"
+    agent_ran = bool(p.get("sales_agent_ran_at") or p.get("agent_status"))
 
     steps = [
         {
@@ -224,41 +224,28 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
             "detail": f"Score {p.get('score')} · tier {p.get('tier')} · {(p.get('recommended_packages') or [{}])[0].get('name', '—')}",
         },
         {
-            "id": "contact",
-            "title": "Buyer contact",
-            "done": has_contact,
-            "detail": "Name + email or LinkedIn for People/Events/L&D",
-            "needs": ["name", "title", "email", "linkedin"],
-        },
-        {
-            "id": "package",
-            "title": "Package + optional deck",
-            "done": has_gamma or stage in ("packaged", "drafted", "approved", "contacted", "replied", "interested", "discovery_booked", "won"),
-            "detail": "Gamma dry-run or live deck (optional before first email)",
-        },
-        {
-            "id": "draft",
-            "title": "Outreach draft",
-            "done": has_draft or stage in ("drafted", "approved", "contacted", "replied", "interested", "won"),
-            "detail": "Cold email ready to copy — human sends from Gmail",
+            "id": "agent",
+            "title": "Sales agent run",
+            "done": agent_ran and has_contact and has_draft,
+            "detail": "Agent finds buyers, picks portfolio/light/full pitch, drafts outreach",
         },
         {
             "id": "send",
-            "title": "Mark sent",
+            "title": "Send outreach",
             "done": stage in ("contacted", "replied", "interested", "discovery_booked", "won"),
-            "detail": "After you send, mark contacted",
+            "detail": "Copy draft → send from Gmail → mark contacted (agent does not auto-send)",
         },
         {
             "id": "reply",
             "title": "Qualify reply",
             "done": stage in ("interested", "discovery_booked", "won", "nurture", "lost"),
-            "detail": "Paste reply → auto brief if warm",
+            "detail": "Paste reply — warm leads go to Edyta automatically",
         },
         {
             "id": "edyta",
-            "title": "Edyta handoff",
-            "done": bool(p.get("edyta_brief_path")) or stage in ("discovery_booked", "won"),
-            "detail": "Warm lead brief for Edyta’s call",
+            "title": "Edyta pipeline",
+            "done": bool(p.get("edyta_brief_path")) or stage in ("discovery_booked", "won") or p.get("agent_status") == "edyta_pipeline",
+            "detail": "Brief ready — Edyta takes the discovery call",
         },
     ]
 
@@ -268,30 +255,27 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
 
     actions = []
     nid = next_step["id"]
-    if nid == "contact":
-        actions = [{"id": "save_contact", "label": "Save contact", "type": "form_contact"}]
-    elif nid == "package":
+    if nid == "agent" or nid == "qualify":
         actions = [
-            {"id": "gamma_dry", "label": "Build Gamma prompt", "type": "button"},
-            {"id": "gamma_live", "label": "Live Gamma deck", "type": "button"},
-            {"id": "skip_gamma", "label": "Skip deck → draft", "type": "button"},
-        ]
-    elif nid == "draft":
-        actions = [
-            {"id": "build_sequences", "label": "Build email sequence", "type": "button"},
-            {"id": "draft_cold", "label": "Draft cold email only", "type": "button"},
+            {"id": "run_sales_agent", "label": "▶ Run sales agent (find contacts + pitch + draft)", "type": "button"},
+            {"id": "run_sales_agent_live_gamma", "label": "Run agent + live Gamma (credits)", "type": "button"},
         ]
     elif nid == "send":
         actions = [
+            {"id": "copy_draft", "label": "Copy pitch email", "type": "button"},
             {"id": "mark_contacted", "label": "I sent it — mark contacted", "type": "button"},
-            {"id": "copy_draft", "label": "Copy latest draft", "type": "button"},
+            {"id": "run_sales_agent", "label": "Re-run sales agent", "type": "button"},
         ]
     elif nid == "reply":
-        actions = [{"id": "qualify_reply", "label": "Qualify reply", "type": "form_reply"}]
+        actions = [
+            {"id": "qualify_reply", "label": "Qualify reply → Edyta if warm", "type": "form_reply"},
+            {"id": "escalate_edyta", "label": "Force to Edyta pipeline", "type": "button"},
+        ]
     elif nid == "edyta":
-        actions = [{"id": "open_brief", "label": "View Edyta brief", "type": "button"}]
-    elif nid == "qualify":
-        actions = [{"id": "rescore", "label": "Re-score", "type": "button"}]
+        actions = [
+            {"id": "open_brief", "label": "View Edyta brief", "type": "button"},
+            {"id": "escalate_edyta", "label": "Refresh Edyta brief", "type": "button"},
+        ]
 
     return {
         "prospect": p,

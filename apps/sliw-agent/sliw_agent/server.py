@@ -38,6 +38,8 @@ from .lead_engine import (
     workstream_for_prospect,
     top_ready_to_contact,
 )
+from .sales_agent import run_sales_agent, run_sales_agent_batch, escalate_to_edyta
+from .contact_finder import find_contacts
 from .wedding_agent import (
     import_wedding_library,
     run_wedding_pipeline,
@@ -86,6 +88,18 @@ class LibraryImportRequest(BaseModel):
 class RefreshLeadsRequest(BaseModel):
     auto_import: bool = True
     draft_email: bool = False
+
+
+class SalesAgentRequest(BaseModel):
+    live_gamma: bool = False
+    marketing_mode: str | None = None  # portfolio | light | full
+    build_sequences: bool = True
+
+
+class SalesAgentBatchRequest(BaseModel):
+    limit: int = 5
+    live_gamma: bool = False
+    prospect_ids: list[str] = Field(default_factory=list)
 
 
 class ContactUpdateRequest(BaseModel):
@@ -436,6 +450,73 @@ def create_api_router() -> APIRouter:
             contacts=[contact],
         )
         return workstream_for_prospect(prospect_id)
+
+    @r.post("/prospects/{prospect_id}/find-contacts")
+    def api_find_contacts(prospect_id: str, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        p = crm.get_prospect(prospect_id)
+        if not p:
+            raise HTTPException(404, "Prospect not found")
+        result = find_contacts(
+            company=p.get("company") or "",
+            website=p.get("website") or "",
+            industry=p.get("industry") or "",
+        )
+        if result.get("contacts"):
+            crm.update_prospect(
+                prospect_id,
+                book=p.get("book") or "corporate",
+                contacts=result["contacts"][:12],
+                contact_research=result.get("method_summary"),
+                linkedin_targets=result.get("linkedin_targets"),
+            )
+        return result
+
+    @r.post("/prospects/{prospect_id}/sales-agent")
+    def api_sales_agent(
+        prospect_id: str,
+        body: SalesAgentRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """Find contacts + choose pitch mode + draft outreach (core automation)."""
+        require_sliw_access(request)
+        try:
+            return run_sales_agent(
+                prospect_id,
+                marketing_mode=body.marketing_mode,
+                live_gamma=body.live_gamma,
+                build_sequences=body.build_sequences,
+            )
+        except KeyError:
+            raise HTTPException(404, "Prospect not found") from None
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @r.post("/sales-agent/batch")
+    def api_sales_agent_batch(body: SalesAgentBatchRequest, request: Request) -> dict[str, Any]:
+        """Run corporate sales agent on top N ready prospects."""
+        require_sliw_access(request)
+        return run_sales_agent_batch(
+            prospect_ids=body.prospect_ids or None,
+            limit=body.limit,
+            live_gamma=body.live_gamma,
+        )
+
+    @r.post("/prospects/{prospect_id}/escalate-edyta")
+    def api_escalate(
+        prospect_id: str,
+        body: InterestedRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        require_sliw_access(request)
+        try:
+            return escalate_to_edyta(
+                prospect_id,
+                reply_text=body.reply_text,
+                reply_summary=body.reply_summary,
+            )
+        except KeyError:
+            raise HTTPException(404, "Prospect not found") from None
 
     @r.post("/prospects/bulk")
     def bulk_import(body: BulkImportRequest, request: Request) -> dict[str, Any]:

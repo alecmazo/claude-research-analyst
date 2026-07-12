@@ -134,19 +134,59 @@ function renderReady() {
   });
 }
 
-async function focusLead(id) {
+async function focusLead(id, { autoAgent = true } = {}) {
   state.focusId = id;
   renderReady();
   busy(true, "Loading pipeline…");
   try {
-    const ws = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+    let ws = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
     state.workstream = ws;
     renderWorkstream();
+    // Auto-run sales agent when contacts/drafts missing — you should not fill contacts manually
+    const needAgent = (ws.next_step?.id === "agent" || ws.next_step?.id === "qualify") && autoAgent;
+    if (needAgent) {
+      busy(true, "Sales agent finding contacts & drafting pitch…");
+      try {
+        const result = await api(`/prospects/${encodeURIComponent(id)}/sales-agent`, {
+          method: "POST",
+          body: JSON.stringify({ live_gamma: false, build_sequences: true }),
+        });
+        toast(`Agent ready: ${result.primary_contact?.email || result.primary_contact?.name || "contact"} · mode ${result.marketing_mode}`);
+        state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+        state._lastAgent = result;
+        renderWorkstream();
+        showAgentResult(result);
+      } catch (e) {
+        toast("Agent: " + e.message);
+      }
+    }
   } catch (e) {
     toast(e.message);
   } finally {
     busy(false);
   }
+}
+
+function showAgentResult(result) {
+  if (!result) return;
+  const out = $("#ws-output");
+  if (!out) return;
+  const c = result.primary_contact || {};
+  const contacts = (result.contacts || []).slice(0, 4);
+  out.hidden = false;
+  out.innerHTML = `
+    <div class="agent-card">
+      <p class="eyebrow">Sales agent result</p>
+      <p><strong>Marketing:</strong> ${esc(result.marketing_mode)} · pitch <a href="${esc(result.pitch_url || "#")}" target="_blank" rel="noopener">open</a></p>
+      <p><strong>Primary buyer:</strong> ${esc(c.name || "—")} ${c.title ? "· " + esc(c.title) : ""} ${c.email ? "· " + esc(c.email) : ""}</p>
+      <p class="muted">${esc(result.contact_research || "")}</p>
+      ${contacts.length ? `<ul class="contact-list">${contacts.map((x) =>
+        `<li>${esc(x.name || "")} · ${esc(x.title || "")} · ${esc(x.email || "no email")} <span class="muted">(${esc(x.source || "")} · ${x.confidence || "?"}%)</span></li>`
+      ).join("")}</ul>` : ""}
+      ${result.email_preview?.body ? `<div class="email-preview"><strong>${esc(result.email_preview.subject || "")}</strong>\n\n${esc(result.email_preview.body)}</div>` : ""}
+      <p class="muted" style="margin-top:10px">${esc(result.next_human_step || "")}</p>
+    </div>`;
+  state._lastEmail = result.email_preview;
 }
 
 function renderWorkstream() {
@@ -249,92 +289,41 @@ async function runAction(act) {
   const id = state.focusId;
   if (!id) return;
   try {
-    if (act === "save_contact") {
-      const body = {
-        name: $("#c-name")?.value || "",
-        title: $("#c-title")?.value || "",
-        email: $("#c-email")?.value || "",
-        linkedin: $("#c-li")?.value || "",
-      };
-      if (!body.name && !body.email && !body.linkedin) {
-        return toast("Add at least a name, email, or LinkedIn");
-      }
-      busy(true, "Saving contact…");
-      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/contact`, {
-        method: "POST", body: JSON.stringify(body),
-      });
-      toast("Contact saved");
-      renderWorkstream();
-    } else if (act === "gamma_dry" || act === "gamma_live") {
-      const p = state.workstream.prospect;
-      busy(true, act === "gamma_live" ? "Generating Gamma…" : "Building prompt…");
-      await api("/prospects/pipeline", {
+    if (act === "run_sales_agent" || act === "run_sales_agent_live_gamma") {
+      busy(true, "Sales agent: finding contacts, pitch mode, drafts…");
+      const result = await api(`/prospects/${encodeURIComponent(id)}/sales-agent`, {
         method: "POST",
         body: JSON.stringify({
-          company: p.company,
-          industry: p.industry || "",
-          geo: p.geo || "",
-          employee_range: p.employee_range || "",
-          website: p.website || "",
-          notes: p.notes || "",
-          signals: p.signals || [],
-          custom_hook: p.notes || "",
-          generate_gamma: true,
-          live_gamma: act === "gamma_live",
-          draft_email: false,
-          book: "corporate",
+          live_gamma: act === "run_sales_agent_live_gamma",
+          build_sequences: true,
         }),
       });
+      state._lastAgent = result;
+      state._lastEmail = result.email_preview;
       state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
-      toast(act === "gamma_live" ? "Gamma deck ready" : "Gamma prompt saved");
       renderWorkstream();
-    } else if (act === "skip_gamma" || act === "draft_cold" || act === "build_sequences") {
-      busy(true, "Drafting…");
-      if (act === "build_sequences" || act === "skip_gamma") {
-        await api(`/prospects/${encodeURIComponent(id)}/sequences`, { method: "POST", body: "{}" });
-      } else {
-        const p = state.workstream.prospect;
-        await api("/prospects/pipeline", {
-          method: "POST",
-          body: JSON.stringify({
-            company: p.company,
-            industry: p.industry || "",
-            geo: p.geo || "",
-            signals: p.signals || [],
-            draft_email: true,
-            generate_gamma: false,
-            book: "corporate",
-            contact_name: (p.contacts || [])[0]?.name || "",
-            contact_email: (p.contacts || [])[0]?.email || "",
-            contact_title: (p.contacts || [])[0]?.title || "",
-          }),
-        });
-      }
-      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
-      toast("Draft ready — copy and send from Gmail");
-      renderWorkstream();
+      showAgentResult(result);
+      toast(`Contacts + pitch ready (${result.marketing_mode})`);
     } else if (act === "mark_contacted") {
       busy(true);
       await api(`/prospects/${encodeURIComponent(id)}/stage`, {
         method: "POST", body: JSON.stringify({ stage: "contacted", note: "Sent by desk" }),
       });
       state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
-      toast("Marked contacted");
+      toast("Marked contacted — waiting on reply");
       renderWorkstream();
       await softRefresh();
     } else if (act === "copy_draft") {
-      let body = state._lastEmail?.body;
-      if (!body && state._focusFull?.outreach?.email?.body) {
-        body = state._focusFull.outreach.email.body;
-      }
+      let body = state._lastEmail?.body || state._lastAgent?.email_preview?.body;
       if (!body) {
         const full = await api(`/prospects/${encodeURIComponent(id)}`);
         body = full.outreach?.email?.body;
         state._lastEmail = full.outreach?.email;
       }
-      if (!body) return toast("No draft yet — build sequence first");
+      if (!body) return toast("No draft — run sales agent first");
       await navigator.clipboard.writeText(body);
-      toast("Email copied — paste into Gmail, then mark contacted");
+      const to = state._lastAgent?.primary_contact?.email || state._lastEmail?.to_email || "";
+      toast(to ? `Copied — send to ${to}` : "Copied — paste into Gmail");
     } else if (act === "qualify_reply") {
       const reply_text = $("#c-reply")?.value?.trim();
       if (!reply_text) return toast("Paste their reply first");
@@ -342,33 +331,49 @@ async function runAction(act) {
       const out = await api(`/prospects/${encodeURIComponent(id)}/interested`, {
         method: "POST", body: JSON.stringify({ reply_text }),
       });
-      toast(out.qualification?.ready_for_edyta ? "Warm lead — Edyta brief ready" : `→ ${out.qualification?.recommended_stage}`);
+      toast(out.qualification?.ready_for_edyta ? "→ Edyta pipeline + brief" : `→ ${out.qualification?.recommended_stage}`);
       state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
       renderWorkstream();
+      await softRefresh();
+    } else if (act === "escalate_edyta") {
+      busy(true, "Escalating to Edyta…");
+      const out = await api(`/prospects/${encodeURIComponent(id)}/escalate-edyta`, {
+        method: "POST",
+        body: JSON.stringify({
+          reply_text: $("#c-reply")?.value || "Desk escalated — discovery requested",
+        }),
+      });
+      toast("On Edyta’s desk with brief");
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
+      renderWorkstream();
+      if (out.edyta_brief_path) {
+        const full = await api(`/prospects/${encodeURIComponent(id)}`);
+        if (full.brief_md) {
+          $("#ws-output").hidden = false;
+          $("#ws-output").innerHTML = `<div class="brief-box">${esc(full.brief_md)}</div>`;
+        }
+      }
       await softRefresh();
     } else if (act === "open_brief") {
       const full = await api(`/prospects/${encodeURIComponent(id)}`);
       if (full.brief_md) {
         $("#ws-output").hidden = false;
         $("#ws-output").innerHTML = `<div class="brief-box">${esc(full.brief_md)}</div>`;
-      } else toast("No brief yet");
-    } else if (act === "rescore") {
-      const p = state.workstream.prospect;
-      busy(true, "Re-scoring…");
-      await api("/prospects/pipeline", {
-        method: "POST",
-        body: JSON.stringify({
-          company: p.company,
-          industry: p.industry || "",
-          geo: p.geo || "",
-          signals: p.signals || [],
-          draft_email: false,
-          book: "corporate",
-        }),
+      } else toast("No brief yet — escalate or qualify a warm reply");
+    } else if (act === "save_contact") {
+      // Manual override only if agent failed
+      const body = {
+        name: $("#c-name")?.value || "",
+        title: $("#c-title")?.value || "",
+        email: $("#c-email")?.value || "",
+        linkedin: $("#c-li")?.value || "",
+      };
+      busy(true, "Saving…");
+      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/contact`, {
+        method: "POST", body: JSON.stringify(body),
       });
-      state.workstream = await api(`/prospects/${encodeURIComponent(id)}/workstream`);
       renderWorkstream();
-      toast("Re-scored");
+      toast("Contact saved");
     }
   } catch (e) {
     toast(e.message);
@@ -534,6 +539,24 @@ function boot() {
       toast(`+${r.discovery_added} discovered · ${r.imported_to_crm} imported · ${r.qualified_tier_a} tier A`);
       await fullRefresh();
       showView("library");
+    } catch (e) { toast(e.message); }
+    finally { busy(false); }
+  });
+
+  $("#btn-agent-batch")?.addEventListener("click", async () => {
+    busy(true, "Sales agent running on top 5 (contacts + pitches)…");
+    try {
+      const r = await api("/sales-agent/batch", {
+        method: "POST",
+        body: JSON.stringify({ limit: 5, live_gamma: false }),
+      });
+      toast(`Agent finished ${r.ran} leads` + (r.errors?.length ? ` (${r.errors.length} errors)` : ""));
+      await fullRefresh();
+      if (r.results?.[0]?.prospect_id) {
+        showView("work");
+        await focusLead(r.results[0].prospect_id, { autoAgent: false });
+        showAgentResult(r.results[0]);
+      }
     } catch (e) { toast(e.message); }
     finally { busy(false); }
   });

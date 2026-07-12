@@ -85,8 +85,13 @@ def build_package_prompt(
     contacts: list[dict[str, str]] | None = None,
     custom_hook: str = "",
     notes: str = "",
+    light: bool = False,
 ) -> tuple[str, int]:
-    """Build Gamma inputText + recommended card count."""
+    """Build Gamma inputText + recommended card count.
+
+    light=True → short personalized overlay (few cards) on top of portfolio story.
+    full → classic multi-package sales deck.
+    """
     signals = signals or []
     package_ids = package_ids or ["icebreaker"]
     pkgs = [PACKAGES[pid] for pid in package_ids if pid in PACKAGES]
@@ -120,13 +125,55 @@ Benefits: {'; '.join(p.benefits)}
         f"{datetime.now().strftime('%B %Y')}"
     )
 
-    num_cards = 10 + len(pkgs)  # base story + one deep-dive per package
+    portfolio_url = TALENT.get("package_site") or "https://edyta-corporate-dance-866y3wq.gamma.site/"
+
+    if light:
+        num_cards = 6
+        input_text = f"""Create a SHORT premium **personalized sales overlay** (not a 20-slide deck).
+
+Title: "{title}"
+
+{_design_block()}
+
+This deck should feel like a 6-card cover letter ON TOP of the full portfolio at:
+{portfolio_url}
+
+# CLIENT
+- Company: {company}
+- Industry: {industry or 'n/a'}
+- Geo: {geo or 'n/a'}
+- Size: {employee_range or 'n/a'}
+- Signals: {', '.join(signals) if signals else 'culture / team connection'}
+- Hook: {custom_hook or notes or 'A team experience they will actually remember'}
+- {contact_line}
+
+# TALENT (facts only)
+{talent_brief_markdown()}
+
+# PRIMARY PACKAGE
+{pkg_sections[0] if pkg_sections else primary.name}
+
+# EXACTLY {num_cards} CARDS
+1. Cover — Edyta × {company}
+2. Why {company} now (use hook + signals)
+3. Recommended package spotlight — {primary.name}
+4. Full portfolio menu (name all 5 packages briefly; point to {portfolio_url})
+5. How it works (5–500 people, zero judgment, 15-min discovery)
+6. CTA + contact {TALENT['email_public']} · {TALENT['phone_primary']}
+
+Tone: CAA packaging — concise, exclusive. Do not invent prices or fake logos.
+"""
+        return input_text, num_cards
+
+    num_cards = 10 + len(pkgs)
 
     input_text = f"""Create a premium **corporate sales / talent booking presentation**.
 
 Title: "{title}"
 
 {_design_block()}
+
+Also reference the full portfolio site: {portfolio_url}
 
 # CLIENT
 - Company: {company}
@@ -140,19 +187,19 @@ Title: "{title}"
 # TALENT (facts only — do not invent)
 {talent_brief_markdown()}
 
-# PACKAGES TO FEATURE (primary first)
+# PACKAGES TO FEATURE (primary first) — present the portfolio, not a single SKU only
 {chr(10).join(pkg_sections)}
 
 # SLIDE STRUCTURE (create {num_cards} cards)
 1. Cover — Edyta Śliwińska × {company} (premium, cinematic)
 2. The opportunity — why {company}'s team needs a moment that actually bonds
 3. Who is Edyta — DWTS pro, 20+ years, star power without ego
-4. Why dance works at work — science-backed team accelerator (endorphins, stress, creativity)
+4. Why dance works at work — science-backed team accelerator
 5. Recommended experience for {company} — spotlight {primary.name}
-6. How the session runs — logistics, 5–500 people, hybrid/in-person, zero judgment
-7. Package deep-dives — one card per featured package (name, duration, outcomes)
-8. What success looks like — morale, cross-team trust, content, lasting lore
-9. Credentials & live-show pedigree (brief, tasteful)
+6. Full portfolio menu — all packages at a glance
+7. How the session runs — logistics, 5–500 people, hybrid/in-person, zero judgment
+8. Package deep-dives — featured packages
+9. Credentials & live-show pedigree (brief)
 10. Next step — complimentary 15-minute discovery call with Edyta
 11. Contact — {TALENT['email_public']} · {TALENT['phone_primary']} · {TALENT['website']}
 
@@ -175,10 +222,12 @@ def generate_marketing_package(
     notes: str = "",
     prospect_id: str | None = None,
     dry_run: bool = False,
+    light: bool = False,
 ) -> dict[str, Any]:
     """
     Create a Gamma marketing deck for a prospect.
     Returns {gamma_url, pptx_path, credits, prompt_path, dry_run}.
+    light=True → short personalized overlay (preferred for most sales).
     """
     ensure_dirs()
     input_text, num_cards = build_package_prompt(
@@ -191,6 +240,7 @@ def generate_marketing_package(
         contacts=contacts,
         custom_hook=custom_hook,
         notes=notes,
+        light=light,
     )
 
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in company)[:40]
