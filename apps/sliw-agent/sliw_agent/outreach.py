@@ -109,6 +109,8 @@ def draft_followup_email(
     body = f"""{greeting},
 
 Floating this back up in case it got buried — happy to make a 15-minute intro with Edyta painless if team connection or a year-end event is on your radar.
+
+Corporate page: {TALENT.get('corporate_page') or 'https://edytasliwinska.com/corporate'}
 {deck}
 If the timing is off, just say the word and I'll close the loop.
 

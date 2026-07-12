@@ -35,8 +35,11 @@ from .scoring import score_prospect
 from .talent_bible import TALENT, PACKAGES
 
 
-PORTFOLIO_URL = TALENT.get("package_site") or "https://edyta-corporate-dance-866y3wq.gamma.site/"
-CORPORATE_URL = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
+# Primary public link for outreach (official site — not the Gamma deck URL)
+PORTFOLIO_URL = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
+CORPORATE_URL = PORTFOLIO_URL
+# Optional deeper package deck (only used when we generate a custom Gamma link)
+PACKAGE_DECK_URL = TALENT.get("package_site") or ""
 
 
 def choose_marketing_mode(
@@ -147,13 +150,13 @@ def run_sales_agent(
     gamma_meta = None
 
     if mode == "portfolio":
-        gamma_url = PORTFOLIO_URL
+        gamma_url = PORTFOLIO_URL  # https://edytasliwinska.com/corporate
         crm.update_prospect(
             prospect_id,
             book=book,
             marketing_mode="portfolio",
             gamma_url=gamma_url,
-            marketing_note="Master portfolio pitch site (all packages) — no new Gamma credits.",
+            marketing_note="Official corporate page (edytasliwinska.com/corporate) — no new Gamma credits.",
         )
     elif mode in ("light", "full"):
         # Generate dry-run prompt always; live only if requested
@@ -181,15 +184,17 @@ def run_sales_agent(
                 light=(mode == "light"),
             )
             if not gamma_meta.get("dry_run") and gamma_meta.get("gamma_url"):
+                # Live custom deck — still keep corporate site as primary public URL in CRM
                 gamma_url = gamma_meta["gamma_url"]
             else:
-                # Dry-run: still pitch portfolio site + mention custom prompt prepared
+                # Dry-run / no live deck: pitch the official corporate page
                 gamma_url = PORTFOLIO_URL
             crm.update_prospect(
                 prospect_id,
                 book=book,
                 marketing_mode=mode,
                 gamma_url=gamma_url,
+                corporate_url=PORTFOLIO_URL,
                 gamma_prompt_path=gamma_meta.get("prompt_path"),
             )
         except Exception as exc:
@@ -199,7 +204,7 @@ def run_sales_agent(
                 book=book,
                 marketing_mode="portfolio",
                 gamma_url=gamma_url,
-                marketing_note=f"Gamma fallback to portfolio: {exc}",
+                marketing_note=f"Gamma fallback to corporate page: {exc}",
             )
 
     p = crm.get_prospect(prospect_id) or p
@@ -338,10 +343,9 @@ Rather than another trust-fall module, Edyta runs DWTS-caliber sessions that act
 **Recommended for {company}:** {package_name}
 {package_one_liner}
 {menu}
-Full experience portfolio (all packages):
+Corporate experiences & packages:
 {PORTFOLIO_URL}
-
-{"Custom note for your team: " + pitch_url if pitch_url and pitch_url != PORTFOLIO_URL else f"Company page: {CORPORATE_URL}"}
+{"Custom proposal deck: " + pitch_url if pitch_url and pitch_url.rstrip("/") != PORTFOLIO_URL.rstrip("/") else ""}
 {conf_note}
 
 Would you (or the right person on People / Events / L&D) take a complimentary 15-minute discovery call with Edyta?

@@ -125,7 +125,7 @@ Benefits: {'; '.join(p.benefits)}
         f"{datetime.now().strftime('%B %Y')}"
     )
 
-    portfolio_url = TALENT.get("package_site") or "https://edyta-corporate-dance-866y3wq.gamma.site/"
+    portfolio_url = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
 
     if light:
         num_cards = 6
