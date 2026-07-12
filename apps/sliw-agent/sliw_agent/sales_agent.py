@@ -79,14 +79,17 @@ def run_sales_agent(
     book = p.get("book") or "corporate"
     company = p.get("company") or ""
 
-    # Ensure we have a master packages deck link for email body
+    # Always use Edyta's published Gamma packages site (not auto-generated decks)
     master_url = get_master_deck_url()
     if ensure_master:
         try:
             meta = ensure_master_deck(live=False)
-            master_url = meta.get("gamma_url") or master_url
+            master_url = meta.get("gamma_site") or meta.get("gamma_url") or master_url
         except Exception:
             master_url = get_master_deck_url()
+    # Never use the old auto-generated gamma.app/docs link
+    if "jk6b492p7fvmjhq" in (master_url or ""):
+        master_url = TALENT.get("package_site") or "https://edyta-corporate-dance-866y3wq.gamma.site/"
 
     # 1. Score if missing
     if p.get("score") is None:

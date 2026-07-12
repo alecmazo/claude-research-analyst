@@ -1,10 +1,9 @@
 {
-  "updated_at": "2026-07-12T20:42:35.384041",
-  "prompt_path": "/Users/dplvideo/Library/CloudStorage/Dropbox/Mac/Desktop/Claude_Research_Analyst/apps/sliw-agent/data/decks/MASTER_corporate_packages_prompt.txt",
+  "status": "published_site",
+  "gamma_url": "https://edyta-corporate-dance-866y3wq.gamma.site/",
+  "gamma_site": "https://edyta-corporate-dance-866y3wq.gamma.site/",
   "corporate_page": "https://edytasliwinska.com/corporate",
-  "status": "ready",
-  "gamma_url": "https://gamma.app/docs/jk6b492p7fvmjhq",
-  "note": "Master deck ready \u2014 use gamma_url in email body (not attachment).",
-  "pptx_path": "/Users/dplvideo/Library/CloudStorage/Dropbox/Mac/Desktop/Claude_Research_Analyst/apps/sliw-agent/data/decks/MASTER_Edyta_Corporate_Packages.pptx",
-  "credits": 51
+  "pdf_url": null,
+  "note": "Uses Edyta's existing Gamma packages presentation. Put the link in the email body \u2014 do not attach files to cold email.",
+  "updated_at": "2026-07-12T21:01:11.711630"
 }

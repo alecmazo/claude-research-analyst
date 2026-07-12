@@ -20,6 +20,11 @@ from .crm import BRIEFS_DIR, OUTREACH_DIR, ensure_dirs, update_prospect
 from .talent_bible import TALENT
 
 CORPORATE = TALENT.get("corporate_page") or "https://edytasliwinska.com/corporate"
+# Existing published packages presentation (Gamma site) — prefer this in body
+PACKAGES_DECK = (
+    TALENT.get("package_site")
+    or "https://edyta-corporate-dance-866y3wq.gamma.site/"
+)
 
 
 def subject_variants(*, company: str, package_name: str = "The Icebreaker") -> list[str]:
@@ -74,10 +79,24 @@ def draft_cold_email(
             f"might enjoy something different for a team gathering — {company} made the list."
         )
 
-    deck = master_deck_url or gamma_url or CORPORATE
+    # Prefer the published packages Gamma site; never force an attachment
+    deck = (master_deck_url or gamma_url or PACKAGES_DECK or CORPORATE).strip()
+    if "jk6b492p7fvmjhq" in deck:
+        # Old auto-generated deck — replace with the good published one
+        deck = PACKAGES_DECK
     one = package_one_liner or "a high-energy, zero-judgment session people actually talk about afterward"
 
     subject = subject_override or subject_variants(company=company, package_name=package_name)[0]
+
+    # Optional PDF line if provided later via env/meta
+    pdf_line = ""
+    try:
+        from .master_deck import get_pdf_url
+        pdf = get_pdf_url()
+        if pdf:
+            pdf_line = f"\nPDF version (optional): {pdf}\n"
+    except Exception:
+        pass
 
     body = f"""{greeting}
 
@@ -87,15 +106,17 @@ I'm writing for Edyta Śliwińska — you may know her from Dancing with the Sta
 
 For {company}, the fit that stood out was {package_name.lower() if not package_name.startswith("The") else package_name} — {one}.
 
-Here's a simple overview of what she offers (open in the browser — nothing to download):
+Here's the full overview of her packages (opens in the browser — no attachment):
 {deck}
 
+More about corporate programs:
+{CORPORATE}
+{pdf_line}
 If useful, she's happy to do a quick 15-minute call and see whether there's a natural fit. No pressure either way.
 
 Best,
 {TALENT.get('stage_name') or 'Edyta'}'s team
 {TALENT['email_public']}
-{CORPORATE}
 """
     # Prefer signing as human desk without "Sliw Agent desk" robotic branding
     return {
@@ -119,14 +140,20 @@ def draft_followup_email(
     """Second touch — only after cold was sent. Friendly bump, not a breakup."""
     first = _first_name(contact_name)
     greeting = f"Hi {first}," if first else "Hi,"
-    deck = master_deck_url or gamma_url or CORPORATE
+    deck = (master_deck_url or gamma_url or PACKAGES_DECK or CORPORATE).strip()
+    if "jk6b492p7fvmjhq" in deck:
+        deck = PACKAGES_DECK
     subject = f"Re: {company} — following up gently"
     body = f"""{greeting}
 
 Just bumping this in case it got buried. No worries if the timing isn't right.
 
-Edyta (Dancing with the Stars) hosts team experiences for companies — offsites, all-hands, holiday gatherings. Overview here:
+Edyta (Dancing with the Stars) hosts team experiences for companies — offsites, all-hands, holiday gatherings.
+
+Packages overview:
 {deck}
+
+Site: {CORPORATE}
 
 If you want intros, I can set up 15 minutes. If not, all good.
 
