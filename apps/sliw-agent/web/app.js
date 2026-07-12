@@ -43,6 +43,152 @@ function tierClass(t) {
   return `pill tier-${(t || "c").toLowerCase()}`;
 }
 
+/* ── Company brand marks (logo via domain, initials fallback) ─────────────── */
+
+/** Well-known domains when website is missing or wrong. */
+const COMPANY_DOMAINS = {
+  airbnb: "airbnb.com",
+  salesforce: "salesforce.com",
+  stripe: "stripe.com",
+  genentech: "gene.com",
+  google: "google.com",
+  meta: "meta.com",
+  facebook: "meta.com",
+  apple: "apple.com",
+  microsoft: "microsoft.com",
+  amazon: "amazon.com",
+  netflix: "netflix.com",
+  uber: "uber.com",
+  lyft: "lyft.com",
+  adobe: "adobe.com",
+  oracle: "oracle.com",
+  nvidia: "nvidia.com",
+  intel: "intel.com",
+  cisco: "cisco.com",
+  zoom: "zoom.us",
+  slack: "slack.com",
+  shopify: "shopify.com",
+  square: "squareup.com",
+  block: "block.xyz",
+  paypal: "paypal.com",
+  visa: "visa.com",
+  mastercard: "mastercard.com",
+  nike: "nike.com",
+  "lululemon": "lululemon.com",
+  "goldman sachs": "goldmansachs.com",
+  jpmorgan: "jpmorgan.com",
+  "jp morgan": "jpmorgan.com",
+  "morgan stanley": "morganstanley.com",
+  "bank of america": "bankofamerica.com",
+  wells: "wellsfargo.com",
+  "wells fargo": "wellsfargo.com",
+  disney: "disney.com",
+  "warner bros": "warnerbros.com",
+  netflix: "netflix.com",
+  spotify: "spotify.com",
+  twitter: "x.com",
+  x: "x.com",
+  linkedin: "linkedin.com",
+  tesla: "tesla.com",
+  openai: "openai.com",
+  anthropic: "anthropic.com",
+  "databricks": "databricks.com",
+  snowflake: "snowflake.com",
+  "roblox": "roblox.com",
+  "electronic arts": "ea.com",
+  ea: "ea.com",
+  activision: "activision.com",
+  "the trade desk": "thetradedesk.com",
+  "tiktok": "tiktok.com",
+  bytedance: "bytedance.com",
+};
+
+function companyInitials(name) {
+  const parts = String(name || "")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+function brandHue(name) {
+  let h = 0;
+  const s = String(name || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function extractDomain(website, company) {
+  const raw = String(website || "").trim();
+  if (raw) {
+    try {
+      const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+      const host = new URL(withProto).hostname.replace(/^www\./i, "").toLowerCase();
+      if (host && host.includes(".")) return host;
+    } catch {
+      /* fall through */
+    }
+  }
+  const key = String(company || "").trim().toLowerCase();
+  if (COMPANY_DOMAINS[key]) return COMPANY_DOMAINS[key];
+  // soft match: "Airbnb Inc" → airbnb
+  for (const [k, domain] of Object.entries(COMPANY_DOMAINS)) {
+    if (key === k || key.startsWith(k + " ") || key.includes(" " + k + " ")) return domain;
+  }
+  return "";
+}
+
+function logoCandidates(domain) {
+  if (!domain) return [];
+  const d = encodeURIComponent(domain);
+  // Prefer clearer brand marks first; favicons as reliable fallback
+  return [
+    `https://unavatar.io/${d}?fallback=false`,
+    `https://www.google.com/s2/favicons?domain=${d}&sz=128`,
+    `https://icons.duckduckgo.com/ip3/${domain}.ico`,
+  ];
+}
+
+/**
+ * Brand mark HTML: logo image with multi-source fallback → initials tile.
+ * size: "sm" | "md" | "lg"
+ */
+function brandMarkHtml(company, website, { size = "md" } = {}) {
+  const domain = extractDomain(website, company);
+  const initials = companyInitials(company);
+  const hue = brandHue(company);
+  const urls = logoCandidates(domain);
+  const first = urls[0] || "";
+  const rest = urls.slice(1).join("|");
+  const img = first
+    ? `<img class="brand-logo-img" src="${esc(first)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fallbacks="${esc(rest)}" onerror="window.__brandLogoFallback && window.__brandLogoFallback(this)" />`
+    : "";
+  return `<span class="brand-mark brand-mark-${size}${first ? "" : " is-fallback"}" style="--brand-hue:${hue}" title="${esc(company || "")}${domain ? " · " + esc(domain) : ""}">
+    ${img}
+    <span class="brand-initials" aria-hidden="true">${esc(initials)}</span>
+  </span>`;
+}
+
+window.__brandLogoFallback = function (img) {
+  const parent = img.closest(".brand-mark");
+  const chain = (img.dataset.fallbacks || "").split("|").filter(Boolean);
+  if (chain.length) {
+    img.dataset.fallbacks = chain.slice(1).join("|");
+    img.src = chain[0];
+    return;
+  }
+  img.remove();
+  if (parent) parent.classList.add("is-fallback");
+};
+
+function brandWashStyle(company) {
+  const hue = brandHue(company);
+  return `--brand-hue:${hue};--brand-a:hsla(${hue},42%,38%,0.55);--brand-b:hsla(${(hue + 40) % 360},35%,22%,0.75)`;
+}
+
 function headers() {
   const h = { "Content-Type": "application/json" };
   const t = localStorage.getItem(TOKEN_KEY);
@@ -209,13 +355,19 @@ function renderReady() {
     return;
   }
   list.innerHTML = items.map((p) => `
-    <button type="button" class="ready-item ${state.focusId === p.id ? "active" : ""}" data-id="${esc(p.id)}">
-      <div class="ready-top">
-        <strong>${esc(p.company)}</strong>
-        <span class="${tierClass(p.tier)}">${esc(p.tier)}</span>
-      </div>
-      <div class="ready-meta">Score ${p.score ?? "—"} · ${esc(p.package || "—")}</div>
-      <div class="ready-next">${esc(p.next_step?.title || p.stage || "")}</div>
+    <button type="button" class="ready-item ${state.focusId === p.id ? "active" : ""}" data-id="${esc(p.id)}" style="${brandWashStyle(p.company)}">
+      <span class="ready-item-wash" aria-hidden="true"></span>
+      <span class="ready-item-inner">
+        ${brandMarkHtml(p.company, p.website, { size: "md" })}
+        <span class="ready-item-copy">
+          <span class="ready-top">
+            <strong>${esc(p.company)}</strong>
+            <span class="${tierClass(p.tier)}">${esc(p.tier)}</span>
+          </span>
+          <span class="ready-meta">Score ${p.score ?? "—"} · ${esc(p.package || "—")}</span>
+          <span class="ready-next">${esc(p.next_step?.title || p.stage || "")}</span>
+        </span>
+      </span>
     </button>`).join("");
   list.querySelectorAll(".ready-item").forEach((b) => {
     b.addEventListener("click", () => focusLead(b.dataset.id));
@@ -331,6 +483,16 @@ async function renderWorkstream() {
   const p = ws.prospect || {};
   const primary = ws.primary_contact || (p.contacts || [])[0] || {};
   const contacts = ws.contacts || p.contacts || [];
+
+  const head = $("#work-client-head");
+  if (head) {
+    head.style.cssText = brandWashStyle(p.company);
+    head.classList.add("has-brand");
+  }
+  const art = $("#ws-brand-art");
+  if (art) {
+    art.innerHTML = brandMarkHtml(p.company, p.website, { size: "lg" });
+  }
 
   $("#ws-company").textContent = p.company || "—";
   $("#ws-tier").textContent = `Tier ${p.tier || "—"} · score ${p.score ?? "—"}`;

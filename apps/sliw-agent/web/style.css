@@ -210,27 +210,62 @@ a:hover { text-decoration: underline; }
 
 .ready-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   max-height: 70vh;
   overflow-y: auto;
 }
 
 .ready-item {
+  position: relative;
   text-align: left;
   width: 100%;
   border: 1px solid var(--line-soft);
-  background: rgba(0, 0, 0, 0.22);
-  border-radius: 12px;
-  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 14px;
+  padding: 0;
   cursor: pointer;
   color: inherit;
-  transition: 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.ready-item-wash {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(120deg, var(--brand-a, rgba(201, 168, 76, 0.18)), transparent 55%),
+    radial-gradient(120% 100% at 100% 0%, var(--brand-b, rgba(255, 255, 255, 0.06)), transparent 60%);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.ready-item-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.ready-item-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .ready-item:hover,
 .ready-item.active {
-  border-color: rgba(201, 168, 76, 0.45);
-  background: rgba(201, 168, 76, 0.08);
+  border-color: rgba(201, 168, 76, 0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.ready-item.active {
+  background: rgba(201, 168, 76, 0.06);
 }
 
 .ready-top {
@@ -238,28 +273,116 @@ a:hover { text-decoration: underline; }
   justify-content: space-between;
   gap: 8px;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+}
+
+.ready-top strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .ready-meta { font-size: 12px; color: var(--mist); }
 .ready-next {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 12px;
   color: var(--champagne-light);
 }
 
+/* Brand marks (logo / initials) */
+.brand-mark {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, hsla(var(--brand-hue, 40), 45%, 48%, 0.35), hsla(var(--brand-hue, 40), 30%, 18%, 0.85));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.brand-mark-sm { width: 32px; height: 32px; border-radius: 8px; }
+.brand-mark-md { width: 44px; height: 44px; border-radius: 11px; }
+.brand-mark-lg { width: 72px; height: 72px; border-radius: 16px; }
+
+.brand-logo-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 18%;
+  background: #fff;
+  z-index: 1;
+}
+
+.brand-mark-lg .brand-logo-img { padding: 16%; }
+
+.brand-initials {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: var(--ivory);
+  z-index: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.brand-mark-sm .brand-initials { font-size: 12px; }
+.brand-mark-lg .brand-initials { font-size: 26px; }
+
+.brand-mark.is-fallback .brand-logo-img { display: none; }
+.brand-mark:not(.is-fallback) .brand-initials { opacity: 0; }
+
 .work-client-head {
+  position: relative;
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 18px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line-soft);
+  background: rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.work-client-head.has-brand::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(115deg, var(--brand-a, rgba(201, 168, 76, 0.28)) 0%, transparent 58%),
+    radial-gradient(90% 140% at 100% 0%, var(--brand-b, rgba(255, 255, 255, 0.08)), transparent 55%);
+  pointer-events: none;
+}
+
+.work-client-brand,
+.work-client-copy,
+.work-client-head .progress-ring {
+  position: relative;
+  z-index: 1;
+}
+
+.work-client-brand {
+  flex-shrink: 0;
+}
+
+.work-client-copy {
+  flex: 1;
+  min-width: 0;
 }
 
 .work-client-head h2 {
   font-family: var(--font-display);
   font-size: 32px;
   font-weight: 600;
+  line-height: 1.15;
 }
 
 .progress-ring {
@@ -268,6 +391,7 @@ a:hover { text-decoration: underline; }
   color: var(--champagne-light);
   min-width: 64px;
   text-align: right;
+  flex-shrink: 0;
 }
 
 .step-rail {

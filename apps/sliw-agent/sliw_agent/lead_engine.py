@@ -322,6 +322,7 @@ def top_ready_to_contact(limit: int = 5) -> list[dict[str, Any]]:
         out.append({
             "id": p["id"],
             "company": p.get("company"),
+            "website": p.get("website") or "",
             "score": p.get("score"),
             "tier": p.get("tier"),
             "stage": p.get("stage"),
