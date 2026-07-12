@@ -918,6 +918,12 @@ select:focus, .search:focus, input:focus, textarea:focus {
   z-index: 40;
 }
 
+/* [hidden] must beat display:flex — otherwise the X cannot dismiss the panel */
+.drawer-backdrop[hidden],
+.drawer[hidden] {
+  display: none !important;
+}
+
 .drawer {
   position: fixed;
   top: 0;
@@ -931,6 +937,10 @@ select:focus, .search:focus, input:focus, textarea:focus {
   flex-direction: column;
   box-shadow: -20px 0 60px rgba(0, 0, 0, 0.4);
   animation: slideIn 0.22s ease;
+}
+
+.drawer:not([hidden]) {
+  display: flex;
 }
 
 @keyframes slideIn {

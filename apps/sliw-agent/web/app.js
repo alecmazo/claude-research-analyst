@@ -447,8 +447,16 @@ async function openProspect(id) {
       </div>
     `;
 
-    $("#drawer").hidden = false;
-    $("#drawer-backdrop").hidden = false;
+    const drawer = $("#drawer");
+    const backdrop = $("#drawer-backdrop");
+    if (drawer) {
+      drawer.hidden = false;
+      drawer.removeAttribute("hidden");
+    }
+    if (backdrop) {
+      backdrop.hidden = false;
+      backdrop.removeAttribute("hidden");
+    }
 
     $("#btn-qualify")?.addEventListener("click", async () => {
       const reply_text = $("#reply-text").value.trim();
@@ -499,9 +507,21 @@ async function openProspect(id) {
   }
 }
 
-function closeDrawer() {
-  $("#drawer").hidden = true;
-  $("#drawer-backdrop").hidden = true;
+function closeDrawer(ev) {
+  if (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  const drawer = $("#drawer");
+  const backdrop = $("#drawer-backdrop");
+  if (drawer) {
+    drawer.hidden = true;
+    drawer.setAttribute("hidden", "");
+  }
+  if (backdrop) {
+    backdrop.hidden = true;
+    backdrop.setAttribute("hidden", "");
+  }
 }
 
 // ── Run form ─────────────────────────────────────────────────────────────────
@@ -647,8 +667,13 @@ function boot() {
   $$("[data-goto]").forEach((btn) => {
     btn.addEventListener("click", () => showView(btn.dataset.goto));
   });
-  $("#drawer-close").addEventListener("click", closeDrawer);
-  $("#drawer-backdrop").addEventListener("click", closeDrawer);
+  $("#drawer-close")?.addEventListener("click", closeDrawer);
+  $("#drawer-backdrop")?.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("#drawer") && !$("#drawer").hidden) {
+      closeDrawer(e);
+    }
+  });
   $("#btn-refresh").addEventListener("click", async () => {
     try {
       await refresh();
