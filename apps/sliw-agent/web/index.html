@@ -9,26 +9,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script>
-    // On Railway: APIs live at /api/sliw and login is the DGA portfolio login.
-    // Local standalone (port 8787): APIs at /api, no shared login required.
     window.SLIW_API_BASE = (function () {
       if (window.location.port === "8787") return "/api";
       if (window.location.pathname.indexOf("/sliw") === 0) return "/api/sliw";
       return "/api";
     })();
-    window.SLIW_REQUIRE_DGA_LOGIN = window.location.port !== "8787"
-      && window.location.hostname !== "127.0.0.1"
-      && window.location.hostname !== "localhost";
-    // Also require login when served under /sliw on any host (incl. local main app)
+    window.SLIW_REQUIRE_DGA_LOGIN = false;
     if (window.location.pathname.indexOf("/sliw") === 0) {
       window.SLIW_REQUIRE_DGA_LOGIN = true;
       window.SLIW_API_BASE = "/api/sliw";
+    } else if (window.location.port !== "8787" && window.location.hostname !== "127.0.0.1" && window.location.hostname !== "localhost") {
+      window.SLIW_REQUIRE_DGA_LOGIN = true;
     }
   </script>
 </head>
 <body>
   <div class="app-shell">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">S</div>
@@ -39,116 +35,117 @@
       </div>
 
       <nav class="nav" id="nav">
-        <button class="nav-item active" data-view="dashboard">
-          <span class="nav-icon">◈</span> Dashboard
-        </button>
-        <button class="nav-item" data-view="pipeline">
-          <span class="nav-icon">◎</span> Pipeline
-        </button>
-        <button class="nav-item" data-view="run">
-          <span class="nav-icon">✦</span> New outreach
-        </button>
-        <button class="nav-item" data-view="packages">
-          <span class="nav-icon">◇</span> Packages
-        </button>
-        <button class="nav-item" data-view="leads">
-          <span class="nav-icon">★</span> Edyta’s leads
+        <button class="nav-item active" data-view="edyta"><span class="nav-icon">★</span> Edyta’s desk
           <span class="nav-badge" id="leads-badge" hidden>0</span>
         </button>
-        <button class="nav-item" data-view="outreach">
-          <span class="nav-icon">✉</span> Drafts
-        </button>
-        <button class="nav-item" data-view="talent">
-          <span class="nav-icon">◆</span> Talent bible
-        </button>
+        <button class="nav-item" data-view="week"><span class="nav-icon">▣</span> This week</button>
+        <div class="nav-section">Corporate</div>
+        <button class="nav-item" data-view="dashboard"><span class="nav-icon">◈</span> Dashboard</button>
+        <button class="nav-item" data-view="engine"><span class="nav-icon">⚡</span> Lead Engine</button>
+        <button class="nav-item" data-view="pipeline"><span class="nav-icon">◎</span> Pipeline</button>
+        <button class="nav-item" data-view="run"><span class="nav-icon">✦</span> New outreach</button>
+        <button class="nav-item" data-view="outreach"><span class="nav-icon">✉</span> Drafts</button>
+        <button class="nav-item" data-view="packages"><span class="nav-icon">◇</span> Packages</button>
+        <div class="nav-section">Wedding Agent</div>
+        <button class="nav-item" data-view="weddings"><span class="nav-icon">♡</span> Weddings</button>
+        <button class="nav-item" data-view="wedding-run"><span class="nav-icon">✦</span> New wedding lead</button>
+        <div class="nav-section">Channels</div>
+        <button class="nav-item" data-view="partners"><span class="nav-icon">⚭</span> Partnerships</button>
+        <button class="nav-item" data-view="talent"><span class="nav-icon">◆</span> Talent bible</button>
       </nav>
 
       <div class="sidebar-foot">
-        <p class="sidebar-quote">“Dance isn’t entertainment — it’s the ultimate team accelerator.”</p>
+        <p class="sidebar-quote">“Find the room. Package the talent. Only book real opportunities.”</p>
         <a class="sidebar-link" href="https://edytasliwinska.com/corporate" target="_blank" rel="noopener">edytasliwinska.com</a>
       </div>
     </aside>
 
-    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div>
-          <p class="eyebrow" id="view-eyebrow">Corporate desk</p>
-          <h1 class="page-title" id="view-title">Dashboard</h1>
+          <p class="eyebrow" id="view-eyebrow">Talent desk</p>
+          <h1 class="page-title" id="view-title">Edyta’s desk</h1>
         </div>
         <div class="topbar-actions">
           <button class="btn ghost" id="btn-refresh" type="button">Refresh</button>
-          <button class="btn primary" id="btn-seed" type="button">Load seed corps</button>
+          <button class="btn primary" id="btn-engine-run" type="button">Import 40 prospects</button>
         </div>
       </header>
 
       <div class="content">
-        <!-- DASHBOARD -->
-        <section class="view active" id="view-dashboard">
+        <section class="view active" id="view-edyta">
+          <div class="panel callout">
+            <h3>Warm leads only</h3>
+            <p id="edyta-message">Loading…</p>
+          </div>
+          <div id="edyta-list" class="leads-list"></div>
+        </section>
+
+        <section class="view" id="view-week">
+          <div class="panel">
+            <div class="panel-head"><h3>Desk checklist</h3><span class="muted" id="week-totals"></span></div>
+            <div id="week-tasks" class="week-tasks"></div>
+          </div>
+        </section>
+
+        <section class="view" id="view-dashboard">
           <div class="hero-card">
             <div class="hero-copy">
-              <p class="hero-kicker">CAA-style representation</p>
-              <h2>Find the room.<br />Package the talent.<br />Book the call.</h2>
-              <p class="hero-body">
-                Sliw Agent researches corporations, matches Edyta’s packages,
-                builds Gamma decks, drafts outreach, and only surfaces warm leads
-                for her to close.
-              </p>
+              <p class="hero-kicker">Corporate book</p>
+              <h2>CAA desk for<br />team experiences</h2>
+              <p class="hero-body">Research → score → Gamma → draft → approve → Edyta only on warms.</p>
               <div class="hero-ctas">
-                <button class="btn primary" data-goto="run">Start new outreach</button>
-                <button class="btn ghost" data-goto="leads">View Edyta’s leads</button>
+                <button class="btn primary" data-goto="engine">Lead Engine</button>
+                <button class="btn ghost" data-goto="week">This week</button>
               </div>
             </div>
-            <div class="hero-stats" id="hero-stats">
-              <!-- filled by JS -->
-            </div>
+            <div class="hero-stats" id="hero-stats"></div>
           </div>
-
           <div class="grid-3" id="kpi-row"></div>
-
           <div class="panel">
-            <div class="panel-head">
-              <h3>Pipeline stages</h3>
-              <span class="muted" id="pipeline-updated"></span>
-            </div>
+            <div class="panel-head"><h3>Pipeline stages</h3></div>
             <div class="stage-flow" id="stage-flow"></div>
           </div>
-
           <div class="panel">
-            <div class="panel-head">
-              <h3>Top prospects</h3>
-              <button class="btn text" data-goto="pipeline">See all →</button>
-            </div>
+            <div class="panel-head"><h3>Top prospects</h3></div>
             <div class="table-wrap">
               <table class="data-table" id="dash-table">
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Tier</th>
-                    <th>Score</th>
-                    <th>Stage</th>
-                    <th>Package</th>
-                  </tr>
-                </thead>
+                <thead><tr><th>Company</th><th>Tier</th><th>Score</th><th>Stage</th><th>Package</th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
           </div>
         </section>
 
-        <!-- PIPELINE -->
+        <section class="view" id="view-engine">
+          <div class="split">
+            <div class="panel">
+              <div class="panel-head"><h3>Lead Engine</h3><span class="pill" id="lib-count">—</span></div>
+              <p class="muted" style="margin-bottom:14px">Expanded library of Bay Area + CA + national corporate targets. Import scores into CRM without burning Gamma credits.</p>
+              <label>How many to import
+                <input type="number" id="engine-limit" value="40" min="5" max="100" />
+              </label>
+              <label class="check" style="margin:12px 0"><input type="checkbox" id="engine-draft" /> Also draft cold emails</label>
+              <button class="btn primary full" id="btn-lib-import" type="button">Run import</button>
+              <div id="engine-result" class="muted" style="margin-top:16px"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Bulk paste</h3></div>
+              <p class="muted" style="margin-bottom:10px">JSON array of objects with company, industry, geo, signals, custom_hook…</p>
+              <textarea id="bulk-json" rows="12" placeholder='[{"company":"Acme","industry":"tech","geo":"SF","signals":["offsite"]}]'></textarea>
+              <button class="btn ghost full" id="btn-bulk" type="button" style="margin-top:12px">Import JSON</button>
+            </div>
+          </div>
+        </section>
+
         <section class="view" id="view-pipeline">
           <div class="toolbar">
             <div class="filters">
-              <select id="filter-stage">
-                <option value="">All stages</option>
-              </select>
+              <select id="filter-stage"><option value="">All stages</option></select>
               <select id="filter-tier">
                 <option value="">All tiers</option>
-                <option value="A">Tier A</option>
-                <option value="B">Tier B</option>
-                <option value="C">Tier C</option>
-                <option value="D">Tier D</option>
+                <option value="A">Tier A</option><option value="B">Tier B</option>
+                <option value="C">Tier C</option><option value="D">Tier D</option>
               </select>
             </div>
             <input class="search" id="filter-search" type="search" placeholder="Search companies…" />
@@ -156,97 +153,134 @@
           <div class="prospect-grid" id="prospect-grid"></div>
         </section>
 
-        <!-- RUN -->
         <section class="view" id="view-run">
           <div class="split">
             <form class="panel form-panel" id="pipeline-form">
-              <div class="panel-head">
-                <h3>Run desk pipeline</h3>
-                <span class="pill">Score → Package → Draft</span>
-              </div>
-              <label>Company *
-                <input name="company" required placeholder="e.g. Genentech" />
-              </label>
+              <div class="panel-head"><h3>Corporate outreach</h3><span class="pill">Score → draft</span></div>
+              <label>Company *<input name="company" required placeholder="e.g. Genentech" /></label>
               <div class="form-row">
-                <label>Industry
-                  <input name="industry" placeholder="biotech, fintech, SaaS…" />
-                </label>
-                <label>Geo
-                  <input name="geo" placeholder="South San Francisco" />
-                </label>
+                <label>Industry<input name="industry" placeholder="biotech, fintech…" /></label>
+                <label>Geo<input name="geo" placeholder="South San Francisco" /></label>
               </div>
               <div class="form-row">
-                <label>Employees
-                  <input name="employee_range" placeholder="14000" />
-                </label>
-                <label>Website
-                  <input name="website" placeholder="https://" />
-                </label>
+                <label>Employees<input name="employee_range" /></label>
+                <label>Website<input name="website" /></label>
               </div>
-              <label>Trigger signals <span class="hint">comma-separated</span>
-                <input name="signals" placeholder="holiday party, wellness, leadership offsite" />
-              </label>
-              <label>Custom hook
-                <textarea name="custom_hook" rows="2" placeholder="One sentence why this company, this month…"></textarea>
-              </label>
-              <label>Notes
-                <textarea name="notes" rows="2" placeholder="Internal research notes"></textarea>
-              </label>
+              <label>Signals<input name="signals" placeholder="holiday party, wellness" /></label>
+              <label>Hook<textarea name="custom_hook" rows="2"></textarea></label>
               <div class="form-row">
-                <label>Contact name
-                  <input name="contact_name" placeholder="Alex Rivera" />
-                </label>
-                <label>Title
-                  <input name="contact_title" placeholder="Head of People" />
-                </label>
+                <label>Contact<input name="contact_name" /></label>
+                <label>Title<input name="contact_title" /></label>
               </div>
               <div class="form-row">
-                <label>Email
-                  <input name="contact_email" type="email" placeholder="alex@company.com" />
-                </label>
-                <label>LinkedIn
-                  <input name="contact_linkedin" placeholder="https://linkedin.com/in/…" />
-                </label>
+                <label>Email<input name="contact_email" type="email" /></label>
+                <label>LinkedIn<input name="contact_linkedin" /></label>
               </div>
               <div class="checks">
-                <label class="check"><input type="checkbox" name="generate_gamma" checked /> Build Gamma prompt</label>
-                <label class="check"><input type="checkbox" name="live_gamma" /> Live Gamma deck <span class="hint">(uses credits)</span></label>
-                <label class="check"><input type="checkbox" name="draft_email" checked /> Draft outreach email</label>
+                <label class="check"><input type="checkbox" name="generate_gamma" /> Gamma prompt</label>
+                <label class="check"><input type="checkbox" name="live_gamma" /> Live Gamma</label>
+                <label class="check"><input type="checkbox" name="draft_email" checked /> Draft email</label>
               </div>
-              <button class="btn primary full" type="submit" id="run-submit">Run pipeline</button>
-              <p class="form-note">Outreach is always a draft. You approve before anyone sends.</p>
+              <button class="btn primary full" type="submit">Run pipeline</button>
             </form>
-
             <div class="panel result-panel" id="run-result">
-              <div class="empty-state">
-                <div class="empty-icon">✦</div>
-                <h3>Ready when you are</h3>
-                <p>Fill in a corporation on the left. The desk will score ICP fit, recommend packages, optionally prep a Gamma deck, and draft a premium email.</p>
-              </div>
+              <div class="empty-state"><div class="empty-icon">✦</div><h3>Ready</h3><p>Fill a corporation — score, package, draft.</p></div>
             </div>
           </div>
         </section>
 
-        <!-- PACKAGES -->
         <section class="view" id="view-packages">
+          <h3 class="panel-head" style="margin-bottom:12px">Corporate packages</h3>
           <div class="package-grid" id="package-grid"></div>
+          <h3 class="panel-head" style="margin:24px 0 12px">Wedding packages</h3>
+          <div class="package-grid" id="wedding-package-grid"></div>
         </section>
 
-        <!-- LEADS -->
-        <section class="view" id="view-leads">
-          <div class="panel callout">
-            <h3>Only warm leads reach Edyta</h3>
-            <p>Qualified interest with a discovery brief. Protect her calendar — tire-kickers stay with the desk.</p>
-          </div>
-          <div id="leads-list" class="leads-list"></div>
-        </section>
-
-        <!-- OUTREACH -->
         <section class="view" id="view-outreach">
           <div id="outreach-list" class="outreach-list"></div>
         </section>
 
-        <!-- TALENT -->
+        <section class="view" id="view-weddings">
+          <div class="panel callout">
+            <h3>Wedding Agent</h3>
+            <p>Parallel book for couples, venues, and planners — separate CRM from corporate.</p>
+          </div>
+          <div class="toolbar">
+            <button class="btn primary sm" id="btn-wedding-import" type="button">Import wedding library</button>
+            <span class="muted" id="wedding-stats"></span>
+          </div>
+          <div class="prospect-grid" id="wedding-grid"></div>
+        </section>
+
+        <section class="view" id="view-wedding-run">
+          <div class="split">
+            <form class="panel form-panel" id="wedding-form">
+              <div class="panel-head"><h3>New wedding lead</h3></div>
+              <label>Name / couple / venue *<input name="name" required /></label>
+              <label>Type
+                <select name="industry">
+                  <option>Wedding couple</option>
+                  <option>Wedding planner</option>
+                  <option>Wedding venue</option>
+                </select>
+              </label>
+              <label>Geo<input name="geo" placeholder="Marin / SF" /></label>
+              <label>Signals<input name="signals" placeholder="engaged, first dance, planner partnership" /></label>
+              <label>Package hint
+                <select name="package_hint">
+                  <option value="">Auto</option>
+                  <option value="single_lesson">Single lesson $150</option>
+                  <option value="package_10">10-lesson $1,250</option>
+                  <option value="dream">Dream Wedding Dance</option>
+                </select>
+              </label>
+              <label>Hook / notes<textarea name="notes" rows="2"></textarea></label>
+              <div class="form-row">
+                <label>Contact<input name="contact_name" /></label>
+                <label>Email<input name="contact_email" type="email" /></label>
+              </div>
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="generate_gamma" /> Gamma prompt</label>
+                <label class="check"><input type="checkbox" name="live_gamma" /> Live Gamma</label>
+                <label class="check"><input type="checkbox" name="draft_email" checked /> Draft email</label>
+              </div>
+              <button class="btn primary full" type="submit">Run wedding pipeline</button>
+            </form>
+            <div class="panel result-panel" id="wedding-run-result">
+              <div class="empty-state"><div class="empty-icon">♡</div><h3>Wedding desk</h3><p>Couples &amp; planner outreach.</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-partners">
+          <div class="toolbar">
+            <button class="btn primary sm" id="btn-partner-seed" type="button">Load partner seeds</button>
+          </div>
+          <div id="partner-list" class="leads-list"></div>
+          <form class="panel form-panel" id="partner-form" style="margin-top:16px">
+            <div class="panel-head"><h3>Add partner</h3></div>
+            <div class="form-row">
+              <label>Name *<input name="name" required /></label>
+              <label>Type
+                <select name="type">
+                  <option value="offsite_planner">Offsite planner</option>
+                  <option value="hotel">Hotel</option>
+                  <option value="pe_ops">PE ops</option>
+                  <option value="wedding_venue">Wedding venue</option>
+                  <option value="hr_consultant">HR consultant</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Geo<input name="geo" /></label>
+              <label>Email<input name="contact_email" type="email" /></label>
+            </div>
+            <label>Notes<textarea name="notes" rows="2"></textarea></label>
+            <button class="btn primary" type="submit">Save partner</button>
+          </form>
+        </section>
+
         <section class="view" id="view-talent">
           <div class="talent-layout" id="talent-layout"></div>
         </section>
@@ -254,7 +288,6 @@
     </main>
   </div>
 
-  <!-- Prospect drawer -->
   <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
   <aside class="drawer" id="drawer" hidden>
     <div class="drawer-head">

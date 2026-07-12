@@ -29386,63 +29386,94 @@ def snaptrade_remove(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sliw Agent — Edyta Śliwińska corporate representation desk
-# UI:  /sliw/     (uses same DGA login as /gp · /lp)
-# API: /api/sliw/*  (auth middleware + allowlist GP/Edyta)
+# Sliw Agent — Edyta Śliwińska corporate representation desk (OPTIONAL)
+#
+# Isolation guarantees (must not break DGA Capital research/fund):
+#   • Fully optional: set SLIW_ENABLED=0 to skip mount entirely
+#   • Import failures are swallowed — DGA continues without /sliw
+#   • sys.path uses append (never insert(0)) so Sliw never shadows DGA pkgs
+#   • Routes only under /sliw and /api/sliw — no DGA route overrides
+#   • CRM/data under $STOCKS_FOLDER/sliw-agent/ (or SLIW_DATA_DIR) only
+#   • Gamma: shared GAMMA_API_KEY is intentional (same credit pool as DGA research)
+#   • Auth allowlist separate from LP fund access
 # ─────────────────────────────────────────────────────────────────────────────
 _SLIW_ROOT = Path(__file__).resolve().parent.parent / "apps" / "sliw-agent"
 _SLIW_WEB = _SLIW_ROOT / "web"
 
+
+def _sliw_enabled() -> bool:
+    """Feature flag. Default on when the app folder exists; set SLIW_ENABLED=0 to kill-switch."""
+    flag = (os.environ.get("SLIW_ENABLED") or "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return _SLIW_ROOT.is_dir()
+
+
 def _mount_sliw_agent() -> None:
-    if not _SLIW_ROOT.is_dir():
-        print("[sliw] apps/sliw-agent not found — skipping", flush=True)
-        return
-    sliw_path = str(_SLIW_ROOT)
-    if sliw_path not in sys.path:
-        sys.path.insert(0, sliw_path)
+    """Best-effort optional mount. Never raises into DGA startup."""
     try:
-        from sliw_agent.server import create_api_router as _sliw_create_router
-        app.include_router(_sliw_create_router(), prefix="/api/sliw")
-        print("[sliw] API mounted at /api/sliw", flush=True)
-    except Exception as _sliw_exc:
-        print(f"[sliw] API mount failed: {_sliw_exc!r}", flush=True)
-        return
+        if not _sliw_enabled():
+            print("[sliw] disabled (SLIW_ENABLED=0 or apps/sliw-agent missing)", flush=True)
+            return
 
-    if not _SLIW_WEB.is_dir():
-        print("[sliw] web/ missing — UI not mounted", flush=True)
-        return
+        sliw_path = str(_SLIW_ROOT.resolve())
+        # APPEND only — never insert(0). Prepending could shadow DGA modules.
+        if sliw_path not in sys.path:
+            sys.path.append(sliw_path)
 
-    @app.get("/sliw")
-    def _sliw_redir():
-        return RedirectResponse(url="/sliw/", status_code=307)
-
-    @app.get("/sliw/")
-    def _sliw_index(request: Request):
-        path = _SLIW_WEB / "index.html"
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Sliw Agent UI not found")
-        return _shell_response(path, request)
-
-    @app.get("/sliw/{asset_path:path}")
-    def _sliw_asset(asset_path: str):
-        # Serve style.css / app.js etc. under /sliw/
-        if ".." in asset_path or asset_path.startswith("/"):
-            raise HTTPException(status_code=404)
-        target = (_SLIW_WEB / asset_path).resolve()
         try:
-            target.relative_to(_SLIW_WEB.resolve())
-        except ValueError:
-            raise HTTPException(status_code=404)
-        if not target.is_file():
-            raise HTTPException(status_code=404)
-        media = None
-        if target.suffix == ".css":
-            media = "text/css"
-        elif target.suffix == ".js":
-            media = "application/javascript"
-        return FileResponse(str(target), media_type=media)
+            from sliw_agent.server import create_api_router as _sliw_create_router
+            app.include_router(
+                _sliw_create_router(),
+                prefix="/api/sliw",
+                tags=["sliw-agent"],
+            )
+            print("[sliw] API mounted at /api/sliw (isolated)", flush=True)
+        except Exception as _sliw_exc:
+            print(f"[sliw] API mount failed (DGA unaffected): {_sliw_exc!r}", flush=True)
+            return
 
-    print("[sliw] UI mounted at /sliw/", flush=True)
+        if not _SLIW_WEB.is_dir():
+            print("[sliw] web/ missing — API only", flush=True)
+            return
+
+        @app.get("/sliw")
+        def _sliw_redir():
+            return RedirectResponse(url="/sliw/", status_code=307)
+
+        @app.get("/sliw/")
+        def _sliw_index(request: Request):
+            path = _SLIW_WEB / "index.html"
+            if not path.exists():
+                raise HTTPException(status_code=404, detail="Sliw Agent UI not found")
+            return _shell_response(path, request)
+
+        @app.get("/sliw/{asset_path:path}")
+        def _sliw_asset(asset_path: str):
+            # Static assets only under apps/sliw-agent/web — no path traversal.
+            if not asset_path or ".." in asset_path or asset_path.startswith(("/", "\\")):
+                raise HTTPException(status_code=404)
+            # Block accidental capture of unrelated extensions that could confuse ops
+            target = (_SLIW_WEB / asset_path).resolve()
+            try:
+                target.relative_to(_SLIW_WEB.resolve())
+            except ValueError:
+                raise HTTPException(status_code=404)
+            if not target.is_file():
+                raise HTTPException(status_code=404)
+            media = None
+            if target.suffix == ".css":
+                media = "text/css"
+            elif target.suffix == ".js":
+                media = "application/javascript"
+            elif target.suffix == ".html":
+                media = "text/html"
+            return FileResponse(str(target), media_type=media)
+
+        print("[sliw] UI mounted at /sliw/ (isolated from /gp /lp /app)", flush=True)
+    except Exception as _outer:
+        # Absolute last resort — never take down DGA boot
+        print(f"[sliw] mount aborted (DGA unaffected): {_outer!r}", flush=True)
 
 
 _mount_sliw_agent()

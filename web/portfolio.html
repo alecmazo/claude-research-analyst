@@ -248,12 +248,16 @@
   const $err     = document.getElementById('login-error');
   let _mfaStage  = false;   // true once the server asks for a 2FA code
 
-  // Safe post-login redirect (?next=/sliw/) — same-origin relative paths only.
+  // Optional post-login redirect. Whitelist ONLY /sliw so normal DGA
+  // login still always lands on /gp or /lp unless the user came from Sliw.
   function postLoginDestination(role) {
     try {
       const raw = new URLSearchParams(window.location.search).get('next') || '';
-      if (raw && raw.charAt(0) === '/' && raw.charAt(1) !== '/' && raw.indexOf('//') === -1) {
-        return raw;
+      // Allow /sliw and /sliw/... only (no open redirects into other apps)
+      if (raw === '/sliw' || raw === '/sliw/' || raw.indexOf('/sliw/') === 0) {
+        if (raw.charAt(0) === '/' && raw.charAt(1) !== '/' && raw.indexOf('//') === -1) {
+          return raw;
+        }
       }
     } catch (_) {}
     return (role === 'gp' || role === 'admin') ? '/gp' : '/lp';

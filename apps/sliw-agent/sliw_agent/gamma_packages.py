@@ -36,10 +36,14 @@ except ImportError:
 
 
 def _gamma_key() -> str:
-    key = os.environ.get("GAMMA_API_KEY", "").strip()
+    """Shared Gamma credits with DGA — same GAMMA_API_KEY is fine."""
+    key = (
+        os.environ.get("SLIW_GAMMA_API_KEY", "").strip()  # optional override
+        or os.environ.get("GAMMA_API_KEY", "").strip()
+    )
     if not key:
         raise RuntimeError(
-            "GAMMA_API_KEY not set. Add it to the monorepo .env "
+            "GAMMA_API_KEY not set. Add it to the monorepo .env / Railway "
             "(https://gamma.app/account)."
         )
     return key

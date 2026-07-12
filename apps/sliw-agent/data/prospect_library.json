@@ -1,0 +1,1188 @@
+[
+  {
+    "company": "Salesforce",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "70000",
+    "website": "https://www.salesforce.com",
+    "signals": [
+      "all-hands",
+      "holiday party",
+      "employee engagement"
+    ],
+    "notes": "Ohana culture + large SF events budget",
+    "custom_hook": "Ohana culture + large SF events budget",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Genentech",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "South San Francisco, CA",
+    "employee_range": "14000",
+    "website": "https://www.gene.com",
+    "signals": [
+      "wellness program",
+      "leadership development",
+      "campus culture"
+    ],
+    "notes": "SSF campus wellness + leadership labs",
+    "custom_hook": "SSF campus wellness + leadership labs",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Stripe",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco / SSF, CA",
+    "employee_range": "8000",
+    "website": "https://stripe.com",
+    "signals": [
+      "engineering culture",
+      "offsite",
+      "RTO hybrid culture rebuilding"
+    ],
+    "notes": "Eng-heavy fintech team connection",
+    "custom_hook": "Eng-heavy fintech team connection",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Airbnb",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "7000",
+    "website": "https://www.airbnb.com",
+    "signals": [
+      "belonging",
+      "culture",
+      "holiday party"
+    ],
+    "notes": "Belonging brand \u2192 movement experience",
+    "custom_hook": "Belonging brand \u2192 movement experience",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Uber",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "30000",
+    "website": "https://www.uber.com",
+    "signals": [
+      "all-hands",
+      "holiday party",
+      "engineering-heavy workforce"
+    ],
+    "notes": "HQ floor energy + gala potential",
+    "custom_hook": "HQ floor energy + gala potential",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "DoorDash",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "19000",
+    "website": "https://www.doordash.com",
+    "signals": [
+      "all-hands",
+      "holiday party",
+      "employee engagement"
+    ],
+    "notes": "SF tech all-hands upgrade",
+    "custom_hook": "SF tech all-hands upgrade",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Autodesk",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "13000",
+    "website": "https://www.autodesk.com",
+    "signals": [
+      "employee experience",
+      "creative culture",
+      "wellness"
+    ],
+    "notes": "Design culture fits experiential events",
+    "custom_hook": "Design culture fits experiential events",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Twilio",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "5000",
+    "website": "https://www.twilio.com",
+    "signals": [
+      "engineering culture",
+      "offsite",
+      "wellness"
+    ],
+    "notes": "Dev-heavy culture rituals",
+    "custom_hook": "Dev-heavy culture rituals",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Block (Square)",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "12000",
+    "website": "https://block.xyz",
+    "signals": [
+      "culture",
+      "all-hands",
+      "holiday party"
+    ],
+    "notes": "SF fintech culture brand",
+    "custom_hook": "SF fintech culture brand",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Dropbox",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "2500",
+    "website": "https://www.dropbox.com",
+    "signals": [
+      "hybrid culture rebuilding",
+      "employee experience"
+    ],
+    "notes": "Hybrid culture needs shared moments",
+    "custom_hook": "Hybrid culture needs shared moments",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Asana",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "1800",
+    "website": "https://asana.com",
+    "signals": [
+      "employee experience",
+      "wellness",
+      "culture"
+    ],
+    "notes": "Work-management culture storytelling",
+    "custom_hook": "Work-management culture storytelling",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Pinterest",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "4000",
+    "website": "https://www.pinterest.com",
+    "signals": [
+      "creative culture",
+      "holiday party",
+      "employee engagement"
+    ],
+    "notes": "Creative HQ events",
+    "custom_hook": "Creative HQ events",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Reddit",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "2000",
+    "website": "https://www.redditinc.com",
+    "signals": [
+      "engineering culture",
+      "all-hands"
+    ],
+    "notes": "SF eng culture",
+    "custom_hook": "SF eng culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Databricks",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "6000",
+    "website": "https://www.databricks.com",
+    "signals": [
+      "engineering-heavy workforce",
+      "offsite",
+      "leadership development"
+    ],
+    "notes": "Fast-growth data platform culture",
+    "custom_hook": "Fast-growth data platform culture",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Snowflake",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Mateo / Bay Area, CA",
+    "employee_range": "7000",
+    "website": "https://www.snowflake.com",
+    "signals": [
+      "offsite",
+      "leadership development",
+      "engineering culture"
+    ],
+    "notes": "Enterprise data culture offsights",
+    "custom_hook": "Enterprise data culture offsights",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "ServiceNow",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Santa Clara, CA",
+    "employee_range": "22000",
+    "website": "https://www.servicenow.com",
+    "signals": [
+      "employee experience",
+      "leadership development",
+      "holiday party"
+    ],
+    "notes": "South Bay enterprise culture",
+    "custom_hook": "South Bay enterprise culture",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Adobe",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Jose / Bay Area, CA",
+    "employee_range": "30000",
+    "website": "https://www.adobe.com",
+    "signals": [
+      "creative culture",
+      "wellness",
+      "employee experience"
+    ],
+    "notes": "Creative + design org fit",
+    "custom_hook": "Creative + design org fit",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Cisco",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Jose, CA",
+    "employee_range": "80000",
+    "website": "https://www.cisco.com",
+    "signals": [
+      "wellness program",
+      "leadership development",
+      "campus culture"
+    ],
+    "notes": "Campus-scale wellness series",
+    "custom_hook": "Campus-scale wellness series",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Intel",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Santa Clara, CA",
+    "employee_range": "100000",
+    "website": "https://www.intel.com",
+    "signals": [
+      "wellness",
+      "leadership development",
+      "campus culture"
+    ],
+    "notes": "Campus wellness + leadership",
+    "custom_hook": "Campus wellness + leadership",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Apple",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Cupertino, CA",
+    "employee_range": "160000",
+    "website": "https://www.apple.com",
+    "signals": [
+      "employee experience",
+      "wellness",
+      "campus culture"
+    ],
+    "notes": "Premium campus experiences (hard buyer)",
+    "custom_hook": "Premium campus experiences (hard buyer)",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Google",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Mountain View, CA",
+    "employee_range": "180000",
+    "website": "https://about.google",
+    "signals": [
+      "employee engagement",
+      "wellness",
+      "all-hands culture"
+    ],
+    "notes": "Campus micro-events by org",
+    "custom_hook": "Campus micro-events by org",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Meta",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Menlo Park, CA",
+    "employee_range": "70000",
+    "website": "https://about.meta.com",
+    "signals": [
+      "employee engagement",
+      "offsite",
+      "engineering culture"
+    ],
+    "notes": "Bay campus culture programs",
+    "custom_hook": "Bay campus culture programs",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "LinkedIn",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Sunnyvale, CA",
+    "employee_range": "20000",
+    "website": "https://careers.linkedin.com",
+    "signals": [
+      "employee experience",
+      "culture",
+      "wellness"
+    ],
+    "notes": "Talent brand culture fit",
+    "custom_hook": "Talent brand culture fit",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Netflix",
+    "industry": "Media / entertainment",
+    "geo": "Los Gatos, CA",
+    "employee_range": "13000",
+    "website": "https://jobs.netflix.com",
+    "signals": [
+      "culture",
+      "holiday party",
+      "creative culture"
+    ],
+    "notes": "Culture-forward entertainment",
+    "custom_hook": "Culture-forward entertainment",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Roblox",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Mateo, CA",
+    "employee_range": "2500",
+    "website": "https://corp.roblox.com",
+    "signals": [
+      "engineering culture",
+      "employee engagement"
+    ],
+    "notes": "Gaming culture energy",
+    "custom_hook": "Gaming culture energy",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Zoom",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Jose, CA",
+    "employee_range": "8000",
+    "website": "https://zoom.us",
+    "signals": [
+      "hybrid culture rebuilding",
+      "wellness",
+      "employee experience"
+    ],
+    "notes": "Hybrid connection irony = perfect hook",
+    "custom_hook": "Hybrid connection irony = perfect hook",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Okta",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "5000",
+    "website": "https://www.okta.com",
+    "signals": [
+      "engineering culture",
+      "offsite"
+    ],
+    "notes": "Identity company team identity moment",
+    "custom_hook": "Identity company team identity moment",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Cloudflare",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "4000",
+    "website": "https://www.cloudflare.com",
+    "signals": [
+      "engineering-heavy workforce",
+      "all-hands"
+    ],
+    "notes": "SF eng all-hands",
+    "custom_hook": "SF eng all-hands",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "GitLab",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Remote / SF presence",
+    "employee_range": "2000",
+    "website": "https://about.gitlab.com",
+    "signals": [
+      "remote culture",
+      "offsite",
+      "employee engagement"
+    ],
+    "notes": "Rare IRL offsite value for remote-first",
+    "custom_hook": "Rare IRL offsite value for remote-first",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Atlassian",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Bay Area / remote",
+    "employee_range": "10000",
+    "website": "https://www.atlassian.com",
+    "signals": [
+      "team collaboration",
+      "offsite",
+      "employee experience"
+    ],
+    "notes": "Teamwork brand \u2192 lived experience",
+    "custom_hook": "Teamwork brand \u2192 lived experience",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Gilead Sciences",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "Foster City, CA",
+    "employee_range": "17000",
+    "website": "https://www.gilead.com",
+    "signals": [
+      "wellness program",
+      "leadership development",
+      "campus culture"
+    ],
+    "notes": "Biotech campus wellness",
+    "custom_hook": "Biotech campus wellness",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "BioMarin",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "San Rafael, CA",
+    "employee_range": "3000",
+    "website": "https://www.biomarin.com",
+    "signals": [
+      "campus culture",
+      "wellness",
+      "employee engagement"
+    ],
+    "notes": "Local Marin biotech \u2014 studio proximity",
+    "custom_hook": "Local Marin biotech \u2014 studio proximity",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Illumina",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "San Diego / Bay presence",
+    "employee_range": "10000",
+    "website": "https://www.illumina.com",
+    "signals": [
+      "leadership development",
+      "wellness program"
+    ],
+    "notes": "Genomics HiPo programs",
+    "custom_hook": "Genomics HiPo programs",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Kaiser Permanente",
+    "industry": "Healthcare systems & health-tech",
+    "geo": "Oakland / Bay Area, CA",
+    "employee_range": "200000",
+    "website": "https://www.kaiserpermanente.org",
+    "signals": [
+      "wellness",
+      "employee engagement",
+      "leadership development"
+    ],
+    "notes": "Dept-level healthcare wellness",
+    "custom_hook": "Dept-level healthcare wellness",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Sutter Health",
+    "industry": "Healthcare systems & health-tech",
+    "geo": "Sacramento / Bay Area, CA",
+    "employee_range": "50000",
+    "website": "https://www.sutterhealth.org",
+    "signals": [
+      "wellness",
+      "employee engagement"
+    ],
+    "notes": "Regional health system culture",
+    "custom_hook": "Regional health system culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "23andMe",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "South San Francisco, CA",
+    "employee_range": "500",
+    "website": "https://www.23andme.com",
+    "signals": [
+      "culture",
+      "wellness",
+      "employee engagement"
+    ],
+    "notes": "Consumer genetics culture",
+    "custom_hook": "Consumer genetics culture",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "Natera",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "Austin / SF Bay",
+    "employee_range": "3000",
+    "website": "https://www.natera.com",
+    "signals": [
+      "leadership development",
+      "wellness"
+    ],
+    "notes": "Growth-stage diagnostics culture",
+    "custom_hook": "Growth-stage diagnostics culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Visa",
+    "industry": "Financial services / fintech",
+    "geo": "Foster City, CA",
+    "employee_range": "25000",
+    "website": "https://www.visa.com",
+    "signals": [
+      "employee experience",
+      "leadership development",
+      "holiday party"
+    ],
+    "notes": "Enterprise culture calendar",
+    "custom_hook": "Enterprise culture calendar",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Charles Schwab",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco / Westlake, TX",
+    "employee_range": "35000",
+    "website": "https://www.schwab.com",
+    "signals": [
+      "employee engagement",
+      "leadership development"
+    ],
+    "notes": "Financial services L&D",
+    "custom_hook": "Financial services L&D",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Wells Fargo",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "200000",
+    "website": "https://www.wellsfargo.com",
+    "signals": [
+      "employee engagement",
+      "wellness",
+      "leadership development"
+    ],
+    "notes": "Large FS culture programs",
+    "custom_hook": "Large FS culture programs",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Wilson Sonsini",
+    "industry": "Professional services (law, consulting)",
+    "geo": "Palo Alto / SF, CA",
+    "employee_range": "1000",
+    "website": "https://www.wsgr.com",
+    "signals": [
+      "holiday party",
+      "associate wellness",
+      "professional services culture"
+    ],
+    "notes": "Biglaw holiday + wellness",
+    "custom_hook": "Biglaw holiday + wellness",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Cooley LLP",
+    "industry": "Professional services (law, consulting)",
+    "geo": "Palo Alto / SF, CA",
+    "employee_range": "1500",
+    "website": "https://www.cooley.com",
+    "signals": [
+      "holiday party",
+      "associate wellness"
+    ],
+    "notes": "Tech law firm events",
+    "custom_hook": "Tech law firm events",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Fenwick & West",
+    "industry": "Professional services (law, consulting)",
+    "geo": "Mountain View / SF, CA",
+    "employee_range": "500",
+    "website": "https://www.fenwick.com",
+    "signals": [
+      "holiday party",
+      "professional services culture"
+    ],
+    "notes": "Silicon Valley law culture",
+    "custom_hook": "Silicon Valley law culture",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "McKinsey Bay Area",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco / SV",
+    "employee_range": "500",
+    "website": "https://www.mckinsey.com",
+    "signals": [
+      "leadership offsite",
+      "team retreat",
+      "high-potential employee accelerator programs"
+    ],
+    "notes": "Experiential leadership spearhead",
+    "custom_hook": "Experiential leadership spearhead",
+    "priority": 9,
+    "contacts": []
+  },
+  {
+    "company": "Bain & Company SF",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco, CA",
+    "employee_range": "300",
+    "website": "https://www.bain.com",
+    "signals": [
+      "leadership offsite",
+      "team retreat"
+    ],
+    "notes": "Consulting team offsights",
+    "custom_hook": "Consulting team offsights",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "BCG San Francisco",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco, CA",
+    "employee_range": "400",
+    "website": "https://www.bcg.com",
+    "signals": [
+      "leadership offsite",
+      "high-potential employee accelerator programs"
+    ],
+    "notes": "Strategy firm leadership labs",
+    "custom_hook": "Strategy firm leadership labs",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Deloitte Bay Area",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco / San Jose",
+    "employee_range": "5000",
+    "website": "https://www2.deloitte.com",
+    "signals": [
+      "leadership development",
+      "employee engagement",
+      "holiday party"
+    ],
+    "notes": "Big 4 culture calendar",
+    "custom_hook": "Big 4 culture calendar",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "EY Bay Area",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco, CA",
+    "employee_range": "3000",
+    "website": "https://www.ey.com",
+    "signals": [
+      "leadership development",
+      "employee engagement"
+    ],
+    "notes": "Professional services L&D",
+    "custom_hook": "Professional services L&D",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "KPMG Bay Area",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco, CA",
+    "employee_range": "2000",
+    "website": "https://kpmg.com",
+    "signals": [
+      "employee engagement",
+      "holiday party"
+    ],
+    "notes": "Audit/advisory culture events",
+    "custom_hook": "Audit/advisory culture events",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Goldman Sachs SF",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "2000",
+    "website": "https://www.goldmansachs.com",
+    "signals": [
+      "leadership development",
+      "employee engagement"
+    ],
+    "notes": "Premium FS culture",
+    "custom_hook": "Premium FS culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "JPMorgan SF",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "5000",
+    "website": "https://www.jpmorgan.com",
+    "signals": [
+      "employee engagement",
+      "wellness",
+      "leadership development"
+    ],
+    "notes": "Bank culture programs",
+    "custom_hook": "Bank culture programs",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Rivian",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Palo Alto / national",
+    "employee_range": "14000",
+    "website": "https://rivian.com",
+    "signals": [
+      "company culture",
+      "offsite",
+      "milestone celebration"
+    ],
+    "notes": "EV culture brand energy",
+    "custom_hook": "EV culture brand energy",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Cruise",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "2000",
+    "website": "https://www.getcruise.com",
+    "signals": [
+      "engineering culture",
+      "employee engagement"
+    ],
+    "notes": "AV eng culture",
+    "custom_hook": "AV eng culture",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "Waymo",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Mountain View, CA",
+    "employee_range": "2500",
+    "website": "https://waymo.com",
+    "signals": [
+      "engineering culture",
+      "campus culture"
+    ],
+    "notes": "AV campus culture",
+    "custom_hook": "AV campus culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Instacart",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "3000",
+    "website": "https://www.instacart.com",
+    "signals": [
+      "all-hands",
+      "holiday party"
+    ],
+    "notes": "SF consumer tech events",
+    "custom_hook": "SF consumer tech events",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Lyft",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "4000",
+    "website": "https://www.lyft.com",
+    "signals": [
+      "employee engagement",
+      "culture",
+      "holiday party"
+    ],
+    "notes": "SF mobility culture",
+    "custom_hook": "SF mobility culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Nextdoor",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "700",
+    "website": "https://about.nextdoor.com",
+    "signals": [
+      "culture",
+      "employee engagement"
+    ],
+    "notes": "Community brand \u2192 team community",
+    "custom_hook": "Community brand \u2192 team community",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Eventbrite",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "1000",
+    "website": "https://www.eventbrite.com",
+    "signals": [
+      "employee experience",
+      "culture"
+    ],
+    "notes": "Events company eating own cooking",
+    "custom_hook": "Events company eating own cooking",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Yelp",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "4000",
+    "website": "https://www.yelp.com",
+    "signals": [
+      "culture",
+      "holiday party"
+    ],
+    "notes": "SF consumer culture",
+    "custom_hook": "SF consumer culture",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "Netflix LA",
+    "industry": "Media / entertainment",
+    "geo": "Los Angeles, CA",
+    "employee_range": "5000",
+    "website": "https://jobs.netflix.com",
+    "signals": [
+      "culture",
+      "holiday party",
+      "creative culture"
+    ],
+    "notes": "LA entertainment culture",
+    "custom_hook": "LA entertainment culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Disney Corporate",
+    "industry": "Media / entertainment",
+    "geo": "Burbank, CA",
+    "employee_range": "200000",
+    "website": "https://thewaltdisneycompany.com",
+    "signals": [
+      "employee engagement",
+      "gala",
+      "culture"
+    ],
+    "notes": "Premium brand experiences",
+    "custom_hook": "Premium brand experiences",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Warner Bros. Discovery",
+    "industry": "Media / entertainment",
+    "geo": "Burbank / LA",
+    "employee_range": "30000",
+    "website": "https://wbd.com",
+    "signals": [
+      "culture",
+      "holiday party"
+    ],
+    "notes": "Studio culture events",
+    "custom_hook": "Studio culture events",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "SpaceX",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Hawthorne, CA",
+    "employee_range": "13000",
+    "website": "https://www.spacex.com",
+    "signals": [
+      "engineering culture",
+      "milestone celebration"
+    ],
+    "notes": "Hard-to-reach; high prestige if in",
+    "custom_hook": "Hard-to-reach; high prestige if in",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "OpenAI",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "3000",
+    "website": "https://openai.com",
+    "signals": [
+      "engineering culture",
+      "offsite",
+      "employee engagement"
+    ],
+    "notes": "AI lab culture moment",
+    "custom_hook": "AI lab culture moment",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Anthropic",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "1000",
+    "website": "https://www.anthropic.com",
+    "signals": [
+      "engineering culture",
+      "employee engagement",
+      "offsite"
+    ],
+    "notes": "AI safety culture + team bonding",
+    "custom_hook": "AI safety culture + team bonding",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Scale AI",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "1000",
+    "website": "https://scale.com",
+    "signals": [
+      "engineering culture",
+      "offsite"
+    ],
+    "notes": "Growth AI company culture",
+    "custom_hook": "Growth AI company culture",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Rippling",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "3000",
+    "website": "https://www.rippling.com",
+    "signals": [
+      "employee experience",
+      "all-hands",
+      "holiday party"
+    ],
+    "notes": "HR platform \u2014 meta culture pitch",
+    "custom_hook": "HR platform \u2014 meta culture pitch",
+    "priority": 8,
+    "contacts": []
+  },
+  {
+    "company": "Gusto",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "2000",
+    "website": "https://gusto.com",
+    "signals": [
+      "employee experience",
+      "culture",
+      "wellness"
+    ],
+    "notes": "People platform culture",
+    "custom_hook": "People platform culture",
+    "priority": 7,
+    "contacts": []
+  },
+  {
+    "company": "Brex",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "1000",
+    "website": "https://www.brex.com",
+    "signals": [
+      "startup culture",
+      "offsite",
+      "holiday party"
+    ],
+    "notes": "Fintech growth culture",
+    "custom_hook": "Fintech growth culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Chime",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco, CA",
+    "employee_range": "1500",
+    "website": "https://www.chime.com",
+    "signals": [
+      "employee engagement",
+      "culture"
+    ],
+    "notes": "Consumer fintech culture",
+    "custom_hook": "Consumer fintech culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "SoFi",
+    "industry": "Financial services / fintech",
+    "geo": "San Francisco Bay Area",
+    "employee_range": "4000",
+    "website": "https://www.sofi.com",
+    "signals": [
+      "employee engagement",
+      "wellness"
+    ],
+    "notes": "Fintech wellness",
+    "custom_hook": "Fintech wellness",
+    "priority": 5,
+    "contacts": []
+  },
+  {
+    "company": "UCSF",
+    "industry": "Healthcare systems & health-tech",
+    "geo": "San Francisco, CA",
+    "employee_range": "25000",
+    "website": "https://www.ucsf.edu",
+    "signals": [
+      "wellness",
+      "employee engagement",
+      "leadership development"
+    ],
+    "notes": "Academic medical culture",
+    "custom_hook": "Academic medical culture",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Stanford University staff programs",
+    "industry": "Professional services (law, consulting)",
+    "geo": "Palo Alto, CA",
+    "employee_range": "15000",
+    "website": "https://stanford.edu",
+    "signals": [
+      "leadership development",
+      "wellness",
+      "employee engagement"
+    ],
+    "notes": "University staff culture programs",
+    "custom_hook": "University staff culture programs",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "SF Symphony / gala partners",
+    "industry": "Nonprofits & foundations running galas",
+    "geo": "San Francisco, CA",
+    "employee_range": "200",
+    "website": "https://www.sfsymphony.org",
+    "signals": [
+      "gala fundraiser",
+      "charity galas"
+    ],
+    "notes": "Gala entertainment pedigree",
+    "custom_hook": "Gala entertainment pedigree",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Lucile Packard Foundation",
+    "industry": "Nonprofits & foundations running galas",
+    "geo": "Palo Alto, CA",
+    "employee_range": "100",
+    "website": "https://www.lpfch.org",
+    "signals": [
+      "gala fundraiser",
+      "charity galas"
+    ],
+    "notes": "Bay Area gala circuit",
+    "custom_hook": "Bay Area gala circuit",
+    "priority": 6,
+    "contacts": []
+  },
+  {
+    "company": "Marin Community Foundation",
+    "industry": "Nonprofits & foundations running galas",
+    "geo": "Novato / Marin, CA",
+    "employee_range": "50",
+    "website": "https://www.marincf.org",
+    "signals": [
+      "gala",
+      "nonprofit"
+    ],
+    "notes": "Local Marin nonprofit events",
+    "custom_hook": "Local Marin nonprofit events",
+    "priority": 7,
+    "contacts": []
+  }
+]

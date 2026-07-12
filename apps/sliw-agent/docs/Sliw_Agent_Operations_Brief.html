@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Sliw Agent Operations Brief</title>
+<style>
+  @page { size: letter; margin: 0.75in; }
+  body { font-family: Georgia, serif; color: #0c0b0a; line-height: 1.45; max-width: 7.5in; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 18pt; border-bottom: 2px solid #c9a84c; padding-bottom: 6px; margin-top: 28px; page-break-after: avoid; }
+  h2 { font-size: 13pt; color: #1a1816; margin-top: 18px; page-break-after: avoid; }
+  h3 { font-size: 11pt; color: #6b6560; margin-top: 14px; }
+  .cover { text-align: center; margin: 40px 0 48px; }
+  .cover h1 { border: 0; font-size: 28pt; }
+  .gold { color: #c9a84c; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 10pt; page-break-inside: avoid; }
+  th, td { border: 1px solid #d4c4a8; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f7f3ec; }
+  ul { margin: 6px 0 12px 18px; }
+  li { margin-bottom: 4px; }
+  .meta { color: #6b6560; font-size: 10pt; }
+  .footer { margin-top: 40px; text-align: center; color: #6b6560; font-size: 9pt; }
+  @media print { body { padding: 0; } .noprint { display: none; } }
+</style></head><body>
+<p class="noprint meta">Open in browser → Print → Save as PDF</p>
+<div class="cover">
+  <h1>SLIW AGENT</h1>
+  <p class="gold" style="font-size:14pt">Operations &amp; Product Design Brief</p>
+  <p class="meta">Hollywood-style representation for Edyta Śliwińska<br/>Corporate team experiences · Wedding first-dance packages</p>
+  <p class="meta">CAA desk model · portfolio.dgacapital.com/sliw/</p>
+</div>
+
+<p>This document explains what lives “below the line”: the desk model, engagement strategy, how Edyta uses the app, the Lead Engine, outreach rules, Gamma packaging, weekly cadence, and the parallel Wedding Agent product.</p>
+
+<h1>1. What this is</h1>
+<p>Sliw Agent is a CAA / William Morris–style representation desk. It researches corporations (and separately, wedding clients), matches Edyta’s packages, builds Gamma marketing decks, drafts outreach for human approval, and filters warm leads so Edyta only spends time on conversations that can book.</p>
+<ul>
+<li><strong>alecmazo1@gmail.com</strong> — full desk + GP portal Sliw link</li>
+<li><strong>edytasliw@gmail.com</strong> — full desk + LP portal Sliw link</li>
+<li>All other DGA logins: no Sliw nav, API denied</li>
+</ul>
+<p class="meta">Sources: edytasliwinska.com + corporate Gamma package site.</p>
+
+<h1>2. Brand positioning</h1>
+<p>Lead with <em>team accelerator</em> and star power — never “hire a dance teacher.”</p>
+<table>
+<tr><th>Corporate package</th><th>Duration</th><th>Primary buyer</th></tr>
+<tr><td>The Icebreaker</td><td>60–90 min</td><td>Employee Exp / Events / CoS</td></tr>
+<tr><td>Leadership Ballroom</td><td>Half-day exec</td><td>VP L&amp;D / CHRO / HiPo</td></tr>
+<tr><td>Tech-Decompress</td><td>4-week series</td><td>Wellness / Benefits</td></tr>
+<tr><td>Office Stars</td><td>Gala + exec prep</td><td>Events / EA / CSR</td></tr>
+<tr><td>Custom Collaboration Lab</td><td>Bespoke</td><td>CHRO / OD / DEI / M&amp;A</td></tr>
+</table>
+<table>
+<tr><th>Wedding package</th><th>Offer</th><th>Entry</th></tr>
+<tr><td>Single private lesson</td><td>First-dance coaching</td><td>$150</td></tr>
+<tr><td>Lesson package ×10</td><td>Full prep arc</td><td>$1,250</td></tr>
+<tr><td>Dream Wedding Dance</td><td>Choreo + venue + day-of</td><td>Custom</td></tr>
+</table>
+<p>CTA: complimentary discovery with Edyta.</p>
+
+<h1>3. Maximizing corporate engagement</h1>
+<table>
+<tr><th>Lead with…</th><th>Response</th></tr>
+<tr><td>Dance instructor</td><td>Low</td></tr>
+<tr><td>Holiday entertainment only</td><td>Medium</td></tr>
+<tr><td>Culture / leadership offsite people remember</td><td>High</td></tr>
+</table>
+<h2>Triggers</h2>
+<ul>
+<li>Holiday parties Aug–Nov → Office Stars, Icebreaker</li>
+<li>Offsites / retreats → Icebreaker, Leadership, Custom</li>
+<li>Post-funding / hiring → Icebreaker, Tech-Decompress</li>
+<li>M&amp;A / reorg → Icebreaker, Custom Lab</li>
+<li>Wellness month → Tech-Decompress</li>
+<li>HiPo / L&amp;D programs → Leadership Ballroom</li>
+</ul>
+<table>
+<tr><th>Stage</th><th>Weekly target</th></tr>
+<tr><td>New prospects researched</td><td>25–40</td></tr>
+<tr><td>Tier A/B</td><td>10–15</td></tr>
+<tr><td>Gamma decks</td><td>3–5 (A-tier)</td></tr>
+<tr><td>Approved sends</td><td>8–12</td></tr>
+<tr><td>Discovery calls (early)</td><td>2–4 / month</td></tr>
+</table>
+<p><strong>90-day goal:</strong> ~300 researched, ~80 contacted, ~15–25 conversations, 3–6 booked sessions.</p>
+
+<h1>4. Architecture below the line</h1>
+<p>Lead Engine → Package + Gamma → Outreach drafts → Human approve → Replies filtered → Edyta briefs only.</p>
+<p>Stages: research → scored → packaged → drafted → approved → contacted → replied → interested → discovery_booked → won | lost | nurture</p>
+<ul>
+<li>Never auto-send</li>
+<li>Never invent pricing/logos/testimonials</li>
+<li>One package per first email</li>
+<li>Corporate and Wedding books stay separate</li>
+</ul>
+
+<h1>5. How Edyta uses the app</h1>
+<ul>
+<li>Open <strong>Edyta’s desk</strong> (warm leads only)</li>
+<li>Read one-page brief → 15-min discovery → confirm package/date/headcount</li>
+<li>Stage → discovery_booked / won / nurture</li>
+<li>Deliver on the floor; desk handles admin</li>
+</ul>
+<p><strong>She does not:</strong> cold research, chase vague maybes, commodity discounting.</p>
+<p><strong>Desk owns:</strong> Lead Engine, Gamma, approve sends, sequences, qualify replies.</p>
+
+<h1>6. Weekly cadence</h1>
+<table>
+<tr><th>Day</th><th>Action</th></tr>
+<tr><td>Mon</td><td>Import 25–40 prospects</td></tr>
+<tr><td>Tue</td><td>A/B review + 3–5 Gamma + sequences</td></tr>
+<tr><td>Wed</td><td>Approve + send 8–12</td></tr>
+<tr><td>Thu</td><td>Follow-ups + partners</td></tr>
+<tr><td>Fri</td><td>Edyta warm queue + hygiene</td></tr>
+</table>
+
+<h1>7. Phases (launch build)</h1>
+<p><strong>Phase 1:</strong> Expanded library, bulk import, sequences, This week checklist, Edyta home, contact enrichment.</p>
+<p><strong>Phase 2:</strong> Reply qualify flow, A/B subjects, partnerships book.</p>
+<p><strong>Phase 3:</strong> Wedding Agent parallel book, wedding Gamma, couple/planner sequences.</p>
+
+<h1>8. Wedding Agent</h1>
+<p>Same CAA pattern, different ICP (couples + planners). Separate CRM, romantic Gamma decks, Edyta still only sees interested clients with briefs.</p>
+
+<h1>9. Technical placement</h1>
+<ul>
+<li>Code: apps/sliw-agent/ on DGA GitHub main</li>
+<li>URL: /sliw/ on portfolio.dgacapital.com</li>
+<li>API: /api/sliw/* + email allowlist</li>
+<li>Data: $STOCKS_FOLDER/sliw-agent/</li>
+<li>Gamma: shared GAMMA_API_KEY</li>
+<li>Kill switch: SLIW_ENABLED=0</li>
+</ul>
+
+<h1>10. Launch checklist</h1>
+<ul>
+<li>Deploy Railway → login as Alec or Edyta → /sliw/</li>
+<li>Confirm name under Sliw Agent</li>
+<li>Corporate → expand library → This week → sequences → approve sends</li>
+<li>Replies → Qualify → Edyta brief</li>
+<li>Weddings tab for secondary book</li>
+</ul>
+
+<h1>11. North stars</h1>
+<p><strong>Desk:</strong> Find the room. Package the talent. Only book real opportunities.</p>
+<p><strong>Edyta:</strong> Read the brief. Hold the call. Deliver star power on the floor.</p>
+<p><strong>App:</strong> Research, score, deck, draft, filter — never send without approval.</p>
+
+<div class="footer">Sliw Agent · Edyta Śliwińska · Confidential · Print or Save as PDF from browser</div>
+</body></html>

@@ -34,6 +34,7 @@ def run_prospect_pipeline(
     generate_gamma: bool = False,
     dry_run_gamma: bool = True,
     draft_email: bool = True,
+    book: str = "corporate",
 ) -> dict[str, Any]:
     """
     Full desk workflow for a single corporation.
@@ -54,6 +55,7 @@ def run_prospect_pipeline(
         notes=notes,
         signals=signals,
         contacts=contacts,
+        book=book,
     )
     pid = prospect["id"]
 
@@ -70,6 +72,7 @@ def run_prospect_pipeline(
     pkg_ids = [p["id"] for p in scored["recommended_packages"][:2]]
     prospect = crm.update_prospect(
         pid,
+        book=book,
         score=scored["score"],
         tier=scored["tier"],
         recommended_packages=scored["recommended_packages"],
@@ -90,7 +93,7 @@ def run_prospect_pipeline(
     # 3. Skip low-tier auto packaging unless forced
     if scored["tier"] in ("D",) and not generate_gamma:
         result["skipped"] = "tier D — nurture only; no deck/email auto-built"
-        crm.set_stage(pid, "nurture", note="Auto-nurture: low ICP score")
+        crm.set_stage(pid, "nurture", note="Auto-nurture: low ICP score", book=book)
         return result
 
     # 4. Gamma marketing package
@@ -110,7 +113,7 @@ def run_prospect_pipeline(
         )
         result["gamma"] = gamma
         if not gamma.get("dry_run"):
-            crm.set_stage(pid, "packaged", note="Gamma deck generated")
+            crm.set_stage(pid, "packaged", note="Gamma deck generated", book=book)
 
     # 5. Outreach draft
     if draft_email:
@@ -131,9 +134,11 @@ def run_prospect_pipeline(
             company=company,
             email=email,
             contact_email=contact.get("email", ""),
+            book=book,
         )
         result["outreach_path"] = str(path)
 
+    result["book"] = book
     return result
 
 
@@ -142,38 +147,42 @@ def mark_interested(
     *,
     reply_text: str = "",
     reply_summary: str = "",
+    book: str | None = None,
 ) -> dict[str, Any]:
     """Qualify a reply and, if warm, write Edyta's call brief."""
-    prospect = crm.get_prospect(prospect_id)
+    prospect = crm.get_prospect(prospect_id, book=book)
     if not prospect:
         raise KeyError(prospect_id)
+    book = prospect.get("book") or book or "corporate"
 
     qualification = qualify_reply(
         reply_text=reply_text or reply_summary,
         company=prospect.get("company", ""),
     )
     stage = qualification["recommended_stage"]
-    crm.set_stage(prospect_id, stage, note=qualification["label"])
+    crm.set_stage(prospect_id, stage, note=qualification["label"], book=book)
     crm.update_prospect(
         prospect_id,
+        book=book,
         reply_summary=reply_summary or reply_text[:500],
         qualification=qualification,
     )
 
     brief_path = None
     if qualification["ready_for_edyta"]:
-        prospect = crm.get_prospect(prospect_id) or prospect
+        prospect = crm.get_prospect(prospect_id, book=book) or prospect
         brief_path = write_edyta_brief(
             prospect=prospect,
             reply_summary=reply_summary or reply_text,
+            book=book,
         )
-        crm.set_stage(prospect_id, "interested", note="Edyta brief ready")
+        crm.set_stage(prospect_id, "interested", note="Edyta brief ready", book=book)
 
     return {
         "prospect_id": prospect_id,
         "qualification": qualification,
         "edyta_brief_path": str(brief_path) if brief_path else None,
-        "prospect": crm.get_prospect(prospect_id),
+        "prospect": crm.get_prospect(prospect_id, book=book),
     }
 
 
@@ -203,6 +212,7 @@ def batch_score_seed(seed_path: str | None = None) -> list[dict[str, Any]]:
             generate_gamma=False,
             dry_run_gamma=False,  # skip gamma entirely in batch score
             draft_email=False,
+            book="corporate",
         )
         # dry_run_gamma False + generate_gamma False skips gamma block partially —
         # fix: we still want score. Pipeline with both false skips gamma. Good.

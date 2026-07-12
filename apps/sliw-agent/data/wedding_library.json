@@ -1,0 +1,94 @@
+[
+  {
+    "company": "Couple \u2014 sample Bay Area (replace)",
+    "industry": "Wedding couple",
+    "geo": "Marin / SF",
+    "signals": [
+      "engaged",
+      "first dance"
+    ],
+    "notes": "Placeholder \u2014 replace with real couple from venue/planner",
+    "package_hint": "package_10",
+    "priority": 3
+  },
+  {
+    "company": "The Lodge at the Presidio (planner outreach)",
+    "industry": "Wedding venue",
+    "geo": "San Francisco, CA",
+    "signals": [
+      "venue partnership",
+      "first dance"
+    ],
+    "notes": "Venue partnership for couple referrals",
+    "package_hint": "dream",
+    "priority": 8
+  },
+  {
+    "company": "Cavallo Point (planner outreach)",
+    "industry": "Wedding venue",
+    "geo": "Sausalito, CA",
+    "signals": [
+      "venue partnership"
+    ],
+    "notes": "Marin luxury venue \u2014 studio proximity",
+    "package_hint": "dream",
+    "priority": 9
+  },
+  {
+    "company": "Brazilian Room Tilden (planner outreach)",
+    "industry": "Wedding venue",
+    "geo": "Berkeley, CA",
+    "signals": [
+      "venue partnership"
+    ],
+    "notes": "East Bay wedding venue referrals",
+    "package_hint": "package_10",
+    "priority": 6
+  },
+  {
+    "company": "Thomas Fogarty Winery (planner outreach)",
+    "industry": "Wedding venue",
+    "geo": "Woodside, CA",
+    "signals": [
+      "venue partnership",
+      "first dance"
+    ],
+    "notes": "Peninsula winery weddings",
+    "package_hint": "dream",
+    "priority": 7
+  },
+  {
+    "company": "Sbragia Family Vineyards events",
+    "industry": "Wedding venue",
+    "geo": "Sonoma / Napa",
+    "signals": [
+      "venue partnership"
+    ],
+    "notes": "Wine country wedding circuit",
+    "package_hint": "package_10",
+    "priority": 6
+  },
+  {
+    "company": "Bay Area wedding planner network \u2014 sample",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "signals": [
+      "planner partnership"
+    ],
+    "notes": "Planner channel for couple intros",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Marin wedding planner collective \u2014 sample",
+    "industry": "Wedding planner",
+    "geo": "Marin County, CA",
+    "signals": [
+      "planner partnership",
+      "first dance"
+    ],
+    "notes": "Local planner channel near studio",
+    "package_hint": "dream",
+    "priority": 9
+  }
+]

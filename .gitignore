@@ -45,3 +45,14 @@ Thumbs.db
 # Google service account credentials (do NOT commit)
 dga-service-account.json
 *-service-account.json
+apps/sliw-agent/docs/node_modules/
+apps/sliw-agent/data/crm.json
+apps/sliw-agent/data/wedding_crm.json
+apps/sliw-agent/data/partnerships.json
+apps/sliw-agent/data/outreach/
+apps/sliw-agent/data/decks/
+apps/sliw-agent/data/briefs/
+apps/sliw-agent/data/wedding_outreach/
+apps/sliw-agent/data/wedding_decks/
+apps/sliw-agent/data/wedding_briefs/
+apps/sliw-agent/docs/node_modules/

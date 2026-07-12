@@ -1,0 +1,37 @@
+[
+  {
+    "name": "Bay Area Offsite Planners (channel)",
+    "type": "offsite_planner",
+    "geo": "SF Bay Area",
+    "notes": "Source leadership offsights + retreat kickoffs",
+    "status": "prospect"
+  },
+  {
+    "name": "Hotel event managers \u2014 Union Square / SOMA",
+    "type": "hotel",
+    "geo": "San Francisco",
+    "notes": "Corporate holiday + gala room blocks",
+    "status": "prospect"
+  },
+  {
+    "name": "PE portfolio ops network",
+    "type": "pe_ops",
+    "geo": "National / Bay",
+    "notes": "Post-acquisition culture integrations",
+    "status": "prospect"
+  },
+  {
+    "name": "Marin / SF wedding venues",
+    "type": "wedding_venue",
+    "geo": "Marin / SF",
+    "notes": "Referral channel for first-dance packages",
+    "status": "prospect"
+  },
+  {
+    "name": "HR consultants / fractional CHROs",
+    "type": "hr_consultant",
+    "geo": "Bay Area",
+    "notes": "Bring experiential L&D to clients",
+    "status": "prospect"
+  }
+]

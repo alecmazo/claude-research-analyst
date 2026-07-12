@@ -25,6 +25,20 @@ from pydantic import BaseModel, Field
 
 from . import crm
 from .pipeline import batch_score_seed, mark_interested, run_prospect_pipeline
+from .lead_engine import (
+    build_sequences_for_prospect,
+    edyta_home,
+    import_from_library,
+    library_stats,
+    this_week_checklist,
+    bulk_import_rows,
+)
+from .wedding_agent import (
+    import_wedding_library,
+    run_wedding_pipeline,
+    seed_default_partnerships,
+)
+from .wedding_bible import WEDDING_PACKAGES, package_to_dict as wedding_pkg_dict
 from .talent_bible import (
     CREDENTIALS,
     ICP,
@@ -55,6 +69,42 @@ class PipelineRequest(BaseModel):
     generate_gamma: bool = False
     live_gamma: bool = False
     draft_email: bool = True
+    book: str = "corporate"
+
+
+class LibraryImportRequest(BaseModel):
+    limit: int = 40
+    min_priority: int = 0
+    draft_email: bool = False
+
+
+class BulkImportRequest(BaseModel):
+    rows: list[dict] = Field(default_factory=list)
+    draft_email: bool = True
+
+
+class WeddingPipelineRequest(BaseModel):
+    name: str
+    industry: str = "Wedding couple"
+    geo: str = ""
+    notes: str = ""
+    signals: list[str] = Field(default_factory=list)
+    package_hint: str = ""
+    custom_hook: str = ""
+    contact_name: str = ""
+    contact_email: str = ""
+    draft_email: bool = True
+    generate_gamma: bool = False
+    live_gamma: bool = False
+
+
+class PartnerRequest(BaseModel):
+    name: str
+    type: str = "other"
+    geo: str = ""
+    notes: str = ""
+    contact_email: str = ""
+    status: str = "prospect"
 
 
 class InterestedRequest(BaseModel):
@@ -132,14 +182,15 @@ def create_api_router() -> APIRouter:
             "credentials": CREDENTIALS,
             "icp": ICP,
             "packages": [package_to_dict(p) for p in PACKAGES.values()],
+            "wedding_packages": [wedding_pkg_dict(p) for p in WEDDING_PACKAGES.values()],
         }
 
     @r.get("/pipeline/summary")
-    def pipeline_summary(request: Request) -> dict[str, Any]:
+    def pipeline_summary(request: Request, book: str = "corporate") -> dict[str, Any]:
         require_sliw_access(request)
-        summary = crm.pipeline_summary()
-        prospects = crm.list_prospects()
-        leads = crm.interested_leads()
+        summary = crm.pipeline_summary(book=book)
+        prospects = crm.list_prospects(book=book)
+        leads = crm.interested_leads(book=book)
         scores = [p.get("score") or 0 for p in prospects if p.get("score") is not None]
         avg = round(sum(scores) / len(scores), 1) if scores else 0.0
         tier_counts = {"A": 0, "B": 0, "C": 0, "D": 0}
@@ -153,8 +204,9 @@ def create_api_router() -> APIRouter:
             "leads": len(leads),
             "avg_score": avg,
             "tiers": tier_counts,
-            "updated_at": crm.load_crm().get("updated_at"),
+            "updated_at": crm.load_crm(book).get("updated_at"),
             "data_dir": str(crm.DATA_DIR),
+            "book": book,
         }
 
     @r.get("/prospects")
@@ -162,9 +214,10 @@ def create_api_router() -> APIRouter:
         request: Request,
         stage: Optional[str] = None,
         min_score: Optional[float] = None,
+        book: str = "corporate",
     ) -> list[dict[str, Any]]:
         require_sliw_access(request)
-        return crm.list_prospects(stage=stage, min_score=min_score)
+        return crm.list_prospects(stage=stage, min_score=min_score, book=book)
 
     @r.get("/prospects/{prospect_id}")
     def get_prospect(prospect_id: str, request: Request) -> dict[str, Any]:
@@ -215,6 +268,7 @@ def create_api_router() -> APIRouter:
                 generate_gamma=body.generate_gamma or body.live_gamma,
                 dry_run_gamma=not body.live_gamma,
                 draft_email=body.draft_email,
+                book=getattr(body, "book", None) or "corporate",
             )
         except Exception as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -242,16 +296,20 @@ def create_api_router() -> APIRouter:
             raise HTTPException(404, "Prospect not found") from None
 
     @r.get("/leads")
-    def leads(request: Request) -> list[dict[str, Any]]:
+    def leads(request: Request, book: str = "corporate") -> list[dict[str, Any]]:
         require_sliw_access(request)
-        return crm.interested_leads()
+        return crm.interested_leads(book=book)
 
     @r.post("/seed")
     def seed(request: Request) -> dict[str, Any]:
+        """Legacy small seed + prefer Lead Engine library import."""
         require_sliw_access(request)
         results = batch_score_seed()
+        eng = import_from_library(limit=40, draft_email=False)
         return {
-            "count": len(results),
+            "count": len(results) + eng.get("imported", 0),
+            "legacy_seed": len(results),
+            "library_import": eng,
             "summary": crm.pipeline_summary(),
             "prospects": crm.list_prospects(),
         }
@@ -282,6 +340,118 @@ def create_api_router() -> APIRouter:
                 "content": path.read_text(encoding="utf-8"),
             })
         return items
+
+
+    # ── Lead Engine / Phase 1–2 ─────────────────────────────────────────────
+
+    @r.get("/library/stats")
+    def lib_stats(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return library_stats()
+
+    @r.post("/library/import")
+    def lib_import(body: LibraryImportRequest, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return import_from_library(
+            limit=body.limit,
+            min_priority=body.min_priority,
+            draft_email=body.draft_email,
+        )
+
+    @r.post("/prospects/bulk")
+    def bulk_import(body: BulkImportRequest, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return bulk_import_rows(body.rows, draft_email=body.draft_email)
+
+    @r.get("/this-week")
+    def this_week(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return this_week_checklist()
+
+    @r.get("/edyta-home")
+    def edyta(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return edyta_home()
+
+    @r.post("/prospects/{prospect_id}/sequences")
+    def sequences(prospect_id: str, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        try:
+            return build_sequences_for_prospect(prospect_id)
+        except KeyError:
+            raise HTTPException(404, "Prospect not found") from None
+
+    # ── Partnerships ────────────────────────────────────────────────────────
+
+    @r.get("/partnerships")
+    def get_partners(request: Request) -> list[dict[str, Any]]:
+        require_sliw_access(request)
+        return crm.load_partnerships()
+
+    @r.post("/partnerships")
+    def add_partner(body: PartnerRequest, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return crm.upsert_partner(body.model_dump())
+
+    @r.post("/partnerships/seed")
+    def seed_partners(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return seed_default_partnerships()
+
+    # ── Wedding Agent ───────────────────────────────────────────────────────
+
+    @r.get("/wedding/packages")
+    def wedding_packages(request: Request) -> list[dict[str, Any]]:
+        require_sliw_access(request)
+        return [wedding_pkg_dict(p) for p in WEDDING_PACKAGES.values()]
+
+    @r.get("/wedding/prospects")
+    def wedding_prospects(request: Request) -> list[dict[str, Any]]:
+        require_sliw_access(request)
+        return crm.list_prospects(book="wedding")
+
+    @r.get("/wedding/pipeline/summary")
+    def wedding_summary(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        prospects = crm.list_prospects(book="wedding")
+        return {
+            "stages": crm.pipeline_summary(book="wedding"),
+            "total": len(prospects),
+            "leads": len(crm.interested_leads(book="wedding")),
+        }
+
+    @r.post("/wedding/pipeline")
+    def wedding_pipeline(body: WeddingPipelineRequest, request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        contacts = []
+        if body.contact_name or body.contact_email:
+            contacts.append({"name": body.contact_name, "email": body.contact_email})
+        try:
+            return run_wedding_pipeline(
+                name=body.name.strip(),
+                industry=body.industry,
+                geo=body.geo,
+                notes=body.notes,
+                signals=body.signals,
+                contacts=contacts,
+                package_hint=body.package_hint,
+                custom_hook=body.custom_hook,
+                draft_email=body.draft_email,
+                generate_gamma=body.generate_gamma or body.live_gamma,
+                live_gamma=body.live_gamma,
+            )
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @r.post("/wedding/library/import")
+    def wedding_lib_import(request: Request, limit: int = 20) -> dict[str, Any]:
+        require_sliw_access(request)
+        return import_wedding_library(limit=limit)
+
+    @r.get("/wedding/leads")
+    def wedding_leads(request: Request) -> list[dict[str, Any]]:
+        require_sliw_access(request)
+        return crm.interested_leads(book="wedding")
 
     return r
 
