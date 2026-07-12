@@ -167,26 +167,52 @@ async function focusLead(id, { autoAgent = true } = {}) {
   }
 }
 
+function contactCardHtml(primary, contacts, research) {
+  const c = primary || {};
+  const list = (contacts || []).filter((x) => x && (x.email || x.name));
+  const hasReal = list.some((x) => x.email && x.source !== "role_inbox_guess" && x.source !== "hunter.io_error");
+  return `
+    <div class="contact-card ${hasReal ? "found" : "weak"}">
+      <p class="eyebrow">Send to</p>
+      <div class="contact-primary">
+        <div class="contact-name">${esc(c.name || "No name found")}</div>
+        <div class="contact-email">${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "<span class='muted'>No email yet</span>"}</div>
+        ${c.title ? `<div class="contact-title">${esc(c.title)}</div>` : ""}
+      </div>
+      ${research ? `<p class="muted" style="margin-top:8px">${esc(research)}</p>` : ""}
+      ${list.length > 1 ? `
+        <p class="eyebrow" style="margin-top:12px">Other contacts</p>
+        <ul class="contact-list">${list.slice(0, 6).map((x) => `
+          <li>
+            <strong>${esc(x.name || "—")}</strong>
+            ${x.email ? ` · <a href="mailto:${esc(x.email)}">${esc(x.email)}</a>` : " · <span class='muted'>no email</span>"}
+            ${x.title ? `<div class="muted">${esc(x.title)}</div>` : ""}
+            <div class="muted" style="font-size:11px">${esc(x.source || "")}${x.confidence ? ` · ${x.confidence}%` : ""}</div>
+          </li>`).join("")}
+        </ul>` : ""}
+    </div>`;
+}
+
 function showAgentResult(result) {
   if (!result) return;
   const out = $("#ws-output");
   if (!out) return;
   const c = result.primary_contact || {};
-  const contacts = (result.contacts || []).slice(0, 4);
+  const contacts = result.contacts || [];
+  state._lastAgent = result;
+  state._lastEmail = result.email_preview;
   out.hidden = false;
   out.innerHTML = `
+    ${contactCardHtml(c, contacts, result.contact_research)}
     <div class="agent-card">
-      <p class="eyebrow">Sales agent result</p>
-      <p><strong>Marketing:</strong> ${esc(result.marketing_mode)} · pitch <a href="${esc(result.pitch_url || "#")}" target="_blank" rel="noopener">open</a></p>
-      <p><strong>Primary buyer:</strong> ${esc(c.name || "—")} ${c.title ? "· " + esc(c.title) : ""} ${c.email ? "· " + esc(c.email) : ""}</p>
-      <p class="muted">${esc(result.contact_research || "")}</p>
-      ${contacts.length ? `<ul class="contact-list">${contacts.map((x) =>
-        `<li>${esc(x.name || "")} · ${esc(x.title || "")} · ${esc(x.email || "no email")} <span class="muted">(${esc(x.source || "")} · ${x.confidence || "?"}%)</span></li>`
-      ).join("")}</ul>` : ""}
+      <p class="eyebrow">Pitch</p>
+      <p><strong>Mode:</strong> ${esc(result.marketing_mode || "—")}
+        ${result.pitch_url || result.master_deck_url
+          ? ` · <a href="${esc(result.pitch_url || result.master_deck_url)}" target="_blank" rel="noopener">open deck / page</a>`
+          : ""}</p>
       ${result.email_preview?.body ? `<div class="email-preview"><strong>${esc(result.email_preview.subject || "")}</strong>\n\n${esc(result.email_preview.body)}</div>` : ""}
       <p class="muted" style="margin-top:10px">${esc(result.next_human_step || "")}</p>
     </div>`;
-  state._lastEmail = result.email_preview;
 }
 
 function renderWorkstream() {
@@ -196,6 +222,9 @@ function renderWorkstream() {
   $("#work-panel").hidden = false;
 
   const p = ws.prospect || {};
+  const primary = ws.primary_contact || (p.contacts || [])[0] || {};
+  const contacts = ws.contacts || p.contacts || [];
+
   $("#ws-company").textContent = p.company || "—";
   $("#ws-tier").textContent = `Tier ${p.tier || "—"} · score ${p.score ?? "—"}`;
   $("#ws-meta").textContent = [
@@ -211,30 +240,65 @@ function renderWorkstream() {
 
   const n = ws.next_step || {};
   $("#ws-next-title").textContent = n.title || "Done";
-  $("#ws-next-detail").textContent = n.detail || "";
-  $("#ws-output").hidden = true;
+  // Always show who we're emailing in the next-step detail
+  const toLine = primary.email
+    ? `To: ${primary.name || "Contact"} <${primary.email}>`
+    : (primary.name ? `Contact: ${primary.name} (no email yet)` : (n.detail || ""));
+  $("#ws-next-detail").textContent = toLine;
+
   $("#ws-form").hidden = true;
   $("#ws-form").innerHTML = "";
 
   const actions = $("#ws-actions");
   actions.innerHTML = (ws.actions || []).map((a) =>
-    `<button type="button" class="btn ${a.id.includes("live") || a.id === "mark_contacted" || a.id === "build_sequences" || a.id === "qualify_reply" || a.id === "save_contact" ? "primary" : "ghost"} sm" data-act="${esc(a.id)}">${esc(a.label)}</button>`
+    `<button type="button" class="btn ${a.id.includes("live") || a.id === "mark_contacted" || a.id === "copy_cold" || a.id === "qualify_reply" || a.id === "run_sales_agent" ? "primary" : "ghost"} sm" data-act="${esc(a.id)}">${esc(a.label)}</button>`
   ).join("") || `<span class="muted">No actions — pick another lead or mark won.</span>`;
 
   actions.querySelectorAll("[data-act]").forEach((btn) => {
     btn.addEventListener("click", () => runAction(btn.dataset.act));
   });
 
-  // Pre-load form for contact / reply
-  if ((ws.actions || []).some((a) => a.type === "form_contact")) {
-    showContactForm();
-  }
   if ((ws.actions || []).some((a) => a.type === "form_reply")) {
     showReplyForm();
   }
 
-  // Show draft preview if available
-  loadDraftPreview(p);
+  // ALWAYS show contacts first (do not let draft preview wipe them)
+  const out = $("#ws-output");
+  out.hidden = false;
+  out.innerHTML = contactCardHtml(
+    primary,
+    contacts,
+    p.contact_research || state._lastAgent?.contact_research || ""
+  );
+  // Append draft if we have it
+  loadDraftPreview(p, true);
+}
+
+async function loadDraftPreview(p, append) {
+  if (!p?.id) return;
+  try {
+    const full = await api(`/prospects/${encodeURIComponent(p.id)}`);
+    const email = full.outreach?.email;
+    const out = $("#ws-output");
+    if (!out) return;
+    if (email?.body) {
+      state._lastEmail = email;
+      const block = `<div class="email-preview" style="margin-top:12px"><strong>${esc(email.subject || "")}</strong>\n\n${esc(email.body)}</div>`;
+      if (append) out.innerHTML += block;
+      else {
+        out.hidden = false;
+        out.innerHTML = block;
+      }
+    }
+    if (full.brief_md && append) {
+      out.innerHTML += `<div class="brief-box" style="margin-top:12px">${esc(full.brief_md)}</div>`;
+    }
+    state._focusFull = full;
+    // Refresh contact card from full prospect if richer
+    if (full.contacts?.length && !append) {
+      /* no-op when not append */
+    }
+  } catch (_) {}
 }
 
 function showContactForm() {
@@ -259,25 +323,6 @@ function showReplyForm() {
     <label>Paste their reply
       <textarea id="c-reply" rows="4" placeholder="Thanks — can we talk next week?"></textarea>
     </label>`;
-}
-
-async function loadDraftPreview(p) {
-  if (!p?.id) return;
-  try {
-    const full = await api(`/prospects/${encodeURIComponent(p.id)}`);
-    const email = full.outreach?.email;
-    const out = $("#ws-output");
-    if (email?.body) {
-      out.hidden = false;
-      out.innerHTML = `<div class="email-preview"><strong>${esc(email.subject || "")}</strong>\n\n${esc(email.body)}</div>`;
-      state._lastEmail = email;
-    }
-    if (full.brief_md) {
-      out.hidden = false;
-      out.innerHTML = (out.innerHTML || "") + `<div class="brief-box" style="margin-top:12px">${esc(full.brief_md)}</div>`;
-    }
-    state._focusFull = full;
-  } catch (_) {}
 }
 
 async function runAction(act) {

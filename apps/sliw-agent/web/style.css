@@ -388,9 +388,50 @@ a:hover { text-decoration: underline; }
   margin-bottom: 12px;
 }
 
+.contact-card {
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(201, 168, 76, 0.1);
+  margin-bottom: 14px;
+}
+
+.contact-card.weak {
+  border-color: rgba(196, 146, 58, 0.4);
+  background: rgba(196, 146, 58, 0.08);
+}
+
+.contact-card.found {
+  border-color: rgba(61, 154, 106, 0.4);
+}
+
+.contact-primary .contact-name {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.contact-primary .contact-email {
+  font-size: 16px;
+  margin-top: 4px;
+  color: var(--champagne-light);
+}
+
+.contact-primary .contact-email a {
+  color: var(--champagne-light);
+  text-decoration: underline;
+}
+
+.contact-primary .contact-title {
+  font-size: 13px;
+  color: var(--mist);
+  margin-top: 2px;
+}
+
 .contact-list {
   list-style: none;
-  margin: 10px 0;
+  margin: 10px 0 0;
   display: grid;
   gap: 6px;
   font-size: 13px;
@@ -398,9 +439,13 @@ a:hover { text-decoration: underline; }
 }
 
 .contact-list li {
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.25);
+}
+
+.contact-list a {
+  color: var(--champagne-light);
 }
 
 @media (max-width: 900px) {

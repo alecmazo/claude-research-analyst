@@ -62,47 +62,91 @@ def _domain_from_website(website: str, company: str = "") -> str:
     return f"{slug}.com" if slug else ""
 
 
-def _hunter_domain_search(domain: str, limit: int = 8) -> list[dict[str, Any]]:
+def _hunter_domain_search(domain: str, limit: int = 15) -> list[dict[str, Any]]:
     key = (os.environ.get("HUNTER_API_KEY") or os.environ.get("HUNTERIO_API_KEY") or "").strip()
     if not key or not domain:
         return []
     try:
-        r = requests.get(
-            "https://api.hunter.io/v2/domain-search",
-            params={
-                "domain": domain,
-                "api_key": key,
-                "limit": limit,
-                "seniority": "senior,executive",
-            },
-            timeout=25,
-        )
-        if r.status_code != 200:
-            return []
-        emails = (r.json().get("data") or {}).get("emails") or []
+        # Prefer HR / people ops department when Hunter supports it; fall back to open search
+        attempts = [
+            {"domain": domain, "api_key": key, "limit": limit, "department": "hr"},
+            {"domain": domain, "api_key": key, "limit": limit, "seniority": "senior,executive"},
+            {"domain": domain, "api_key": key, "limit": limit},
+        ]
+        emails: list[dict] = []
+        last_status = None
+        last_error = ""
+        for params in attempts:
+            r = requests.get(
+                "https://api.hunter.io/v2/domain-search",
+                params=params,
+                timeout=30,
+            )
+            last_status = r.status_code
+            if r.status_code != 200:
+                try:
+                    last_error = str((r.json() or {}).get("errors") or r.text)[:200]
+                except Exception:
+                    last_error = (r.text or "")[:200]
+                continue
+            batch = (r.json().get("data") or {}).get("emails") or []
+            if batch:
+                emails = batch
+                break
+        if not emails:
+            # Surface failure for UI (no secrets)
+            return [{
+                "name": "",
+                "title": "",
+                "email": "",
+                "linkedin": "",
+                "source": "hunter.io_error",
+                "confidence": 0,
+                "role_fit_score": 0,
+                "note": f"Hunter returned no emails (HTTP {last_status}). {last_error}".strip(),
+            }] if last_status and last_status != 200 else []
+
         out = []
         for e in emails:
             pos = (e.get("position") or "").lower()
+            dept = (e.get("department") or "").lower()
             score = 0
-            if any(k in pos for k in ROLE_KEYWORDS):
+            if any(k in pos for k in ROLE_KEYWORDS) or any(k in dept for k in ("hr", "people", "talent")):
                 score += 5
             if e.get("confidence", 0) >= 70:
                 score += 2
             if e.get("type") == "personal":
                 score += 1
+            first = (e.get("first_name") or "").strip()
+            last = (e.get("last_name") or "").strip()
+            name = f"{first} {last}".strip()
+            email = (e.get("value") or "").strip()
+            if not email and not name:
+                continue
             out.append({
-                "name": f"{e.get('first_name') or ''} {e.get('last_name') or ''}".strip(),
-                "title": e.get("position") or "",
-                "email": e.get("value") or "",
+                "name": name or email.split("@")[0],
+                "title": e.get("position") or e.get("department") or "",
+                "email": email,
                 "linkedin": e.get("linkedin") or "",
                 "source": "hunter.io",
                 "confidence": min(95, int(e.get("confidence") or 50) + score * 3),
                 "role_fit_score": score,
             })
+        # Prefer role-fit, but keep non-HR seniors as backup
         out.sort(key=lambda x: (-x.get("role_fit_score", 0), -x.get("confidence", 0)))
-        return out
-    except Exception:
-        return []
+        # If nobody matched People/Events keywords, still return top seniors
+        role_fit = [c for c in out if c.get("role_fit_score", 0) >= 4]
+        return role_fit[:10] if role_fit else out[:8]
+    except Exception as exc:
+        return [{
+            "name": "",
+            "title": "",
+            "email": "",
+            "source": "hunter.io_error",
+            "confidence": 0,
+            "role_fit_score": 0,
+            "note": f"Hunter request failed: {exc}",
+        }]
 
 
 def _scrape_team_page(website: str) -> list[dict[str, Any]]:
@@ -270,10 +314,14 @@ def find_contacts(
 
 def _method_summary(contacts: list[dict]) -> str:
     sources = {c.get("source", "") for c in contacts}
-    if any(str(s).startswith("hunter") for s in sources):
-        return "Found via Hunter.io domain search (role-filtered)."
+    if any(s == "hunter.io_error" for s in sources):
+        notes = [c.get("note") for c in contacts if c.get("note")]
+        return notes[0] if notes else "Hunter error — check HUNTER_API_KEY on Railway."
+    real = [c for c in contacts if c.get("email") and c.get("source") == "hunter.io"]
+    if real:
+        return f"Found {len(real)} contact(s) via Hunter.io (People/HR preferred when available)."
     if any(str(s).startswith("scrape") for s in sources):
         return "Found names/titles on public company pages; emails may still need verification."
     if any(s == "role_inbox_guess" for s in sources):
-        return "No personal emails found — role inboxes suggested. Set HUNTER_API_KEY for better hit rates."
+        return "No personal emails found — role inboxes suggested. Confirm HUNTER_API_KEY is live on Railway."
     return "No contacts found."

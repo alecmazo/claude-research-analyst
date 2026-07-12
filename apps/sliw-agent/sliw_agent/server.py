@@ -530,6 +530,39 @@ def create_api_router() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @r.get("/debug/hunter")
+    def debug_hunter(request: Request) -> dict[str, Any]:
+        """Confirm Hunter key is present (never returns the key) + optional probe."""
+        require_sliw_access(request)
+        import os
+        key = (os.environ.get("HUNTER_API_KEY") or os.environ.get("HUNTERIO_API_KEY") or "").strip()
+        out: dict[str, Any] = {
+            "hunter_key_present": bool(key),
+            "hunter_key_length": len(key) if key else 0,
+        }
+        if key:
+            try:
+                sample = find_contacts(company="Stripe", website="https://stripe.com")
+                out["probe_company"] = "Stripe"
+                out["probe_method"] = sample.get("method_summary")
+                out["probe_count"] = len([
+                    c for c in (sample.get("contacts") or [])
+                    if c.get("email") and c.get("source") == "hunter.io"
+                ])
+                out["probe_sample"] = [
+                    {
+                        "name": c.get("name"),
+                        "email": c.get("email"),
+                        "title": c.get("title"),
+                        "source": c.get("source"),
+                    }
+                    for c in (sample.get("contacts") or [])[:3]
+                    if c.get("email")
+                ]
+            except Exception as exc:
+                out["probe_error"] = str(exc)
+        return out
+
     @r.get("/master-deck")
     def api_master_deck(request: Request) -> dict[str, Any]:
         require_sliw_access(request)

@@ -280,8 +280,16 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
             {"id": "escalate_edyta", "label": "Refresh Edyta brief", "type": "button"},
         ]
 
+    # Primary contact for UI (name + email always surfaceable)
+    primary = next(
+        (c for c in contacts if c.get("email") and c.get("source") not in ("role_inbox_guess", "hunter.io_error")),
+        None,
+    ) or next((c for c in contacts if c.get("email")), None) or (contacts[0] if contacts else {})
+
     return {
         "prospect": p,
+        "primary_contact": primary,
+        "contacts": contacts[:8],
         "steps": steps,
         "next_step": next_step,
         "actions": actions,
