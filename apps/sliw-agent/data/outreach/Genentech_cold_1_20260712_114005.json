@@ -1,0 +1,16 @@
+{
+  "prospect_id": "genentech-a5934d",
+  "company": "Genentech",
+  "sequence_step": "cold_1",
+  "contact_email": "",
+  "status": "draft",
+  "created_at": "2026-07-12T18:40:05.188114",
+  "email": {
+    "subject": "Genentech × Edyta Śliwińska (DWTS) — team experience worth remembering",
+    "body": "Hi Alex,\n\nI'm reaching out on behalf of Edyta Śliwińska — Dancing with the Stars professional and corporate team-experience producer — because Campus wellness that teams actually look forward to. I noticed wellness program — that's exactly when a shared, high-energy experience lands hardest.\n\nRather than another trust-fall offsite module, Edyta brings a DWTS-caliber session (The Leadership Ballroom: Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.) designed for teams of 5–500. Lunch hour, retreat kickoff, leadership lab, or full gala — same star power, zero judgment.\n\nWould you or the right person on your People / Events team take a complimentary 15-minute discovery call with Edyta to see if there's a fit for an upcoming gathering?\n\nHappy to work around your calendar.\n\nWarmly,\nSliw Agent desk (for Edyta Śliwińska)\nadmin@edytasliwinska.com · +1 (218) 304-8372\nhttps://edytasliwinska.com · Corporate: https://edytasliwinska.com/corporate\n",
+    "to_name": "Alex Rivera",
+    "to_title": "Head of Employee Experience"
+  },
+  "approval_required": true,
+  "send_instructions": "HUMAN APPROVAL REQUIRED. Review subject/body, then either: (1) send manually from Edyta's or the desk Gmail, or (2) mark approved in CRM and use gmail draft tools if connected. The agent must never auto-send cold outreach."
+}

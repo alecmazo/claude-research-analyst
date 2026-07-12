@@ -1,0 +1,143 @@
+Create a premium **corporate sales / talent booking presentation**.
+
+Title: "Edyta Śliwińska × Genentech — Corporate Experience Proposal | July 2026"
+
+IMPORTANT DESIGN RULES (enforce strictly):
+- Branding: EDYTA ŚLIWIŃSKA / Dancing with the Stars pro.
+- Aesthetic: premium Hollywood talent booking deck — elegant, high-energy,
+  not corporate-generic. Think CAA packaging for experiential talent.
+- Color palette: deep black / charcoal, champagne gold (#C9A84C), soft ivory,
+  warm accent blush. High contrast photography-friendly slides.
+- Title treatment: bold talent name + client company name on cover.
+- ALL TEXT minimum 12pt (titles 28–32pt, headings 20–24pt, body 14–18pt).
+- Minimal bullet density; short punchy lines; one big idea per card.
+- Include CTA slide: complimentary 15-minute discovery call.
+- Footer on each slide: https://edytasliwinska.com · admin@edytasliwinska.com · +1 (218) 304-8372
+- Never invent client logos or fake testimonials.
+- Never invent dollar pricing unless provided in the brief.
+
+
+# CLIENT
+- Company: Genentech
+- Industry: biotech
+- Location / geo: South San Francisco
+- Approx size: 14000
+- Trigger signals: wellness program, leadership development
+- Custom hook (use this as the personalization spine): Campus wellness that teams actually look forward to
+- Primary contacts researched: Alex Rivera, Head of Employee Experience
+
+# TALENT (facts only — do not invent)
+# Talent Brief — Edyta Śliwińska
+
+## Identity
+- Name: Edyta Śliwińska (Edyta Sliwinska)
+- Headline: Dancing with the Stars pro · Corporate team accelerator · Live stage producer
+- Brand promise: Dance isn't just entertainment — it's the ultimate team accelerator. Star power, zero judgment, measurable connection.
+- Website: https://edytasliwinska.com
+- Corporate: https://edytasliwinska.com/corporate
+- Package site: https://edyta-corporate-dance-866y3wq.gamma.site/
+- Contact: admin@edytasliwinska.com · +1 (218) 304-8372
+- Studio: 1133 Francisco Blvd E, San Rafael, California 94901, United States
+- Markets: San Francisco Bay Area, San Rafael / Marin, Silicon Valley, Los Angeles (tour), National (travel for premium bookings)
+
+## Positioning
+Edyta Śliwińska is a world-renowned ballroom dancer, instructor, and fan-favorite
+professional from Dancing with the Stars (Seasons 1–10+). For over two decades she
+has taught celebrities with zero prior experience, choreographed and produced live
+stage shows worldwide, and now channels that same star power into corporate events,
+team-building workshops, and wellness programs.
+
+THE HOOK (never lead with "dance class"):
+  Corporate L&D, People Ops, and event buyers are drowning in forgettable icebreakers
+  and trust falls. Edyta sells a *team accelerator* — 45–60 minutes of science-backed
+  movement that spikes endorphins, cuts cortisol, and creates the shared memory
+  every culture team wants and almost never gets.
+
+THE PROOF:
+  - DWTS pedigree (instant credibility with executives and employees)
+  - Taught thousands of "two left feet" participants — zero judgment format
+  - Scales 5 → 500, hybrid or in-person
+  - Styles: Samba, Swing, Hip-Hop, Salsa, Cha-Cha, ballroom leadership metaphors
+  - Live-show producer (Dancing Pros Live, Battle of The Voices, Dance Star, Dance Temptation)
+
+THE ASK:
+  Complimentary 15-minute discovery call → custom session proposal.
+  Agent books the call; Edyta closes and delivers.
+
+## Credentials
+- Professional on Dancing with the Stars (fan-favorite across first 10 seasons)
+- 20+ years professional ballroom & performance experience
+- Expert at teaching complete beginners (celebrities → corporate teams)
+- Executive produced & choreographed: Dancing Pros Live, Battle of The Voices, Dance Star, Dance Temptation
+- Based in San Rafael, CA — Dance Sport studio; serves Bay Area + national clients
+
+## Packages
+# Edyta Corporate Package Catalog
+
+## The Icebreaker (`icebreaker`)
+**Duration:** 60–90 minute team bonding mixer
+**One-liner:** Ultimate upgrade from a corporate happy hour — high-energy, zero-pressure movement that dissolves hierarchy.
+**Best for:** All-hands meetings and department orientations; Kickoff for company retreats; Post-merger culture integration; Holiday parties and milestone celebrations
+**Buyer titles:** Head of People, VP People Ops, Director of Employee Experience, Event Manager, Chief of Staff, Culture Lead
+
+## The Leadership Ballroom (`leadership_ballroom`)
+**Duration:** Half-day executive seminar
+**One-liner:** Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.
+**Best for:** Management and executive leadership retreats; High-potential accelerator programs; Orgs navigating rapid change or restructuring
+**Buyer titles:** CHRO, VP Learning & Development, Head of Talent Development, Chief People Officer, Executive Coach (internal), CEO / Founder (small-mid)
+
+## The Tech-Decompress (`tech_decompress`)
+**Duration:** 4-week weekly wellness series (60 min/week)
+**One-liner:** Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.
+**Best for:** Tech / engineering / product orgs with burnout risk; Wellness benefit programs seeking something employees actually use; Hybrid teams needing recurring culture rituals
+**Buyer titles:** Wellness Program Manager, Benefits Manager, Head of People, VP Engineering (culture owner), Employee Experience Lead
+
+## The "Dancing with the Office Stars" (`office_stars`)
+**Duration:** Premium holiday & gala package (+ private exec prep)
+**One-liner:** Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.
+**Best for:** Annual holiday parties and year-end celebrations; Company milestones and anniversary galas; Charity galas and high-profile fundraisers; Culture content moments worth filming
+**Buyer titles:** Director of Events, Corporate Event Producer, Chief Marketing Officer (culture content), Executive Assistant to CEO, Foundation / CSR lead
+
+## The Custom Collaboration Lab (`custom_lab`)
+**Duration:** Fully bespoke tailored workshop
+**One-liner:** Co-designed from discovery — movement curriculum aimed at your specific friction, not a template.
+**Best for:** Structural change or reorganization; Newly formed or cross-functional teams; Unique high-impact experiential asks; DEI / belonging engagement goals
+**Buyer titles:** CHRO, Chief of Staff, Head of DEI, VP People Ops, Org Development lead
+
+
+## ICP summary
+- Size: 50–5,000
+- Industries: Technology / SaaS / AI, Biotech / life sciences (Bay Area), Financial services / fintech, Professional services (law, consulting), Healthcare systems & health-tech, Consumer brands with strong culture teams, Media / entertainment, Nonprofits & foundations running galas
+- Geo: San Francisco / Peninsula / South Bay, East Bay / Marin / North Bay, LA / SoCal for premium packages, National remote for Leadership Ballroom & Office Stars (travel ok)
+- Triggers: Q4 holiday party planning (Aug–Nov), Q1 culture kickoff / all-hands, Post-funding or post-IPO team growth, Post-merger integration windows, Announced offsites / retreats, Wellness month / Mental Health Awareness (May), Women's leadership / ERG events, Company anniversary milestones
+
+
+# PACKAGES TO FEATURE (primary first)
+Package 1: The Leadership Ballroom
+Duration: Half-day executive seminar
+Pitch: Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.
+Best for: Management and executive leadership retreats; High-potential accelerator programs; Orgs navigating rapid change or restructuring
+Benefits: Enhances non-verbal communication and active listening; Builds cross-functional trust at leadership level; Teaches graceful pivots under pressure; Turns abstract leadership theory into lived experience
+
+Package 2: The Tech-Decompress
+Duration: 4-week weekly wellness series (60 min/week)
+Pitch: Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.
+Best for: Tech / engineering / product orgs with burnout risk; Wellness benefit programs seeking something employees actually use; Hybrid teams needing recurring culture rituals
+Benefits: Combats burnout and screen fatigue; Improves posture and sustainable energy; Becomes a protected calendar ritual people look forward to; Builds progressive competence and belonging
+
+
+# SLIDE STRUCTURE (create 12 cards)
+1. Cover — Edyta Śliwińska × Genentech (premium, cinematic)
+2. The opportunity — why Genentech's team needs a moment that actually bonds
+3. Who is Edyta — DWTS pro, 20+ years, star power without ego
+4. Why dance works at work — science-backed team accelerator (endorphins, stress, creativity)
+5. Recommended experience for Genentech — spotlight The Leadership Ballroom
+6. How the session runs — logistics, 5–500 people, hybrid/in-person, zero judgment
+7. Package deep-dives — one card per featured package (name, duration, outcomes)
+8. What success looks like — morale, cross-team trust, content, lasting lore
+9. Credentials & live-show pedigree (brief, tasteful)
+10. Next step — complimentary 15-minute discovery call with Edyta
+11. Contact — admin@edytasliwinska.com · +1 (218) 304-8372 · https://edytasliwinska.com
+
+Tone: warm, confident, exclusive — Hollywood representation energy, not spammy vendor pitch.
+Personalize every Genentech mention. Reference signals where natural.

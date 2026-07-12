@@ -1,0 +1,835 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-12T18:54:55.988285+00:00",
+  "prospects": {
+    "salesforce-c3c28e": {
+      "id": "salesforce-c3c28e",
+      "company": "Salesforce",
+      "created_at": "2026-07-12T18:40:05.100928+00:00",
+      "stage": "scored",
+      "score": 84,
+      "recommended_packages": [
+        {
+          "id": "office_stars",
+          "name": "The \"Dancing with the Office Stars\"",
+          "duration": "Premium holiday & gala package (+ private exec prep)",
+          "one_liner": "Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Director of Events",
+            "Corporate Event Producer",
+            "Chief Marketing Officer (culture content)",
+            "Executive Assistant to CEO",
+            "Foundation / CSR lead"
+          ]
+        },
+        {
+          "id": "icebreaker",
+          "name": "The Icebreaker",
+          "duration": "60–90 minute team bonding mixer",
+          "one_liner": "Ultimate upgrade from a corporate happy hour — high-energy, zero-pressure movement that dissolves hierarchy.",
+          "match_score": 3.0,
+          "matched_signals": [
+            "all-hands culture"
+          ],
+          "buyer_titles": [
+            "Head of People",
+            "VP People Ops",
+            "Director of Employee Experience",
+            "Event Manager",
+            "Chief of Staff",
+            "Culture Lead"
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "name": "People Events / Employee Experience team",
+          "title": "Employee Experience",
+          "email": "",
+          "linkedin": ""
+        }
+      ],
+      "signals": [
+        "employee engagement",
+        "all-hands culture",
+        "holiday party",
+        "wellness"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "San Francisco, CA",
+      "employee_range": "70000",
+      "website": "https://www.salesforce.com",
+      "notes": "Major SF employer with heavy culture / Ohana branding. Strong fit for Icebreaker and Office Stars at Tower events.",
+      "updated_at": "2026-07-12T18:54:55.981113+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 10,
+        "signals": 24
+      },
+      "agent_note": "Priority target (score 84). Lead with The \"Dancing with the Office Stars\". Build a tailored Gamma deck and draft a senior-tone outreach. Signals: all-hands culture, employee engagement, holiday party, wellness."
+    },
+    "genentech-a5934d": {
+      "id": "genentech-a5934d",
+      "company": "Genentech",
+      "created_at": "2026-07-12T18:40:05.101367+00:00",
+      "stage": "scored",
+      "score": 83,
+      "recommended_packages": [
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "name": "Alex Rivera",
+          "title": "Head of Employee Experience",
+          "email": "",
+          "linkedin": ""
+        }
+      ],
+      "signals": [
+        "wellness program",
+        "campus culture",
+        "leadership development",
+        "retreat"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": "/Users/dplvideo/.grok/worktrees/desktop-claude-research-analyst/sliw-agent/apps/sliw-agent/data/outreach/Genentech_cold_1_20260712_114005.json",
+      "edyta_brief_path": "/Users/dplvideo/.grok/worktrees/desktop-claude-research-analyst/sliw-agent/apps/sliw-agent/data/briefs/EDYTA_BRIEF_Genentech.md",
+      "history": [
+        {
+          "at": "2026-07-12T18:40:09.249068+00:00",
+          "from": "drafted",
+          "to": "interested",
+          "note": "warm_lead"
+        },
+        {
+          "at": "2026-07-12T18:40:09.251060+00:00",
+          "from": "interested",
+          "to": "interested",
+          "note": "Edyta brief ready"
+        }
+      ],
+      "industry": "Biotech / life sciences (Bay Area)",
+      "geo": "South San Francisco, CA",
+      "employee_range": "14000",
+      "website": "https://www.gene.com",
+      "notes": "SSF campus with strong internal culture programming. Good for Tech-Decompress series and Leadership Ballroom.",
+      "updated_at": "2026-07-12T18:54:55.981846+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 20,
+        "geo": 25,
+        "size": 14,
+        "signals": 24
+      },
+      "agent_note": "Priority target (score 83). Lead with The Leadership Ballroom. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: wellness program, campus culture, leadership development, retreat.",
+      "reply_summary": "This sounds amazing — interested in a discovery call next week for our leadership offsite.",
+      "qualification": {
+        "company": "Genentech",
+        "label": "warm_lead",
+        "recommended_stage": "interested",
+        "ready_for_edyta": true,
+        "positive_signals": [
+          "interested",
+          "discovery"
+        ],
+        "negative_signals": [],
+        "nurture_signals": [],
+        "agent_action": "Prepare Edyta brief and offer calendar slots."
+      }
+    },
+    "stripe-eb820e": {
+      "id": "stripe-eb820e",
+      "company": "Stripe",
+      "created_at": "2026-07-12T18:40:05.101846+00:00",
+      "stage": "scored",
+      "score": 77,
+      "recommended_packages": [
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "engineering culture",
+        "RTO hybrid culture rebuilding",
+        "offsite"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Financial services / fintech",
+      "geo": "South San Francisco / San Francisco, CA",
+      "employee_range": "8000",
+      "website": "https://stripe.com",
+      "notes": "Engineering-heavy fintech. Icebreaker for all-hands; Tech-Decompress for burnout.",
+      "updated_at": "2026-07-12T18:54:55.982491+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 20,
+        "geo": 25,
+        "size": 14,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 77). Lead with The Leadership Ballroom. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: engineering culture, RTO hybrid culture rebuilding, offsite."
+    },
+    "airbnb-f2db36": {
+      "id": "airbnb-f2db36",
+      "company": "Airbnb",
+      "created_at": "2026-07-12T18:40:05.102404+00:00",
+      "stage": "scored",
+      "score": 88,
+      "recommended_packages": [
+        {
+          "id": "office_stars",
+          "name": "The \"Dancing with the Office Stars\"",
+          "duration": "Premium holiday & gala package (+ private exec prep)",
+          "one_liner": "Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Director of Events",
+            "Corporate Event Producer",
+            "Chief Marketing Officer (culture content)",
+            "Executive Assistant to CEO",
+            "Foundation / CSR lead"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "belonging",
+        "culture",
+        "holiday party",
+        "employee experience"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "San Francisco, CA",
+      "employee_range": "7000",
+      "website": "https://www.airbnb.com",
+      "notes": "Belonging is core brand language — maps perfectly to dance-as-connection narrative.",
+      "updated_at": "2026-07-12T18:54:55.983125+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 14,
+        "signals": 24
+      },
+      "agent_note": "Priority target (score 88). Lead with The \"Dancing with the Office Stars\". Build a tailored Gamma deck and draft a senior-tone outreach. Signals: belonging, culture, holiday party, employee experience."
+    },
+    "uber-2dd06b": {
+      "id": "uber-2dd06b",
+      "company": "Uber",
+      "created_at": "2026-07-12T18:40:05.103020+00:00",
+      "stage": "scored",
+      "score": 78,
+      "recommended_packages": [
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 5.0,
+          "matched_signals": [
+            "engineering-heavy workforce"
+          ],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        },
+        {
+          "id": "office_stars",
+          "name": "The \"Dancing with the Office Stars\"",
+          "duration": "Premium holiday & gala package (+ private exec prep)",
+          "one_liner": "Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Director of Events",
+            "Corporate Event Producer",
+            "Chief Marketing Officer (culture content)",
+            "Executive Assistant to CEO",
+            "Foundation / CSR lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "all-hands",
+        "holiday party",
+        "engineering-heavy workforce"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "San Francisco, CA",
+      "employee_range": "30000",
+      "website": "https://www.uber.com",
+      "notes": "Large SF HQ events budget historically. Icebreaker / Office Stars.",
+      "updated_at": "2026-07-12T18:54:55.983772+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 10,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 78). Lead with The Tech-Decompress. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: engineering-heavy workforce, all-hands, holiday party."
+    },
+    "kaiser-permanente-ef9b43": {
+      "id": "kaiser-permanente-ef9b43",
+      "company": "Kaiser Permanente",
+      "created_at": "2026-07-12T18:40:05.103759+00:00",
+      "stage": "scored",
+      "score": 73,
+      "recommended_packages": [
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "wellness",
+        "employee engagement",
+        "leadership development"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Healthcare systems & health-tech",
+      "geo": "Oakland / Bay Area, CA",
+      "employee_range": "200000",
+      "website": "https://www.kaiserpermanente.org",
+      "notes": "Healthcare system with massive employee base — department-level sessions more realistic than all-company.",
+      "updated_at": "2026-07-12T18:54:55.984398+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 20,
+        "geo": 25,
+        "size": 10,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 73). Lead with The Leadership Ballroom. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: wellness, employee engagement, leadership development."
+    },
+    "wilson-sonsini-goodrich-rosati-b50b64": {
+      "id": "wilson-sonsini-goodrich-rosati-b50b64",
+      "company": "Wilson Sonsini Goodrich & Rosati",
+      "created_at": "2026-07-12T18:40:05.104490+00:00",
+      "stage": "scored",
+      "score": 78,
+      "recommended_packages": [
+        {
+          "id": "office_stars",
+          "name": "The \"Dancing with the Office Stars\"",
+          "duration": "Premium holiday & gala package (+ private exec prep)",
+          "one_liner": "Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Director of Events",
+            "Corporate Event Producer",
+            "Chief Marketing Officer (culture content)",
+            "Executive Assistant to CEO",
+            "Foundation / CSR lead"
+          ]
+        },
+        {
+          "id": "icebreaker",
+          "name": "The Icebreaker",
+          "duration": "60–90 minute team bonding mixer",
+          "one_liner": "Ultimate upgrade from a corporate happy hour — high-energy, zero-pressure movement that dissolves hierarchy.",
+          "match_score": 1.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Head of People",
+            "VP People Ops",
+            "Director of Employee Experience",
+            "Event Manager",
+            "Chief of Staff",
+            "Culture Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "holiday party",
+        "associate wellness",
+        "professional services culture"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Professional services (law, consulting)",
+      "geo": "Palo Alto / San Francisco, CA",
+      "employee_range": "1000",
+      "website": "https://www.wsgr.com",
+      "notes": "Biglaw holiday parties and associate wellness budgets. Icebreaker / Office Stars.",
+      "updated_at": "2026-07-12T18:54:55.985025+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 15,
+        "geo": 25,
+        "size": 20,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 78). Lead with The \"Dancing with the Office Stars\". Build a tailored Gamma deck and draft a senior-tone outreach. Signals: holiday party, associate wellness, professional services culture."
+    },
+    "rivian-8c291a": {
+      "id": "rivian-8c291a",
+      "company": "Rivian",
+      "created_at": "2026-07-12T18:40:05.105227+00:00",
+      "stage": "scored",
+      "score": 88,
+      "recommended_packages": [
+        {
+          "id": "custom_lab",
+          "name": "The Custom Collaboration Lab",
+          "duration": "Fully bespoke tailored workshop",
+          "one_liner": "Co-designed from discovery — movement curriculum aimed at your specific friction, not a template.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "Chief of Staff",
+            "Head of DEI",
+            "VP People Ops",
+            "Org Development lead"
+          ]
+        },
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "company culture",
+        "offsite",
+        "engineering culture",
+        "milestone celebration"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "Palo Alto / Bay Area + national",
+      "employee_range": "14000",
+      "website": "https://rivian.com",
+      "notes": "Growth-stage EV with culture branding. Custom Lab / Icebreaker for team moments.",
+      "updated_at": "2026-07-12T18:54:55.985648+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 14,
+        "signals": 24
+      },
+      "agent_note": "Priority target (score 88). Lead with The Custom Collaboration Lab. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: company culture, offsite, engineering culture, milestone celebration."
+    },
+    "doordash-66c251": {
+      "id": "doordash-66c251",
+      "company": "DoorDash",
+      "created_at": "2026-07-12T18:40:05.105958+00:00",
+      "stage": "scored",
+      "score": 82,
+      "recommended_packages": [
+        {
+          "id": "office_stars",
+          "name": "The \"Dancing with the Office Stars\"",
+          "duration": "Premium holiday & gala package (+ private exec prep)",
+          "one_liner": "Executives become the stars — private coaching, then a polished gala performance + company-wide interactive flash.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Director of Events",
+            "Corporate Event Producer",
+            "Chief Marketing Officer (culture content)",
+            "Executive Assistant to CEO",
+            "Foundation / CSR lead"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "all-hands",
+        "holiday party",
+        "employee engagement"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "San Francisco, CA",
+      "employee_range": "19000",
+      "website": "https://www.doordash.com",
+      "notes": "SF tech with large ops + eng mix. Icebreaker for all-hands energy.",
+      "updated_at": "2026-07-12T18:54:55.986257+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 14,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 82). Lead with The \"Dancing with the Office Stars\". Build a tailored Gamma deck and draft a senior-tone outreach. Signals: all-hands, holiday party, employee engagement."
+    },
+    "illumina-ec9f35": {
+      "id": "illumina-ec9f35",
+      "company": "Illumina",
+      "created_at": "2026-07-12T18:40:05.106717+00:00",
+      "stage": "scored",
+      "score": 77,
+      "recommended_packages": [
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        },
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "leadership development",
+        "wellness program",
+        "campus culture"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Biotech / life sciences (Bay Area)",
+      "geo": "San Diego / Bay Area presence",
+      "employee_range": "10000",
+      "website": "https://www.illumina.com",
+      "notes": "Life sciences leadership programs. Leadership Ballroom + Tech-Decompress.",
+      "updated_at": "2026-07-12T18:54:55.986884+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 20,
+        "geo": 25,
+        "size": 14,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 77). Lead with The Leadership Ballroom. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: leadership development, wellness program, campus culture."
+    },
+    "mckinsey-company-bay-area-0105ab": {
+      "id": "mckinsey-company-bay-area-0105ab",
+      "company": "McKinsey & Company (Bay Area)",
+      "created_at": "2026-07-12T18:40:05.107980+00:00",
+      "stage": "scored",
+      "score": 78,
+      "recommended_packages": [
+        {
+          "id": "leadership_ballroom",
+          "name": "The Leadership Ballroom",
+          "duration": "Half-day executive seminar",
+          "one_liner": "Ballroom as a leadership lab — non-verbal communication, psychological safety, and pivoting under pressure.",
+          "match_score": 5.0,
+          "matched_signals": [
+            "leadership offsite"
+          ],
+          "buyer_titles": [
+            "CHRO",
+            "VP Learning & Development",
+            "Head of Talent Development",
+            "Chief People Officer",
+            "Executive Coach (internal)",
+            "CEO / Founder (small-mid)"
+          ]
+        },
+        {
+          "id": "icebreaker",
+          "name": "The Icebreaker",
+          "duration": "60–90 minute team bonding mixer",
+          "one_liner": "Ultimate upgrade from a corporate happy hour — high-energy, zero-pressure movement that dissolves hierarchy.",
+          "match_score": 1.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Head of People",
+            "VP People Ops",
+            "Director of Employee Experience",
+            "Event Manager",
+            "Chief of Staff",
+            "Culture Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "leadership offsite",
+        "team retreat",
+        "high-potential employee accelerator programs"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Professional services (law, consulting)",
+      "geo": "San Francisco / Silicon Valley",
+      "employee_range": "500",
+      "website": "https://www.mckinsey.com",
+      "notes": "Consulting teams buy experiential leadership. Leadership Ballroom is the spearhead package.",
+      "updated_at": "2026-07-12T18:54:55.987585+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 15,
+        "geo": 25,
+        "size": 20,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 78). Lead with The Leadership Ballroom. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: leadership offsite, team retreat, high-potential employee accelerator programs."
+    },
+    "autodesk-8cc51f": {
+      "id": "autodesk-8cc51f",
+      "company": "Autodesk",
+      "created_at": "2026-07-12T18:40:05.108878+00:00",
+      "stage": "scored",
+      "score": 82,
+      "recommended_packages": [
+        {
+          "id": "tech_decompress",
+          "name": "The Tech-Decompress",
+          "duration": "4-week weekly wellness series (60 min/week)",
+          "one_liner": "Recurring lunchtime movement series that fights burnout in screen-heavy teams — progressive, social, addictive.",
+          "match_score": 3.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Wellness Program Manager",
+            "Benefits Manager",
+            "Head of People",
+            "VP Engineering (culture owner)",
+            "Employee Experience Lead"
+          ]
+        },
+        {
+          "id": "icebreaker",
+          "name": "The Icebreaker",
+          "duration": "60–90 minute team bonding mixer",
+          "one_liner": "Ultimate upgrade from a corporate happy hour — high-energy, zero-pressure movement that dissolves hierarchy.",
+          "match_score": 1.0,
+          "matched_signals": [],
+          "buyer_titles": [
+            "Head of People",
+            "VP People Ops",
+            "Director of Employee Experience",
+            "Event Manager",
+            "Chief of Staff",
+            "Culture Lead"
+          ]
+        }
+      ],
+      "contacts": [],
+      "signals": [
+        "employee experience",
+        "wellness",
+        "creative culture"
+      ],
+      "gamma_url": null,
+      "gamma_pptx": null,
+      "outreach_path": null,
+      "edyta_brief_path": null,
+      "history": [],
+      "industry": "Technology / SaaS / AI",
+      "geo": "San Francisco, CA",
+      "employee_range": "13000",
+      "website": "https://www.autodesk.com",
+      "notes": "Design/software culture. Creative teams respond well to movement experiences.",
+      "updated_at": "2026-07-12T18:54:55.988269+00:00",
+      "tier": "A",
+      "score_breakdown": {
+        "industry": 25,
+        "geo": 25,
+        "size": 14,
+        "signals": 18
+      },
+      "agent_note": "Priority target (score 82). Lead with The Tech-Decompress. Build a tailored Gamma deck and draft a senior-tone outreach. Signals: employee experience, wellness, creative culture."
+    }
+  }
+}

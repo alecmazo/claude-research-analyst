@@ -29384,6 +29384,70 @@ def snaptrade_remove(request: Request):
     return {"ok": True, "removed": connection_id}
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sliw Agent — Edyta Śliwińska corporate representation desk
+# UI:  /sliw/     (uses same DGA login as /gp · /lp)
+# API: /api/sliw/*  (auth middleware + allowlist GP/Edyta)
+# ─────────────────────────────────────────────────────────────────────────────
+_SLIW_ROOT = Path(__file__).resolve().parent.parent / "apps" / "sliw-agent"
+_SLIW_WEB = _SLIW_ROOT / "web"
+
+def _mount_sliw_agent() -> None:
+    if not _SLIW_ROOT.is_dir():
+        print("[sliw] apps/sliw-agent not found — skipping", flush=True)
+        return
+    sliw_path = str(_SLIW_ROOT)
+    if sliw_path not in sys.path:
+        sys.path.insert(0, sliw_path)
+    try:
+        from sliw_agent.server import create_api_router as _sliw_create_router
+        app.include_router(_sliw_create_router(), prefix="/api/sliw")
+        print("[sliw] API mounted at /api/sliw", flush=True)
+    except Exception as _sliw_exc:
+        print(f"[sliw] API mount failed: {_sliw_exc!r}", flush=True)
+        return
+
+    if not _SLIW_WEB.is_dir():
+        print("[sliw] web/ missing — UI not mounted", flush=True)
+        return
+
+    @app.get("/sliw")
+    def _sliw_redir():
+        return RedirectResponse(url="/sliw/", status_code=307)
+
+    @app.get("/sliw/")
+    def _sliw_index(request: Request):
+        path = _SLIW_WEB / "index.html"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Sliw Agent UI not found")
+        return _shell_response(path, request)
+
+    @app.get("/sliw/{asset_path:path}")
+    def _sliw_asset(asset_path: str):
+        # Serve style.css / app.js etc. under /sliw/
+        if ".." in asset_path or asset_path.startswith("/"):
+            raise HTTPException(status_code=404)
+        target = (_SLIW_WEB / asset_path).resolve()
+        try:
+            target.relative_to(_SLIW_WEB.resolve())
+        except ValueError:
+            raise HTTPException(status_code=404)
+        if not target.is_file():
+            raise HTTPException(status_code=404)
+        media = None
+        if target.suffix == ".css":
+            media = "text/css"
+        elif target.suffix == ".js":
+            media = "application/javascript"
+        return FileResponse(str(target), media_type=media)
+
+    print("[sliw] UI mounted at /sliw/", flush=True)
+
+
+_mount_sliw_agent()
+
+
 if BRANDING_DIR.exists():
     app.mount("/branding", StaticFiles(directory=str(BRANDING_DIR)), name="branding")
 

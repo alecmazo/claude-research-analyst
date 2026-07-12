@@ -1,0 +1,141 @@
+[
+  {
+    "company": "Salesforce",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "70000",
+    "website": "https://www.salesforce.com",
+    "signals": ["employee engagement", "all-hands culture", "holiday party", "wellness"],
+    "notes": "Major SF employer with heavy culture / Ohana branding. Strong fit for Icebreaker and Office Stars at Tower events.",
+    "custom_hook": "Salesforce's Ohana culture is famous — a DWTS-caliber team experience would match that brand energy better than another icebreaker slide deck",
+    "contacts": [
+      {
+        "name": "People Events / Employee Experience team",
+        "title": "Employee Experience",
+        "email": "",
+        "linkedin": ""
+      }
+    ]
+  },
+  {
+    "company": "Genentech",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "South San Francisco, CA",
+    "employee_range": "14000",
+    "website": "https://www.gene.com",
+    "signals": ["wellness program", "campus culture", "leadership development", "retreat"],
+    "notes": "SSF campus with strong internal culture programming. Good for Tech-Decompress series and Leadership Ballroom.",
+    "custom_hook": "Life-science teams live high-stakes pressure — a recurring movement series is a memorable wellness differentiator on a South City campus",
+    "contacts": []
+  },
+  {
+    "company": "Stripe",
+    "industry": "Financial services / fintech",
+    "geo": "South San Francisco / San Francisco, CA",
+    "employee_range": "8000",
+    "website": "https://stripe.com",
+    "signals": ["engineering culture", "RTO hybrid culture rebuilding", "offsite"],
+    "notes": "Engineering-heavy fintech. Icebreaker for all-hands; Tech-Decompress for burnout.",
+    "custom_hook": "Stripe teams move fast on product — a high-energy shared session is a rare chance for cross-team connection offline",
+    "contacts": []
+  },
+  {
+    "company": "Airbnb",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "7000",
+    "website": "https://www.airbnb.com",
+    "signals": ["belonging", "culture", "holiday party", "employee experience"],
+    "notes": "Belonging is core brand language — maps perfectly to dance-as-connection narrative.",
+    "custom_hook": "Belonging is Airbnb's product story — Edyta turns that into a lived team experience, not a poster on the wall",
+    "contacts": []
+  },
+  {
+    "company": "Uber",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "30000",
+    "website": "https://www.uber.com",
+    "signals": ["all-hands", "holiday party", "engineering-heavy workforce"],
+    "notes": "Large SF HQ events budget historically. Icebreaker / Office Stars.",
+    "custom_hook": "For a company that moves the world, an unforgettable HQ floor experience is on-brand culture content",
+    "contacts": []
+  },
+  {
+    "company": "Kaiser Permanente",
+    "industry": "Healthcare systems & health-tech",
+    "geo": "Oakland / Bay Area, CA",
+    "employee_range": "200000",
+    "website": "https://www.kaiserpermanente.org",
+    "signals": ["wellness", "employee engagement", "leadership development"],
+    "notes": "Healthcare system with massive employee base — department-level sessions more realistic than all-company.",
+    "custom_hook": "Healthcare teams carry extraordinary stress — a zero-judgment movement session is wellness they will actually talk about",
+    "contacts": []
+  },
+  {
+    "company": "Wilson Sonsini Goodrich & Rosati",
+    "industry": "Professional services (law, consulting)",
+    "geo": "Palo Alto / San Francisco, CA",
+    "employee_range": "1000",
+    "website": "https://www.wsgr.com",
+    "signals": ["holiday party", "associate wellness", "professional services culture"],
+    "notes": "Biglaw holiday parties and associate wellness budgets. Icebreaker / Office Stars.",
+    "custom_hook": "Associates remember the firm that gave them a legendary holiday event — not another seated dinner",
+    "contacts": []
+  },
+  {
+    "company": "Rivian",
+    "industry": "Technology / SaaS / AI",
+    "geo": "Palo Alto / Bay Area + national",
+    "employee_range": "14000",
+    "website": "https://rivian.com",
+    "signals": ["company culture", "offsite", "engineering culture", "milestone celebration"],
+    "notes": "Growth-stage EV with culture branding. Custom Lab / Icebreaker for team moments.",
+    "custom_hook": "Building the future of adventure vehicles — your team deserves a culture moment with the same energy",
+    "contacts": []
+  },
+  {
+    "company": "DoorDash",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "19000",
+    "website": "https://www.doordash.com",
+    "signals": ["all-hands", "holiday party", "employee engagement"],
+    "notes": "SF tech with large ops + eng mix. Icebreaker for all-hands energy.",
+    "custom_hook": "Dashers move the city — give HQ a shared rhythm they will not forget",
+    "contacts": []
+  },
+  {
+    "company": "Illumina",
+    "industry": "Biotech / life sciences (Bay Area)",
+    "geo": "San Diego / Bay Area presence",
+    "employee_range": "10000",
+    "website": "https://www.illumina.com",
+    "signals": ["leadership development", "wellness program", "campus culture"],
+    "notes": "Life sciences leadership programs. Leadership Ballroom + Tech-Decompress.",
+    "custom_hook": "Genomics teams solve complex problems daily — a leadership-through-movement lab is a memorable HiPo differentiator",
+    "contacts": []
+  },
+  {
+    "company": "McKinsey & Company (Bay Area)",
+    "industry": "Professional services (law, consulting)",
+    "geo": "San Francisco / Silicon Valley",
+    "employee_range": "500",
+    "website": "https://www.mckinsey.com",
+    "signals": ["leadership offsite", "team retreat", "high-potential employee accelerator programs"],
+    "notes": "Consulting teams buy experiential leadership. Leadership Ballroom is the spearhead package.",
+    "custom_hook": "You teach clients about high-performing teams — Edyta lets your own team feel psychological safety through movement",
+    "contacts": []
+  },
+  {
+    "company": "Autodesk",
+    "industry": "Technology / SaaS / AI",
+    "geo": "San Francisco, CA",
+    "employee_range": "13000",
+    "website": "https://www.autodesk.com",
+    "signals": ["employee experience", "wellness", "creative culture"],
+    "notes": "Design/software culture. Creative teams respond well to movement experiences.",
+    "custom_hook": "A company that designs the world should host team experiences that feel designed — not generic",
+    "contacts": []
+  }
+]

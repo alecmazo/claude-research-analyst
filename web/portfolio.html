@@ -248,6 +248,17 @@
   const $err     = document.getElementById('login-error');
   let _mfaStage  = false;   // true once the server asks for a 2FA code
 
+  // Safe post-login redirect (?next=/sliw/) — same-origin relative paths only.
+  function postLoginDestination(role) {
+    try {
+      const raw = new URLSearchParams(window.location.search).get('next') || '';
+      if (raw && raw.charAt(0) === '/' && raw.charAt(1) !== '/' && raw.indexOf('//') === -1) {
+        return raw;
+      }
+    } catch (_) {}
+    return (role === 'gp' || role === 'admin') ? '/gp' : '/lp';
+  }
+
   // Migrate any older sessionStorage token to localStorage so existing
   // sessions don't get bumped back to the login screen.
   try {
@@ -275,7 +286,7 @@
         return;
       }
       const me = await r.json();
-      window.location.href = (me.role === 'gp' || me.role === 'admin') ? '/gp' : '/lp';
+      window.location.href = postLoginDestination(me.role);
     } catch (e) {
       // Network error — leave login visible
     }
@@ -348,8 +359,9 @@
         managed_account_ids:  data.managed_account_ids || [],
       }));
 
-      // Route to the appropriate dashboard (admin has full GP access)
-      window.location.href = (data.role === 'gp' || data.role === 'admin') ? '/gp' : '/lp';
+      // Route to the appropriate dashboard (admin has full GP access),
+      // or honor ?next= (e.g. /sliw/) when present.
+      window.location.href = postLoginDestination(data.role);
 
     } catch (err) {
       console.error(err);
