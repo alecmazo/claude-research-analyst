@@ -442,6 +442,16 @@ a:hover { text-decoration: underline; }
   padding: 4px 10px;
 }
 
+.hunter-badge-warn {
+  background: linear-gradient(135deg, #e0b86a, #c4923a);
+  color: #0c0b0a;
+}
+
+.hunter-badge-off {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--mist);
+}
+
 .materials-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

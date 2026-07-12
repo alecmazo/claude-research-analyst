@@ -539,21 +539,28 @@ def create_api_router() -> APIRouter:
             raise HTTPException(400, str(exc)) from exc
 
     @r.get("/debug/hunter")
-    def debug_hunter(request: Request) -> dict[str, Any]:
-        """Confirm Hunter key is present (never returns the key) + optional probe."""
+    def debug_hunter(request: Request, domain: str = "stripe.com") -> dict[str, Any]:
+        """Confirm Hunter key is present (never returns the key) + probe a domain."""
         require_sliw_access(request)
-        import os
-        key = (os.environ.get("HUNTER_API_KEY") or os.environ.get("HUNTERIO_API_KEY") or "").strip()
+        from .contact_finder import _hunter_api_key, find_contacts
+        key = _hunter_api_key()
         out: dict[str, Any] = {
             "hunter_key_present": bool(key),
             "hunter_key_length": len(key) if key else 0,
+            "env_names_checked": [
+                "HUNTER_API_KEY", "HUNTERIO_API_KEY", "HUNTER_KEY", "HUNTER_API",
+            ],
         }
         if key:
             try:
-                sample = find_contacts(company="Stripe", website="https://stripe.com")
-                out["probe_company"] = "Stripe"
+                sample = find_contacts(
+                    company=domain.split(".")[0].title(),
+                    website=f"https://{domain}",
+                )
+                out["probe_domain"] = sample.get("domain")
                 out["probe_method"] = sample.get("method_summary")
-                out["probe_count"] = len([
+                out["hunter_diagnostics"] = sample.get("hunter_diagnostics")
+                out["probe_count_hunter"] = len([
                     c for c in (sample.get("contacts") or [])
                     if c.get("email") and c.get("source") == "hunter.io"
                 ])
@@ -564,11 +571,16 @@ def create_api_router() -> APIRouter:
                         "title": c.get("title"),
                         "source": c.get("source"),
                     }
-                    for c in (sample.get("contacts") or [])[:3]
+                    for c in (sample.get("contacts") or [])[:5]
                     if c.get("email")
                 ]
             except Exception as exc:
                 out["probe_error"] = str(exc)
+        else:
+            out["hint"] = (
+                "Key not visible in this process. On Railway: Variables → HUNTER_API_KEY → "
+                "Redeploy the service (Save alone is not enough)."
+            )
         return out
 
     @r.get("/master-deck")

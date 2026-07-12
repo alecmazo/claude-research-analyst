@@ -129,10 +129,13 @@ def run_sales_agent(
         )
         found = contact_result.get("contacts") or []
         if found:
-            # Merge with any existing
-            existing = p.get("contacts") or []
+            # Prefer Hunter contacts over old role-inbox guesses
+            existing = [
+                c for c in (p.get("contacts") or [])
+                if c.get("source") not in ("role_inbox_guess", "hunter.io_error")
+            ]
             by_key = {}
-            for c in existing + found:
+            for c in found + existing:  # found first so Hunter wins
                 key = (c.get("email") or c.get("name") or "").lower()
                 if key:
                     by_key[key] = {**(by_key.get(key) or {}), **c}
@@ -141,7 +144,17 @@ def run_sales_agent(
                 book=book,
                 contacts=list(by_key.values())[:12],
                 contact_research=contact_result.get("method_summary"),
+                hunter_enabled=contact_result.get("hunter_enabled"),
+                hunter_diagnostics=contact_result.get("hunter_diagnostics"),
                 linkedin_targets=contact_result.get("linkedin_targets"),
+            )
+        else:
+            crm.update_prospect(
+                prospect_id,
+                book=book,
+                contact_research=contact_result.get("method_summary"),
+                hunter_enabled=contact_result.get("hunter_enabled"),
+                hunter_diagnostics=contact_result.get("hunter_diagnostics"),
             )
 
     contacts = p.get("contacts") or []
@@ -290,6 +303,8 @@ def run_sales_agent(
         "contacts": contacts[:5],
         "primary_contact": primary_contact,
         "contact_research": contact_result.get("method_summary") if contact_result else None,
+        "hunter_enabled": (contact_result or {}).get("hunter_enabled"),
+        "hunter_diagnostics": (contact_result or {}).get("hunter_diagnostics") or p.get("hunter_diagnostics"),
         "linkedin_targets": (contact_result or {}).get("linkedin_targets") or p.get("linkedin_targets"),
         "outreach_path": str(path),
         "sequence_paths": seq_paths,

@@ -226,16 +226,22 @@ function hunterBadge(src) {
   return `<span class="hunter-badge" title="Verified via Hunter.io API">Hunter ✓</span>`;
 }
 
-function contactCardHtml(primary, contacts, research) {
+function contactCardHtml(primary, contacts, research, diagnostics) {
   const c = primary || {};
   const list = (contacts || []).filter((x) => x && (x.email || x.name));
   const hasHunter = isHunterSource(c.source) || list.some((x) => isHunterSource(x.source));
   const hasReal = list.some((x) => x.email && x.source !== "role_inbox_guess" && x.source !== "hunter.io_error");
+  const keyPresent = diagnostics?.hunter_key_present;
+  const keyBadge = keyPresent
+    ? (hasHunter
+      ? `<span class="hunter-badge hunter-badge-lg" title="Hunter API used">Hunter ✓</span>`
+      : `<span class="hunter-badge hunter-badge-warn" title="Key present but no personal email for this domain">Hunter key · no hit</span>`)
+    : `<span class="hunter-badge hunter-badge-off" title="HUNTER_API_KEY not visible to server">Hunter key missing</span>`;
   return `
     <div class="contact-card ${hasReal ? "found" : "weak"} ${hasHunter ? "hunter" : ""}">
       <div class="contact-card-head">
         <p class="eyebrow">Send to</p>
-        ${hasHunter ? `<span class="hunter-badge hunter-badge-lg" title="Contact found via Hunter.io API">Hunter ✓</span>` : ""}
+        ${keyBadge}
       </div>
       <div class="contact-primary">
         <div class="contact-name">${esc(c.name || "No name found")}${isHunterSource(c.source) ? " " + hunterBadge(c.source) : ""}</div>
@@ -243,6 +249,7 @@ function contactCardHtml(primary, contacts, research) {
         ${c.title ? `<div class="contact-title">${esc(c.title)}</div>` : ""}
       </div>
       ${research ? `<p class="muted" style="margin-top:8px">${esc(research)}</p>` : ""}
+      ${diagnostics?.domain ? `<p class="muted" style="font-size:11px">Domain searched: <code>${esc(diagnostics.domain)}</code></p>` : ""}
       ${list.length ? `
         <p class="eyebrow" style="margin-top:12px">Contacts found</p>
         <ul class="contact-list">${list.slice(0, 6).map((x) => `
@@ -266,7 +273,7 @@ function showAgentResult(result) {
   state._lastEmail = result.email_preview;
   out.hidden = false;
   out.innerHTML = `
-    ${contactCardHtml(c, contacts, result.contact_research)}
+    ${contactCardHtml(c, contacts, result.contact_research, result.hunter_diagnostics)}
     <div class="agent-card">
       <p class="eyebrow">Pitch</p>
       <p><strong>Mode:</strong> ${esc(result.marketing_mode || "—")}
@@ -331,7 +338,8 @@ function renderWorkstream() {
   out.innerHTML = contactCardHtml(
     primary,
     contacts,
-    p.contact_research || state._lastAgent?.contact_research || ""
+    p.contact_research || state._lastAgent?.contact_research || "",
+    p.hunter_diagnostics || state._lastAgent?.hunter_diagnostics || null
   );
   // Append draft if we have it
   loadDraftPreview(p, true);
