@@ -15,6 +15,7 @@ const state = {
   edyta: null,
   wedding: [],
   partners: [],
+  materials: null,
 };
 
 function toast(msg, ms = 3200) {
@@ -100,6 +101,7 @@ function showView(name) {
     edyta: ["Edyta’s desk", "Warm leads only"],
     weddings: ["Weddings", "Parallel book"],
     partners: ["Partners", "Channels"],
+    materials: ["Materials", "Master PDF & package links"],
   };
   const [t, e] = titles[name] || [name, ""];
   $("#view-title").textContent = t;
@@ -108,7 +110,55 @@ function showView(name) {
   if (name === "edyta") renderEdyta();
   if (name === "weddings") renderWeddings();
   if (name === "partners") renderPartners();
+  if (name === "materials") loadMaterials();
   if (name === "work") renderReady();
+}
+
+async function loadMaterials() {
+  try {
+    const meta = await api("/master-deck");
+    state.materials = meta;
+    renderMaterials();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderMaterials() {
+  const m = state.materials || {};
+  const hasPdf = !!m.pdf_uploaded && !!m.pdf_url;
+  const title = $("#pdf-status-title");
+  const detail = $("#pdf-status-detail");
+  const view = $("#pdf-view-link");
+  const del = $("#pdf-delete-btn");
+  if (title) {
+    title.textContent = hasPdf ? "PDF uploaded ✓" : "No PDF yet";
+  }
+  if (detail) {
+    if (hasPdf) {
+      const kb = m.pdf_bytes ? Math.round(m.pdf_bytes / 1024) + " KB" : "";
+      const when = m.pdf_uploaded_at ? ` · ${m.pdf_uploaded_at.slice(0, 10)}` : "";
+      const orig = m.pdf_original_name ? ` · ${m.pdf_original_name}` : "";
+      detail.textContent = `Ready for email body links${orig}${when}${kb ? " · " + kb : ""}`;
+    } else {
+      detail.textContent = "Upload your master packages PDF. It will be linked in outreach emails.";
+    }
+  }
+  if (view) {
+    if (hasPdf) {
+      view.hidden = false;
+      view.href = m.pdf_url;
+    } else {
+      view.hidden = true;
+    }
+  }
+  if (del) del.hidden = !hasPdf;
+  if (m.gamma_site && $("#gamma-site-link")) {
+    $("#gamma-site-link").href = m.gamma_site;
+  }
+  if (m.corporate_page && $("#corporate-page-link")) {
+    $("#corporate-page-link").href = m.corporate_page;
+  }
 }
 
 /* ── Work queue + step panel ─────────────────────────────────────────────── */
@@ -651,6 +701,53 @@ function boot() {
       state.partners = await api("/partnerships");
       renderPartners();
       toast("Partners loaded");
+    } catch (e) { toast(e.message); }
+  });
+
+  // Master PDF upload
+  $("#pdf-file-input")?.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      toast("Please choose a PDF file");
+      return;
+    }
+    busy(true, "Uploading master PDF…");
+    const msg = $("#pdf-upload-msg");
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const token = localStorage.getItem(TOKEN_KEY) || "";
+      const res = await fetch(`${API}/master-deck/pdf`, {
+        method: "POST",
+        headers: token ? { "x-auth-v2-token": token } : {},
+        body: fd,
+      });
+      if (!res.ok) {
+        let err = res.statusText;
+        try { err = (await res.json()).detail || err; } catch (_) {}
+        throw new Error(err);
+      }
+      const data = await res.json();
+      state.materials = data;
+      renderMaterials();
+      toast("Master PDF uploaded — linked in new outreach");
+      if (msg) msg.textContent = `Uploaded. Public link: ${data.pdf_url || "/sliw/media/master-packages.pdf"}`;
+    } catch (e) {
+      toast(e.message);
+      if (msg) msg.textContent = e.message;
+    } finally {
+      busy(false);
+      ev.target.value = "";
+    }
+  });
+
+  $("#pdf-delete-btn")?.addEventListener("click", async () => {
+    if (!confirm("Remove the master PDF from the server?")) return;
+    try {
+      await api("/master-deck/pdf", { method: "DELETE" });
+      toast("PDF removed");
+      await loadMaterials();
     } catch (e) { toast(e.message); }
   });
 

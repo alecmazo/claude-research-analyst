@@ -442,6 +442,30 @@ a:hover { text-decoration: underline; }
   padding: 4px 10px;
 }
 
+.materials-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.materials-card {
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line-soft);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.materials-card h4 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  margin: 6px 0 8px;
+}
+
+@media (max-width: 800px) {
+  .materials-grid { grid-template-columns: 1fr; }
+}
+
 .contact-primary .contact-name {
   font-family: var(--font-display);
   font-size: 26px;

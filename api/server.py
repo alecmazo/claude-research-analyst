@@ -29448,12 +29448,36 @@ def _mount_sliw_agent() -> None:
                 raise HTTPException(status_code=404, detail="Sliw Agent UI not found")
             return _shell_response(path, request)
 
+        # Public master PDF for email body links (no login — cold recipients open this)
+        @app.get("/sliw/media/master-packages.pdf")
+        def _sliw_master_pdf():
+            try:
+                from sliw_agent.master_deck import MASTER_PDF_PATH, master_pdf_exists
+            except Exception:
+                raise HTTPException(status_code=404, detail="PDF module unavailable")
+            if not master_pdf_exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail="No master PDF uploaded yet. Upload in Sliw → Materials.",
+                )
+            return FileResponse(
+                str(MASTER_PDF_PATH),
+                media_type="application/pdf",
+                filename="Edyta_Sliwinska_Corporate_Packages.pdf",
+                headers={
+                    "Cache-Control": "public, max-age=3600",
+                    "Content-Disposition": 'inline; filename="Edyta_Sliwinska_Corporate_Packages.pdf"',
+                },
+            )
+
         @app.get("/sliw/{asset_path:path}")
         def _sliw_asset(asset_path: str):
             # Static assets only under apps/sliw-agent/web — no path traversal.
             if not asset_path or ".." in asset_path or asset_path.startswith(("/", "\\")):
                 raise HTTPException(status_code=404)
-            # Block accidental capture of unrelated extensions that could confuse ops
+            # media/ is handled above
+            if asset_path.startswith("media/"):
+                raise HTTPException(status_code=404)
             target = (_SLIW_WEB / asset_path).resolve()
             try:
                 target.relative_to(_SLIW_WEB.resolve())

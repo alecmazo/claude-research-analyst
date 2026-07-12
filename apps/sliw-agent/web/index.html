@@ -33,6 +33,7 @@
         </button>
         <button class="nav-item" data-view="weddings"><span class="nav-icon">♡</span> Weddings</button>
         <button class="nav-item" data-view="partners"><span class="nav-icon">⚭</span> Partners</button>
+        <button class="nav-item" data-view="materials"><span class="nav-icon">▤</span> Materials</button>
       </nav>
       <div class="sidebar-foot">
         <p class="sidebar-quote">Free-flow desk — pick a lead, finish the next step.</p>
@@ -162,6 +163,49 @@
             <button class="btn primary sm" id="btn-partner-seed" type="button">Load partner seeds</button>
           </div>
           <div id="partner-list" class="leads-list"></div>
+        </section>
+
+        <!-- MATERIALS: master PDF upload + links -->
+        <section class="view" id="view-materials">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Master packages PDF</h3>
+              <span class="muted">Used in cold email body links</span>
+            </div>
+            <p class="hint-line">
+              Upload your polished packages PDF here. It is stored on the server and linked in outreach
+              (open in browser — not attached). Interactive overview stays on the published Gamma site.
+            </p>
+
+            <div class="materials-grid">
+              <div class="materials-card" id="materials-pdf-card">
+                <p class="eyebrow">PDF status</p>
+                <h4 id="pdf-status-title">Checking…</h4>
+                <p class="muted" id="pdf-status-detail"></p>
+                <div class="ws-actions" style="margin-top:12px">
+                  <label class="btn primary sm" style="cursor:pointer">
+                    Upload PDF
+                    <input type="file" id="pdf-file-input" accept="application/pdf,.pdf" hidden />
+                  </label>
+                  <a class="btn ghost sm" id="pdf-view-link" href="#" target="_blank" rel="noopener" hidden>View PDF</a>
+                  <button type="button" class="btn ghost sm" id="pdf-delete-btn" hidden>Remove PDF</button>
+                </div>
+                <p class="muted" id="pdf-upload-msg" style="margin-top:10px"></p>
+              </div>
+
+              <div class="materials-card">
+                <p class="eyebrow">Always linked</p>
+                <h4>Gamma packages site</h4>
+                <p class="muted">Interactive presentation of all packages</p>
+                <p style="margin-top:10px">
+                  <a id="gamma-site-link" href="https://edyta-corporate-dance-866y3wq.gamma.site/" target="_blank" rel="noopener">Open Gamma site →</a>
+                </p>
+                <p style="margin-top:8px">
+                  <a id="corporate-page-link" href="https://edytasliwinska.com/corporate" target="_blank" rel="noopener">Corporate page →</a>
+                </p>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </main>

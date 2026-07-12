@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -40,7 +40,15 @@ from .lead_engine import (
 )
 from .sales_agent import run_sales_agent, run_sales_agent_batch, escalate_to_edyta, prepare_followup
 from .contact_finder import find_contacts
-from .master_deck import ensure_master_deck, get_master_deck_meta, get_master_deck_url
+from .master_deck import (
+    ensure_master_deck,
+    get_master_deck_meta,
+    get_master_deck_url,
+    save_master_pdf,
+    delete_master_pdf,
+    master_pdf_exists,
+    MASTER_PDF_PATH,
+)
 from .wedding_agent import (
     import_wedding_library,
     run_wedding_pipeline,
@@ -566,16 +574,50 @@ def create_api_router() -> APIRouter:
     @r.get("/master-deck")
     def api_master_deck(request: Request) -> dict[str, Any]:
         require_sliw_access(request)
-        return get_master_deck_meta()
+        base = str(request.base_url).rstrip("/")
+        return get_master_deck_meta(request_base=base)
 
     @r.post("/master-deck")
     def api_master_deck_build(request: Request, live: bool = False) -> dict[str, Any]:
-        """Build/refresh master packages deck for email body links."""
+        """Refresh meta (Gamma site is fixed; no generation)."""
         require_sliw_access(request)
+        base = str(request.base_url).rstrip("/")
+        return get_master_deck_meta(request_base=base)
+
+    @r.post("/master-deck/pdf")
+    async def api_upload_master_pdf(
+        request: Request,
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        """Upload master packages PDF (shown in Materials + linked in emails)."""
+        require_sliw_access(request)
+        name = file.filename or "master_packages.pdf"
+        if not name.lower().endswith(".pdf"):
+            raise HTTPException(400, "Please upload a .pdf file")
+        content = await file.read()
+        if len(content) > 25 * 1024 * 1024:
+            raise HTTPException(400, "PDF too large (max 25 MB)")
+        if len(content) < 100:
+            raise HTTPException(400, "File is empty or too small")
+        base = str(request.base_url).rstrip("/")
         try:
-            return ensure_master_deck(live=live)
-        except Exception as exc:
+            meta = save_master_pdf(
+                content,
+                original_name=name,
+                request_base=base,
+            )
+        except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        return {
+            "ok": True,
+            "message": "Master PDF uploaded",
+            **meta,
+        }
+
+    @r.delete("/master-deck/pdf")
+    def api_delete_master_pdf(request: Request) -> dict[str, Any]:
+        require_sliw_access(request)
+        return delete_master_pdf()
 
     @r.post("/prospects/bulk")
     def bulk_import(body: BulkImportRequest, request: Request) -> dict[str, Any]:
