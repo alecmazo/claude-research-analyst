@@ -493,8 +493,45 @@ a:hover { text-decoration: underline; }
   margin: 6px 0 8px;
 }
 
+.materials-card-wide {
+  grid-column: 1 / -1;
+}
+
+.materials-pdf-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.materials-pdf-preview {
+  min-height: 420px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: #111;
+  overflow: hidden;
+  position: relative;
+}
+
+.materials-pdf-preview iframe {
+  width: 100%;
+  height: 480px;
+  border: 0;
+  background: #222;
+}
+
+.pdf-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+}
+
 @media (max-width: 800px) {
   .materials-grid { grid-template-columns: 1fr; }
+  .materials-pdf-layout { grid-template-columns: 1fr; }
 }
 
 .contact-primary .contact-name {

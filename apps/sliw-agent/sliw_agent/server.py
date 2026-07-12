@@ -47,7 +47,7 @@ from .master_deck import (
     save_master_pdf,
     delete_master_pdf,
     master_pdf_exists,
-    MASTER_PDF_PATH,
+    master_pdf_path,
 )
 from .wedding_agent import (
     import_wedding_library,

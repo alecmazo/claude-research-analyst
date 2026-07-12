@@ -126,33 +126,54 @@ async function loadMaterials() {
 
 function renderMaterials() {
   const m = state.materials || {};
-  const hasPdf = !!m.pdf_uploaded && !!m.pdf_url;
+  // Accept file on disk OR any usable pdf_url
+  const hasPdf = !!(m.pdf_uploaded || (m.pdf_bytes && m.pdf_bytes > 100) || m.pdf_url);
+  const pdfHref = m.pdf_preview_url || m.pdf_url || "/sliw/media/master-packages.pdf";
   const title = $("#pdf-status-title");
   const detail = $("#pdf-status-detail");
   const view = $("#pdf-view-link");
   const del = $("#pdf-delete-btn");
+  const frame = $("#pdf-preview-frame");
+  const empty = $("#pdf-preview-empty");
+  const storage = $("#pdf-storage-hint");
+
   if (title) {
-    title.textContent = hasPdf ? "PDF uploaded ✓" : "No PDF yet";
+    title.textContent = hasPdf ? "PDF ready ✓" : "No PDF on server yet";
   }
   if (detail) {
     if (hasPdf) {
-      const kb = m.pdf_bytes ? Math.round(m.pdf_bytes / 1024) + " KB" : "";
-      const when = m.pdf_uploaded_at ? ` · ${m.pdf_uploaded_at.slice(0, 10)}` : "";
-      const orig = m.pdf_original_name ? ` · ${m.pdf_original_name}` : "";
-      detail.textContent = `Ready for email body links${orig}${when}${kb ? " · " + kb : ""}`;
+      const kb = m.pdf_bytes ? `${Math.round(m.pdf_bytes / 1024)} KB` : "";
+      const when = m.pdf_uploaded_at ? m.pdf_uploaded_at.replace("T", " ").slice(0, 16) + " UTC" : "";
+      const orig = m.pdf_original_name || m.pdf_filename || "master_packages.pdf";
+      detail.innerHTML = `<strong>${esc(orig)}</strong>${kb ? " · " + esc(kb) : ""}${when ? " · " + esc(when) : ""}<br/><span class="muted">Linked in new outreach emails (browser link, not attachment).</span>`;
     } else {
-      detail.textContent = "Upload your master packages PDF. It will be linked in outreach emails.";
+      detail.textContent = "Upload your master packages PDF. After a successful upload you’ll see a live preview here.";
     }
   }
   if (view) {
-    if (hasPdf) {
-      view.hidden = false;
-      view.href = m.pdf_url;
-    } else {
-      view.hidden = true;
-    }
+    view.hidden = !hasPdf;
+    if (hasPdf) view.href = pdfHref;
   }
   if (del) del.hidden = !hasPdf;
+
+  // Live preview card
+  if (frame && empty) {
+    if (hasPdf) {
+      empty.hidden = true;
+      frame.hidden = false;
+      // cache-bust so replace shows new file
+      frame.src = pdfHref + (pdfHref.includes("?") ? "&" : "?") + "t=" + Date.now();
+    } else {
+      frame.hidden = true;
+      frame.removeAttribute("src");
+      empty.hidden = false;
+    }
+  }
+  if (storage) {
+    storage.textContent = m.data_dir
+      ? `Storage: ${m.data_dir} (must be on Railway volume / STOCKS_FOLDER to survive redeploys)`
+      : "";
+  }
   if (m.gamma_site && $("#gamma-site-link")) {
     $("#gamma-site-link").href = m.gamma_site;
   }
@@ -739,8 +760,9 @@ function boot() {
       await fullRefresh();
       if (r.results?.[0]?.prospect_id) {
         showView("work");
+        state._lastAgent = r.results[0];
+        state._coldEmail = r.results[0].email_preview;
         await focusLead(r.results[0].prospect_id, { autoAgent: false });
-        showAgentResult(r.results[0]);
       }
     } catch (e) { toast(e.message); }
     finally { busy(false); }

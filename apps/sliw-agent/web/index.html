@@ -178,23 +178,34 @@
             </p>
 
             <div class="materials-grid">
-              <div class="materials-card" id="materials-pdf-card">
-                <p class="eyebrow">PDF status</p>
-                <h4 id="pdf-status-title">Checking…</h4>
-                <p class="muted" id="pdf-status-detail"></p>
-                <div class="ws-actions" style="margin-top:12px">
-                  <label class="btn primary sm" style="cursor:pointer">
-                    Upload PDF
-                    <input type="file" id="pdf-file-input" accept="application/pdf,.pdf" hidden />
-                  </label>
-                  <a class="btn ghost sm" id="pdf-view-link" href="#" target="_blank" rel="noopener" hidden>View PDF</a>
-                  <button type="button" class="btn ghost sm" id="pdf-delete-btn" hidden>Remove PDF</button>
+              <div class="materials-card materials-card-wide" id="materials-pdf-card">
+                <div class="materials-pdf-layout">
+                  <div class="materials-pdf-info">
+                    <p class="eyebrow">Master packages PDF</p>
+                    <h4 id="pdf-status-title">Checking…</h4>
+                    <p class="muted" id="pdf-status-detail"></p>
+                    <div class="ws-actions" style="margin-top:12px">
+                      <label class="btn primary sm" style="cursor:pointer">
+                        Upload / replace PDF
+                        <input type="file" id="pdf-file-input" accept="application/pdf,.pdf" hidden />
+                      </label>
+                      <a class="btn ghost sm" id="pdf-view-link" href="#" target="_blank" rel="noopener" hidden>Open PDF</a>
+                      <button type="button" class="btn ghost sm" id="pdf-delete-btn" hidden>Remove</button>
+                    </div>
+                    <p class="muted" id="pdf-upload-msg" style="margin-top:10px"></p>
+                    <p class="muted" id="pdf-storage-hint" style="margin-top:8px;font-size:11px"></p>
+                  </div>
+                  <div class="materials-pdf-preview" id="pdf-preview-wrap">
+                    <div class="pdf-preview-empty" id="pdf-preview-empty">
+                      <p class="muted">PDF preview appears here after upload</p>
+                    </div>
+                    <iframe id="pdf-preview-frame" title="Master packages PDF preview" hidden></iframe>
+                  </div>
                 </div>
-                <p class="muted" id="pdf-upload-msg" style="margin-top:10px"></p>
               </div>
 
               <div class="materials-card">
-                <p class="eyebrow">Always linked</p>
+                <p class="eyebrow">Always linked in email</p>
                 <h4>Gamma packages site</h4>
                 <p class="muted">Interactive presentation of all packages</p>
                 <p style="margin-top:10px">

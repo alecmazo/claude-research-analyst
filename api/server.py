@@ -29452,7 +29452,7 @@ def _mount_sliw_agent() -> None:
         @app.get("/sliw/media/master-packages.pdf")
         def _sliw_master_pdf():
             try:
-                from sliw_agent.master_deck import MASTER_PDF_PATH, master_pdf_exists
+                from sliw_agent.master_deck import master_pdf_exists, master_pdf_path
             except Exception:
                 raise HTTPException(status_code=404, detail="PDF module unavailable")
             if not master_pdf_exists():
@@ -29460,8 +29460,9 @@ def _mount_sliw_agent() -> None:
                     status_code=404,
                     detail="No master PDF uploaded yet. Upload in Sliw → Materials.",
                 )
+            path = master_pdf_path()
             return FileResponse(
-                str(MASTER_PDF_PATH),
+                str(path),
                 media_type="application/pdf",
                 filename="Edyta_Sliwinska_Corporate_Packages.pdf",
                 headers={
