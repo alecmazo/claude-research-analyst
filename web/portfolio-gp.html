@@ -909,7 +909,7 @@
     .grid-2 { grid-template-columns: 1fr; }
   }
 
-  /* Saved reports table — ticker+news column claims width; price/tgt stay compact */
+  /* Saved reports table — ticker+news gets the room; price/tgt right-aligned & fixed */
   .rep-table {
     width: 100%;
     border-collapse: collapse;
@@ -927,18 +927,60 @@
   /* Sortable column headers in data-table */
   .data-table th[style*="cursor:pointer"]:hover { color: var(--blue); }
   .rep-table td {
-    padding: 7px 10px;
+    padding: 8px 10px;
     border-bottom: 1px solid rgba(0,0,0,0.04);
     font-size: 13px;
+  }
+  /* Col 1: ticker + news. Col 2/3: fixed right-aligned numerics (no wrap). */
+  .rep-table th:nth-child(1),
+  .rep-table td:nth-child(1) {
+    width: auto;
     vertical-align: top;
   }
-  /* Col 1: ticker + news (majority of row). Col 2/3: tight numeric. */
-  .rep-table th:nth-child(1),
-  .rep-table td:nth-child(1) { width: auto; }
   .rep-table th:nth-child(2),
-  .rep-table td:nth-child(2) { width: 78px; padding-left: 6px; padding-right: 8px; }
+  .rep-table td:nth-child(2) {
+    width: 96px;
+    padding-left: 4px;
+    padding-right: 10px;
+  }
   .rep-table th:nth-child(3),
-  .rep-table td:nth-child(3) { width: 100px; padding-left: 6px; padding-right: 10px; }
+  .rep-table td:nth-child(3) {
+    width: 118px;
+    padding-left: 4px;
+    padding-right: 12px;
+  }
+  .rep-table th.rep-num,
+  .rep-table td.rep-num {
+    text-align: right !important;
+    vertical-align: middle !important;
+    white-space: nowrap;
+  }
+  .rep-num-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1px;
+    width: 100%;
+  }
+  .rep-num-stack .rep-num-primary {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+  }
+  .rep-num-stack .rep-num-secondary {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+  .rep-num-stack .rep-num-lbl {
+    color: var(--blue);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    line-height: 1.2;
+  }
   .rep-table tbody tr { cursor: pointer; transition: background .12s; }
   .rep-table tbody tr:hover td { background: rgba(91,184,212,0.06); }
   .rep-tk { font-weight: 800; color: var(--text-primary); letter-spacing: 1px; font-size: 14px; }
@@ -971,13 +1013,16 @@
   /* Per-provider rows inside the TGT column (when both providers ran) */
   .rep-tgt-row {
     display: flex; align-items: baseline; justify-content: flex-end;
-    gap: 6px; font-size: 11px; line-height: 1.25;
+    gap: 5px; font-size: 11px; line-height: 1.25;
+    width: 100%;
+    font-variant-numeric: tabular-nums;
   }
-  .rep-tgt-row .rep-tgt-up   { font-size: 10px; font-weight: 700; }
-  .rep-tgt-row .rep-tgt-price { font-weight: 700; color: var(--text-primary); }
+  .rep-tgt-row .rep-tgt-up   { font-size: 10px; font-weight: 700; min-width: 3.2em; text-align: right; }
+  .rep-tgt-row .rep-tgt-price { font-weight: 700; color: var(--text-primary); min-width: 2.8em; text-align: right; }
   .rep-tgt-row .rep-tgt-prov {
     font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
     padding: 0 3px; border-radius: 2px;
+    flex-shrink: 0;
   }
   .rep-tgt-prov.grok   { background: #0A1628; color: #fff; }
   .rep-tgt-prov.claude { background: #d97706; color: #fff; }
@@ -2505,6 +2550,15 @@
     font-size: var(--text-base);
     color: var(--text-primary);
     border-bottom: 1px solid var(--border-subtle);
+  }
+  /* Keep saved-reports numeric headers right-aligned even after design-system refresh */
+  .rep-table th.rep-num {
+    text-align: right !important;
+    padding-right: 12px !important;
+  }
+  .rep-table td.rep-num {
+    text-align: right !important;
+    padding-right: 12px !important;
   }
 
   /* ────────────────────────────────────────────────────────────────────
@@ -8872,10 +8926,29 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   // Sort state for reports table (persists across re-renders within the session)
-  // Default: 'date' = chronological (newest first) — user can click the
-  // TGT/Upside header to switch to upside-based sort.
+  // Default: 'date' = when the report was last successfully run (newest first).
+  // Click TGT/Upside to switch to upside sort.
   let _repSortMode = 'date';   // 'date' | 'upside'
   let _repSortDir  = 'desc';
+
+  /** Epoch ms of when this report was last run (successful Grok/Claude gen preferred). */
+  function _repRunAtMs(rep) {
+    if (!rep) return 0;
+    const times = [];
+    // Prefer successful report generation timestamps (when analysis actually completed)
+    if (rep.generated_at) times.push(new Date(rep.generated_at).getTime());
+    if (rep.claude_generated_at) times.push(new Date(rep.claude_generated_at).getTime());
+    if (times.length) {
+      const best = Math.max.apply(null, times.filter(function (n) { return !isNaN(n); }));
+      if (best > 0) return best;
+    }
+    // Fall back to last attempt (includes failed retries) only if no success ts
+    if (rep.last_attempt_at) {
+      const t = new Date(rep.last_attempt_at).getTime();
+      if (!isNaN(t)) return t;
+    }
+    return 0;
+  }
 
   // Format the "x ago" relative date used in the dateStr column. Falls back
   // to absolute ISO date for anything older than 7 days.
@@ -8922,13 +8995,10 @@ End with the sleeve block at this account's real market value so I can push it t
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
 
-    // Chronological default: newest attempted (success OR failed) first.
-    // Falls back to generated_at when last_attempt_at is missing.
-    if (_repSortMode === 'date') {
+    // Always sort by last successful run (newest → oldest) unless upside mode.
+    if (_repSortMode !== 'upside') {
       reports = reports.slice().sort(function(a, b) {
-        const da = new Date(a.last_attempt_at || a.generated_at || 0).getTime();
-        const db = new Date(b.last_attempt_at || b.generated_at || 0).getTime();
-        return db - da;
+        return _repRunAtMs(b) - _repRunAtMs(a);
       });
     }
 
@@ -8961,12 +9031,15 @@ End with the sleeve block at this account's real market value so I can push it t
           statusIcon = '<span class="rep-status-ok" title="Last refresh succeeded">✅</span>';
         }
         const sortVal = upside != null ? upside.toFixed(4) : '';
+        const runMs = _repRunAtMs(rep);
+        // Show when the analysis was run (pipeline finish), not the report's narrative as-of
+        const runDateStr = runMs ? _repFmtRelDate(new Date(runMs).toISOString()) : dateStr;
         return (
-          '<tr data-ticker="' + rep.ticker + '" data-rep-status="' + (attemptStat || '') + '">' +
+          '<tr data-ticker="' + rep.ticker + '" data-rep-status="' + (attemptStat || '') + '" data-run-at="' + runMs + '">' +
           '<td>' +
-            '<span style="display:inline-flex;align-items:center;gap:5px;">' +
+            '<span style="display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;">' +
               statusIcon +
-              '<span class="rep-tk" data-rep-gf="' + rep.ticker + '" title="Open ' + rep.ticker + ' on GuruFocus">' + rep.ticker + '</span>' +
+              '<span class="rep-tk" data-rep-gf="' + rep.ticker + '" title="Open free snapshot for ' + rep.ticker + '">' + rep.ticker + '</span>' +
               '<button data-rep-delete="' + rep.ticker + '" title="Remove report" ' +
                 'style="background:none;border:none;cursor:pointer;padding:0 2px;font-size:12px;line-height:1;color:var(--dim);opacity:0.6;" ' +
                 'onclick="event.stopPropagation();">×</button>' +
@@ -9007,65 +9080,43 @@ End with the sleeve block at this account's real market value so I can push it t
               + ' title="Wipe cached SEC + market data for this ticker and re-run a fresh Grok analysis. '
               + 'Use when the report has empty financial tables (cached extract was bad)."'
               + ' onclick="event.stopPropagation();">🔃</button>' +
-            // As-of date(s) pulled FROM the report header. When both providers
-            // ran and dates differ, show 'G May 22 · C May 23' so the user
-            // sees each engine's analysis date. When they match (or only one
-            // ran), show a single date. Falls back to the server timestamp.
-            (function() {
-              // Clean leaked markdown/emoji from header-extracted dates:
-              // '⚡ **May 22, 2026**' → 'May 22, 2026'. Fixes rows stored
-              // before the server-side _clean_report_date() landed.
-              const _cd = function(s){ return (s||'').replace(/\*/g,'').replace(/^[^A-Za-z0-9]+/,'').replace(/[\s.,;:|]+$/,'').trim(); };
-              const gd = _cd(rep.report_date);
-              const cd = _cd(rep.claude_report_date);
-              if (gd && cd && gd !== cd) {
-                const g = _repCompactAsOf(gd), c = _repCompactAsOf(cd);
-                return '<span class="rep-date">'
-                  + '<span title="Grok report as-of: ' + _esc(g.full) + '"><b style="color:var(--text-primary);">G</b> ' + _esc(g.short) + '</span>'
-                  + ' · '
-                  + '<span title="Claude report as-of: ' + _esc(c.full) + '"><b style="color:#d97706;">C</b> ' + _esc(c.short) + '</span>'
-                  + '</span>';
-              }
-              const single = gd || cd;
-              if (single) {
-                const a = _repCompactAsOf(single);
-                return '<span class="rep-date" title="Report as-of: ' + _esc(a.full) + '">' + _esc(a.short) + '</span>';
-              }
-              return '<span class="rep-date">' + _esc(dateStr) + '</span>';
-            })() +
+            // "Run" time = when analysis finished (generated_at / claude_generated_at)
+            '<span class="rep-date" title="Last run: ' + _esc(runMs ? new Date(runMs).toLocaleString() : (attemptAt || '')) + '">'
+              + _esc(runDateStr) + '</span>' +
           '</td>' +
           '<td class="rep-num">' +
-            '<div style="color:var(--text-primary); font-weight:700;">' + (price != null ? '$' + fmtPx(price) : '—') + _quoteStaleChip(q) + '</div>' +
-            '<div class="' + cssClass(pct) + '" style="font-size:10px;">' + fmtPct(pct) + '</div>' +
+            '<div class="rep-num-stack">' +
+              '<div class="rep-num-primary">' + (price != null ? '$' + fmtPx(price) : '—') + _quoteStaleChip(q) + '</div>' +
+              '<div class="rep-num-secondary ' + cssClass(pct) + '">' + fmtPct(pct) + '</div>' +
+            '</div>' +
           '</td>' +
           '<td class="rep-num" data-sort-val="' + sortVal + '">' +
-            '<div style="color:var(--blue); font-size:9px; font-weight:800; letter-spacing:1px;">TGT</div>' +
             (function() {
               // When BOTH LLMs produced a target, stack them: each row has
               // [provider chip · upside % · target $] right-aligned. When only
-              // one LLM ran, keep the original single-target layout.
+              // one LLM ran, keep a matching stacked layout for alignment.
               const gT = rep.grok_price_target,   cT = rep.claude_price_target;
               const _fmtTgt = function(v) { return v == null ? '—' : '$' + (v >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)); };
               if (gT != null && cT != null) {
-                // Recompute upsides from current LIVE price for an honest comparison
                 const gUp = (price != null && price > 0) ? ((gT - price) / price * 100) : null;
                 const cUp = (price != null && price > 0) ? ((cT - price) / price * 100) : null;
-                return ''
+                return '<div class="rep-num-stack">'
                   + '<div class="rep-tgt-row">'
                   +   '<span class="rep-tgt-prov grok">G</span>'
                   +   '<span class="rep-tgt-up ' + cssClass(gUp) + '">' + fmtPct(gUp) + '</span>'
                   +   '<span class="rep-tgt-price">' + _fmtTgt(gT) + '</span>'
                   + '</div>'
-                  + '<div class="rep-tgt-row" style="margin-top:1px;">'
+                  + '<div class="rep-tgt-row">'
                   +   '<span class="rep-tgt-prov claude">C</span>'
                   +   '<span class="rep-tgt-up ' + cssClass(cUp) + '">' + fmtPct(cUp) + '</span>'
                   +   '<span class="rep-tgt-price">' + _fmtTgt(cT) + '</span>'
-                  + '</div>';
+                  + '</div></div>';
               }
-              // Single-provider layout: target then upside (original)
-              return ''
-                + '<div style="color:var(--text-primary); font-weight:700;">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>'
-                + '<div class="' + cssClass(upside) + '" style="font-size:10px;">' + fmtPct(upside) + '</div>';
+              return '<div class="rep-num-stack">'
+                + '<div class="rep-num-lbl">TGT</div>'
+                + '<div class="rep-num-primary">' + (target != null ? '$' + (target >= 100 ? target.toFixed(0) : target.toFixed(2)) : '—') + '</div>'
+                + '<div class="rep-num-secondary ' + cssClass(upside) + '">' + fmtPct(upside) + '</div>'
+                + '</div>';
             })() +
           '</td>' +
           '</tr>'
@@ -9249,7 +9300,7 @@ End with the sleeve block at this account's real market value so I can push it t
       _wireRepScanButtons();
 
       // Only apply upside-sort if the user explicitly switched to it.
-      // Default 'date' mode keeps the chronological order set up top.
+      // Default date mode already sorted by last run (newest first) above.
       if (_repSortMode === 'upside') {
         _sortTableByCol(tbody, 2, _repSortDir);
       }
@@ -9258,26 +9309,37 @@ End with the sleeve block at this account's real market value so I can push it t
       const th = document.getElementById('rep-th-upside');
       if (th && !th.dataset.sortWired) {
         th.dataset.sortWired = '1';
-        // Show current direction arrow
         const arrow = document.createElement('span');
         arrow.id = 'rep-sort-arrow';
         arrow.style.cssText = 'margin-left:4px;font-size:9px;opacity:0.7;';
         arrow.textContent = _repSortMode === 'upside' ? (_repSortDir === 'desc' ? '▼' : '▲') : '';
         th.appendChild(arrow);
+        th.title = 'Click to sort by upside. Click again to flip direction.';
         th.addEventListener('click', function() {
           if (_repSortMode !== 'upside') {
             _repSortMode = 'upside';
             _repSortDir  = 'desc';
           } else {
-            _repSortDir = _repSortDir === 'desc' ? 'asc' : 'desc';
+            // Second flip returns to newest-run order
+            if (_repSortDir === 'asc') {
+              _repSortMode = 'date';
+              _repSortDir = 'desc';
+              document.getElementById('rep-sort-arrow').textContent = '';
+              loadReports();
+              return;
+            }
+            _repSortDir = 'asc';
           }
           document.getElementById('rep-sort-arrow').textContent = _repSortDir === 'desc' ? '▼' : '▲';
           _sortTableByCol(tbody, 2, _repSortDir);
         });
       } else {
-        // Update arrow text in case it already exists
         const arrow = document.getElementById('rep-sort-arrow');
-        if (arrow) arrow.textContent = _repSortDir === 'desc' ? '▼' : '▲';
+        if (arrow) {
+          arrow.textContent = _repSortMode === 'upside'
+            ? (_repSortDir === 'desc' ? '▼' : '▲')
+            : '';
+        }
       }
     });
   }

@@ -9472,7 +9472,11 @@ def list_reports(request: Request = None):
                            report_date, claude_report_date
                     FROM analyst_reports
                     WHERE archived IS NOT TRUE
-                    ORDER BY COALESCE(last_attempt_at, generated_at) DESC NULLS LAST
+                    ORDER BY GREATEST(
+                      COALESCE(generated_at, TIMESTAMP '1970-01-01'),
+                      COALESCE(claude_generated_at, TIMESTAMP '1970-01-01'),
+                      COALESCE(last_attempt_at, TIMESTAMP '1970-01-01')
+                    ) DESC NULLS LAST
                 """)
                 rows = cur.fetchall()
             if rows:
