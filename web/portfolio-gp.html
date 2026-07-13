@@ -7774,7 +7774,7 @@ End with the sleeve block at this account's real market value so I can push it t
   //         fmtL, fmtR, clampL?:{lo,hi}, clampR?:{lo,hi} }
   // clamp*: caps the AXIS range so one outlier period (e.g. a 400% dilution
   // year) can't flatten every other bar — clipped bars draw to the edge, and
-  // the tooltip always shows the true value.
+  // the HTML hover tooltip always shows the true (unclipped) value.
   function _gfChart(cfg) {
     const W = 560, H = 268, padL = 82, padR = (cfg.series.some(s => s.axis === 'R') ? 74 : 14),
           padT = 12, padB = 44, n = cfg.labels.length;
@@ -7818,6 +7818,7 @@ End with the sleeve block at this account's real market value so I can push it t
     let svg = '';
     // gridlines + left ticks
     const fmtL = cfg.fmtL || _gfMoney, fmtR = cfg.fmtR || _gfPctF;
+    const fmtVal = (v, a) => (a === 'R' ? fmtR : fmtL)(v);
     for (let i = 0; i <= 4; i++) {
       const v = L.lo + (L.hi - L.lo) * i / 4, y = yOf(v, 'L');
       svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border-subtle,#e2e8f0)" stroke-width="1"/>`
@@ -7829,7 +7830,31 @@ End with the sleeve block at this account's real market value so I can push it t
     }
     // zero line
     if (L.lo < 0) svg += `<line x1="${padL}" y1="${yOf(0,'L').toFixed(1)}" x2="${W - padR}" y2="${yOf(0,'L').toFixed(1)}" stroke="var(--text-tertiary,#94a3b8)" stroke-width="1"/>`;
-    // bars
+
+    // Full-height period hit zones (under bars) — hover a year/quarter to see every series for that period.
+    for (let i = 0; i < n; i++) {
+      const lines = [];
+      cfg.series.forEach(s => {
+        const v = (s.values || [])[i];
+        if (v == null || !isFinite(v)) return;
+        const a = s.axis || 'L';
+        const nm = (v < 0 && s.nameNeg) ? s.nameNeg : s.name;
+        const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
+        lines.push({ name: nm, val: fmtVal(v, a), color: col });
+      });
+      if (!lines.length) continue;
+      const tipHtml = `<div style="font-weight:700;margin-bottom:4px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+        lines.map(l =>
+          `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">` +
+          `<span style="width:8px;height:8px;border-radius:50%;background:${l.color};flex-shrink:0;"></span>` +
+          `<span style="flex:1;opacity:.85;">${_gfEsc(l.name)}</span>` +
+          `<span style="font-weight:700;font-variant-numeric:tabular-nums;">${_gfEsc(l.val)}</span></div>`
+        ).join('');
+      const hx = padL + slotW * i;
+      svg += `<rect class="gf-hit" data-tip="${_gfEsc(tipHtml)}" x="${hx.toFixed(1)}" y="${padT}" width="${slotW.toFixed(1)}" height="${plotH.toFixed(1)}" fill="transparent" style="cursor:crosshair;"/>`;
+    }
+
+    // bars — visible fill + slightly wider hit target for short bars
     barSeries.forEach((s, si) => {
       const a = s.axis || 'L', y0 = yOf(0, a);
       s.values.forEach((v, i) => {
@@ -7838,10 +7863,24 @@ End with the sleeve block at this account's real market value so I can push it t
         const y = yOf(v, a);
         const col = (v < 0 && s.colorNeg) ? s.colorNeg : s.color;
         const nm = (v < 0 && s.nameNeg) ? s.nameNeg : s.name;
-        svg += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(1, Math.abs(y0 - y)).toFixed(1)}" fill="${col}" rx="1"><title>${_gfEsc(cfg.labels[i])} · ${_gfEsc(nm)}: ${_gfEsc((a==='R'?fmtR:fmtL)(v))}</title></rect>`;
+        const barY = Math.min(y, y0);
+        const barH = Math.max(1, Math.abs(y0 - y));
+        const tipHtml =
+          `<div style="font-weight:700;margin-bottom:3px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+          `<div style="display:flex;align-items:center;gap:6px;">` +
+          `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0;"></span>` +
+          `<span style="opacity:.85;">${_gfEsc(nm)}</span>` +
+          `<span style="font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;">${_gfEsc(fmtVal(v, a))}</span></div>`;
+        // Visible bar
+        svg += `<rect x="${x.toFixed(1)}" y="${barY.toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${barH.toFixed(1)}" fill="${col}" rx="1" pointer-events="none"/>`;
+        // Hover target (min ~10px tall so short bars are easy to hit)
+        const hitPad = 3;
+        const hitH = Math.max(10, barH + hitPad * 2);
+        const hitY = Math.min(barY - hitPad, y0 - hitH / 2);
+        svg += `<rect class="gf-hit" data-tip="${_gfEsc(tipHtml)}" x="${(x - 2).toFixed(1)}" y="${hitY.toFixed(1)}" width="${(bw + 3).toFixed(1)}" height="${hitH.toFixed(1)}" fill="transparent" style="cursor:pointer;"/>`;
       });
     });
-    // lines
+    // lines + hover dots
     cfg.series.filter(s => s.type === 'line').forEach(s => {
       const a = s.axis || 'L';
       let d = '', started = false;
@@ -7850,8 +7889,16 @@ End with the sleeve block at this account's real market value so I can push it t
         const x = padL + slotW * i + slotW / 2, y = yOf(v, a);
         d += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
         started = true;
+        const tipHtml =
+          `<div style="font-weight:700;margin-bottom:3px;opacity:.9;">${_gfEsc(cfg.labels[i])}</div>` +
+          `<div style="display:flex;align-items:center;gap:6px;">` +
+          `<span style="width:10px;height:2.5px;background:${s.color};flex-shrink:0;"></span>` +
+          `<span style="opacity:.85;">${_gfEsc(s.name)}</span>` +
+          `<span style="font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;">${_gfEsc(fmtVal(v, a))}</span></div>`;
+        svg += `<circle class="gf-hit" data-tip="${_gfEsc(tipHtml)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="transparent" style="cursor:pointer;"/>`;
+        svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${s.color}" stroke="#fff" stroke-width="1" pointer-events="none"/>`;
       });
-      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5"/>`;
+      if (d) svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" pointer-events="none"/>`;
     });
     // x labels (thin out when crowded — wider text at FS 17 needs fewer labels)
     const step = Math.ceil(n / 6);
@@ -7871,9 +7918,55 @@ End with the sleeve block at this account's real market value so I can push it t
       if (s.colorNeg) h += chip(s.nameNeg || (s.name + ' (negative)'), s.colorNeg, false);
       return h;
     }).join('');
-    return `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;background:var(--bg-elevated);">`
+    return `<div class="gf-chart-wrap" style="position:relative;border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;background:var(--bg-elevated);">`
       + `<div style="margin-bottom:5px;">${legend}</div>`
-      + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;">${svg}</svg></div>`;
+      + `<div style="position:relative;">`
+      + `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;overflow:visible;">${svg}</svg>`
+      + `<div class="gf-chart-tip" style="display:none;position:absolute;z-index:20;pointer-events:none;`
+      + `background:rgba(15,23,42,0.94);color:#fff;font-size:11.5px;line-height:1.35;`
+      + `padding:8px 10px;border-radius:7px;box-shadow:0 6px 18px rgba(0,0,0,0.22);`
+      + `white-space:nowrap;min-width:120px;max-width:280px;"></div>`
+      + `</div></div>`;
+  }
+
+  // Wire HTML tooltips for fundaments bar/line charts (native <title> is too flaky).
+  function _gfChartWireTips(root) {
+    (root || document).querySelectorAll('.gf-chart-wrap').forEach(wrap => {
+      if (wrap.dataset.tipWired === '1') return;
+      wrap.dataset.tipWired = '1';
+      const tip = wrap.querySelector('.gf-chart-tip');
+      if (!tip) return;
+      const plot = tip.parentElement;
+      const show = (el, ev) => {
+        const html = el.getAttribute('data-tip');
+        if (!html) return;
+        tip.innerHTML = html;
+        tip.style.display = 'block';
+        move(ev);
+      };
+      const move = (ev) => {
+        if (tip.style.display === 'none') return;
+        const rect = plot.getBoundingClientRect();
+        const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+        const cy = (ev.touches ? ev.touches[0].clientY : ev.clientY) - rect.top;
+        const tw = tip.offsetWidth || 140, th = tip.offsetHeight || 40;
+        let left = cx + 14, top = cy - th - 10;
+        if (left + tw > rect.width - 4) left = cx - tw - 10;
+        if (top < 4) top = cy + 16;
+        if (left < 4) left = 4;
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+      };
+      const hide = () => { tip.style.display = 'none'; };
+      wrap.querySelectorAll('.gf-hit').forEach(el => {
+        el.addEventListener('mouseenter', e => show(el, e));
+        el.addEventListener('mousemove', move);
+        el.addEventListener('mouseleave', hide);
+        el.addEventListener('touchstart', e => { show(el, e); }, { passive: true });
+        el.addEventListener('touchmove', e => { move(e); }, { passive: true });
+        el.addEventListener('touchend', hide);
+      });
+    });
   }
 
   async function _finDashLoad(tkOverride) {
@@ -8110,6 +8203,7 @@ End with the sleeve block at this account's real market value so I can push it t
     grid.style.display = 'grid';
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
     grid.style.gap = '12px';
+    _gfChartWireTips(grid);   // hover tooltips with exact bar / period values
 
     // ── Peer comps (sector/industry from free store) ──
     const peersHost = document.getElementById('fin-dash-peers');
