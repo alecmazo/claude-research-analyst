@@ -4923,16 +4923,32 @@ End with the sleeve block at this account's real market value so I can push it t
         <span class="panel-badge" id="fin-coverage-badge" style="background:#e0f2fe;color:#075985;">—</span>
       </header>
       <div class="panel-body" style="padding:14px 16px;">
+        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
+          <strong>Source of truth = Postgres</strong> (<code>company_financials</code>) — queryable for charts &amp; peer comps.
+          Dropbox holds research docs, not this warehouse (S&amp;P-scale numbers are tens of MB, fine in DB).
+          Free universes: S&amp;P 500 (GICS) + Nasdaq-100. Full Nasdaq Composite (~3–4k) is too large for one SEC job.
+        </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
-          <label style="font-size:11px;color:var(--text-secondary);">years back:
-            <input id="fin-years" type="number" min="1" max="20" value="10"
+          <label style="font-size:11px;color:var(--text-secondary);">Universe
+            <select id="fin-universe" style="margin-left:4px;border:1px solid var(--border-default);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+              <option value="sp500_nasdaq100">S&amp;P 500 + Nasdaq-100 (~550) — best for comps</option>
+              <option value="sp500">S&amp;P 500 only (~503)</option>
+              <option value="nasdaq100">Nasdaq-100 only (~100)</option>
+              <option value="reports">Saved reports only</option>
+              <option value="custom">Custom tickers only</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:var(--text-secondary);">years
+            <input id="fin-years" type="number" min="1" max="20" value="7"
+              title="Use 5–7 for bulk index jobs (faster). 10+ for deep history on a short list."
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
-          <input id="fin-tickers" placeholder="tickers (optional, e.g. INTC NVDA) — blank = all covered names"
-            style="flex:1;min-width:240px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
+          <input id="fin-tickers" placeholder="extra tickers (optional) — merged into universe, or sole list if Custom"
+            style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
         </div>
         <div id="fin-sync-status" style="margin-top:10px;"></div>
+        <div id="fin-universe-meta" style="margin-top:6px;font-size:11px;color:var(--text-tertiary);"></div>
         <div id="fin-coverage" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
       </div>
     </section>
@@ -8538,7 +8554,22 @@ End with the sleeve block at this account's real market value so I can push it t
       if (badge) badge.textContent = cov.length ? (cov.length + ' names') : 'empty';
       if (el) el.innerHTML = cov.length
         ? cov.map(c => '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')+'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>').join('')
-        : 'No financials stored yet — click “Sync from SEC”.';
+        : 'No financials stored yet — pick a universe and click “Sync from SEC”.';
+    } catch(_) {}
+    // Universe counts + storage note
+    try {
+      const u = await (await window.dgaFetch('/api/financials/universes')).json();
+      const meta = document.getElementById('fin-universe-meta');
+      if (meta && u && u.ok) {
+        const bits = [];
+        if (u.sp500 && u.sp500.count) bits.push('S&P 500 list: ' + u.sp500.count);
+        if (u.nasdaq100 && u.nasdaq100.count) bits.push('Nasdaq-100: ' + u.nasdaq100.count);
+        if (u.sp500_nasdaq100 && u.sp500_nasdaq100.count) bits.push('Combined unique: ' + u.sp500_nasdaq100.count);
+        if (u.stored_tickers != null) bits.push('In DB now: ' + u.stored_tickers);
+        if (u.stored_bytes) bits.push('Table ~' + (u.stored_bytes / 1e6).toFixed(1) + ' MB');
+        if (u.cap) bits.push('job cap ' + u.cap);
+        meta.textContent = bits.join(' · ') + ' · free lists, zero tokens';
+      }
     } catch(_) {}
   }
 
@@ -8546,7 +8577,8 @@ End with the sleeve block at this account's real market value so I can push it t
   async function _syncFinancials() {
     const status = document.getElementById('fin-sync-status');
     const btn = document.getElementById('fin-sync-btn');
-    const years = parseInt(document.getElementById('fin-years').value || '10', 10);
+    const years = parseInt(document.getElementById('fin-years').value || '7', 10);
+    const universe = (document.getElementById('fin-universe') || {}).value || 'sp500_nasdaq100';
     const tickers = (document.getElementById('fin-tickers').value || '')
       .toUpperCase().split(/[^A-Z.]+/).filter(Boolean);
     const box = h => { status.innerHTML = h; };
@@ -8555,14 +8587,18 @@ End with the sleeve block at this account's real market value so I can push it t
     try {
       const r = await window.dgaFetch('/api/financials/sync', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ years_back: years, tickers }),
+        body: JSON.stringify({ years_back: years, tickers, universe }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
-      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for '+(j.tickers||[]).length+' names…</div>');
+      const nTk = (j.count != null ? j.count : (j.tickers || []).length);
+      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for <strong>'+nTk+'</strong> names'
+        + (j.universe ? ' · universe <code>'+_trEsc(j.universe)+'</code>' : '')
+        + ' · this can take 20–60+ min for index universes; leave the tab open or come back later.</div>');
       const t0 = Date.now();
+      // 3h window for bulk S&P jobs (was 25 min — too short for ~550 names)
       _finSyncPoll = setInterval(async () => {
-        if (Date.now() - t0 > 1500000) { clearInterval(_finSyncPoll); _finSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still working in the background — check coverage shortly.</div>'); btn.disabled=false; btn.textContent='⬇️ Sync from SEC'; return; }
+        if (Date.now() - t0 > 3 * 3600 * 1000) { clearInterval(_finSyncPoll); _finSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still working in the background — re-open Financials later; coverage will grow as rows land.</div>'); btn.disabled=false; btn.textContent='⬇️ Sync from SEC'; return; }
         try {
           const s = await (await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(j.job_id))).json();
           if (s.status === 'done') {

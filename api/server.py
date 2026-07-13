@@ -23261,6 +23261,12 @@ def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
 # charted per company, and cited consistently by the AI Analyst.
 # ═══════════════════════════════════════════════════════════════════════
 _fin_sync_jobs: dict[str, dict] = {}             # financials sync jobs
+# Cap for one SEC pull job. S&P 500 + Nasdaq-100 is ~550 unique names; full
+# Nasdaq Composite (~3–4k) is intentionally not offered as a one-click job
+# (hours of SEC traffic + rate-limit risk). Raise only with care.
+_FIN_SYNC_CAP = 600
+_FIN_UNIVERSE_CACHE: dict[str, tuple] = {}        # key → (epoch, rows)
+_FIN_UNIVERSE_TTL_S = 24 * 3600
 
 # Extractor metric name (CamelCase) → DB column (snake_case). Insertion order
 # defines the column order used when binding values, so keep them in sync.
@@ -23280,6 +23286,150 @@ _FIN_COLMAP = {
     "GrossMargin": "gross_margin", "OperatingMargin": "operating_margin",
     "NetMargin": "net_margin", "EBITDAMargin": "ebitda_margin",
 }
+
+
+def _http_get_text(url: str, timeout: float = 25.0) -> str:
+    """Free HTTP GET with a real User-Agent. Falls back to an unverified SSL
+    context when the local cert store is broken (common on some macOS Python
+    installs); Railway/production normally uses the verified path."""
+    import urllib.request
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "DGACapitalResearch/1.0 (financials-universe; contact@dgacapital.com)"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+    except Exception:
+        import ssl
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+
+def _fin_universe_sp500() -> list[dict]:
+    """S&P 500 constituents from the free datasets/s-and-p-500-companies CSV
+    (GitHub). Includes GICS sector + sub-industry for comps. Cached 24h."""
+    cached = _FIN_UNIVERSE_CACHE.get("sp500")
+    if cached and (time.time() - cached[0]) < _FIN_UNIVERSE_TTL_S:
+        return list(cached[1])
+    url = ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
+           "master/data/constituents.csv")
+    text = _http_get_text(url)
+    import csv, io
+    rows = []
+    rdr = csv.DictReader(io.StringIO(text))
+    for r in rdr:
+        # Source uses BRK.B / BF.B style — keep as-is (matches SEC / our store).
+        sym = (r.get("Symbol") or r.get("symbol") or "").strip().upper()
+        sym = sym.replace("-", ".")
+        if not sym or not re.match(r"^[A-Z][A-Z0-9.]{0,6}$", sym):
+            continue
+        rows.append({
+            "ticker": sym,
+            "name": (r.get("Security") or r.get("Name") or "").strip() or None,
+            "sector": (r.get("GICS Sector") or r.get("Sector") or "").strip() or None,
+            "industry": (r.get("GICS Sub-Industry") or r.get("Industry") or "").strip() or None,
+            "source": "sp500",
+        })
+    if len(rows) < 400:
+        raise RuntimeError(f"S&P 500 list too short ({len(rows)}) — source may have moved")
+    _FIN_UNIVERSE_CACHE["sp500"] = (time.time(), rows)
+    return list(rows)
+
+
+def _fin_universe_nasdaq100() -> list[dict]:
+    """Nasdaq-100 from Wikipedia (free). Sector column when present. Cached 24h."""
+    cached = _FIN_UNIVERSE_CACHE.get("nasdaq100")
+    if cached and (time.time() - cached[0]) < _FIN_UNIVERSE_TTL_S:
+        return list(cached[1])
+    # Wikipedia free page (full Nasdaq Composite listing is ~3–4k names — not
+    # offered as a one-click job). Prefer the wikitable whose header has Ticker.
+    rows = []
+    try:
+        html = _http_get_text("https://en.wikipedia.org/wiki/Nasdaq-100")
+        tables = re.findall(
+            r'<table[^>]*class="[^"]*wikitable[^"]*"[^>]*>[\s\S]*?</table>',
+            html, re.I)
+        body = ""
+        for t in tables:
+            if re.search(r'Ticker|Symbol', t, re.I):
+                body = t
+                break
+        body = body or (tables[0] if tables else "")
+        for tr in re.findall(r'<tr[\s\S]*?</tr>', body, re.I):
+            tds = re.findall(r'<td[^>]*>([\s\S]*?)</td>', tr, re.I)
+            if not tds:
+                continue
+            raw = re.sub(r'<[^>]+>', '', tds[0]).strip().upper()
+            raw = raw.replace("&amp;", "&").split()[0] if raw else ""
+            if not re.match(r"^[A-Z][A-Z0-9.\-]{0,6}$", raw):
+                continue
+            name = re.sub(r'<[^>]+>', '', tds[1]).strip() if len(tds) > 1 else None
+            sector = re.sub(r'<[^>]+>', '', tds[2]).strip() if len(tds) > 2 else None
+            rows.append({
+                "ticker": raw.replace("-", "."),
+                "name": name or None,
+                "sector": sector or None,
+                "industry": None,
+                "source": "nasdaq100",
+            })
+    except Exception as e:
+        print(f"[fin-universe] nasdaq100 wiki failed: {e!s:.140}", flush=True)
+        rows = []
+    # Dedupe
+    seen, out = set(), []
+    for r in rows:
+        if r["ticker"] in seen:
+            continue
+        seen.add(r["ticker"])
+        out.append(r)
+    if len(out) < 80:
+        raise RuntimeError(f"Nasdaq-100 list too short ({len(out)}) — source may have moved")
+    _FIN_UNIVERSE_CACHE["nasdaq100"] = (time.time(), out)
+    return list(out)
+
+
+def _fin_universe_rows(universe: str) -> list[dict]:
+    """Resolve a named free universe into [{ticker, name, sector, industry}]."""
+    u = (universe or "reports").strip().lower()
+    if u in ("sp500", "s&p500", "s&p 500"):
+        return _fin_universe_sp500()
+    if u in ("nasdaq100", "ndx", "nasdaq-100"):
+        return _fin_universe_nasdaq100()
+    if u in ("sp500_nasdaq100", "sp500+nasdaq100", "broad", "indices"):
+        by = {}
+        for r in _fin_universe_sp500() + _fin_universe_nasdaq100():
+            by[r["ticker"]] = {**by.get(r["ticker"], {}), **{k: v for k, v in r.items() if v}}
+            by[r["ticker"]]["ticker"] = r["ticker"]
+        return list(by.values())
+    return []
+
+
+def _fin_persist_universe_meta(rows: list[dict]) -> int:
+    """Upsert GICS/wiki sector+industry into security_meta so peer comps work
+    without a separate market sync. Free data only."""
+    if not rows or not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return 0
+    n = 0
+    try:
+        _ensure_market_tables()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            for r in rows:
+                tk = (r.get("ticker") or "").upper()
+                if not tk:
+                    continue
+                if not (r.get("sector") or r.get("industry") or r.get("name")):
+                    continue
+                _store_meta(cur, tk, {
+                    "sector": r.get("sector"),
+                    "industry": r.get("industry"),
+                    "name": r.get("name"),
+                    "source": r.get("source") or "fin-universe",
+                })
+                n += 1
+            conn.commit()
+    except Exception as e:
+        print(f"[fin-universe] meta persist failed: {e!s:.140}", flush=True)
+    return n
 
 
 @_ddl_once
@@ -23345,7 +23495,9 @@ def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
                     (r.get("start") or None), (r.get("filed") or None),
                     (r.get("accession") or None), bool(r.get("derived"))]
             vals += [_num(r.get(metric)) for metric in _FIN_COLMAP]
-            vals.append(json.dumps({k: v for k, v in r.items() if k != "_tags"}, default=str))
+            # metrics_json is unused by the dashboard/comps path and roughly
+            # doubles row size — keep NULL to stay lean at S&P-scale coverage.
+            vals.append(None)
             cur.execute(sql, vals)
             n += 1
         conn.commit()
@@ -23422,10 +23574,57 @@ def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
         return cur.fetchall() or []
 
 
+@app.get("/api/financials/universes")
+def financials_universes(request: Request):
+    """List free index universes available for bulk SEC sync (counts only —
+    does not hit SEC). Used by the Financials store UI."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    out = {
+        "reports": {"label": "Saved reports", "note": "Your analyzed names only"},
+        "sp500": {"label": "S&P 500", "count": None, "note": "Free GICS list (~503)"},
+        "nasdaq100": {"label": "Nasdaq-100", "count": None, "note": "Free Wikipedia list (~100)"},
+        "sp500_nasdaq100": {"label": "S&P 500 + Nasdaq-100", "count": None,
+                            "note": "Best default for comps (~550 unique)"},
+        "custom": {"label": "Custom tickers", "note": "Use the ticker box only"},
+        "cap": _FIN_SYNC_CAP,
+        "storage": {
+            "primary": "Postgres company_financials (queryable)",
+            "files": "stock-financials/{TICKER}/ Excel (report pipeline, optional)",
+            "dropbox": "Reports/presentations only — not the financials warehouse",
+        },
+    }
+    for key in ("sp500", "nasdaq100", "sp500_nasdaq100"):
+        try:
+            out[key]["count"] = len(_fin_universe_rows(key))
+        except Exception as e:
+            out[key]["error"] = str(e)[:120]
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(DISTINCT ticker) FROM company_financials")
+            out["stored_tickers"] = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute("SELECT pg_total_relation_size('company_financials')")
+            out["stored_bytes"] = int((cur.fetchone() or [0])[0] or 0)
+    except Exception:
+        pass
+    return {"ok": True, **out}
+
+
 @app.post("/api/financials/sync")
 def financials_sync(req: Request, background_tasks: BackgroundTasks):
     """Build/refresh the structured financials store from SEC EDGAR XBRL.
-    Body: {tickers?, years_back?}. If tickers omitted, uses Saved Reports."""
+
+    Body: {
+      tickers?: string[],          # optional extras / custom list
+      years_back?: int,            # default 10 (use 5–7 for bulk index jobs)
+      universe?: "reports" | "sp500" | "nasdaq100" | "sp500_nasdaq100" | "custom"
+    }
+
+    Storage note: rows land in Postgres `company_financials` (source of truth
+    for the dashboard/comps). Dropbox is NOT used as the warehouse — keep it
+    for research docs; Postgres is ~tens of MB even at S&P scale and supports
+    SQL peer comps. Free index lists also seed security_meta (GICS sector)."""
     claims = _claims_or_401(req)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -23439,25 +23638,59 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
     except Exception:
         body = {}
     years_back = max(1, min(int((body or {}).get("years_back") or 10), 20))
-    tickers = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and t.strip()]
-    if not tickers:
+    universe = str((body or {}).get("universe") or "reports").strip().lower()
+    extras = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and str(t).strip()]
+    tickers: list[str] = []
+    meta_rows: list[dict] = []
+    try:
+        if universe == "custom":
+            tickers = list(extras)
+        elif universe in ("sp500", "nasdaq100", "sp500_nasdaq100", "broad", "indices"):
+            meta_rows = _fin_universe_rows(universe)
+            tickers = [r["ticker"] for r in meta_rows]
+            tickers = list(dict.fromkeys(tickers + extras))   # extras first? keep index order + extras
+            # Prefer index order, then extras not already included
+            base = [r["ticker"] for r in meta_rows]
+            for t in extras:
+                if t not in base:
+                    base.append(t)
+            tickers = base
+        else:
+            # reports (default): saved analyst reports, then any extras
+            try:
+                with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                    cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
+                    tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
+            except Exception:
+                tickers = []
+            for t in extras:
+                if t not in tickers:
+                    tickers.append(t)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Universe resolve failed: {e!s:.160}"}, status_code=400)
+
+    # Seed sector/industry for comps (free GICS/wiki — no tokens)
+    if meta_rows:
         try:
-            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
-                cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
-                tickers = [r["ticker"].upper() for r in (cur.fetchall() or []) if r.get("ticker")]
-        except Exception:
-            tickers = []
-    tickers = tickers[:80]
+            _fin_persist_universe_meta(meta_rows)
+        except Exception as e:
+            print(f"[fin sync] meta seed failed: {e!s:.120}", flush=True)
+
+    tickers = [t for t in tickers if t][:_FIN_SYNC_CAP]
     if not tickers:
-        return JSONResponse({"ok": False, "error": "No tickers to sync."}, status_code=400)
+        return JSONResponse({"ok": False, "error": "No tickers to sync. Pick a universe or enter tickers."},
+                            status_code=400)
     import uuid as _uuid
     job_id = "FINSYNC_" + _uuid.uuid4().hex[:12]
     _fin_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
                                "started_at": time.time(), "updated_at": time.time(),
-                               "total": len(tickers), "done": 0, "stored": 0}
+                               "total": len(tickers), "done": 0, "stored": 0,
+                               "universe": universe}
     background_tasks.add_task(_run_financials_sync, job_id, tickers, years_back)
-    print(f"📊 [fin sync] queued {job_id}  {len(tickers)} tickers  yrs={years_back}", flush=True)
-    return {"ok": True, "job_id": job_id, "tickers": tickers}
+    print(f"📊 [fin sync] queued {job_id}  universe={universe}  "
+          f"{len(tickers)} tickers  yrs={years_back}", flush=True)
+    return {"ok": True, "job_id": job_id, "tickers": tickers, "universe": universe,
+            "count": len(tickers), "cap": _FIN_SYNC_CAP}
 
 
 @app.get("/api/financials/sync/{job_id}")
