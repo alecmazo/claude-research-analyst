@@ -6238,7 +6238,14 @@ End with the sleeve block at this account's real market value so I can push it t
         cost: _llmRng(est.prioritize_grok, '≈ $0.02–0.08'),
         paid: true,
       },
-      pulse: {
+      pulse: volOn ? {
+        action: 'Market pulse / ticker scan (volume)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.pulse_volume || [0.002, 0.015], '≈ $0.002–0.015') + ' / ticker',
+        paid: true,
+        note: 'Cheap volume model + free Yahoo/Google headlines (no Grok live search)',
+      } : {
         action: 'Market pulse / ticker scan',
         provider: 'grok',
         model: g + ' + live search',
@@ -6351,6 +6358,10 @@ End with the sleeve block at this account's real market value so I can push it t
       ['#strat-run-btn', 'strategist'],
       ['#lab-runclaude-btn', 'lab_claude'],
       ['#tr-agentic-run-btn', 'agentic'],
+      ['#rpulse-run', 'pulse'],
+      ['#ipulse-run', 'pulse'],
+      ['#reports-scan-btn', 'pulse'],
+      ['#reports-scan-all-btn', 'pulse'],
     ];
     pairs.forEach(function (p) {
       const el = document.querySelector(p[0]);
@@ -13750,17 +13761,32 @@ End with the sleeve block at this account's real market value so I can push it t
       _pulseSetRunState(false, 'Watchlist is empty — add tickers first.');
       return;
     }
-    const est = (n * _PULSE_COST_PER_TICKER).toFixed(2);
+    const meta = llmDescribe('pulse');
+    const volOn = !!(window.DGA_LLM && window.DGA_LLM.volume && window.DGA_LLM.volume.enabled);
+    // Per-ticker cost: volume ballpark or Grok live estimate
+    let per = _PULSE_COST_PER_TICKER;
+    try {
+      const pv = (window.DGA_LLM && window.DGA_LLM.est && window.DGA_LLM.est.pulse_volume) || null;
+      if (volOn && Array.isArray(pv) && pv[0] != null)
+        per = (Number(pv[0]) + Number(pv[1] || pv[0])) / 2;
+    } catch (_) {}
+    const est = (n * per).toFixed(2);
     const okGo = await dgaConfirm({
       title: 'Run Market Pulse',
-      message: 'Scan ' + n + ' watchlist ticker' + (n === 1 ? '' : 's') + ' with Grok live web/X search? '
-        + 'Estimated cost ≈ $' + est + ' (~$0.02/ticker — estimate only; actual varies with search volume).',
+      message: 'Scan ' + n + ' watchlist ticker' + (n === 1 ? '' : 's') + '?\n\n'
+        + 'Model: ' + meta.model + ' (' + meta.provider + ')\n'
+        + 'Est. cost ≈ $' + est + ' for this run'
+        + (volOn
+          ? ' (volume LLM + free headlines — no Grok live search).'
+          : ' (Grok live web/X search — estimate only).')
+        + (meta.note ? '\n' + meta.note : ''),
       confirmLabel: 'Run scan',
       danger: false,
     });
     if (!okGo) return;
     _pulseRunning = true;
-    _pulseSetRunState(true, 'Queuing scan…');
+    llmToast('pulse', 'Starting market pulse');
+    _pulseSetRunState(true, 'Queuing · ' + meta.model + '…');
     try {
       const r = await window.dgaFetch('/api/scan', { method: 'POST' });   // empty body → watchlist union server-side
       if (!r.ok) { const e = await r.json().catch(function(){return {};}); throw new Error(e.detail || ('HTTP ' + r.status)); }
@@ -13773,13 +13799,17 @@ End with the sleeve block at this account's real market value so I can push it t
           seen.add(tk);
           _pulseLatest[tk] = res;
           _pulseScannedAt = new Date().toISOString();
-          _pulseSetRunState(true, 'Scanning… ' + seen.size + '/' + total + ' tickers done');
+          const used = (res && res.model) ? res.model : meta.model;
+          _pulseSetRunState(true, used + ' · ' + seen.size + '/' + total + ' done');
           _pulseRenderAll();
         },
         function() {
           _pulseRunning = false;
           _pulseSetRunState(false, '');
           _pulseLoadLatest();   // reload the merged persisted pulse
+          try {
+            window.toast && window.toast('Pulse done · ' + meta.provider + ' · ' + meta.model + ' · ~$' + est, { type: 'info', ttl: 4000 });
+          } catch (_) {}
         },
         function(err) {
           _pulseRunning = false;
@@ -17820,7 +17850,8 @@ End with the sleeve block at this account's real market value so I can push it t
           + '<div style="margin-top:6px;font-size:11px;color:#64748b;">'
           + 'Routes — brief: <code>' + (routes.daily_brief || '—') + '</code> · '
           + 'intel: <code>' + (routes.intelligence || '—') + '</code> · '
-          + 'prioritize: <code>' + (routes.prioritize || '—') + '</code><br>'
+          + 'prioritize: <code>' + (routes.prioritize || '—') + '</code> · '
+          + 'pulse/scan: <code>' + (routes.market_pulse || '—') + '</code><br>'
           + 'Reports: <code>' + (routes.full_reports || 'grok | claude') + '</code> · '
           + 'Podcast: <code>' + (routes.podcast || 'claude | grok') + '</code>'
           + '</div>';

@@ -283,6 +283,7 @@ def volume_llm_status() -> dict:
             "daily_brief": "volume" if volume_llm_enabled() else "grok",
             "intelligence": "volume" if volume_llm_enabled() else "grok",
             "prioritize": "volume" if volume_llm_enabled() else "grok",
+            "market_pulse": "volume" if volume_llm_enabled() else "grok",
             "full_reports": "grok | claude (unchanged)",
             "podcast": "claude | grok (unchanged)",
         },
@@ -1425,18 +1426,19 @@ def remove_from_watchlist(ticker: str) -> list[str]:
 
 
 # ============================================================================
-# Market Scan — daily news intelligence per ticker via Grok live search
+# Market Scan / Market Pulse — per-ticker digest
+# Volume mode → cheap open model + free headlines; rollback → Grok live search
 # ============================================================================
 
 SCAN_SYSTEM_PROMPT = """You are a real-time market intelligence scanner for a professional portfolio manager. Your job is FAST, SPECIFIC, and FACTUAL.
 
-For each stock scan request you receive, use your live web and X (Twitter) search results to produce a concise daily market digest.
+For each stock scan request you receive, produce a concise daily market digest from the evidence provided (and live search when available).
 
 Rules:
 - Be SPECIFIC: exact dates, exact dollar amounts, exact % figures, and source URLs where possible
 - Be CURRENT: items from TODAY and YESTERDAY rank first; do not lead with 30-day-old news
 - Be CONCISE: the entire response must fit in under 500 words
-- NEVER invent news. If no confirmed live source exists for a fact, mark it "(unconfirmed)"
+- NEVER invent news. If no confirmed source exists for a fact, mark it "(unconfirmed)"
 - For price movement: name the SINGLE most important driver, not generic "market sentiment"
 - Tag every news item: [HIGH], [MED], or [LOW] by its market impact on this stock
 - [HIGH] = material to a PM today: CEO change, earnings, M&A, regulatory ruling, large guidance revision
@@ -1451,7 +1453,9 @@ CURRENT_PRICE: {price}
 PREVIOUS_CLOSE: {prev_close}
 PRICE_CHANGE_PCT: {pct_change}%
 
-Using live web and X search, produce a market scan for {ticker}. Use this exact format:
+{evidence_block}
+
+Produce a market scan for {ticker}. Use this exact format:
 
 ## {ticker} — ${price} ({sign}{pct_change_abs}%)
 
@@ -1475,8 +1479,65 @@ Using live web and X search, produce a market scan for {ticker}. Use this exact 
 """
 
 
+def _free_ticker_headlines(ticker: str, limit: int = 6) -> list[dict]:
+    """Free Yahoo Finance RSS headlines for one ticker (no LLM, no paid news API)."""
+    import urllib.request as _req
+    import xml.etree.ElementTree as _ET
+    from email.utils import parsedate_to_datetime
+    from urllib.parse import quote as _q
+
+    tk = (ticker or "").strip().upper()
+    if not tk:
+        return []
+    items: list[dict] = []
+
+    def _pull(url: str, source: str) -> None:
+        nonlocal items
+        if len(items) >= limit:
+            return
+        try:
+            req = _req.Request(url, headers={
+                "User-Agent": "DGA-Capital-Research/1.0 (market-pulse volume)",
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            })
+            with _req.urlopen(req, timeout=6) as resp:
+                xml_text = resp.read().decode("utf-8", "replace")
+            root = _ET.fromstring(xml_text)
+            channel = root.find("channel")
+            if channel is None:
+                return
+            for it in channel.findall("item")[:limit]:
+                title = (it.findtext("title") or "").strip()
+                link = (it.findtext("link") or "").strip()
+                pub = (it.findtext("pubDate") or "").strip()
+                if not title:
+                    continue
+                items.append({
+                    "title": title, "url": link, "publisher": source, "pub": pub,
+                })
+                if len(items) >= limit:
+                    return
+        except Exception:
+            pass
+
+    # Yahoo finance RSS first, then Google News RSS
+    _pull(
+        f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={_q(tk)}&region=US&lang=en-US",
+        "Yahoo Finance",
+    )
+    if len(items) < 2:
+        _pull(
+            f"https://news.google.com/rss/search?q={_q(tk + ' stock')}&hl=en-US&gl=US&ceid=US:en",
+            "Google News",
+        )
+    return items[:limit]
+
+
 def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
-    """Run a live Grok scan for one ticker and return a structured result dict.
+    """Market-pulse digest for one ticker.
+
+    Volume mode (Option 4): cheap open model + free Yahoo/Google headlines.
+    Rollback: Grok with live web + X search.
 
     Returns:
         {
@@ -1486,9 +1547,11 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             "price": float | None,
             "previous_close": float | None,
             "pct_change": float | None,
-            "markdown": str,   # the Grok-generated digest
+            "markdown": str,
             "sentiment": str,  # BULLISH | NEUTRAL | BEARISH | UNKNOWN
             "error": str | None,
+            "provider": str | None,
+            "model": str | None,
         }
     """
     ticker = ticker.strip().upper()
@@ -1505,6 +1568,24 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
     sign = "+" if (pct_change or 0) >= 0 else ""
     pct_abs = abs(pct_change) if pct_change is not None else 0.0
 
+    use_vol = volume_llm_enabled()
+    evidence_block = ""
+    if use_vol:
+        headlines = _free_ticker_headlines(ticker, limit=6)
+        if headlines:
+            lines = ["FREE HEADLINES (ground truth — do not invent beyond these):"]
+            for h in headlines:
+                lines.append(
+                    f"  · {h.get('title', '')}"
+                    + (f"  ({h.get('publisher')})" if h.get("publisher") else "")
+                    + (f"  {h.get('url')}" if h.get("url") else "")
+                )
+            evidence_block = "\n".join(lines) + "\n"
+        else:
+            evidence_block = (
+                "FREE HEADLINES: (none fetched — say so explicitly; do not invent.)\n"
+            )
+
     user_msg = _SCAN_USER_TEMPLATE.format(
         today=today,
         ticker=ticker,
@@ -1514,13 +1595,32 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
         pct_change=f"{pct_change:.2f}" if pct_change is not None else "N/A",
         sign=sign,
         pct_change_abs=f"{pct_abs:.2f}",
+        evidence_block=evidence_block or (
+            "Using live web and X search for this run.\n"
+        ),
     )
 
     if verbose:
-        print(f"   📡 Scanning {ticker} (${price}, {sign}{pct_abs:.2f}%)…")
+        route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_MODEL}+live"
+        print(f"   📡 Scanning {ticker} via {route} "
+              f"(${price}, {sign}{pct_abs:.2f}%)…")
 
+    provider = "grok"
+    model_used = GROK_MODEL
     try:
-        markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True)
+        if use_vol:
+            sys_p = SCAN_SYSTEM_PROMPT + (
+                "\n\nNOTE: You do not have live X/web tools on this volume run. "
+                "Use FREE HEADLINES + price data only. Do not invent catalysts."
+            )
+            markdown, provider = call_volume_or_grok(
+                sys_p, user_msg, live_search=False, grok_live_on_fallback=True,
+            )
+            model_used = VOLUME_LLM_MODEL if provider == "volume" else GROK_MODEL
+        else:
+            markdown = call_grok(SCAN_SYSTEM_PROMPT, user_msg, live_search=True)
+            provider = "grok"
+            model_used = GROK_MODEL
     except Exception as exc:  # noqa: BLE001
         error_msg = str(exc)
         if verbose:
@@ -1535,6 +1635,8 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             "markdown": "",
             "sentiment": "UNKNOWN",
             "error": error_msg,
+            "provider": None,
+            "model": None,
         }
 
     # Extract the BULLISH/NEUTRAL/BEARISH tag from the last line.
@@ -1552,7 +1654,7 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
             break
 
     if verbose:
-        print(f"   ✅ {ticker} → {sentiment}")
+        print(f"   ✅ {ticker} → {sentiment} ({provider}/{model_used})")
 
     return {
         "ticker": ticker,
@@ -1564,6 +1666,8 @@ def scan_ticker_news(ticker: str, verbose: bool = True) -> dict:
         "markdown": markdown,
         "sentiment": sentiment,
         "error": None,
+        "provider": provider,
+        "model": model_used,
     }
 
 

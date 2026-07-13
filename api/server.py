@@ -6067,6 +6067,8 @@ def config_models():
             "prioritize_volume":  [0.005, 0.03],
             "prioritize_grok":    [round(analyst.estimate_grok_cost(g_model, 6_000, 1_500, 0), 3),
                                    round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
+            # Market pulse / per-ticker scan
+            "pulse_volume":       [0.002, 0.015],
             "agentic":            [0.05, 0.30],
             "strategist":         [0.30, 1.00],
             "volume_active":      vol_on,
