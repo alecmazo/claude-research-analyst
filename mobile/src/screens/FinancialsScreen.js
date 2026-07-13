@@ -27,16 +27,15 @@ const EXPL_DGA_SCORE =
   'Financial Strength (20%), Predictability (15%), and Value (10%). Each bar is that pillar’s own ' +
   '0–100 sub-score; the headline number weights them as above.';
 const EXPL_RATING_HIST =
-  'Rating bar = absolute quality of today’s value vs fixed good / fair / poor thresholds ' +
-  '(green = strong, amber = ok, red = weak). Vs History bar = where today’s value sits within this ' +
-  'company’s own past (up to 12 fiscal years) — a fuller bar means it’s near its own best. ' +
-  'The card’s /10 = the average quality of the metrics listed.';
+  'Rating bar = where today’s value sits vs this company’s own history (≤12 fiscal years) — ' +
+  'fuller bar = near its own best (for leverage/PE, lower is better so “best” means cheaper/safer). ' +
+  'Vs Industry = percentile vs industry/sector peers in the SEC store; blank if fewer than 3 peers ' +
+  'have that metric (never guessed). Card /10 = mean of available Rating percentiles.';
 const EXPL_VALUE_RANK =
-  'DGA Value Rank /10 scores how cheap the stock looks across many valuation measures — P/E, EV/EBITDA, ' +
-  'P/FCF, PEG, and price vs the DCF, Graham, Peter-Lynch and DGA Value anchors. Each row’s Rating is ' +
-  'green when the multiple is low (cheap), red when high (expensive); the rank is their average. ' +
-  '10 = cheap on most measures, low = richly valued. These are point-in-time multiples, so there’s no ' +
-  'Vs-History bar here.';
+  'DGA Value Rank compares valuation multiples (P/E, EV/EBITDA, P/FCF, yields, price vs DCF/Graham/Lynch). ' +
+  'Rating (own history) is usually blank for multiples — we only have the current store price, not multi-year ' +
+  'price history per FY. Vs Industry fills when ≥3 store peers have the same multiple. Lower multiple / higher ' +
+  'yield ranks better. Blank ≠ zero — it means no comparison data.';
 
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 const fmtRank = (fmt, v) => {
@@ -212,16 +211,24 @@ function RankCard({ card, t, s, expl }) {
         <Text style={[s.rankName, { color: t.textDim }]}>Metric</Text>
         <Text style={[s.rankVal, { color: t.textDim, fontWeight: '700' }]}>Current</Text>
         <Text style={s.rankColLbl}>Rating</Text>
-        <Text style={s.rankColLbl}>vs Hist</Text>
+        <Text style={s.rankColLbl}>vs Ind</Text>
       </View>
-      {card.metrics.map((m, i) => (
+      {card.metrics.map((m, i) => {
+        // Rating = own-history percentile; Vs Industry = ind_pct only (blank if missing).
+        const ratePct = m.hist_pct != null ? m.hist_pct
+          : (m.quality != null ? Math.round(m.quality * 100) : null);
+        const rateCol = m.hist_color || m.rating || t.textDim;
+        const indPct = m.ind_pct != null ? m.ind_pct : null;
+        const indCol = m.ind_color || t.textDim;
+        return (
         <View key={i} style={[s.rankRow, i === card.metrics.length - 1 && { borderBottomWidth: 0 }]}>
           <Text style={s.rankName} numberOfLines={1}>{m.name}</Text>
           <Text style={s.rankVal}>{fmtRank(m.fmt, m.value)}</Text>
-          <View style={s.rankBar}><Bar pct={m.quality == null ? null : Math.max(8, m.quality * 100)} color={m.rating} track={t.surfaceAlt} /></View>
-          <View style={s.rankBar}><Bar pct={m.hist_pct} color={m.hist_color || t.textDim} track={t.surfaceAlt} /></View>
+          <View style={s.rankBar}>{ratePct != null ? <Bar pct={ratePct} color={rateCol} track={t.surfaceAlt} /> : null}</View>
+          <View style={s.rankBar}>{indPct != null ? <Bar pct={indPct} color={indCol} track={t.surfaceAlt} /> : null}</View>
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

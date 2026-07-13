@@ -8007,36 +8007,58 @@ End with the sleeve block at this account's real market value so I can push it t
     if (fmt === 'spread')  return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
     return v.toFixed(2);                       // 'x' ratios
   }
-  function _finRankCard(c) {
+  function _finRankCard(c, peerMeta) {
     if (!c || !(c.metrics || []).length) return '';
     const rank = c.rank;
     const rc = rank == null ? 'var(--text-tertiary)' : rank >= 7 ? _GF.green : rank >= 4 ? _GF.orange : _GF.red;
+    const peerN = (c.peer_count != null ? c.peer_count : (peerMeta && peerMeta.peer_count));
+    const peerScope = c.peer_scope || (peerMeta && peerMeta.peer_scope);
+    const peerNote = peerN
+      ? ('Vs Industry uses ' + peerN + ' ' + (peerScope || 'peer') + ' names in the store (≥3 required per metric; blank if not).')
+      : 'Vs Industry blank — no industry/sector peers with financials in the store yet.';
     const head =
-      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">` +
+      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">` +
         `<span style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(c.title)}</span>` +
         `<span style="flex:1;"></span>` +
         `<div style="width:110px;height:8px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
-          `<div style="height:100%;width:${rank == null ? 0 : rank * 10}%;background:${rc};border-radius:99px;"></div></div>` +
-        `<span style="font-size:15px;font-weight:800;color:${rc};">${rank == null ? '—' : rank}` +
+          `<div style="height:100%;width:${rank == null ? 0 : Math.min(100, rank * 10)}%;background:${rc};border-radius:99px;"></div></div>` +
+        `<span style="font-size:15px;font-weight:800;color:${rc};" title="Mean of available Rating (own-history) percentiles">${rank == null ? '—' : rank}` +
           `<span style="font-size:11px;color:var(--text-tertiary);font-weight:600;">/10</span></span>` +
+      `</div>` +
+      `<div style="font-size:10px;color:var(--text-tertiary);margin-bottom:8px;line-height:1.35;">` +
+        `Rating = vs this company's own history · Vs Industry = vs store peers · ${ _gfEsc(peerNote) }` +
       `</div>`;
-    const GC = '1.45fr 0.72fr 1fr 1fr';
+    const GC = '1.4fr 0.7fr 1fr 1fr';
     const colhead =
       `<div style="display:grid;grid-template-columns:${GC};gap:8px;font-size:9px;font-weight:800;` +
         `letter-spacing:.5px;text-transform:uppercase;color:var(--text-tertiary);padding-bottom:3px;">` +
-        `<span>Name</span><span style="text-align:right;">Current</span><span>Rating</span><span>Vs History</span></div>`;
-    const bar = (pct, col) => pct == null
-      ? `<div style="height:9px;"></div>`
-      : `<div style="height:9px;border-radius:3px;background:var(--gray-100,#f1f5f9);overflow:hidden;">` +
-          `<div style="height:100%;width:${Math.max(4, pct)}%;background:${col};border-radius:3px;"></div></div>`;
+        `<span>Name</span><span style="text-align:right;">Current</span>` +
+        `<span title="Percentile vs this company's ≤12 fiscal years">Rating</span>` +
+        `<span title="Percentile vs industry/sector peers in the store — blank if &lt;3 peers">Vs Industry</span></div>`;
+    // Continuous 0–100 bars. Null → blank (do not invent a stub bar).
+    const bar = (pct, col, title) => pct == null
+      ? `<div style="height:9px;" title="${_gfEsc(title || 'No comparison data')}"></div>`
+      : `<div style="height:9px;border-radius:3px;background:var(--gray-100,#f1f5f9);overflow:hidden;" title="${_gfEsc((title || '') + ' · ' + pct + 'th pct')}">` +
+          `<div style="height:100%;width:${Math.max(3, Math.min(100, pct))}%;background:${col || '#94a3b8'};border-radius:3px;"></div></div>`;
     const rows = (c.metrics || []).map(m => {
-      const ratePct = m.quality == null ? null : Math.max(8, m.quality * 100);
+      // Rating = own-history percentile (hist_pct). Fallback for old payloads: quality*100.
+      const ratePct = m.hist_pct != null ? m.hist_pct
+        : (m.quality != null ? Math.round(m.quality * 100) : null);
+      const rateCol = m.hist_color || m.rating || '#94a3b8';
+      // Vs Industry = ind_pct only — never fall back to history or absolute thresholds.
+      const indPct = m.ind_pct != null ? m.ind_pct : null;
+      const indCol = m.ind_color || '#94a3b8';
+      const tip = [m.note,
+        ratePct != null ? ('Rating: ' + ratePct + 'th pct of own history') : 'Rating: n/a (need ≥3 FY of this metric)',
+        indPct != null ? ('Industry: ' + indPct + 'th pct of peers') : 'Industry: blank (need ≥3 peers with this metric)',
+      ].filter(Boolean).join(' · ');
       return `<div style="display:grid;grid-template-columns:${GC};gap:8px;align-items:center;` +
-          `padding:5px 0;border-top:1px solid var(--border-subtle);"${m.note ? ' title="' + _gfEsc(m.note) + '"' : ''}>` +
+          `padding:5px 0;border-top:1px solid var(--border-subtle);" title="${_gfEsc(tip)}">` +
           `<span style="font-size:11.5px;color:var(--text-secondary);">${_gfEsc(m.name)}</span>` +
           `<span style="font-size:12px;font-weight:700;color:var(--text-primary);text-align:right;` +
             `font-variant-numeric:tabular-nums;">${_rkFmt(m.value, m.fmt)}</span>` +
-          bar(ratePct, m.rating) + bar(m.hist_pct, m.hist_color) +
+          bar(ratePct, rateCol, 'Own-history rating') +
+          bar(indPct, indCol, 'Vs industry peers') +
         `</div>`;
     }).join('');
     return `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;` +
@@ -8044,9 +8066,10 @@ End with the sleeve block at this account's real market value so I can push it t
   }
   function _finRankCards(rc) {
     if (!rc) return '';
-    const fs = _finRankCard(rc.financial_strength);
-    const pr = _finRankCard(rc.profitability);
-    const va = _finRankCard(rc.value);
+    const meta = { peer_scope: rc.peer_scope, peer_count: rc.peer_count };
+    const fs = _finRankCard(rc.financial_strength, meta);
+    const pr = _finRankCard(rc.profitability, meta);
+    const va = _finRankCard(rc.value, meta);
     if (!fs && !pr && !va) return '';
     return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;">` +
       `<div>${fs}</div>` +
