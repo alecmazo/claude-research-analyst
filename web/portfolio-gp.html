@@ -5309,6 +5309,41 @@ End with the sleeve block at this account's real market value so I can push it t
   <div class="wide-shell">
 
 
+    <h3 class="settings-group-head">Models · Option 4 harness</h3>
+
+    <!-- Volume LLM — cheap model for daily volume; full reports stay Grok+Claude -->
+    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
+      <header class="panel-head">
+        <span class="panel-title">⚡ Volume LLM (cheap daily jobs)</span>
+        <span class="panel-badge" id="volume-llm-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+      </header>
+      <div style="padding:16px 18px;">
+        <p style="font-size:12px;color:#475569;line-height:1.55;margin:0 0 12px;">
+          <strong>Option 4:</strong> daily brief, sector intelligence, and Idea Generator
+          <em>Prioritize</em> can run on a cheap OpenAI-compatible open model
+          (e.g. DeepSeek). <strong>Full equity reports stay Grok + Claude only</strong>
+          (hero Analyze + LLM Lab). <strong>Podcasts unchanged</strong> (Claude/Grok script path).
+        </p>
+        <div id="volume-llm-status" style="font-size:12px;color:#64748b;margin-bottom:12px;line-height:1.5;">Loading…</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button type="button" id="volume-llm-enable" class="btn-primary" style="padding:0 16px;height:34px;font-size:12px;">
+            Use cheap volume model
+          </button>
+          <button type="button" id="volume-llm-rollback" class="tab-btn" style="height:34px;font-size:12px;border:1px solid #dc2626;color:#b91c1c;">
+            ↩ Roll back to Grok for volume
+          </button>
+          <button type="button" id="volume-llm-refresh" class="tab-btn" style="height:34px;font-size:12px;">↻ Refresh status</button>
+        </div>
+        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
+          Railway / .env: <code>VOLUME_LLM_API_KEY</code>,
+          <code>VOLUME_LLM_BASE_URL</code> (default DeepSeek),
+          <code>VOLUME_LLM_MODEL</code> (default <code>deepseek-chat</code>),
+          optional <code>VOLUME_LLM_ENABLED=false</code> to force env-level off.
+          Toggle above survives redeploys via DB. Rollback never touches full-report or podcast models.
+        </div>
+      </div>
+    </section>
+
     <h3 class="settings-group-head">Data Connections</h3>
 
     <!-- 🔗 Linked accounts — SnapTrade (Fidelity holdings) -->
@@ -17380,6 +17415,75 @@ End with the sleeve block at this account's real market value so I can push it t
     _settingsPanel('plaid',       loadPlaid);
     _settingsPanel('mfa',         loadMfa);
     _settingsPanel('demo',        loadDemoSandbox);
+    _settingsPanel('volume-llm',  loadVolumeLlmSettings);
+  }
+
+  // ── Option 4 · Volume LLM settings (rollback safe) ─────────────────────
+  var _volumeLlmWired = false;
+  async function loadVolumeLlmSettings() {
+    const $st = document.getElementById('volume-llm-status');
+    const $badge = document.getElementById('volume-llm-badge');
+    const $on = document.getElementById('volume-llm-enable');
+    const $off = document.getElementById('volume-llm-rollback');
+    const $ref = document.getElementById('volume-llm-refresh');
+    if (!$st) return;
+
+    async function refresh() {
+      try {
+        const r = await window.dgaFetch('/api/config/volume-llm');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const en = !!d.enabled;
+        const cfg = !!d.configured;
+        if ($badge) {
+          $badge.textContent = !cfg ? 'NOT CONFIGURED' : (en ? 'VOLUME ON' : 'ROLLED BACK → GROK');
+          $badge.style.background = !cfg ? '#fef3c7' : (en ? '#dcfce7' : '#fee2e2');
+          $badge.style.color = !cfg ? '#92400e' : (en ? '#166534' : '#991b1b');
+        }
+        const routes = d.routes || {};
+        $st.innerHTML =
+          '<div><strong>Configured:</strong> ' + (cfg ? 'yes' : 'no (set VOLUME_LLM_API_KEY on Railway)') + '</div>'
+          + '<div><strong>Active for volume jobs:</strong> ' + (en ? 'YES — cheap model' : 'NO — Grok (premium)') + '</div>'
+          + '<div><strong>Model:</strong> ' + (d.model || '—') + ' · <strong>Host:</strong> ' + (d.base_url || '—') + '</div>'
+          + '<div style="margin-top:6px;font-size:11px;color:#64748b;">'
+          + 'Routes — brief: <code>' + (routes.daily_brief || '—') + '</code> · '
+          + 'intel: <code>' + (routes.intelligence || '—') + '</code> · '
+          + 'prioritize: <code>' + (routes.prioritize || '—') + '</code><br>'
+          + 'Reports: <code>' + (routes.full_reports || 'grok | claude') + '</code> · '
+          + 'Podcast: <code>' + (routes.podcast || 'claude | grok') + '</code>'
+          + '</div>';
+        if ($on) $on.disabled = !cfg || en;
+        if ($off) $off.disabled = !cfg || !en;
+      } catch (e) {
+        $st.textContent = 'Could not load volume LLM status: ' + (e.message || e);
+      }
+    }
+
+    if (!_volumeLlmWired) {
+      _volumeLlmWired = true;
+      async function setEnabled(enabled) {
+        try {
+          const r = await window.dgaFetch('/api/config/volume-llm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: !!enabled }),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+          try { window.toast && window.toast(d.message || (enabled ? 'Volume LLM on' : 'Rolled back to Grok'), { type: 'info', ttl: 3500 }); } catch (_) {}
+          await refresh();
+        } catch (e) {
+          alert('Volume LLM toggle failed: ' + (e.message || e));
+        }
+      }
+      if ($on) $on.addEventListener('click', function () { setEnabled(true); });
+      if ($off) $off.addEventListener('click', function () {
+        if (!confirm('Roll back volume jobs to Grok?\n\nDaily brief, intelligence, and Prioritize will use Grok again (higher cost).\nFull reports (Grok + Claude) and podcasts are unchanged.')) return;
+        setEnabled(false);
+      });
+      if ($ref) $ref.addEventListener('click', refresh);
+    }
+    await refresh();
   }
 
   // ── 🎭 Demo Sandbox: status + seed/reset (real GP only; server enforces) ──

@@ -6035,6 +6035,8 @@ def config_models():
         "grok":    g_model,
         "claude":  c_model,
         "agentic": _AGENTIC_MODEL,
+        # Option 4 volume harness — never used for full reports / podcast
+        "volume":  getattr(analyst, "volume_llm_status", lambda: {})(),
     }
     try:
         # Single-ticker report envelope: ~30-45K input, 6-10K output,
@@ -6055,6 +6057,96 @@ def config_models():
     except Exception:
         pass    # estimates are optional — UI falls back to its static strings
     return out
+
+
+_VOLUME_KV_KEY = "dga.volume_llm.enabled"
+
+
+def _load_volume_llm_override_from_db() -> None:
+    """Hydrate Settings toggle from kv_store into the analyst runtime flag."""
+    try:
+        raw = _kv_get(_VOLUME_KV_KEY)
+        if raw is None:
+            return
+        if isinstance(raw, dict):
+            en = raw.get("enabled")
+        else:
+            en = raw
+        if en is True or en is False:
+            analyst.set_volume_llm_runtime(bool(en))
+            print(f"[volume-llm] runtime override from DB: enabled={bool(en)}", flush=True)
+    except Exception as e:
+        print(f"[volume-llm] load override failed: {e!s:.120}", flush=True)
+
+
+@app.get("/api/config/volume-llm")
+def get_volume_llm_config(request: Request):
+    """Option 4 status for Settings UI. No secrets returned."""
+    _claims_or_401(request)
+    return {"ok": True, **analyst.volume_llm_status()}
+
+
+@app.post("/api/config/volume-llm")
+def set_volume_llm_config(request: Request):
+    """Enable / roll back the volume LLM for daily jobs.
+
+    Body: { "enabled": true|false }  — false = rollback to Grok for volume.
+    Full reports (Grok + Claude) and podcasts are never affected.
+    """
+    _claims_or_401(request)
+    try:
+        body = _request_json_sync(request) or {}
+    except Exception:
+        body = {}
+    if "enabled" not in body:
+        raise HTTPException(status_code=422, detail="Body must include {enabled: true|false}")
+    enabled = bool(body.get("enabled"))
+    analyst.set_volume_llm_runtime(enabled)
+    try:
+        _kv_put(_VOLUME_KV_KEY, {"enabled": enabled, "updated_at": _now_pacific().isoformat()})
+    except Exception as e:
+        print(f"[volume-llm] kv_put failed: {e!s:.120}", flush=True)
+    st = analyst.volume_llm_status()
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "message": (
+            "Volume LLM ON — daily brief / intelligence / prioritize use the cheap model."
+            if enabled else
+            "Rolled back — daily volume jobs use Grok again. Full reports + podcasts unchanged."
+        ),
+        **st,
+    }
+
+
+def _volume_evidence_pack(lp_id: str | None = "anon") -> str:
+    """Free facts for volume daily brief (no LLM). Market wire + fund filings."""
+    lines: list[str] = []
+    try:
+        mw = _build_market_wire(limit=10)
+        items = (mw or {}).get("items") or []
+        if items:
+            lines.append("MARKET WIRE (macro RSS, free):")
+            for it in items[:10]:
+                title = (it.get("title") or "").strip()
+                feed = it.get("feed") or it.get("publisher") or ""
+                if title:
+                    lines.append(f"  · [{feed}] {title}")
+    except Exception as e:
+        lines.append(f"(market wire unavailable: {e!s:.80})")
+    try:
+        ff = _build_fund_filings(lp_id or "anon", limit=20, days=14)
+        items = (ff or {}).get("items") or []
+        if items:
+            lines.append("FUND FILINGS (SEC EDGAR, saved-report universe, free):")
+            for it in items[:20]:
+                lines.append(
+                    f"  · {it.get('ticker')} {it.get('form')} filed {it.get('filed')} "
+                    f"({it.get('age_days')}d)"
+                )
+    except Exception as e:
+        lines.append(f"(fund filings unavailable: {e!s:.80})")
+    return "\n".join(lines)
 
 
 @app.get("/api/health/data")
@@ -10523,7 +10615,18 @@ def _run_daily_brief(job_id: str) -> None:
     with _bjobs_lock:
         _bjobs[job_id]["status"] = "running"
     try:
-        result = analyst.run_daily_brief(book_tickers=_dga_book_tickers())
+        # Option 4: when volume LLM is on, attach free Market Wire + Fund Filings
+        # so the cheap model has ground truth without Grok live-search spend.
+        evidence = ""
+        try:
+            if analyst.volume_llm_enabled():
+                evidence = _volume_evidence_pack("anon")
+        except Exception as _e:
+            print(f"[daily_brief] evidence pack: {_e!s:.120}", flush=True)
+        result = analyst.run_daily_brief(
+            book_tickers=_dga_book_tickers(),
+            evidence_context=evidence,
+        )
         with _bjobs_lock:
             _bjobs[job_id]["status"] = "done" if result.get("ok") else "failed"
             _bjobs[job_id]["result"] = result
@@ -10548,7 +10651,7 @@ def _run_daily_brief(job_id: str) -> None:
 
 @app.post("/api/daily-brief")
 def start_daily_brief(background_tasks: BackgroundTasks, request: Request = None):
-    """Start a Goldman-style PM morning brief (Grok 4.30-beta w/ live search)."""
+    """Start PM morning brief. Volume LLM when Option 4 enabled; else Grok+live."""
     if request is not None and _request_is_demo(request):
         return {"job_id": "demo-brief", "status": "done"}
     job_id = str(uuid.uuid4())
@@ -11203,10 +11306,15 @@ def _auto_daily_brief_worker() -> None:
                 print("[daily-brief-scheduler] disabled after wake — skipping")
                 continue
             print(f"[daily-brief-scheduler] {h:02d}:{m:02d} Pacific — running daily brief…")
-            # Same call as the manual endpoint — includes the GP's book tickers
-            # (the bare run_daily_brief() the worker used to make silently
-            # generated a brief with no book context).
-            analyst.run_daily_brief(book_tickers=_dga_book_tickers())
+            # Same call as the manual endpoint — includes the GP's book tickers.
+            # Volume mode attaches free evidence; rollback uses Grok+live.
+            _ev = ""
+            try:
+                if analyst.volume_llm_enabled():
+                    _ev = _volume_evidence_pack("anon")
+            except Exception:
+                pass
+            analyst.run_daily_brief(book_tickers=_dga_book_tickers(), evidence_context=_ev)
             # Persist to kv_store so the UI picks it up
             try:
                 brief = analyst.DAILY_BRIEF_FILE
@@ -12240,6 +12348,11 @@ async def _on_startup_run_migrations() -> None:
             print("[auth_v2] DB backend registered")
         except Exception as _e:
             print(f"[auth_v2] DB backend registration failed: {_e}")
+    # Option 4: restore Settings volume-LLM toggle after redeploy
+    try:
+        _load_volume_llm_override_from_db()
+    except Exception as _e:
+        print(f"[startup] volume-llm override load skipped: {_e}")
     # Note: Dropbox hydration + DB backfill run sequentially in _hydrate_all()
     # (started at module load time). No separate thread needed here.
 

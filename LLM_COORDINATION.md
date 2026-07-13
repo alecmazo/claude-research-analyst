@@ -61,7 +61,7 @@ If two agents need the same file:
 
 | Agent | Claimed paths / scope | Status | Started | Notes |
 |-------|----------------------|--------|---------|--------|
-| **Grok** | — | free | 2026-07-13 | Shipped high-ROI UX package (see handoff log). Paths released. |
+| **Grok** | — | free | 2026-07-13 | Shipped Option 4 volume LLM harness + Desk feeds. Paths released. |
 | **Fable** | — | free | — | Safe to take next assigned work; pull `main` first. |
 | **Claude/Opus** | — | free | — | Historical builder of much of GP/LP/app; treat large existing surfaces as shared heritage. |
 

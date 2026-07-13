@@ -184,13 +184,32 @@ def _optional_env(name: str, default: str = "") -> str:
 
 
 # xAI API (Grok) — required at call time (not at import; keeps unit-testability)
-# All analysis, research, intelligence, and daily brief runs on grok-4.3
-# (xAI's newest; also aliased grok-latest — verified against /v1/models
-# 2026-07-08; no grok-4.5 exists on this account).
+# FULL REPORTS default to Grok. Volume jobs (daily brief, intelligence,
+# prioritize) can use a cheaper OpenAI-compatible open model when enabled.
 # Override via GROK_MODEL in .env to pin a specific version.
 GROK_MODEL = _optional_env("GROK_MODEL", "grok-4.3")
-# Intelligence / Daily Brief use the same model as analysis.
+# Premium intel path (used when volume LLM is rolled back / disabled).
 GROK_INTEL_MODEL = GROK_MODEL
+
+# ── Option 4 · Volume LLM harness ───────────────────────────────────────────
+# Cheap accurate model for high-volume daily work. Full single-ticker reports
+# and podcasts stay on Grok + Claude only (never routed here).
+#
+# OpenAI-compatible providers work (DeepSeek, Together, Fireworks, OpenRouter,
+# Groq, etc.). Example DeepSeek:
+#   VOLUME_LLM_BASE_URL=https://api.deepseek.com/v1
+#   VOLUME_LLM_API_KEY=sk-...
+#   VOLUME_LLM_MODEL=deepseek-chat
+#
+# Rollback: set VOLUME_LLM_ENABLED=false OR flip the Settings toggle (runtime
+# override stored in DB) — volume jobs immediately use Grok again.
+VOLUME_LLM_BASE_URL = _optional_env("VOLUME_LLM_BASE_URL", "https://api.deepseek.com/v1")
+VOLUME_LLM_API_KEY  = _optional_env("VOLUME_LLM_API_KEY", "")
+VOLUME_LLM_MODEL    = _optional_env("VOLUME_LLM_MODEL", "deepseek-chat")
+# Env default: on only when a key is present (safe out of the box).
+_VOLUME_ENV_DEFAULT = _optional_env("VOLUME_LLM_ENABLED", "").strip().lower()
+# Runtime override: None = follow env/key heuristic; True/False = Settings toggle
+_volume_llm_runtime: bool | None = None
 
 # Gamma.app folder ID is optional; API key is only required if Gamma generation
 # is actually requested at runtime.
@@ -211,6 +230,144 @@ def get_grok_api_key() -> str:
 
 def get_gamma_api_key() -> str:
     return _require_env("GAMMA_API_KEY", hint="Get yours at https://gamma.app/account")
+
+
+# ── Volume LLM helpers (Option 4) ───────────────────────────────────────────
+
+def volume_llm_configured() -> bool:
+    """True when base URL + API key + model are present."""
+    return bool(VOLUME_LLM_API_KEY and VOLUME_LLM_BASE_URL and VOLUME_LLM_MODEL)
+
+
+def set_volume_llm_runtime(enabled: bool | None) -> None:
+    """Settings UI / API sets this. None clears override (back to env heuristic)."""
+    global _volume_llm_runtime
+    _volume_llm_runtime = enabled
+
+
+def get_volume_llm_runtime() -> bool | None:
+    return _volume_llm_runtime
+
+
+def volume_llm_enabled() -> bool:
+    """Whether volume jobs should use the cheap open model right now.
+
+    Rollback paths:
+      1. Settings toggle → set_volume_llm_runtime(False)
+      2. VOLUME_LLM_ENABLED=false in env
+      3. Missing VOLUME_LLM_API_KEY → always off (safe)
+    """
+    if not volume_llm_configured():
+        return False
+    if _volume_llm_runtime is not None:
+        return bool(_volume_llm_runtime)
+    if _VOLUME_ENV_DEFAULT in ("0", "false", "no", "off"):
+        return False
+    if _VOLUME_ENV_DEFAULT in ("1", "true", "yes", "on"):
+        return True
+    # Default when key is present and env unset: ON (Option 4 active)
+    return True
+
+
+def volume_llm_status() -> dict:
+    """Snapshot for Settings / config API (no secrets)."""
+    return {
+        "configured": volume_llm_configured(),
+        "enabled": volume_llm_enabled(),
+        "runtime_override": _volume_llm_runtime,
+        "env_default": _VOLUME_ENV_DEFAULT or "(auto: on if key present)",
+        "base_url": VOLUME_LLM_BASE_URL,
+        "model": VOLUME_LLM_MODEL,
+        "has_api_key": bool(VOLUME_LLM_API_KEY),
+        "routes": {
+            "daily_brief": "volume" if volume_llm_enabled() else "grok",
+            "intelligence": "volume" if volume_llm_enabled() else "grok",
+            "prioritize": "volume" if volume_llm_enabled() else "grok",
+            "full_reports": "grok | claude (unchanged)",
+            "podcast": "claude | grok (unchanged)",
+        },
+        "rollback": "POST /api/config/volume-llm {\"enabled\": false}",
+    }
+
+
+def _volume_client():
+    from openai import OpenAI
+    if not volume_llm_configured():
+        raise RuntimeError(
+            "Volume LLM not configured. Set VOLUME_LLM_API_KEY (+ optional "
+            "VOLUME_LLM_BASE_URL / VOLUME_LLM_MODEL) or roll back to Grok."
+        )
+    return OpenAI(api_key=VOLUME_LLM_API_KEY, base_url=VOLUME_LLM_BASE_URL)
+
+
+def call_volume_llm(system_prompt: str, user_content: str,
+                    model: str | None = None,
+                    *,
+                    temperature: float = 0.3,
+                    usage_capture=None) -> str:
+    """Call the cheap OpenAI-compatible volume model. No live web/X search.
+
+    Full reports and podcasts must NOT call this — keep them on Grok/Claude.
+    """
+    mid = model or VOLUME_LLM_MODEL
+    client = _volume_client()
+    resp = client.chat.completions.create(
+        model=mid,
+        temperature=temperature,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    if usage_capture is not None:
+        try:
+            u = getattr(resp, "usage", None)
+            usage_capture({
+                "model": mid,
+                "provider": "volume",
+                "input_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+                "output_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+                "cost_usd": None,  # host-specific; UI shows model id
+            })
+        except Exception:
+            pass
+    if not text:
+        raise RuntimeError(f"Volume LLM ({mid}) returned empty content")
+    return text
+
+
+def call_volume_or_grok(system_prompt: str, user_content: str,
+                        *,
+                        live_search: bool = False,
+                        grok_model: str | None = None,
+                        volume_model: str | None = None,
+                        grok_live_on_fallback: bool = True,
+                        usage_capture=None) -> tuple[str, str]:
+    """Route a volume job: cheap model when enabled, else Grok.
+
+    Returns (text, provider_label) where provider_label is 'volume' or 'grok'.
+    On volume failure, falls back to Grok once (logged). Full reports / podcast
+    must never call this — they stay on call_grok / call_claude directly.
+    """
+    if volume_llm_enabled():
+        try:
+            text = call_volume_llm(
+                system_prompt, user_content,
+                model=volume_model,
+                usage_capture=usage_capture,
+            )
+            return text, "volume"
+        except Exception as e:
+            print(f"⚠️  Volume LLM failed ({e!s:.160}); falling back to Grok…", flush=True)
+            live_search = bool(grok_live_on_fallback)
+    text = call_grok(
+        system_prompt, user_content,
+        model=grok_model or GROK_INTEL_MODEL,
+        live_search=live_search,
+        usage_capture=usage_capture,
+    )
+    return text, "grok"
 
 
 # ============================================================================
@@ -1622,15 +1779,29 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
             sector_upper=sector.upper(),
         )
 
-    print(f"🧠 Running market intelligence (sector: {sector})…")
+    use_vol = volume_llm_enabled()
+    route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
+    print(f"🧠 Running market intelligence (sector: {sector}) via {route}…")
 
     try:
-        markdown = call_grok(
-            INTEL_SYSTEM_PROMPT,
-            user_msg,
-            model=GROK_INTEL_MODEL,
-            live_search=True,
-        )
+        if use_vol:
+            markdown, provider = call_volume_or_grok(
+                INTEL_SYSTEM_PROMPT + (
+                    "\n\nNOTE: No live web/X tools on this volume run. "
+                    "Be conservative; mark uncertain items (verify). "
+                    "Prefer structural / multi-year asymmetric setups over day-trade noise."
+                ),
+                user_msg,
+                live_search=False,
+            )
+        else:
+            markdown = call_grok(
+                INTEL_SYSTEM_PROMPT,
+                user_msg,
+                model=GROK_INTEL_MODEL,
+                live_search=True,
+            )
+            provider = "grok"
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Intelligence scan failed: {exc}")
         return {
@@ -1640,6 +1811,7 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
             "markdown": "",
             "tickers": [],
             "error": str(exc),
+            "provider": None,
         }
 
     # Parse out **TICKER** tokens so the UI can make them tappable.
@@ -1656,6 +1828,8 @@ def run_market_intelligence(sector: str = "Tech") -> dict:
         "markdown": markdown,
         "tickers": tickers,
         "error": None,
+        "provider": provider,
+        "model": VOLUME_LLM_MODEL if provider == "volume" else GROK_INTEL_MODEL,
     }
 
     # Persist to disk so the result survives server restarts / Railway redeploys.
@@ -1788,20 +1962,18 @@ Write your morning brief for the DGA Capital trading floor. Use EXACTLY this for
 """
 
 
-def run_daily_brief(book_tickers: list[str] | None = None) -> dict:
-    """Run a Goldman-style morning brief via Grok 4.x with live web + X search.
+def run_daily_brief(book_tickers: list[str] | None = None,
+                    evidence_context: str = "") -> dict:
+    """Run a Goldman-style morning brief.
 
-    book_tickers: the PM's actual book — watchlist + open positions — so the
-    brief can lead with the live X read on names DGA actually holds/follows.
+    Volume mode (Option 4, default when configured): cheap open model + optional
+    free evidence pack (no live X tools). Rollback → Grok with live web + X.
 
-    Returns:
-        {
-            "ok": bool,
-            "generated_at": str (ISO),
-            "markdown": str,
-            "tickers": list[str],
-            "error": str | None,
-        }
+    Full equity reports are NEVER routed here — only this volume job.
+
+    book_tickers: the PM's actual book — watchlist + open positions.
+    evidence_context: optional free-data pack (Market Wire / Fund Filings text)
+        injected when volume LLM has no live search.
     """
     today = datetime.now().strftime("%A, %B %d, %Y")
     now_iso = datetime.utcnow().isoformat()
@@ -1814,16 +1986,37 @@ def run_daily_brief(book_tickers: list[str] | None = None) -> dict:
     book_line = (f"\nDGA BOOK (positions + watchlist) — focus the YOUR BOOK section on these: "
                  f"{', '.join(_book[:60])}\n" if _book else "\nDGA BOOK: (none provided)\n")
     user_msg = _DAILY_BRIEF_USER_TEMPLATE.format(today=today, book=book_line)
+    if evidence_context:
+        user_msg += (
+            "\n\n── FREE EVIDENCE PACK (ground truth — prefer these over training recall) ──\n"
+            + evidence_context[:12000]
+            + "\n── END EVIDENCE ──\n"
+        )
 
-    print(f"📰 Running Daily Brief ({GROK_INTEL_MODEL}) with live X + web search…")
+    use_vol = volume_llm_enabled()
+    route = f"volume/{VOLUME_LLM_MODEL}" if use_vol else f"grok/{GROK_INTEL_MODEL}+live"
+    print(f"📰 Running Daily Brief via {route}…")
 
     try:
-        markdown = call_grok(
-            DAILY_BRIEF_SYSTEM_PROMPT,
-            user_msg,
-            model=GROK_INTEL_MODEL,
-            live_search=True,
-        )
+        if use_vol:
+            # No live X on open hosts — evidence pack + book is the ground truth
+            markdown, provider = call_volume_or_grok(
+                DAILY_BRIEF_SYSTEM_PROMPT + (
+                    "\n\nNOTE: You do not have live X search on this run. "
+                    "Use the FREE EVIDENCE PACK and DGA BOOK above as primary sources. "
+                    "Do not invent overnight headlines not supported by evidence."
+                ),
+                user_msg,
+                live_search=False,
+            )
+        else:
+            markdown = call_grok(
+                DAILY_BRIEF_SYSTEM_PROMPT,
+                user_msg,
+                model=GROK_INTEL_MODEL,
+                live_search=True,
+            )
+            provider = "grok"
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Daily Brief failed: {exc}")
         return {
@@ -1832,6 +2025,8 @@ def run_daily_brief(book_tickers: list[str] | None = None) -> dict:
             "markdown": "",
             "tickers": [],
             "error": str(exc),
+            "provider": None,
+            "model": None,
         }
 
     # Parse out **TICKER** tokens so the UI can make them tappable.
@@ -1848,6 +2043,8 @@ def run_daily_brief(book_tickers: list[str] | None = None) -> dict:
         "markdown": markdown,
         "tickers": tickers,
         "error": None,
+        "provider": provider,
+        "model": VOLUME_LLM_MODEL if provider == "volume" else GROK_INTEL_MODEL,
     }
 
     # Persist to disk so it survives restarts and can be hydrated.
@@ -6105,21 +6302,32 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         f"{_json.dumps(candidates, indent=2, default=str)}"
     )
 
+    # Volume mode → cheap open model; rollback → Grok 4.5 screen
+    use_vol = volume_llm_enabled()
+    screen_model = VOLUME_LLM_MODEL if use_vol else GROK_SCREEN_MODEL
     try:
-        raw = call_grok(
-            system_prompt=sys_prompt,
-            user_content=user,
-            model=GROK_SCREEN_MODEL,
-            live_search=False,
-        )
+        if use_vol:
+            raw, provider = call_volume_or_grok(
+                sys_prompt, user, live_search=False,
+                grok_model=GROK_SCREEN_MODEL,
+            )
+            if provider == "grok":
+                screen_model = GROK_SCREEN_MODEL
+        else:
+            raw = call_grok(
+                system_prompt=sys_prompt,
+                user_content=user,
+                model=GROK_SCREEN_MODEL,
+                live_search=False,
+            )
+            provider = "grok"
     except Exception as e:
         err = str(e)
         if "model" in err.lower() and ("not found" in err.lower() or "404" in err or "does not exist" in err.lower()):
-            err = (f"Screen model '{GROK_SCREEN_MODEL}' not found on your xAI account. "
-                   "Set GROK_SCREEN_MODEL env var to a valid identifier "
-                   "(e.g. grok-4.5, grok-4.5-latest, grok-4.3).")
+            err = (f"Screen model '{screen_model}' not found. "
+                   "Check VOLUME_LLM_MODEL / GROK_SCREEN_MODEL env vars.")
         return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": err[:400],
-                "model": GROK_SCREEN_MODEL}
+                "model": screen_model, "provider": None}
 
     # Strip stray code fences if model misbehaves
     cleaned = raw.strip()
@@ -6131,13 +6339,15 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         parsed = _json.loads(cleaned)
     except _json.JSONDecodeError:
         return {"ok": False, "picks": [], "skipped": [], "raw": raw,
-                "error": "screener returned invalid JSON", "model": GROK_SCREEN_MODEL}
+                "error": "screener returned invalid JSON", "model": screen_model,
+                "provider": provider}
 
     return {
         "ok":      True,
         "picks":   parsed.get("picks") or [],
         "skipped": parsed.get("skipped") or [],
-        "model":   GROK_SCREEN_MODEL,
+        "model":   screen_model,
+        "provider": provider,
         "raw":     raw,
     }
 
