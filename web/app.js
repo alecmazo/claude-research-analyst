@@ -291,7 +291,7 @@ document.querySelectorAll('[data-target]').forEach(el => {
     e.preventDefault();
     const t = el.dataset.target;
     showView(t);
-    if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); }
+    if (t === 'view-home') { loadReports(); loadLastPortfolioCard(); loadTodayDesk(); }
     if (t === 'view-portfolio') { rehydratePortfolioLastCard(); loadLiveBenchmark(); }
     if (t === 'view-intelligence') { loadTrackers(); loadLatestBriefs(); }
     if (t === 'view-settings') updateAppVersionCard();
@@ -530,12 +530,65 @@ function showError(msg) {
   box.style.display = 'block';
 }
 
-// ---------- Report view ----------
+// ---------- Report view (hero + TOC + freshness) ----------
+function _extractReportMetaMobile(md) {
+  const meta = { rating: null, target: null, upside: null };
+  if (!md) return meta;
+  const head = String(md).slice(0, 4000);
+  let m = head.match(/\b(?:Overall\s+)?(?:Rating|Verdict|Recommendation)\s*[:|]\s*\**\s*(BUY|SELL|HOLD|OVERWEIGHT|UNDERWEIGHT|OUTPERFORM|UNDERPERFORM|STRONG\s*BUY|NEUTRAL)\b/i);
+  if (m) meta.rating = m[1].replace(/\s+/g, ' ').toUpperCase();
+  m = head.match(/\b(?:Price\s*Target|Target\s*Price|PT)\s*[:|]\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+  if (m) meta.target = Number(m[1]);
+  m = head.match(/\b(?:Upside|Implied\s+Upside)\s*[:|]\s*([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%/i);
+  if (m) meta.upside = Number(m[1]);
+  return meta;
+}
+function _slugifyMobile(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'section';
+}
+function _buildMobileReportToc(root) {
+  const toc = document.getElementById('report-toc');
+  if (!toc || !root) return;
+  const heads = root.querySelectorAll('h1, h2, h3');
+  if (!heads.length) { toc.style.display = 'none'; toc.innerHTML = ''; return; }
+  const used = {};
+  const links = [];
+  heads.forEach((h) => {
+    let id = _slugifyMobile(h.textContent);
+    if (used[id]) { used[id] += 1; id = id + '-' + used[id]; }
+    else used[id] = 1;
+    h.id = id;
+    const depth = h.tagName === 'H3' ? 'h3' : 'h2';
+    links.push(`<a class="report-toc-link ${depth}" href="#${id}">${(h.textContent || '').trim().slice(0, 72)}</a>`);
+  });
+  toc.innerHTML = `<div class="report-toc-title">On this page</div>${links.join('')}`;
+  toc.style.display = '';
+  toc.querySelectorAll('a').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const el = document.getElementById(a.getAttribute('href').slice(1));
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+function _setHeroVal(id, text, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'report-hero-val' + (cls ? ' ' + cls : '');
+}
+
 async function openReport(ticker) {
   document.getElementById('report-ticker').textContent = ticker;
   document.getElementById('report-price').textContent = '';
   document.getElementById('report-generated').textContent = '';
   document.getElementById('report-content').textContent = 'Loading…';
+  const toc = document.getElementById('report-toc');
+  if (toc) { toc.style.display = 'none'; toc.innerHTML = ''; }
+  _setHeroVal('report-day', '—');
+  _setHeroVal('report-rating', '—');
+  _setHeroVal('report-target', '—');
+  _setHeroVal('report-upside', '—');
   showView('view-report');
 
   document.getElementById('download-docx').onclick = () =>
@@ -544,17 +597,151 @@ async function openReport(ticker) {
     window.location.href = `${API_BASE}/api/download/${ticker}/pptx?token=${getToken()}`;
 
   try {
-    const [report, quote] = await Promise.all([
+    const [report, quote, list] = await Promise.all([
       api.getReport(ticker),
       api.getQuote(ticker).catch(() => null),
+      api.listReports().catch(() => []),
     ]);
-    if (quote?.price) {
-      document.getElementById('report-price').textContent = `$${Number(quote.price).toFixed(2)}`;
+    const listMeta = (Array.isArray(list) ? list : []).find(
+      (r) => String(r.ticker || '').toUpperCase() === String(ticker).toUpperCase()
+    ) || null;
+    const px = quote?.price != null ? Number(quote.price) : null;
+    const day = quote?.pct_change != null ? Number(quote.pct_change) : null;
+    if (px != null) {
+      document.getElementById('report-price').textContent = `$${px.toFixed(2)}`;
     }
-    document.getElementById('report-generated').textContent = `Generated ${formatDateTime(report.generated_at)}`;
-    document.getElementById('report-content').innerHTML = marked.parse(fixMd(report.report_md));
+    if (day != null) {
+      _setHeroVal('report-day', `${day >= 0 ? '+' : ''}${day.toFixed(2)}%`, day >= 0 ? 'up' : 'dn');
+    }
+    const md = report.report_md || '';
+    const parsed = _extractReportMetaMobile(md);
+    const rating = (listMeta && listMeta.rating) || parsed.rating;
+    const target = (listMeta && listMeta.price_target != null) ? Number(listMeta.price_target) : parsed.target;
+    let upside = (listMeta && listMeta.upside_pct != null) ? Number(listMeta.upside_pct) : parsed.upside;
+    if (upside == null && target != null && px != null && px > 0) upside = (target - px) / px * 100;
+    _setHeroVal('report-rating', rating || '—');
+    _setHeroVal('report-target', target != null ? `$${target.toFixed(2)}` : '—');
+    if (upside != null) {
+      _setHeroVal('report-upside', `${upside >= 0 ? '+' : ''}${upside.toFixed(1)}%`, upside >= 0 ? 'up' : 'dn');
+    }
+
+    let freshNote = '';
+    if (report.generated_at) {
+      const ageDays = (Date.now() - new Date(report.generated_at).getTime()) / 86400000;
+      if (ageDays > 14) freshNote = ` · STALE ${Math.floor(ageDays)}d`;
+      else if (ageDays > 3) freshNote = ` · ${Math.floor(ageDays)}d old`;
+      else freshNote = ' · fresh';
+    }
+    document.getElementById('report-generated').textContent =
+      `Generated ${formatDateTime(report.generated_at)}${freshNote} · cache-first`;
+    document.getElementById('report-content').innerHTML = marked.parse(fixMd(md));
+    _buildMobileReportToc(document.getElementById('report-content'));
   } catch (err) {
     document.getElementById('report-content').textContent = 'Error: ' + err.message;
+  }
+}
+
+// ---------- Today desk (home) ----------
+function _relAgeShort(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  const min = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (min < 60) return (min < 1 ? 'now' : min + 'm');
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return hrs + 'h';
+  return Math.floor(hrs / 24) + 'd';
+}
+function _briefTeaser(md) {
+  if (!md) return '';
+  return String(md)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*_`\[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
+}
+async function loadTodayDesk() {
+  const title = document.getElementById('today-hero-title');
+  const sub = document.getElementById('today-hero-sub');
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
+  if (title) title.textContent = greet;
+  if (sub) {
+    sub.textContent = new Date().toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    }) + ' · cache-first';
+  }
+
+  const openIdeas = document.getElementById('today-open-ideas-btn');
+  if (openIdeas && !openIdeas._wired) {
+    openIdeas._wired = true;
+    openIdeas.addEventListener('click', () => {
+      const tab = document.querySelector('.tab[data-target="view-intelligence"]');
+      if (tab) tab.click();
+      else showView('view-intelligence');
+    });
+  }
+
+  try {
+    const [reports, brief] = await Promise.all([
+      api.listReports().catch(() => []),
+      api.getLatestDailyBrief().catch(() => null),
+    ]);
+    const list = Array.isArray(reports) ? reports : [];
+    const stale = [];
+    list.forEach((r) => {
+      const when = r.generated_at || r.last_attempt_at;
+      const age = when ? (Date.now() - new Date(when).getTime()) / 86400000 : 999;
+      if (r.last_attempt_status === 'failed' || age > 14) {
+        stale.push({ ...r, _age: age });
+      }
+    });
+    stale.sort((a, b) => (b._age || 0) - (a._age || 0));
+
+    const rc = document.getElementById('today-reports-count');
+    const sc = document.getElementById('today-stale-count');
+    const ba = document.getElementById('today-brief-age');
+    if (rc) rc.textContent = String(list.length || 0);
+    if (sc) sc.textContent = String(stale.length || 0);
+
+    const teaserEl = document.getElementById('today-brief-teaser');
+    const md = brief && (brief.markdown || brief.brief_md || brief.report_md || brief.result);
+    const when = brief && (brief.generated_at || brief.finished_at || brief.created_at);
+    if (ba) ba.textContent = when ? _relAgeShort(when) : 'none';
+    if (teaserEl) {
+      if (md && typeof md === 'string' && md.trim()) {
+        teaserEl.textContent = _briefTeaser(md) + (String(md).length > 220 ? '…' : '');
+      } else {
+        teaserEl.textContent = 'No cached daily brief yet. Open Ideas to generate one (does not auto-run).';
+      }
+    }
+
+    const attnCard = document.getElementById('today-attn-card');
+    const attnList = document.getElementById('today-attn-list');
+    if (attnCard && attnList) {
+      if (!stale.length) {
+        attnCard.style.display = 'none';
+      } else {
+        attnCard.style.display = '';
+        attnList.innerHTML = stale.slice(0, 6).map((r) => {
+          const label = r.last_attempt_status === 'failed'
+            ? 'FAILED'
+            : `${Math.floor(r._age)}d old`;
+          return `<button type="button" class="today-attn-row" data-ticker="${r.ticker}">
+            <span class="today-attn-tk">${r.ticker}</span>
+            <span class="today-attn-badge">${label}</span>
+            <span class="today-attn-meta">${r.rating || 'coverage'}</span>
+          </button>`;
+        }).join('');
+        attnList.querySelectorAll('[data-ticker]').forEach((btn) => {
+          btn.addEventListener('click', () => openReport(btn.dataset.ticker));
+        });
+      }
+    }
+  } catch (e) {
+    const teaserEl = document.getElementById('today-brief-teaser');
+    if (teaserEl) teaserEl.textContent = 'Today snapshot unavailable.';
   }
 }
 
@@ -1529,6 +1716,7 @@ async function loadReports() {
 // ---------- Boot ----------
 async function boot() {
   checkServer();
+  loadTodayDesk();
   loadReports();
   loadStrategies();
   loadLastPortfolioCard();

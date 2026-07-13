@@ -11,8 +11,7 @@
 |------|--------|
 | Repo | `https://github.com/alecmazo/claude-research-analyst` |
 | Default branch | `main` |
-| Verified tip | `6708074` — *Show company brand marks on Work lead cards* |
-| Local ↔ GitHub | **Matched** after restore of accidental worktree deletions (Sliw seed data + `stock-financials/.gitkeep`) |
+| Last coordination note | 2026-07-13 — Grok high-ROI UX package (Desk/Today/report reader/LP narrative) |
 | Do not commit | `.env`, `.claude/`, `.grok/`, generated `stocks/*` reports, runtime CRM under most of `apps/sliw-agent/data/*` (see `.gitignore`) |
 
 If your clone’s `main` is not at this tip (or newer `origin/main`), **pull/rebase first**. Do not force-push `main`.
@@ -62,29 +61,31 @@ If two agents need the same file:
 
 | Agent | Claimed paths / scope | Status | Started | Notes |
 |-------|----------------------|--------|---------|--------|
-| **Grok** | Design *proposals only* for portfolio web UX (no production code changes yet). Coordination docs: this file, `.gitignore` (`.grok/`) | Idle / proposal phase | 2026-07-13 | Reviewed live site + local + GitHub. **Did not implement** redesign. Ready to hand design mocks/specs if human greenlights. |
-| **Fable** | — | free | — | No claim recorded. Safe to take implementation work the human assigns. |
+| **Grok** | — | free | 2026-07-13 | Shipped high-ROI UX package (see handoff log). Paths released. |
+| **Fable** | — | free | — | Safe to take next assigned work; pull `main` first. |
 | **Claude/Opus** | — | free | — | Historical builder of much of GP/LP/app; treat large existing surfaces as shared heritage. |
 
 ---
 
-## Open product thread (Grok, 2026-07-13) — **not implemented**
+## Open product thread (Grok, 2026-07-13) — **partially shipped**
 
-Human asked for a **fresh design review** of portfolio.dgacapital.com (Opus/Fable build), not a big-bang rewrite.
+Human greenlit high-ROI package: **GP → mobile research → LP**, light terminal default.
 
-**Recommended direction (proposals only):**
+### Shipped in this package
 
-1. Unify design language across GP / LP / Research PWA (tokens, type, icons — less emoji chrome).
-2. GP IA: collapse toolbox nav into workflow tabs (**Desk · Research · Book · Fund**); labs secondary.
-3. High-ROI features: Desk/Today home (compose existing APIs), report hero + sticky TOC + metric strip, ⌘K command palette, cache-first + freshness UX, surface report compare API.
-4. Do **not** rewrite `portfolio-gp.html` into a framework until IA stabilizes; optional modular CSS later.
-5. Sliw aesthetic lessons (shell + hierarchy), **not** champagne branding on the fund product.
+| Surface | Change |
+|---------|--------|
+| **GP** `web/portfolio-gp.html` | New **Desk** landing tab (cache-first: book, daily pulse teaser, stale coverage, movers). Nav primary: Desk · Research · Positions · Ideas · Fund; labs secondary. **Light theme default** (dark only if user saved preference). Report modal: **hero metrics + TOC + freshness + Compare**. |
+| **Mobile research** `web/index.html`, `app.js`, `style.css` | Home retitled **Today** with desk snapshot (reports / stale / brief), needs-attention list, report **hero + TOC + freshness**. Cache-bust `?v=ui68-today`. |
+| **LP** `web/portfolio-lp.html` | **Portfolio narrative** strip under hero (plain-English total, blended YTD, strongest/softest sleeve, as-of chips). |
 
-**Safe places to prototype without colliding production:**
+### Still open (good next steps for Fable / Grok)
 
-- `mockups/` (new HTML mockups)
-- New design notes under `docs/` if added
-- This coordination file
+1. True shared design-token CSS module (still three parallel stylesheets).
+2. Expand ⌘K search into full command palette (actions, not just tickers).
+3. Modularize `portfolio-gp.html` after IA settles.
+4. Wire Desk book snapshot to richer chart/YTD if positions payload thin.
+5. LP documents tab still placeholder.
 
 **Hot paths — coordinate before editing:**
 
@@ -96,7 +97,8 @@ Human asked for a **fresh design review** of portfolio.dgacapital.com (Opus/Fabl
 
 | Date | From → To | Summary |
 |------|-----------|---------|
-| 2026-07-13 | Grok → Fable / all | Verified local worktree ≡ `origin/main` @ `6708074`. Restored accidental local deletions of tracked Sliw data files + `stock-financials/.gitkeep` (not committed as deletes). Added `.grok/` to `.gitignore`. Left design proposals in conversation only; **no portfolio UI code changes**. Next agent: pull `main`, claim a row above, avoid overlapping claims. |
+| 2026-07-13 | Grok → Fable / all | Verified local worktree ≡ `origin/main` @ `6708074`. Restored accidental local deletions of tracked Sliw data files + `stock-financials/.gitkeep` (not committed as deletes). Added `.grok/` to `.gitignore`. Left design proposals in conversation only; **no portfolio UI code changes**. |
+| 2026-07-13 | Grok → Fable / all | **Implemented** high-ROI UX package (no API/fund math changes): GP Desk + light default + report reader; mobile Today + report hero/TOC; LP narrative strip. Claims released. Pull `main` before further web UI work. |
 
 ---
 

@@ -13,6 +13,18 @@
 
 <script>window.PAGE_ROLE = 'gp';</script>
 <script src="/app/auth-guard.js"></script>
+<script>
+/* Light terminal is product default (2026-07-13). Dark only if user chose it. */
+(function () {
+  try {
+    var t = localStorage.getItem('dga_theme');
+    if (t !== 'dark' && t !== 'light') t = 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script>
 <style>
   :root {
     --navy:       #0A1628;    /* brand dark — button text, badges */
@@ -2747,7 +2759,174 @@
     border-color: var(--border-strong);
   }
 
-  /* ═══════════════════════════════════════════════════════════════════
+  
+  /* ── Desk (morning home) ─────────────────────────────────────── */
+  .desk-shell {
+    max-width: 1400px; margin: 0 auto; padding: 16px 18px 40px;
+  }
+  .desk-top {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 16px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .desk-kicker {
+    font-size: 10px; font-weight: 800; letter-spacing: 1.4px;
+    text-transform: uppercase; color: var(--blue);
+    margin-bottom: 4px;
+  }
+  .desk-title {
+    font-size: 22px; font-weight: 800; color: var(--navy-light, #1e293b);
+    letter-spacing: -0.3px; line-height: 1.15;
+  }
+  html[data-theme="dark"] .desk-title { color: var(--text-primary, #e2e8f0); }
+  .desk-sub {
+    font-size: 12px; color: var(--mid); margin-top: 4px;
+  }
+  .desk-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .desk-btn {
+    height: 34px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--panel-edge);
+    background: #fff; color: var(--navy-light); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.4px; cursor: pointer;
+  }
+  .desk-btn:hover { border-color: var(--blue); color: var(--blue); }
+  .desk-btn.primary {
+    background: linear-gradient(180deg, var(--blue-light), var(--blue));
+    color: var(--navy); border-color: transparent;
+  }
+  html[data-theme="dark"] .desk-btn { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-default); }
+  .desk-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 1100px) {
+    .desk-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 720px) {
+    .desk-grid { grid-template-columns: 1fr; }
+  }
+  .desk-card {
+    background: var(--panel, #fff);
+    border: 1px solid var(--panel-edge);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    min-height: 140px;
+    display: flex; flex-direction: column;
+  }
+  .desk-card-wide { grid-column: 1 / -1; }
+  .desk-card-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px 9px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    background: #fafbfc;
+  }
+  html[data-theme="dark"] .desk-card-head { background: var(--bg-surface); border-color: var(--border-subtle); }
+  .desk-card-title {
+    font-size: 10px; font-weight: 800; color: var(--blue);
+    letter-spacing: 1.3px; text-transform: uppercase;
+  }
+  .desk-card-meta {
+    margin-left: auto; font-size: 10px; color: var(--dim); font-weight: 600;
+  }
+  .desk-card-body { padding: 12px 14px 14px; flex: 1; }
+  .desk-stat-row {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
+  }
+  .desk-stat-val {
+    font-size: 26px; font-weight: 800; letter-spacing: -0.4px;
+    font-variant-numeric: tabular-nums; color: var(--navy-light, #0f172a);
+  }
+  html[data-theme="dark"] .desk-stat-val { color: var(--text-primary); }
+  .desk-stat-lbl {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--mid); margin-bottom: 3px;
+  }
+  .desk-list { list-style: none; margin: 0; padding: 0; }
+  .desk-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+    font-size: 12px; cursor: pointer;
+  }
+  .desk-list li:last-child { border-bottom: none; }
+  .desk-list li:hover { color: var(--blue); }
+  .desk-tk {
+    font-weight: 800; letter-spacing: 0.5px; min-width: 52px;
+    font-variant-numeric: tabular-nums;
+  }
+  .desk-muted { color: var(--dim); font-size: 11.5px; line-height: 1.5; }
+  .desk-fresh {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    padding: 2px 7px; border-radius: 999px;
+    background: rgba(34,197,94,0.10); color: #15803d;
+  }
+  .desk-fresh.stale {
+    background: rgba(245,158,11,0.14); color: #b45309;
+  }
+  .desk-chip {
+    display: inline-block; font-size: 9px; font-weight: 800;
+    letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px;
+    background: #f1f5f9; color: #475569;
+  }
+  .desk-chip.up { background: rgba(22,163,74,0.12); color: #15803d; }
+  .desk-chip.dn { background: rgba(220,38,38,0.12); color: #b91c1c; }
+  .desk-chip.warn { background: rgba(245,158,11,0.14); color: #b45309; }
+
+  /* ── Report reader hero + TOC ──────────────────────────────── */
+  .rm-reader { display: flex; flex-direction: column; gap: 0; min-height: 0; flex: 1; }
+  .rm-hero {
+    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+    padding: 12px 18px; border-bottom: 1px solid var(--panel-edge);
+    background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+  }
+  html[data-theme="dark"] .rm-hero { background: var(--bg-surface); }
+  .rm-hero-metric { min-width: 72px; }
+  .rm-hero-lbl {
+    font-size: 9px; font-weight: 800; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--mid); margin-bottom: 2px;
+  }
+  .rm-hero-val {
+    font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums;
+    color: var(--navy-light, #0f172a);
+  }
+  html[data-theme="dark"] .rm-hero-val { color: var(--text-primary); }
+  .rm-hero-val.up { color: #16a34a; }
+  .rm-hero-val.dn { color: #dc2626; }
+  .rm-body-wrap {
+    display: grid; grid-template-columns: 168px 1fr; min-height: 0; flex: 1;
+  }
+  @media (max-width: 720px) {
+    .rm-body-wrap { grid-template-columns: 1fr; }
+    .rm-toc { display: none !important; }
+  }
+  .rm-toc {
+    border-right: 1px solid var(--panel-edge);
+    padding: 12px 10px 18px;
+    overflow-y: auto; max-height: min(70vh, 720px);
+    background: #fafbfc;
+    position: sticky; top: 0;
+  }
+  html[data-theme="dark"] .rm-toc { background: var(--bg-surface); }
+  .rm-toc-title {
+    font-size: 9px; font-weight: 800; letter-spacing: 1.2px;
+    text-transform: uppercase; color: var(--mid); margin: 0 4px 8px;
+  }
+  .rm-toc a {
+    display: block; font-size: 11px; color: var(--mid);
+    text-decoration: none; padding: 5px 8px; border-radius: 5px;
+    line-height: 1.35; margin-bottom: 2px;
+  }
+  .rm-toc a:hover { background: rgba(91,184,212,0.10); color: var(--blue); }
+  .rm-toc a.h3 { padding-left: 16px; font-size: 10.5px; }
+  .rm-md-scroll {
+    overflow-y: auto; max-height: min(70vh, 720px); padding: 4px 0;
+  }
+  .rm-fresh-row {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 0 18px 10px; font-size: 11px; color: var(--dim);
+  }
+
+/* ═══════════════════════════════════════════════════════════════════
      DARK MODE — activated by [data-theme="dark"] on <html>
      Persisted in localStorage. Toggle button in topbar.
   ═══════════════════════════════════════════════════════════════════ */
@@ -3168,17 +3347,18 @@
   </div>
 
   <nav class="topbar-right">
-    <span class="topbar-link active" data-tab="research">Research</span>
+    <span class="topbar-link active" data-tab="desk">Desk</span>
+    <span class="topbar-link" data-tab="research">Research</span>
+    <span class="topbar-link" data-tab="positions">Positions</span>
+    <span class="topbar-link" data-tab="ideas">Ideas</span>
+    <span class="topbar-link" data-tab="fund">Fund</span>
+    <span class="topbar-divider" role="separator" aria-hidden="true"
+          title="Primary workflow  |  Labs & tools"></span>
     <span class="topbar-link" data-tab="builder">Builder</span>
     <span class="topbar-link" data-tab="lab">LLM Lab</span>
     <span class="topbar-link" data-tab="transcripts">Transcripts</span>
     <span class="topbar-link" data-tab="financials">Financials</span>
-    <span class="topbar-link" data-tab="ideas">Ideas</span>
-    <span class="topbar-divider" role="separator" aria-hidden="true"
-          title="Research  |  Fund Administration"></span>
-    <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="options">Options</span>
-    <span class="topbar-link" data-tab="fund">Fund</span>
     <span class="topbar-link" data-tab="memos">Memos</span>
     <span class="topbar-link" data-tab="settings">Settings</span>
     <a class="topbar-link" id="nav-sliw-link" href="/sliw/" title="Sliw Agent — Edyta corporate desk" style="text-decoration:none;display:none">Sliw</a>
@@ -3201,8 +3381,85 @@
 <!-- TAB PANELS                                                 -->
 <!-- ══════════════════════════════════════════════════════════ -->
 
+
+<!-- ══ DESK TAB — morning home (compose existing APIs; cache-first) ══ -->
+<div id="tab-desk" class="tab-panel active">
+  <div class="desk-shell">
+    <div class="desk-top">
+      <div>
+        <div class="desk-kicker">GP Terminal · Light desk</div>
+        <div class="desk-title" id="desk-title">Morning desk</div>
+        <div class="desk-sub" id="desk-sub">Book · pulse · stale coverage · movers. Cache-first; deep tools stay one click away.</div>
+      </div>
+      <div class="desk-actions">
+        <button type="button" class="desk-btn" data-desk-goto="research">Open Research</button>
+        <button type="button" class="desk-btn" data-desk-goto="positions">Book</button>
+        <button type="button" class="desk-btn primary" data-desk-goto="ideas">Ideas</button>
+        <button type="button" class="desk-btn" id="desk-refresh-btn">Refresh</button>
+      </div>
+    </div>
+
+    <div class="desk-grid">
+      <section class="desk-card">
+        <header class="desk-card-head">
+          <span class="desk-card-title">Book snapshot</span>
+          <span class="desk-card-meta" id="desk-book-meta">—</span>
+        </header>
+        <div class="desk-card-body" id="desk-book-body">
+          <div class="desk-muted">Loading positions…</div>
+        </div>
+      </section>
+
+      <section class="desk-card">
+        <header class="desk-card-head">
+          <span class="desk-card-title">Daily pulse</span>
+          <span class="desk-card-meta" id="desk-brief-meta">—</span>
+        </header>
+        <div class="desk-card-body" id="desk-brief-body">
+          <div class="desk-muted">Loading brief…</div>
+        </div>
+      </section>
+
+      <section class="desk-card">
+        <header class="desk-card-head">
+          <span class="desk-card-title">Needs attention</span>
+          <span class="desk-card-meta" id="desk-attn-meta">—</span>
+        </header>
+        <div class="desk-card-body" id="desk-attn-body">
+          <div class="desk-muted">Checking coverage…</div>
+        </div>
+      </section>
+
+      <section class="desk-card">
+        <header class="desk-card-head">
+          <span class="desk-card-title">Market movers</span>
+          <span class="desk-card-meta" id="desk-movers-meta">from idea feed</span>
+        </header>
+        <div class="desk-card-body" id="desk-movers-body">
+          <div class="desk-muted">Loading movers…</div>
+        </div>
+      </section>
+
+      <section class="desk-card desk-card-wide">
+        <header class="desk-card-head">
+          <span class="desk-card-title">Quick actions</span>
+          <span class="desk-card-meta">no auto LLM runs</span>
+        </header>
+        <div class="desk-card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button type="button" class="desk-btn primary" data-desk-goto="research" data-desk-focus="agentic-q">Ask analyst</button>
+          <button type="button" class="desk-btn" data-desk-goto="research" data-desk-focus="run-brief-btn">Run daily pulse</button>
+          <button type="button" class="desk-btn" data-desk-goto="ideas">Sector intelligence</button>
+          <button type="button" class="desk-btn" data-desk-goto="positions">Positions &amp; chart</button>
+          <button type="button" class="desk-btn" data-desk-goto="options">Options wheel</button>
+          <span class="desk-muted" style="margin-left:4px;">Tip: ⌘K search jumps to any ticker or report.</span>
+        </div>
+      </section>
+    </div>
+  </div>
+</div><!-- #tab-desk -->
+
 <!-- ══ POSITIONS TAB — Fidelity-style two-pane layout ═══════════════════ -->
-<div id="tab-positions" class="tab-panel active">
+<div id="tab-positions" class="tab-panel">
 <div class="fid-shell">
 
   <!-- ── LEFT: Account Sidebar ─────────────────────────────────────────── -->
@@ -5736,10 +5993,281 @@ End with the sleeve block at this account's real market value so I can push it t
     const iv = setInterval(tick, 3000);
   }
 
+
+  // ══════════════════════════════════════════════════════════════
+  // DESK — morning home (cache-first composition of existing APIs)
+  // ══════════════════════════════════════════════════════════════
+  function _deskEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function _deskRel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const min = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return min + 'm ago';
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return days + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  function _deskBriefTeaser(md) {
+    if (!md) return '';
+    const plain = String(md)
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/[#>*_`\[\]()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return plain.slice(0, 280) + (plain.length > 280 ? '…' : '');
+  }
+  async function loadDesk() {
+    const titleEl = document.getElementById('desk-title');
+    const subEl = document.getElementById('desk-sub');
+    const hour = new Date().getHours();
+    const greet = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
+    if (titleEl) titleEl.textContent = greet + ' · desk';
+    if (subEl) {
+      subEl.textContent = new Date().toLocaleString('en-US', {
+        weekday: 'long', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      }) + ' · light terminal · cache-first';
+    }
+
+    // Wire action buttons once
+    if (!window._deskWired) {
+      window._deskWired = true;
+      document.querySelectorAll('[data-desk-goto]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const tab = btn.getAttribute('data-desk-goto');
+          const focus = btn.getAttribute('data-desk-focus');
+          if (tab) showTab(tab);
+          if (focus) {
+            setTimeout(function () {
+              const el = document.getElementById(focus);
+              if (!el) return;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              if (el.tagName === 'BUTTON') el.focus();
+              else if (el.focus) el.focus();
+            }, 200);
+          }
+        });
+      });
+      const ref = document.getElementById('desk-refresh-btn');
+      if (ref) ref.addEventListener('click', function () {
+        _tabLoadedAt.desk = 0;
+        loadDesk();
+      });
+    }
+
+    const bookBody = document.getElementById('desk-book-body');
+    const bookMeta = document.getElementById('desk-book-meta');
+    const briefBody = document.getElementById('desk-brief-body');
+    const briefMeta = document.getElementById('desk-brief-meta');
+    const attnBody = document.getElementById('desk-attn-body');
+    const attnMeta = document.getElementById('desk-attn-meta');
+    const moversBody = document.getElementById('desk-movers-body');
+    const moversMeta = document.getElementById('desk-movers-meta');
+
+    const safeJson = async function (url) {
+      try {
+        const r = await window.dgaFetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (e) { return null; }
+    };
+
+    // Same positions endpoint as Positions tab; watchlist is a soft fallback
+    let pos = await safeJson('/api/v2/lp/me/positions');
+    if (!pos) pos = await safeJson('/api/watchlist');
+    const [brief, reports, ideas, scan] = await Promise.all([
+      safeJson('/api/daily-brief/latest'),
+      safeJson('/api/reports'),
+      safeJson('/api/v2/research/idea-feed?threshold=2.5'),
+      safeJson('/api/scan/latest'),
+    ]);
+
+    // Book snapshot — try positions-shaped payload, fall back to watchlist
+    try {
+      let totalMV = null, dayAbs = null, count = 0, asOf = '';
+      if (pos && Array.isArray(pos.positions)) {
+        totalMV = pos.total_market_value != null ? Number(pos.total_market_value) : null;
+        count = pos.positions.length;
+        asOf = pos.as_of || '';
+        let daySum = 0, ok = false;
+        pos.positions.forEach(function (p) {
+          if (p.day_change_abs != null && p.total_qty != null) {
+            daySum += Number(p.day_change_abs) * Number(p.total_qty || 0);
+            ok = true;
+          }
+        });
+        if (ok) dayAbs = daySum;
+      } else if (Array.isArray(pos)) {
+        count = pos.length;
+      } else if (pos && Array.isArray(pos.tickers)) {
+        count = pos.tickers.length;
+      }
+      if (bookMeta) bookMeta.textContent = asOf ? ('as of ' + _deskRel(asOf)) : 'live when available';
+      if (bookBody) {
+        if (totalMV != null) {
+          const dayCls = dayAbs == null ? '' : (dayAbs >= 0 ? 'up' : 'dn');
+          const dayStr = dayAbs == null ? '—' : ((dayAbs >= 0 ? '+' : '') + fmtUSD(dayAbs));
+          bookBody.innerHTML = `
+            <div class="desk-stat-row">
+              <div>
+                <div class="desk-stat-lbl">Total market value</div>
+                <div class="desk-stat-val">${_deskEsc(fmtUSD(totalMV))}</div>
+              </div>
+              <div>
+                <div class="desk-stat-lbl">Today</div>
+                <div class="desk-stat-val" style="font-size:18px;">
+                  <span class="desk-chip ${dayCls}">${_deskEsc(dayStr)}</span>
+                </div>
+              </div>
+              <div>
+                <div class="desk-stat-lbl">Positions</div>
+                <div class="desk-stat-val" style="font-size:18px;">${count}</div>
+              </div>
+            </div>
+            <div style="margin-top:12px;">
+              <button type="button" class="desk-btn" data-desk-goto="positions">Open book →</button>
+            </div>`;
+          bookBody.querySelectorAll('[data-desk-goto]').forEach(function (b) {
+            b.addEventListener('click', function () { showTab(b.getAttribute('data-desk-goto')); });
+          });
+        } else {
+          bookBody.innerHTML = `<div class="desk-muted">Book detail loads on the Positions tab.
+            ${count ? (count + ' watchlist names ready.') : 'Connect / open Positions for live NAV.'}</div>
+            <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-open-pos">Open Positions →</button></div>`;
+          const b = document.getElementById('desk-open-pos');
+          if (b) b.onclick = function () { showTab('positions'); };
+        }
+      }
+    } catch (e) {
+      if (bookBody) bookBody.innerHTML = '<div class="desk-muted">Book snapshot unavailable.</div>';
+    }
+
+    // Daily brief teaser
+    try {
+      if (brief && (brief.markdown || brief.brief_md || brief.report_md || brief.status === 'done')) {
+        const md = brief.markdown || brief.brief_md || brief.report_md || brief.result || '';
+        const when = brief.generated_at || brief.finished_at || brief.created_at;
+        if (briefMeta) briefMeta.textContent = when ? _deskRel(when) : 'cached';
+        const teaser = _deskBriefTeaser(typeof md === 'string' ? md : '');
+        if (briefBody) {
+          briefBody.innerHTML = teaser
+            ? `<div class="desk-muted" style="color:var(--navy-light);line-height:1.55;">${_deskEsc(teaser)}</div>
+               <div style="margin-top:10px;display:flex;gap:8px;">
+                 <button type="button" class="desk-btn primary" id="desk-open-brief">Read on Research →</button>
+               </div>`
+            : `<div class="desk-muted">Brief on file but empty body.</div>
+               <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-open-brief">Open Research →</button></div>`;
+          const b = document.getElementById('desk-open-brief');
+          if (b) b.onclick = function () { showTab('research'); };
+        }
+      } else {
+        if (briefMeta) briefMeta.textContent = 'none yet';
+        if (briefBody) {
+          briefBody.innerHTML = `<div class="desk-muted">No daily pulse cached. Generate from Research when ready (does not auto-run).</div>
+            <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-run-brief">Go to Daily Pulse →</button></div>`;
+          const b = document.getElementById('desk-run-brief');
+          if (b) b.onclick = function () { showTab('research'); };
+        }
+      }
+    } catch (e) {
+      if (briefBody) briefBody.innerHTML = '<div class="desk-muted">Brief unavailable.</div>';
+    }
+
+    // Needs attention — stale reports (>14d) or failed attempts
+    try {
+      const list = Array.isArray(reports) ? reports : [];
+      const stale = [];
+      const failed = [];
+      list.forEach(function (rep) {
+        const when = rep.generated_at || rep.last_attempt_at;
+        const ageDays = when ? (Date.now() - new Date(when).getTime()) / 86400000 : 999;
+        if (rep.last_attempt_status === 'failed') failed.push(rep);
+        else if (ageDays > 14) stale.push(Object.assign({}, rep, { _age: ageDays }));
+      });
+      stale.sort(function (a, b) { return (b._age || 0) - (a._age || 0); });
+      if (attnMeta) attnMeta.textContent = list.length + ' reports';
+      const rows = failed.slice(0, 3).map(function (r) {
+        return `<li data-tk="${_deskEsc(r.ticker)}"><span class="desk-tk">${_deskEsc(r.ticker)}</span>
+          <span class="desk-chip warn">FAILED</span><span class="desk-muted">retry analysis</span></li>`;
+      }).concat(stale.slice(0, 6).map(function (r) {
+        return `<li data-tk="${_deskEsc(r.ticker)}"><span class="desk-tk">${_deskEsc(r.ticker)}</span>
+          <span class="desk-chip warn">${Math.floor(r._age)}d</span>
+          <span class="desk-muted">${_deskEsc(r.rating || 'stale coverage')}</span></li>`;
+      }));
+      if (attnBody) {
+        if (!rows.length) {
+          attnBody.innerHTML = '<div class="desk-muted">Coverage looks fresh — no stale (&gt;14d) or failed reports.</div>';
+        } else {
+          attnBody.innerHTML = `<ul class="desk-list">${rows.join('')}</ul>`;
+          attnBody.querySelectorAll('li[data-tk]').forEach(function (li) {
+            li.addEventListener('click', function () { openReport(li.getAttribute('data-tk')); });
+          });
+        }
+      }
+    } catch (e) {
+      if (attnBody) attnBody.innerHTML = '<div class="desk-muted">Could not load coverage list.</div>';
+    }
+
+    // Movers — idea feed, fall back to scan
+    try {
+      let items = [];
+      if (ideas && Array.isArray(ideas.items)) items = ideas.items;
+      else if (ideas && Array.isArray(ideas.ideas)) items = ideas.ideas;
+      else if (ideas && Array.isArray(ideas.results)) items = ideas.results;
+      else if (scan && scan.results) {
+        const ent = scan.results;
+        if (Array.isArray(ent)) items = ent;
+        else if (typeof ent === 'object') {
+          items = Object.keys(ent).map(function (k) {
+            return Object.assign({ ticker: k }, ent[k] || {});
+          });
+        }
+      }
+      if (moversMeta) {
+        moversMeta.textContent = items.length ? (items.length + ' signals') : '—';
+      }
+      if (moversBody) {
+        if (!items.length) {
+          moversBody.innerHTML = '<div class="desk-muted">No mover signals cached. Open Ideas or run a scan from Research.</div>';
+        } else {
+          const top = items.slice(0, 8).map(function (it) {
+            const tk = it.ticker || it.symbol || it.tk || '—';
+            const pct = it.pct_change != null ? Number(it.pct_change)
+                      : (it.change_pct != null ? Number(it.change_pct)
+                      : (it.pct != null ? Number(it.pct) : null));
+            const cls = pct == null ? '' : (pct >= 0 ? 'up' : 'dn');
+            const reason = it.reason || it.headline || it.summary || it.classification || '';
+            return `<li data-tk="${_deskEsc(tk)}"><span class="desk-tk">${_deskEsc(tk)}</span>
+              ${pct != null ? `<span class="desk-chip ${cls}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>` : ''}
+              <span class="desk-muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_deskEsc(String(reason).slice(0, 90))}</span></li>`;
+          });
+          moversBody.innerHTML = `<ul class="desk-list">${top.join('')}</ul>`;
+          moversBody.querySelectorAll('li[data-tk]').forEach(function (li) {
+            li.addEventListener('click', function () {
+              const tk = li.getAttribute('data-tk');
+              if (tk && tk !== '—') openReport(tk);
+            });
+          });
+        }
+      }
+    } catch (e) {
+      if (moversBody) moversBody.innerHTML = '<div class="desk-muted">Movers unavailable.</div>';
+    }
+  }
+
   // ══════════════════════════════════════════════════════════════
   // TAB ROUTING
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
+    desk:      () => loadDesk(),
     positions: () => loadGPPositions(),
     options:   () => loadOptionsTab(),
     research:  () => {
@@ -18334,14 +18862,62 @@ End with the sleeve block at this account's real market value so I can push it t
     document.body.style.overflow = '';
   }
 
+  // ── Report meta helpers (hero strip) ─────────────────────────
+  function _extractReportMeta(md) {
+    const meta = { rating: null, target: null, upside: null };
+    if (!md) return meta;
+    const head = md.slice(0, 4000);
+    let m = head.match(/\b(?:Overall\s+)?(?:Rating|Verdict|Recommendation)\s*[:|]\s*\**\s*(BUY|SELL|HOLD|OVERWEIGHT|UNDERWEIGHT|OUTPERFORM|UNDERPERFORM|STRONG\s*BUY|NEUTRAL)\b/i);
+    if (m) meta.rating = m[1].replace(/\s+/g, ' ').toUpperCase();
+    m = head.match(/\b(?:Price\s*Target|Target\s*Price|PT)\s*[:|]\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+    if (m) meta.target = Number(m[1]);
+    m = head.match(/\b(?:Upside|Implied\s+Upside)\s*[:|]\s*([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%/i);
+    if (m) meta.upside = Number(m[1]);
+    return meta;
+  }
+  function _slugifyHeading(s) {
+    return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'section';
+  }
+  function _buildReportToc(mdRoot) {
+    const heads = mdRoot.querySelectorAll('h2, h3');
+    if (!heads.length) return null;
+    const nav = document.createElement('nav');
+    nav.className = 'rm-toc';
+    nav.innerHTML = '<div class="rm-toc-title">On this page</div>';
+    const used = {};
+    heads.forEach(function (h) {
+      let id = _slugifyHeading(h.textContent);
+      if (used[id]) { used[id] += 1; id = id + '-' + used[id]; }
+      else used[id] = 1;
+      h.id = id;
+      const a = document.createElement('a');
+      a.href = '#' + id;
+      a.className = h.tagName === 'H3' ? 'h3' : 'h2';
+      a.textContent = (h.textContent || '').trim().slice(0, 80);
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      nav.appendChild(a);
+    });
+    return nav;
+  }
+  function _fmtHeroPrice(n) {
+    if (n == null || isNaN(n)) return '—';
+    return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function _fmtHeroPct(n) {
+    if (n == null || isNaN(n)) return '—';
+    const v = Number(n);
+    return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  }
+
   async function openReport(ticker, provider) {
     if (!ticker) return;
     provider = (provider || 'grok').toLowerCase();
 
-    // Remove any existing report overlay (re-open clean)
     closeReportModal();
 
-    // ── Build overlay + dialog dynamically (same pattern as _openPulseDetail) ──
     const maxBtnId = 'rm-max-btn-' + Date.now();
 
     const overlay = document.createElement('div');
@@ -18349,38 +18925,52 @@ End with the sleeve block at this account's real market value so I can push it t
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;';
 
     overlay.innerHTML = `
-      <div class="dga-dialog">
+      <div class="dga-dialog" style="display:flex;flex-direction:column;max-height:92vh;">
         <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:8px;padding:11px 16px 10px;border-bottom:1px solid var(--panel-edge);flex-wrap:wrap;">
           <span id="rm-ticker" style="font-size:15px;font-weight:800;color:var(--text-primary);letter-spacing:0.8px;">${ticker}</span>
           ${provider !== 'grok'
             ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#d97706;color:#fff;">${provider.toUpperCase()}</span>`
             : `<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:#0A1628;color:#fff;">GROK</span>`}
           <span id="rm-date"   style="font-size:10px;color:var(--dim);margin-left:2px;"></span>
+          <span id="rm-fresh" class="desk-fresh" style="display:none;"></span>
           <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <button id="rm-compare-btn" type="button"
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:0.6px;cursor:pointer;">Compare</button>
             <a id="rm-gamma-btn" href="#" target="_blank" rel="noopener"
-               style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;text-decoration:none;letter-spacing:1px;">🎯 GAMMA</a>
+               style="display:none;background:linear-gradient(180deg,var(--blue-light),var(--blue));color:var(--navy);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;text-decoration:none;letter-spacing:1px;">GAMMA</a>
             <button id="rm-docx-btn"
-               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ DOCX</button>
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">DOCX</button>
             <button id="rm-pptx-btn"
-               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">⬇ PPTX</button>
+               style="display:none;background:rgba(91,184,212,0.12);color:var(--blue);font-size:10px;font-weight:800;padding:4px 12px;border-radius:5px;border:1px solid rgba(91,184,212,0.30);letter-spacing:1px;cursor:pointer;">PPTX</button>
             <button id="${maxBtnId}" class="dga-max-btn" title="Expand / restore">⤢</button>
             <button id="rm-close"
               style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);color:#475569;border-radius:5px;padding:3px 12px;font-size:14px;cursor:pointer;line-height:1.4;">✕</button>
           </div>
         </div>
-        <div id="rm-body" class="md-body dga-dialog-body" style="padding:18px 22px;">
-          <div class="tab-loading"><span class="spin">↻</span> Loading report…</div>
+        <div class="rm-reader">
+          <div class="rm-hero" id="rm-hero">
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Price</div><div class="rm-hero-val" id="rm-price">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Day</div><div class="rm-hero-val" id="rm-day">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Rating</div><div class="rm-hero-val" id="rm-rating">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Target</div><div class="rm-hero-val" id="rm-target">—</div></div>
+            <div class="rm-hero-metric"><div class="rm-hero-lbl">Upside</div><div class="rm-hero-val" id="rm-upside">—</div></div>
+          </div>
+          <div class="rm-fresh-row" id="rm-fresh-row"></div>
+          <div class="rm-body-wrap">
+            <div id="rm-toc-slot"></div>
+            <div id="rm-body" class="md-body dga-dialog-body rm-md-scroll" style="padding:14px 20px 28px;">
+              <div class="tab-loading"><span class="spin">↻</span> Loading report…</div>
+            </div>
+          </div>
         </div>
       </div>`;
 
     document.body.appendChild(overlay);
     document.body.style.overflow = 'hidden';
 
-    // Wire close + backdrop click
     overlay.querySelector('#rm-close').addEventListener('click', closeReportModal);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeReportModal(); });
 
-    // Wire drag + maximize
     const dlg    = overlay.querySelector('.dga-dialog');
     const handle = overlay.querySelector('.dga-dialog-handle');
     const maxBtn = overlay.querySelector('#' + maxBtnId);
@@ -18392,13 +18982,53 @@ End with the sleeve block at this account's real market value so I can push it t
     const gammaBtn = overlay.querySelector('#rm-gamma-btn');
     const docxBtn  = overlay.querySelector('#rm-docx-btn');
     const pptxBtn  = overlay.querySelector('#rm-pptx-btn');
+    const cmpBtn   = overlay.querySelector('#rm-compare-btn');
+    const freshEl  = overlay.querySelector('#rm-fresh');
+    const freshRow = overlay.querySelector('#rm-fresh-row');
 
     try {
-      const r = await window.dgaFetch('/api/report/' + encodeURIComponent(ticker)
-                                       + '?provider=' + encodeURIComponent(provider));
+      const [r, qRes, listRes] = await Promise.all([
+        window.dgaFetch('/api/report/' + encodeURIComponent(ticker)
+                         + '?provider=' + encodeURIComponent(provider)),
+        window.dgaFetch('/api/quote/' + encodeURIComponent(ticker)).catch(() => null),
+        window.dgaFetch('/api/reports').catch(() => null),
+      ]);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
-      if (d.generated_at) dateEl.textContent = '· ' + fmtDate(d.generated_at);
+
+      let quote = null;
+      if (qRes && qRes.ok) {
+        try { quote = await qRes.json(); } catch (_) {}
+      }
+      let listMeta = null;
+      if (listRes && listRes.ok) {
+        try {
+          const list = await listRes.json();
+          listMeta = (Array.isArray(list) ? list : []).find(function (x) {
+            return String(x.ticker || '').toUpperCase() === String(ticker).toUpperCase();
+          }) || null;
+        } catch (_) {}
+      }
+
+      if (d.generated_at) {
+        dateEl.textContent = '· ' + fmtDate(d.generated_at);
+        const ageMs = Date.now() - new Date(d.generated_at).getTime();
+        const ageDays = ageMs / 86400000;
+        freshEl.style.display = '';
+        if (ageDays <= 3) {
+          freshEl.textContent = 'Fresh';
+          freshEl.className = 'desk-fresh';
+        } else if (ageDays <= 14) {
+          freshEl.textContent = Math.floor(ageDays) + 'd old';
+          freshEl.className = 'desk-fresh stale';
+        } else {
+          freshEl.textContent = 'Stale · ' + Math.floor(ageDays) + 'd';
+          freshEl.className = 'desk-fresh stale';
+        }
+        freshRow.textContent = 'As of ' + fmtDate(d.generated_at)
+          + ' · provider ' + (d.provider || provider).toUpperCase()
+          + ' · cache-first (regenerate from Research if needed)';
+      }
       if (d.gamma_url) {
         gammaBtn.href = d.gamma_url;
         gammaBtn.style.display = '';
@@ -18417,11 +19047,56 @@ End with the sleeve block at this account's real market value so I can push it t
         );
         pptxBtn.style.display = '';
       }
+      if (cmpBtn) {
+        cmpBtn.style.display = '';
+        cmpBtn.onclick = function () {
+          try {
+            if (typeof openCompareModal === 'function') openCompareModal(ticker);
+            else if (typeof _openCompare === 'function') _openCompare(ticker);
+            else showTab('lab');
+          } catch (_) { showTab('lab'); }
+        };
+      }
+
+      // Hero metrics
+      const priceEl = overlay.querySelector('#rm-price');
+      const dayEl = overlay.querySelector('#rm-day');
+      const ratingEl = overlay.querySelector('#rm-rating');
+      const targetEl = overlay.querySelector('#rm-target');
+      const upsideEl = overlay.querySelector('#rm-upside');
+      const px = quote && (quote.price != null) ? Number(quote.price) : null;
+      const day = quote && (quote.pct_change != null) ? Number(quote.pct_change) : null;
+      if (priceEl) priceEl.textContent = _fmtHeroPrice(px);
+      if (dayEl) {
+        dayEl.textContent = _fmtHeroPct(day);
+        dayEl.className = 'rm-hero-val' + (day == null ? '' : (day >= 0 ? ' up' : ' dn'));
+      }
       const mdText = d.report_md || d.markdown || '';
+      const parsed = _extractReportMeta(mdText);
+      const rating = (listMeta && listMeta.rating) || parsed.rating;
+      const target = (listMeta && listMeta.price_target != null) ? Number(listMeta.price_target) : parsed.target;
+      let upside = (listMeta && listMeta.upside_pct != null) ? Number(listMeta.upside_pct) : parsed.upside;
+      if (upside == null && target != null && px != null && px > 0) upside = (target - px) / px * 100;
+      if (ratingEl) ratingEl.textContent = rating || '—';
+      if (targetEl) targetEl.textContent = target != null ? _fmtHeroPrice(target) : '—';
+      if (upsideEl) {
+        upsideEl.textContent = _fmtHeroPct(upside);
+        upsideEl.className = 'rm-hero-val' + (upside == null ? '' : (upside >= 0 ? ' up' : ' dn'));
+      }
+
       if (!mdText) {
         body.innerHTML = '<div class="tab-empty">Report exists but has no text content. Use the download buttons above.</div>';
       } else {
         renderMd(body, mdText);
+        const mdRoot = body.querySelector('.md-body') || body;
+        const toc = _buildReportToc(mdRoot);
+        const slot = overlay.querySelector('#rm-toc-slot');
+        if (toc && slot) {
+          slot.appendChild(toc);
+        } else {
+          const wrap = overlay.querySelector('.rm-body-wrap');
+          if (wrap) wrap.style.gridTemplateColumns = '1fr';
+        }
       }
     } catch (e) {
       body.innerHTML = `<div class="tab-error">Could not load report for ${ticker}: ${e.message}</div>`;
@@ -20151,9 +20826,9 @@ End with the sleeve block at this account's real market value so I can push it t
   loadWatchlist();
   loadReports();
   loadTrendingTickers();
-  // Research is the default landing tab (positions is lazy-loaded on first click)
+  // Desk is the default landing tab (light terminal home)
   initLiveMarkets();
-  showTab('research');
+  showTab('desk');
 
   // ── Archived Reports (Settings tab) ───────────────────────────────────────
   async function loadArchivedReports() {
@@ -21122,9 +21797,8 @@ End with the sleeve block at this account's real market value so I can push it t
       const v = localStorage.getItem(THEME_KEY);
       if (v === 'dark' || v === 'light') return v;
     } catch {}
-    // Default to OS preference
-    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
-      ? 'dark' : 'light';
+    // Light terminal is the product default (user preference 2026-07-13)
+    return 'light';
   }
   function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t);

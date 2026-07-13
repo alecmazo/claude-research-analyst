@@ -232,6 +232,36 @@
   }
   .hero-btn:disabled { opacity: 0.6; cursor: default; }
 
+  /* ── Portfolio narrative strip (high-ROI LP clarity) ───────── */
+  .lp-narrative {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: rgba(91,184,212,0.10);
+    border: 1px solid rgba(91,184,212,0.22);
+  }
+  .lp-narrative-kicker {
+    font-size: 9px; font-weight: 800; letter-spacing: 1.3px;
+    text-transform: uppercase; color: var(--blue); margin-bottom: 6px;
+  }
+  .lp-narrative-body {
+    font-size: 13px; line-height: 1.55; color: rgba(255,255,255,0.88);
+  }
+  .lp-narrative-meta {
+    margin-top: 8px; font-size: 11px; color: rgba(255,255,255,0.45);
+    display: flex; flex-wrap: wrap; gap: 10px 16px;
+  }
+  .lp-fresh-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
+    padding: 2px 8px; border-radius: 999px;
+    background: rgba(34,197,94,0.16); color: #86efac;
+  }
+  .lp-fresh-chip.stale {
+    background: rgba(245,158,11,0.18); color: #fbbf24;
+  }
+
+
   /* ── STAT BAND ────────────────────────────────────────────── */
   .stat-band {
     display: grid;
@@ -619,6 +649,11 @@
       <div class="hero-title" id="lp-hero-title">Loading your portfolio…</div>
       <div class="hero-sub" id="lp-hero-sub"></div>
       <div id="lp-hero-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top:18px;"></div>
+      <div class="lp-narrative" id="lp-narrative" style="display:none;">
+        <div class="lp-narrative-kicker">Portfolio narrative</div>
+        <div class="lp-narrative-body" id="lp-narrative-body"></div>
+        <div class="lp-narrative-meta" id="lp-narrative-meta"></div>
+      </div>
     </div>
 
     <!-- Quarterly Letter (shown only when a letter is published for this LP) -->
@@ -1261,6 +1296,80 @@
     }
   }
 
+
+  function _lpBuildNarrative(data, totalPortfolio, funds, accts) {
+    const box = document.getElementById('lp-narrative');
+    const body = document.getElementById('lp-narrative-body');
+    const meta = document.getElementById('lp-narrative-meta');
+    if (!box || !body || !meta) return;
+
+    const parts = [];
+    const ytds = [];
+    (accts || []).forEach(function (a) {
+      let ytd = a.ytd_pct;
+      const beg = a.ytd_beg_balance;
+      const deps = a.ytd_total_deposits ?? 0;
+      const wdrs = a.ytd_total_withdrawals ?? 0;
+      const currentMV = a.nav || a.market_nav;
+      if (ytd == null && beg && beg > 0 && currentMV != null) {
+        ytd = (currentMV + wdrs - deps - beg) / beg * 100;
+      }
+      if (ytd != null && !isNaN(ytd)) {
+        ytds.push({ name: a.account_name || a.short_name || 'Account', ytd: Number(ytd), asof: a.ytd_as_of || a.nav_as_of || '' });
+      }
+    });
+    (funds || []).forEach(function (f) {
+      if (f.ytd_pct != null) ytds.push({ name: f.short_name || f.fund_name || 'Fund', ytd: Number(f.ytd_pct), asof: f.fund_nav_as_of || '' });
+    });
+
+    if (totalPortfolio > 0) {
+      parts.push(`Your total portfolio is approximately ${fmtUSD(totalPortfolio)}.`);
+    }
+    if (ytds.length) {
+      ytds.sort(function (a, b) { return b.ytd - a.ytd; });
+      const best = ytds[0];
+      const worst = ytds[ytds.length - 1];
+      const avg = ytds.reduce(function (s, x) { return s + x.ytd; }, 0) / ytds.length;
+      const avgStr = (avg >= 0 ? '+' : '') + avg.toFixed(2) + '%';
+      parts.push(`Blended YTD across ${ytds.length} sleeve${ytds.length > 1 ? 's' : ''} is about ${avgStr}.`);
+      if (ytds.length > 1) {
+        parts.push(`Strongest sleeve: ${best.name} (${best.ytd >= 0 ? '+' : ''}${best.ytd.toFixed(2)}%). Softest: ${worst.name} (${worst.ytd >= 0 ? '+' : ''}${worst.ytd.toFixed(2)}%).`);
+      } else {
+        parts.push(`${best.name} YTD is ${best.ytd >= 0 ? '+' : ''}${best.ytd.toFixed(2)}%.`);
+      }
+    } else {
+      parts.push('YTD figures appear once managed-account performance is uploaded or fund NAVs are marked.');
+    }
+    parts.push('Open any card below for holdings detail, or use Reports for quarterly letters.');
+
+    body.textContent = parts.join(' ');
+
+    // Freshness chips
+    const asOfs = [];
+    ytds.forEach(function (x) { if (x.asof) asOfs.push(x.asof); });
+    (funds || []).forEach(function (f) { if (f.fund_nav_as_of) asOfs.push(f.fund_nav_as_of); });
+    (accts || []).forEach(function (a) { if (a.nav_as_of) asOfs.push(a.nav_as_of); if (a.ytd_as_of) asOfs.push(a.ytd_as_of); });
+    let chip = '<span class="lp-fresh-chip">Snapshot loaded</span>';
+    if (asOfs.length) {
+      // pick most recent parseable date
+      let best = null;
+      asOfs.forEach(function (s) {
+        const d = new Date(s);
+        if (!isNaN(d.getTime()) && (!best || d > best)) best = d;
+      });
+      if (best) {
+        const ageDays = (Date.now() - best.getTime()) / 86400000;
+        const label = best.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        if (ageDays > 14) chip = `<span class="lp-fresh-chip stale">As of ${label} · review freshness</span>`;
+        else chip = `<span class="lp-fresh-chip">As of ${label}</span>`;
+      } else {
+        chip = `<span class="lp-fresh-chip">As of ${esc(String(asOfs[0]))}</span>`;
+      }
+    }
+    meta.innerHTML = chip + `<span>${(funds || []).length} fund${(funds || []).length === 1 ? '' : 's'} · ${(accts || []).length} managed account${(accts || []).length === 1 ? '' : 's'}</span>`;
+    box.style.display = '';
+  }
+
   function renderOverview(data) {
     // Flush portfolio-history cache so the chart re-fetches against the
     // freshly-rendered hero card (avoids stale data after a manual reload).
@@ -1278,7 +1387,9 @@
         login (<strong>${esc(me.email)}</strong>) yet. Once the GP assigns one,
         it will appear here automatically. Reach out to <strong>alecmazo1@gmail.com</strong>
         with any questions.`;
-      $stats.innerHTML = ''; $hold.innerHTML = ''; return;
+      $stats.innerHTML = ''; $hold.innerHTML = '';
+      const n = document.getElementById('lp-narrative'); if (n) n.style.display = 'none';
+      return;
     }
 
     const totalFundStakes = funds.reduce((s, f) => s + (f.stake_value || 0), 0);

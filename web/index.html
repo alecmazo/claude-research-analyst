@@ -73,7 +73,7 @@
     } catch (_) {}
   })();
   </script>
-  <link rel="stylesheet" href="/app/style.css?v=ui67s">
+  <link rel="stylesheet" href="/app/style.css?v=ui68-today">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -96,10 +96,42 @@
   <header class="header">
     <div class="header-brand">
       <img src="/branding/dga_logo_small.png" alt="DGA Capital" class="header-logo" onerror="this.style.display='none'">
-      <h1>Research</h1>
+      <h1>Today</h1>
     </div>
     <span id="status-dot" class="status-dot"></span>
   </header>
+
+  <!-- TODAY DESK — morning snapshot (cache-first; no auto LLM) -->
+  <div class="card today-hero-card" id="today-hero-card">
+    <div class="today-hero-kicker">DGA · Pocket desk</div>
+    <div class="today-hero-title" id="today-hero-title">Today</div>
+    <div class="today-hero-sub" id="today-hero-sub">Book pulse · brief · coverage freshness</div>
+    <div class="today-stat-row" id="today-stat-row">
+      <div class="today-stat">
+        <div class="today-stat-lbl">Reports</div>
+        <div class="today-stat-val" id="today-reports-count">—</div>
+      </div>
+      <div class="today-stat">
+        <div class="today-stat-lbl">Stale &gt;14d</div>
+        <div class="today-stat-val" id="today-stale-count">—</div>
+      </div>
+      <div class="today-stat">
+        <div class="today-stat-lbl">Brief</div>
+        <div class="today-stat-val" id="today-brief-age">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="today-brief-card">
+    <div class="label">DAILY BRIEF</div>
+    <div id="today-brief-teaser" class="today-brief-teaser">Loading cached brief…</div>
+    <button type="button" id="today-open-ideas-btn" class="btn-secondary full-width" style="margin-top:12px;">Open Ideas →</button>
+  </div>
+
+  <div class="card" id="today-attn-card" style="display:none;">
+    <div class="label">NEEDS ATTENTION</div>
+    <div id="today-attn-list" class="today-attn-list"></div>
+  </div>
 
   <div class="card" id="analyze-card">
     <div class="label">ANALYZE TICKER</div>
@@ -131,7 +163,7 @@
   <!-- ============ MARKET SCAN ============ -->
   <div class="scan-section-header">
     <div class="label section-label" style="margin:0;">MARKET SCAN</div>
-    <button id="scan-run-btn" class="btn-scan">⚡ Scan Now</button>
+    <button id="scan-run-btn" class="btn-scan">Scan Now</button>
   </div>
 
   <div class="card scan-watchlist-card">
@@ -220,11 +252,18 @@
       <div class="report-price" id="report-price"></div>
     </div>
     <div class="header-actions">
-      <button id="download-docx" class="icon-btn" title="Download Word">📄</button>
-      <button id="download-pptx" class="icon-btn icon-btn-gold" title="Download Presentation">📊</button>
+      <button id="download-docx" class="icon-btn" title="Download Word">DOCX</button>
+      <button id="download-pptx" class="icon-btn icon-btn-gold" title="Download Presentation">PPTX</button>
     </div>
   </header>
+  <div class="report-hero" id="report-hero">
+    <div class="report-hero-metric"><div class="report-hero-lbl">Day</div><div class="report-hero-val" id="report-day">—</div></div>
+    <div class="report-hero-metric"><div class="report-hero-lbl">Rating</div><div class="report-hero-val" id="report-rating">—</div></div>
+    <div class="report-hero-metric"><div class="report-hero-lbl">Target</div><div class="report-hero-val" id="report-target">—</div></div>
+    <div class="report-hero-metric"><div class="report-hero-lbl">Upside</div><div class="report-hero-val" id="report-upside">—</div></div>
+  </div>
   <div class="generated-at" id="report-generated"></div>
+  <nav class="report-toc" id="report-toc" style="display:none;"></nav>
   <article id="report-content" class="report-content">Loading…</article>
 </section>
 
@@ -333,7 +372,7 @@
         </svg>
       </span>
     </div>
-    <span class="tab-label">Research</span>
+    <span class="tab-label">Today</span>
   </button>
 
   <!-- Intelligence tab — lightbulb -->
@@ -911,6 +950,6 @@
   </div>
 </section>
 
-<script src="/app/app.js?v=ui67s"></script>
+<script src="/app/app.js?v=ui68-today"></script>
 </body>
 </html>
