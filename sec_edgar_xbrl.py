@@ -196,11 +196,19 @@ def _session(user_agent: str | None = None) -> requests.Session:
     return s
 
 
-def _get_json(sess: requests.Session, url: str, *, retries: int = 3) -> dict:
+def _get_json(sess: requests.Session, url: str, *, retries: int = 8) -> dict:
+    """GET JSON from SEC with aggressive 429 backoff.
+
+    Fair-access guidance is ~10 req/s with a proper User-Agent. When we still
+    hit 429, wait progressively longer so bulk pulls can finish instead of
+    failing: 10s → 30s → 60s → 2m → 5m → 10m (then give up for this URL).
+    """
     last_err: Exception | None = None
+    # Seconds to sleep after each consecutive 429 (index = attempt number).
+    _429_WAITS = (10, 30, 60, 120, 300, 600, 600, 600)
     for attempt in range(retries):
         try:
-            resp = sess.get(url, timeout=30)
+            resp = sess.get(url, timeout=45)
             if resp.status_code == 200:
                 result = resp.json()
                 if not isinstance(result, dict):
@@ -210,13 +218,19 @@ def _get_json(sess: requests.Session, url: str, *, retries: int = 3) -> dict:
                     )
                 return result
             if resp.status_code == 429:
-                # SEC is rate-limiting us.
-                time.sleep(1.5 * (attempt + 1))
+                wait = _429_WAITS[min(attempt, len(_429_WAITS) - 1)]
+                print(f"[sec] 429 rate limited — waiting {wait}s before retry "
+                      f"({attempt+1}/{retries}) {url[-60:]}", flush=True)
+                time.sleep(wait)
+                continue
+            if resp.status_code in (500, 502, 503, 504):
+                time.sleep(min(30, 2 ** attempt))
                 continue
             resp.raise_for_status()
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            time.sleep(0.8 * (attempt + 1))
+            # Network blips — short backoff, not a 10-minute pause.
+            time.sleep(min(20, 1.5 * (attempt + 1)))
     raise RuntimeError(f"SEC request failed after {retries} retries: {url} ({last_err})")
 
 

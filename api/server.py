@@ -23772,29 +23772,59 @@ def _store_financials_rows(ticker: str, cik, entity_name, rows: list) -> int:
     return n
 
 
-def _sync_one_ticker_financials(ticker: str, years_back: int = 10) -> dict:
+def _fin_is_rate_limit_error(msg: str) -> bool:
+    m = (msg or "").lower()
+    return any(x in m for x in ("429", "rate limit", "rate-limit", "too many requests",
+                                "throttle", "slow down"))
+
+
+def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
+                                max_rate_retries: int = 4) -> dict:
     """Pull SEC XBRL history for one ticker and persist it. Returns
-    {stored, periods, entity, errors}."""
+    {stored, periods, entity, errors, rate_limited?}.
+
+    On rate-limit errors, wait and retry the same ticker (outer loop; the
+    SEC client also backs off on 429). Wait ladder: 60s → 3m → 10m → 10m."""
     import sec_edgar_xbrl as _edgar
     try:
         ua = analyst.get_sec_user_agent()
     except Exception as e:
         return {"stored": 0, "periods": 0, "errors": [f"SEC_USER_AGENT not set: {e!s:.80}"]}
-    try:
-        res = _edgar.extract_financials_history(ticker, years_back=years_back, user_agent=ua)
-    except Exception as e:
-        return {"stored": 0, "periods": 0, "errors": [f"{ticker}: {e!s:.140}"]}
-    rows = res.get("rows") or []
-    try:
-        stored = _store_financials_rows(ticker, res.get("cik"), res.get("entity_name"), rows)
-    except Exception as e:
-        return {"stored": 0, "periods": len(rows), "errors": [f"{ticker} store failed: {e!s:.120}"]}
-    return {"stored": stored, "periods": len(rows),
-            "entity": res.get("entity_name"), "errors": res.get("errors") or []}
+    waits = (60, 180, 600, 600)
+    last_err = None
+    for attempt in range(max(1, max_rate_retries)):
+        try:
+            res = _edgar.extract_financials_history(
+                ticker, years_back=years_back, user_agent=ua)
+            rows = res.get("rows") or []
+            try:
+                stored = _store_financials_rows(
+                    ticker, res.get("cik"), res.get("entity_name"), rows)
+            except Exception as e:
+                return {"stored": 0, "periods": len(rows),
+                        "errors": [f"{ticker} store failed: {e!s:.120}"]}
+            return {"stored": stored, "periods": len(rows),
+                    "entity": res.get("entity_name"),
+                    "errors": res.get("errors") or []}
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            if _fin_is_rate_limit_error(msg) and attempt < max_rate_retries - 1:
+                wait = waits[min(attempt, len(waits) - 1)]
+                print(f"[fin sync] rate limited on {ticker} — waiting {wait}s "
+                      f"(retry {attempt+1}/{max_rate_retries})", flush=True)
+                time.sleep(wait)
+                continue
+            return {"stored": 0, "periods": 0,
+                    "errors": [f"{ticker}: {msg[:140]}"],
+                    "rate_limited": _fin_is_rate_limit_error(msg)}
+    return {"stored": 0, "periods": 0,
+            "errors": [f"{ticker}: {str(last_err)[:140]}"], "rate_limited": True}
 
 
 def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
-    """Background worker: build/refresh the structured financials store."""
+    """Background worker: build/refresh the structured financials store.
+    Polite to SEC; pauses longer after rate-limit hits then continues."""
     def _set(**kw):
         _fin_sync_jobs[job_id] = {**(_fin_sync_jobs.get(job_id) or {}), **kw,
                                    "updated_at": time.time()}
@@ -23803,30 +23833,115 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
     try:
         _ensure_financials_table()
         total_stored, names_ok, all_errors = 0, 0, []
+        consecutive_rl = 0
         for i, tk in enumerate(tickers):
-            _set(stage="syncing", label=f"📊 {tk} ({i+1}/{len(tickers)})…", done=i)
+            _set(stage="syncing",
+                 label=f"📊 {tk} ({i+1}/{len(tickers)})…", done=i)
             try:
                 r = _sync_one_ticker_financials(tk, years_back=years_back)
                 total_stored += r.get("stored", 0)
                 if r.get("stored"):
                     names_ok += 1
+                    consecutive_rl = 0
                 for e in (r.get("errors") or [])[:1]:
                     all_errors.append(f"{tk}: {e}")
+                if r.get("rate_limited"):
+                    consecutive_rl += 1
+                    # Cool-down between tickers after a hard rate-limit fail
+                    cool = min(600, 30 * consecutive_rl)
+                    _set(label=f"⏳ Rate limited — cooling {cool}s before next…")
+                    print(f"[fin sync] cool-down {cool}s after rate limit "
+                          f"(streak={consecutive_rl})", flush=True)
+                    time.sleep(cool)
+                else:
+                    # ~4 tickers/sec max would be aggressive; stay well under
+                    # SEC's 10 req/s (each name makes several GETs).
+                    time.sleep(0.35)
             except Exception as e:
                 all_errors.append(f"{tk}: {e!s:.100}")
                 print(f"⚠️ [fin sync {tk}] {e!s:.150}", flush=True)
-            _set(stored=total_stored)
-            time.sleep(0.2)   # be polite to SEC (≈ stays well under their rate cap)
+                time.sleep(0.5)
+            _set(stored=total_stored, done=i + 1)
         if total_stored > 0:
             label = f"✓ Stored {total_stored} periods across {names_ok} names"
         else:
             label = f"⚠ Stored 0 periods — {(all_errors[0] if all_errors else 'no data returned')[:150]}"
         _set(stage="done", status="done", done=len(tickers), label=label,
              result={"periods_stored": total_stored, "names": names_ok,
-                     "errors": all_errors[:12]})
+                     "errors": all_errors[:20]})
     except Exception as e:
         print(f"❌ [fin sync {job_id}] {e!s:.300}", flush=True)
         _set(stage="error", status="error", label=f"❌ {e!s:.200}", error=str(e))
+
+
+def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None) -> dict:
+    """Pull ALL never-synced US-listed names (no nightly budget), then backup.
+    Continues through rate limits by waiting and resuming. One ticker at a time."""
+    years = years_back if years_back is not None else _FIN_OVERNIGHT_YEARS
+    # No budget cap — full missing list (can be thousands).
+    tickers = _fin_pick_overnight_batch(budget=50_000)
+    # Prefer pure missing: re-fetch ordered list without stale-refresh first
+    try:
+        universe = [r["ticker"] for r in _fin_universe_us_listed()]
+        have = set()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ticker FROM company_financials")
+            have = {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
+        missing = [t for t in universe if t not in have]
+        # After missing are done, refresh oldest 0 this run — focus on coverage
+        tickers = missing if missing else tickers
+    except Exception as e:
+        print(f"[fin-full] missing-list failed, using pick batch: {e!s:.120}", flush=True)
+
+    jid = job_id or ("FINFULL_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
+    _fin_sync_jobs[jid] = {
+        "stage": "queued", "status": "running",
+        "label": f"Full US-listed pull ({len(tickers)} names)…",
+        "started_at": time.time(), "updated_at": time.time(),
+        "total": len(tickers), "done": 0, "stored": 0,
+        "universe": "us_listed_full",
+    }
+    if not tickers:
+        _fin_sync_jobs[jid].update(
+            stage="done", status="done",
+            label="✓ Full pull: already covered (no missing names)",
+            result={"periods_stored": 0, "names": 0})
+        return _fin_sync_jobs[jid]
+    try:
+        meta = {r["ticker"]: r for r in _fin_universe_us_listed()}
+        _fin_persist_universe_meta([meta[t] for t in tickers if t in meta])
+    except Exception:
+        pass
+    print(f"[fin-full] starting {len(tickers)} tickers years={years} job={jid}", flush=True)
+    _run_financials_sync(jid, tickers, years)
+    backup_note = ""
+    try:
+        _fin_sync_jobs[jid] = {**(_fin_sync_jobs.get(jid) or {}),
+                               "stage": "backup",
+                               "label": "☁️ Backing up financials to Dropbox…",
+                               "updated_at": time.time()}
+        ok, info = _dropbox_backup_financials()
+        backup_note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:80]})"
+    except Exception as e:
+        backup_note = f" · backup error ({e!s:.60})"
+    job = _fin_sync_jobs.get(jid) or {}
+    label = (job.get("label") or "Full pull done") + backup_note
+    result = dict(job.get("result") or {})
+    result["backup"] = backup_note
+    result["tickers_attempted"] = len(tickers)
+    _fin_sync_jobs[jid] = {**job, "label": label, "result": result,
+                           "stage": "done", "status": job.get("status") or "done",
+                           "updated_at": time.time()}
+    try:
+        _kv_put("fin_full_pull.last", {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "tickers": len(tickers),
+            "label": label[:300],
+            "job_id": jid,
+        })
+    except Exception:
+        pass
+    return _fin_sync_jobs[jid]
 
 
 def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
@@ -23986,8 +24101,13 @@ def financials_sync_status(job_id: str, request: Request):
 
 @app.post("/api/financials/overnight")
 def financials_overnight_now(request: Request, background_tasks: BackgroundTasks):
-    """Manually kick the overnight batch (same as 2:15 AM Pacific job). GP only.
-    Free SEC + Dropbox backup — no LLM tokens."""
+    """Manually kick a financials batch. GP only. Free SEC + Dropbox backup.
+
+    Body (optional): { full?: bool, years_back?: int }
+      full=true  → pull ALL missing US-listed names (no nightly budget);
+                   on SEC 429 waits up to 10 min then continues.
+      full=false → one overnight budget batch (~400 names).
+    """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -23996,12 +24116,28 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
             raise ValueError("no UA")
     except Exception:
         return JSONResponse({"ok": False, "error": "SEC_USER_AGENT not configured."}, status_code=400)
+    try:
+        body = _request_json_sync(request) or {}
+    except Exception:
+        body = {}
+    full = bool((body or {}).get("full", True))   # default full for "as soon as possible"
+    years = (body or {}).get("years_back")
+    years = int(years) if years is not None else _FIN_OVERNIGHT_YEARS
+    years = max(3, min(years, 12))
     import uuid as _uuid
+    if full:
+        job_id = "FINFULL_" + _uuid.uuid4().hex[:10]
+        background_tasks.add_task(_run_fin_full_pull, job_id, years)
+        return {"ok": True, "job_id": job_id, "mode": "full",
+                "years_back": years,
+                "note": "Full US-listed pull queued (all missing names). "
+                        "On SEC 429: wait 10s→10min then resume. "
+                        "Poll /api/financials/sync/{job_id}."}
     job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
     background_tasks.add_task(_run_fin_overnight, job_id)
-    return {"ok": True, "job_id": job_id, "budget": _FIN_OVERNIGHT_BUDGET,
-            "years_back": _FIN_OVERNIGHT_YEARS,
-            "note": "Queued. Poll /api/financials/sync/{job_id}. Dropbox backup runs after the batch."}
+    return {"ok": True, "job_id": job_id, "mode": "budget",
+            "budget": _FIN_OVERNIGHT_BUDGET, "years_back": _FIN_OVERNIGHT_YEARS,
+            "note": "Budget batch queued. Poll /api/financials/sync/{job_id}."}
 
 
 @app.post("/api/financials/backup")
@@ -24031,7 +24167,62 @@ def _auto_fin_overnight_worker() -> None:
     """
     import time as _time
     # Let the rest of startup (DB pool, hydrate) finish before first check.
-    _time.sleep(45)
+    _time.sleep(60)
+    # ── Bootstrap full pull on boot when coverage is thin ────────────────
+    # Lets a deploy kick off "get everything" without a manual click. Claims
+    # via kv so flapping restarts don't start 5 parallel full pulls.
+    try:
+        if (_fin_overnight_enabled() and _PSYCOPG2_OK
+                and os.environ.get("DATABASE_URL")):
+            stored_n = 0
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(DISTINCT ticker) FROM company_financials")
+                    stored_n = int((cur.fetchone() or [0])[0] or 0)
+            except Exception:
+                stored_n = 0
+            last = _kv_get("fin_full_pull.last") or {}
+            last_ts = last.get("ts") or ""
+            # If < 2500 names stored and we haven't started a full pull in 4h
+            recent = False
+            try:
+                if last_ts:
+                    from datetime import datetime as _dt
+                    age_h = (_dt.utcnow() - _dt.fromisoformat(
+                        last_ts.replace("Z", "")).replace(tzinfo=None)).total_seconds() / 3600
+                    recent = age_h < 4
+            except Exception:
+                recent = False
+            claim = _kv_get("fin_full_pull.running") or {}
+            claim_age_ok = True
+            try:
+                if claim.get("ts"):
+                    from datetime import datetime as _dt
+                    age_h = (_dt.utcnow() - _dt.fromisoformat(
+                        str(claim["ts"]).replace("Z", "")).replace(tzinfo=None)).total_seconds() / 3600
+                    claim_age_ok = age_h > 6   # stale claim → allow restart
+            except Exception:
+                pass
+            if stored_n < 2500 and not recent and claim_age_ok:
+                print(f"[fin-overnight] bootstrap FULL pull — only {stored_n} names in store",
+                      flush=True)
+                _kv_put("fin_full_pull.running",
+                        {"ts": datetime.utcnow().isoformat() + "Z", "stored_at_start": stored_n})
+                try:
+                    job = _run_fin_full_pull()
+                    _automation_record_run("fin_overnight", True,
+                                           (job.get("label") or "bootstrap full")[:400])
+                finally:
+                    try:
+                        _kv_put("fin_full_pull.running", {"ts": None})
+                    except Exception:
+                        pass
+            else:
+                print(f"[fin-overnight] bootstrap skip (stored={stored_n}, "
+                      f"recent_full={recent})", flush=True)
+    except Exception as _be:
+        print(f"[fin-overnight] bootstrap error: {_be!s:.200}", flush=True)
+
     while True:
         try:
             if not _fin_overnight_enabled():
@@ -24041,9 +24232,9 @@ def _auto_fin_overnight_worker() -> None:
             cfg = _get_automation_settings().get(
                 "fin_overnight", _DEFAULT_AUTOMATION["fin_overnight"])
             h, m = int(cfg.get("hour", 2)), int(cfg.get("minute", 15))
-            # No deploy catch-up: a 400-name SEC batch mid-day would compete with
-            # interactive use. Missed nights simply resume tomorrow (never-synced
-            # first). Manual kick: POST /api/financials/overnight.
+            # No deploy catch-up for the scheduled budget batch (avoids daytime
+            # SEC storms). Bootstrap full-pull above handles "fill as soon as
+            # possible" after deploys when coverage is incomplete.
             wait_secs = _secs_until(h, m)
             print(f"[fin-overnight] next run at {h:02d}:{m:02d} Pacific — "
                   f"sleeping {wait_secs/3600:.1f}h (budget={_FIN_OVERNIGHT_BUDGET})")
@@ -24064,9 +24255,22 @@ def _auto_fin_overnight_worker() -> None:
                 print("[fin-overnight] SEC_USER_AGENT missing — skipping")
                 _time.sleep(3600)
                 continue
-            print(f"[fin-overnight] starting batch budget={_FIN_OVERNIGHT_BUDGET} "
-                  f"years={_FIN_OVERNIGHT_YEARS}", flush=True)
-            job = _run_fin_overnight()
+            # Prefer full missing pull if still incomplete; else budget refresh
+            stored_n = 0
+            try:
+                with _fund_conn() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(DISTINCT ticker) FROM company_financials")
+                    stored_n = int((cur.fetchone() or [0])[0] or 0)
+            except Exception:
+                pass
+            if stored_n < 2500:
+                print(f"[fin-overnight] coverage still thin ({stored_n}) — full pull",
+                      flush=True)
+                job = _run_fin_full_pull()
+            else:
+                print(f"[fin-overnight] starting budget batch={_FIN_OVERNIGHT_BUDGET} "
+                      f"years={_FIN_OVERNIGHT_YEARS}", flush=True)
+                job = _run_fin_overnight()
             detail = (job.get("label") or "ok")[:400]
             ok = job.get("status") == "done"
             _automation_record_run("fin_overnight", bool(ok), detail)

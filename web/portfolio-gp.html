@@ -4946,7 +4946,7 @@ End with the sleeve block at this account's real market value so I can push it t
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
           <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
-          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Run tonight's batch now (budget ~400 names + Dropbox backup)">🌙 Run overnight batch now</button>
+          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Pull ALL missing US-listed names now. On SEC 429 waits up to 10 min then continues. Dropbox backup at end.">🚀 Full pull now (all missing)</button>
           <button id="fin-backup-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Push slim company_financials dump to Dropbox">☁️ Backup to Dropbox</button>
           <input id="fin-tickers" placeholder="extra tickers (optional) — merged into universe, or sole list if Custom"
             style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
@@ -8590,19 +8590,24 @@ End with the sleeve block at this account's real market value so I can push it t
     const status = document.getElementById('fin-sync-status');
     const btn = document.getElementById('fin-overnight-btn');
     const box = h => { if (status) status.innerHTML = h; };
+    const restore = '🚀 Full pull now (all missing)';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
     try {
-      const r = await window.dgaFetch('/api/financials/overnight', { method: 'POST' });
+      // full=true: all missing US-listed; on 429 wait up to 10 min and resume
+      const r = await window.dgaFetch('/api/financials/overnight', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ full: true, years_back: 6 }),
+      });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
-      box('<div style="font-size:12px;color:var(--text-secondary);">🌙 Overnight batch queued · budget <strong>'
-        + (j.budget || '?') + '</strong> names · job <code>' + _trEsc(j.job_id) + '</code>. '
-        + 'Polls for up to 3h; Dropbox backup runs at the end.</div>');
-      if (j.job_id) _pollFinJob(j.job_id, btn, '🌙 Run overnight batch now');
-      else if (btn) { btn.disabled = false; btn.textContent = '🌙 Run overnight batch now'; }
+      box('<div style="font-size:12px;color:var(--text-secondary);">🚀 <strong>Full US-listed pull</strong> queued · job <code>'
+        + _trEsc(j.job_id) + '</code>. SEC 429 → wait 10s–10min then continue. '
+        + 'Can run many hours; leave Railway up. Dropbox backup at end.</div>');
+      if (j.job_id) _pollFinJob(j.job_id, btn, restore);
+      else if (btn) { btn.disabled = false; btn.textContent = restore; }
     } catch (e) {
       box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(e.message) + '</div>');
-      if (btn) { btn.disabled = false; btn.textContent = '🌙 Run overnight batch now'; }
+      if (btn) { btn.disabled = false; btn.textContent = restore; }
     }
   }
 
@@ -8629,10 +8634,11 @@ End with the sleeve block at this account's real market value so I can push it t
     const status = document.getElementById('fin-sync-status');
     const box = h => { if (status) status.innerHTML = h; };
     const t0 = Date.now();
+    // Full US pull can run 6–12+ hours; keep polling for 14h then hand off to background.
     _finSyncPoll = setInterval(async () => {
-      if (Date.now() - t0 > 3 * 3600 * 1000) {
+      if (Date.now() - t0 > 14 * 3600 * 1000) {
         clearInterval(_finSyncPoll); _finSyncPoll = null;
-        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in background — check coverage later.</div>');
+        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in background on Railway — check coverage / badge later. Safe to close this tab.</div>');
         if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
         return;
       }
