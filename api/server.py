@@ -11206,6 +11206,10 @@ _DEFAULT_AUTOMATION: dict = {
     # hands-off replacement for the manual CSV imports. On by default; a saved
     # automation.settings override (the UI toggle) still wins.
     "snaptrade_sync": {"enabled": True, "hour": 6, "minute": 0},
+    # Overnight SEC financials batch (free, sequential, no LLM). Fills
+    # us_listed (Nasdaq + NYSE common) over successive nights, then Dropbox
+    # backup. Safe on Railway without upsizing memory.
+    "fin_overnight": {"enabled": True, "hour": 2, "minute": 15},
 }
 
 def _get_automation_settings() -> dict:
@@ -11285,7 +11289,7 @@ def get_automation_settings_endpoint():
 def save_automation_settings_endpoint(request: Request):
     body = _request_json_sync(request)
     current = _get_automation_settings()
-    for job in ("daily_brief", "market_pulse", "snaptrade_sync"):
+    for job in ("daily_brief", "market_pulse", "snaptrade_sync", "fin_overnight"):
         if job in body and isinstance(body[job], dict):
             patch = body[job]
             if "enabled" in patch:
@@ -23261,12 +23265,18 @@ def transcripts_calls_probe(request: Request, ticker: str = "AAPL",
 # charted per company, and cited consistently by the AI Analyst.
 # ═══════════════════════════════════════════════════════════════════════
 _fin_sync_jobs: dict[str, dict] = {}             # financials sync jobs
-# Cap for one SEC pull job. S&P 500 + Nasdaq-100 is ~550 unique names; full
-# Nasdaq Composite (~3–4k) is intentionally not offered as a one-click job
-# (hours of SEC traffic + rate-limit risk). Raise only with care.
-_FIN_SYNC_CAP = 600
+# Manual/UI job cap. Overnight batch uses FIN_OVERNIGHT_BUDGET (default 400/night)
+# and resumes across nights — never loads the full universe into memory at once.
+_FIN_SYNC_CAP = 800
 _FIN_UNIVERSE_CACHE: dict[str, tuple] = {}        # key → (epoch, rows)
 _FIN_UNIVERSE_TTL_S = 24 * 3600
+# Overnight: sequential SEC pulls (1 ticker at a time) → same RAM footprint as
+# interactive use. No LLM tokens. Postgres growth is slim numerics only
+# (~tens of MB at full US-listed scale). Safe on Railway hobby/pro without
+# upsizing the service. Kill switch: FIN_OVERNIGHT_SYNC=0 or automation UI.
+_FIN_OVERNIGHT_BUDGET = max(50, min(int(os.environ.get("FIN_OVERNIGHT_BUDGET") or "400"), 800))
+_FIN_OVERNIGHT_YEARS = max(3, min(int(os.environ.get("FIN_OVERNIGHT_YEARS") or "6"), 12))
+_DBX_FIN_BACKUP = "/Financials/company_financials.jsonl.gz"
 
 # Extractor metric name (CamelCase) → DB column (snake_case). Insertion order
 # defines the column order used when binding values, so keep them in sync.
@@ -23388,6 +23398,94 @@ def _fin_universe_nasdaq100() -> list[dict]:
     return list(out)
 
 
+def _fin_universe_nasdaq_listed() -> list[dict]:
+    """Full Nasdaq-listed common stocks from the free nasdaqtrader.com symbol
+    directory (not ETFs, not test issues). ~4k names. Cached 24h."""
+    cached = _FIN_UNIVERSE_CACHE.get("nasdaq_listed")
+    if cached and (time.time() - cached[0]) < _FIN_UNIVERSE_TTL_S:
+        return list(cached[1])
+    text = _http_get_text("https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt")
+    rows = []
+    for line in text.splitlines()[1:]:
+        if not line or line.startswith("File Creation"):
+            continue
+        p = line.split("|")
+        if len(p) < 8:
+            continue
+        # Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot|ETF|NextShares
+        sym, name, _mkt, test, _fs, _lot, etf = p[0], p[1], p[2], p[3], p[4], p[5], p[6]
+        if test == "Y" or etf == "Y":
+            continue
+        sym = (sym or "").strip().upper()
+        if not re.match(r"^[A-Z][A-Z0-9.]{0,6}$", sym):
+            continue
+        # Skip warrants / units / rights noise when obvious from name
+        nl = (name or "").lower()
+        if any(x in nl for x in (" warrant", " right", " unit", " preferred")):
+            continue
+        rows.append({"ticker": sym, "name": (name or "").strip() or None,
+                     "sector": None, "industry": None, "source": "nasdaq_listed"})
+    if len(rows) < 1000:
+        raise RuntimeError(f"Nasdaq listed list too short ({len(rows)})")
+    _FIN_UNIVERSE_CACHE["nasdaq_listed"] = (time.time(), rows)
+    return list(rows)
+
+
+def _fin_universe_nyse_listed() -> list[dict]:
+    """NYSE / NYSE American / etc. common stocks from free nasdaqtrader
+    otherlisted.txt. Covers most of Russell 1000 (large/mid US). Cached 24h."""
+    cached = _FIN_UNIVERSE_CACHE.get("nyse_listed")
+    if cached and (time.time() - cached[0]) < _FIN_UNIVERSE_TTL_S:
+        return list(cached[1])
+    text = _http_get_text("https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt")
+    rows = []
+    for line in text.splitlines()[1:]:
+        if not line or line.startswith("File Creation"):
+            continue
+        p = line.split("|")
+        if len(p) < 8:
+            continue
+        # ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot|Test Issue|NASDAQ Symbol
+        sym, name, _ex, _cqs, etf, _lot, test = p[0], p[1], p[2], p[3], p[4], p[5], p[6]
+        if test == "Y" or etf == "Y":
+            continue
+        sym = (sym or "").strip().upper()
+        # CQS uses dots/spaces; normalize
+        sym = sym.replace(" ", "").replace("-", ".")
+        if not re.match(r"^[A-Z][A-Z0-9.]{0,6}$", sym):
+            continue
+        nl = (name or "").lower()
+        if any(x in nl for x in (" warrant", " right", " unit", " preferred")):
+            continue
+        rows.append({"ticker": sym, "name": (name or "").strip() or None,
+                     "sector": None, "industry": None, "source": "nyse_listed"})
+    if len(rows) < 500:
+        raise RuntimeError(f"NYSE/other listed list too short ({len(rows)})")
+    _FIN_UNIVERSE_CACHE["nyse_listed"] = (time.time(), rows)
+    return list(rows)
+
+
+def _fin_universe_us_listed() -> list[dict]:
+    """Full free US equity directory: Nasdaq + NYSE/AMEX common stocks.
+    Supersets full Nasdaq + Russell 1000 for comps (R1000 is not redistributed
+    as a free official CSV). Deduped. Cached 24h."""
+    cached = _FIN_UNIVERSE_CACHE.get("us_listed")
+    if cached and (time.time() - cached[0]) < _FIN_UNIVERSE_TTL_S:
+        return list(cached[1])
+    by = {}
+    for r in _fin_universe_nasdaq_listed() + _fin_universe_nyse_listed():
+        t = r["ticker"]
+        if t not in by:
+            by[t] = r
+        else:
+            # Prefer keeping a name if the other is blank
+            if not by[t].get("name") and r.get("name"):
+                by[t]["name"] = r["name"]
+    rows = list(by.values())
+    _FIN_UNIVERSE_CACHE["us_listed"] = (time.time(), rows)
+    return list(rows)
+
+
 def _fin_universe_rows(universe: str) -> list[dict]:
     """Resolve a named free universe into [{ticker, name, sector, industry}]."""
     u = (universe or "reports").strip().lower()
@@ -23401,6 +23499,17 @@ def _fin_universe_rows(universe: str) -> list[dict]:
             by[r["ticker"]] = {**by.get(r["ticker"], {}), **{k: v for k, v in r.items() if v}}
             by[r["ticker"]]["ticker"] = r["ticker"]
         return list(by.values())
+    if u in ("nasdaq_listed", "nasdaq", "nasdaq_all", "nasdaq_composite"):
+        return _fin_universe_nasdaq_listed()
+    if u in ("nyse_listed", "nyse", "russell1000", "r1000"):
+        # Russell 1000 is not free as an official list; NYSE+AMEX common stocks
+        # plus SP500 is the free proxy. True R1000 lives mostly on NYSE/Nasdaq.
+        # For "russell1000" we return us_listed (covers it) via alias below.
+        if u in ("russell1000", "r1000"):
+            return _fin_universe_us_listed()
+        return _fin_universe_nyse_listed()
+    if u in ("us_listed", "full", "overnight", "nasdaq_russell"):
+        return _fin_universe_us_listed()
     return []
 
 
@@ -23430,6 +23539,165 @@ def _fin_persist_universe_meta(rows: list[dict]) -> int:
     except Exception as e:
         print(f"[fin-universe] meta persist failed: {e!s:.140}", flush=True)
     return n
+
+
+def _fin_overnight_enabled() -> bool:
+    """Env kill-switch wins; else automation.settings.fin_overnight.enabled."""
+    env = (os.environ.get("FIN_OVERNIGHT_SYNC") or "").strip().lower()
+    if env in ("0", "false", "off", "no"):
+        return False
+    if env in ("1", "true", "on", "yes"):
+        return True
+    try:
+        return bool(_get_automation_settings().get("fin_overnight", {}).get("enabled", True))
+    except Exception:
+        return True
+
+
+def _fin_pick_overnight_batch(budget: int) -> list[str]:
+    """Pick up to `budget` tickers for tonight: never-synced first, then
+    oldest updated_at. Pure free universe + DB — no LLM."""
+    budget = max(1, min(int(budget or _FIN_OVERNIGHT_BUDGET), 800))
+    try:
+        universe = [r["ticker"] for r in _fin_universe_us_listed()]
+    except Exception as e:
+        print(f"[fin-overnight] universe failed, falling back to sp500+ndx: {e!s:.120}", flush=True)
+        try:
+            universe = [r["ticker"] for r in _fin_universe_rows("sp500_nasdaq100")]
+        except Exception:
+            universe = []
+    if not universe:
+        return []
+    have: dict[str, object] = {}
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, MAX(updated_at) AS u
+                  FROM company_financials
+                 GROUP BY ticker
+            """)
+            for tk, u in (cur.fetchall() or []):
+                if tk:
+                    have[str(tk).upper()] = u
+    except Exception as e:
+        print(f"[fin-overnight] coverage lookup failed: {e!s:.120}", flush=True)
+    missing = [t for t in universe if t not in have]
+    stale = sorted(
+        (t for t in universe if t in have),
+        key=lambda t: have.get(t) or datetime.min,
+    )
+    ordered = missing + stale
+    return ordered[:budget]
+
+
+def _dropbox_backup_financials() -> tuple:
+    """Gzip JSONL dump of company_financials → Dropbox Financials folder.
+    Slim columns only (no metrics_json). Returns (ok, path_or_error)."""
+    try:
+        dbx = analyst._dropbox_client()
+    except Exception as e:
+        return False, f"dropbox client error: {e!s:.100}"
+    if not dbx:
+        return False, "Dropbox not configured"
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return False, "no database"
+    try:
+        import gzip, io as _io, dropbox as _dx
+        cols = ["ticker", "cik", "entity_name", "period_type", "fy", "fp",
+                "period_end", "period_start", "filed", "accession", "derived"] + list(_FIN_COLMAP.values())
+        buf = _io.BytesIO()
+        n = 0
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Stream in chunks so we never hold the full table in RAM
+            cur.execute(
+                f"SELECT {', '.join(cols)} FROM company_financials ORDER BY ticker, period_end")
+            with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
+                meta = {"exported_at": datetime.utcnow().isoformat() + "Z",
+                        "columns": cols, "note": "DGA company_financials slim backup"}
+                gz.write((json.dumps({"_meta": meta}) + "\n").encode("utf-8"))
+                while True:
+                    batch = cur.fetchmany(500)
+                    if not batch:
+                        break
+                    for r in batch:
+                        rec = {}
+                        for k in cols:
+                            v = r.get(k)
+                            if hasattr(v, "isoformat"):
+                                v = v.isoformat()
+                            elif isinstance(v, (int, float)) or v is None or isinstance(v, bool):
+                                pass
+                            else:
+                                try:
+                                    v = float(v)
+                                except Exception:
+                                    v = str(v) if v is not None else None
+                            rec[k] = v
+                        gz.write((json.dumps(rec, default=str) + "\n").encode("utf-8"))
+                        n += 1
+        data = buf.getvalue()
+        folder = analyst._dropbox_folder() or ""
+        path = folder + _DBX_FIN_BACKUP
+        # Ensure parent folder exists (idempotent)
+        try:
+            parent = path.rsplit("/", 1)[0]
+            if parent:
+                try:
+                    dbx.files_create_folder_v2(parent)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        dbx.files_upload(data, path, mode=_dx.files.WriteMode.overwrite)
+        return True, f"{path} ({len(data) // 1024} KB, {n} rows)"
+    except Exception as e:
+        return False, f"upload failed: {e!s:.160}"
+
+
+def _run_fin_overnight(job_id: str | None = None) -> dict:
+    """One overnight batch: pull SEC for budget tickers, then Dropbox backup.
+    Sequential, slim, free — designed for Railway without memory upsizing."""
+    budget = _FIN_OVERNIGHT_BUDGET
+    years = _FIN_OVERNIGHT_YEARS
+    tickers = _fin_pick_overnight_batch(budget)
+    jid = job_id or ("FINOVER_" + datetime.utcnow().strftime("%Y%m%d") + "_" + str(int(time.time()) % 100000))
+    _fin_sync_jobs[jid] = {
+        "stage": "queued", "status": "running", "label": f"Overnight batch ({len(tickers)} names)…",
+        "started_at": time.time(), "updated_at": time.time(),
+        "total": len(tickers), "done": 0, "stored": 0, "universe": "us_listed_overnight",
+    }
+    if not tickers:
+        _fin_sync_jobs[jid].update(stage="done", status="done",
+                                   label="✓ Overnight: nothing to pull (universe empty or all fresh)",
+                                   result={"periods_stored": 0, "names": 0, "backup": None})
+        return _fin_sync_jobs[jid]
+    # Seed names into security_meta when we have them (nasdaq/nyse lists)
+    try:
+        meta = {r["ticker"]: r for r in _fin_universe_us_listed()}
+        _fin_persist_universe_meta([meta[t] for t in tickers if t in meta])
+    except Exception:
+        pass
+    _run_financials_sync(jid, tickers, years)
+    # Dropbox backup after the batch (best-effort)
+    backup_note = ""
+    try:
+        _fin_sync_jobs[jid] = {**(_fin_sync_jobs.get(jid) or {}),
+                               "stage": "backup", "label": "☁️ Backing up financials to Dropbox…",
+                               "updated_at": time.time()}
+        ok, info = _dropbox_backup_financials()
+        backup_note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:80]})"
+        print(f"[fin-overnight] dropbox backup: ok={ok} {info}", flush=True)
+    except Exception as e:
+        backup_note = f" · backup error ({e!s:.60})"
+    job = _fin_sync_jobs.get(jid) or {}
+    label = (job.get("label") or "Overnight done") + backup_note
+    result = dict(job.get("result") or {})
+    result["backup"] = backup_note
+    result["tickers_attempted"] = len(tickers)
+    _fin_sync_jobs[jid] = {**job, "label": label, "result": result,
+                           "stage": "done", "status": job.get("status") or "done",
+                           "updated_at": time.time()}
+    return _fin_sync_jobs[jid]
 
 
 @_ddl_once
@@ -23586,16 +23854,25 @@ def financials_universes(request: Request):
         "sp500": {"label": "S&P 500", "count": None, "note": "Free GICS list (~503)"},
         "nasdaq100": {"label": "Nasdaq-100", "count": None, "note": "Free Wikipedia list (~100)"},
         "sp500_nasdaq100": {"label": "S&P 500 + Nasdaq-100", "count": None,
-                            "note": "Best default for comps (~550 unique)"},
+                            "note": "Quick comps set (~550 unique)"},
+        "us_listed": {"label": "Full US listed (Nasdaq + NYSE common)", "count": None,
+                      "note": "Overnight target — free symbol dirs; covers full Nasdaq + Russell-scale"},
         "custom": {"label": "Custom tickers", "note": "Use the ticker box only"},
         "cap": _FIN_SYNC_CAP,
+        "overnight": {
+            "enabled": _fin_overnight_enabled(),
+            "budget_per_night": _FIN_OVERNIGHT_BUDGET,
+            "years_back": _FIN_OVERNIGHT_YEARS,
+            "note": "Sequential 1-at-a-time SEC pulls — same RAM as interactive; no LLM cost. "
+                    "Dropbox backup after each night. Env FIN_OVERNIGHT_SYNC=0 to disable.",
+        },
         "storage": {
-            "primary": "Postgres company_financials (queryable)",
+            "primary": "Postgres company_financials (queryable, slim numerics)",
             "files": "stock-financials/{TICKER}/ Excel (report pipeline, optional)",
-            "dropbox": "Reports/presentations only — not the financials warehouse",
+            "dropbox_backup": f"App folder{_DBX_FIN_BACKUP} (gzip JSONL after overnight)",
         },
     }
-    for key in ("sp500", "nasdaq100", "sp500_nasdaq100"):
+    for key in ("sp500", "nasdaq100", "sp500_nasdaq100", "us_listed"):
         try:
             out[key]["count"] = len(_fin_universe_rows(key))
         except Exception as e:
@@ -23606,6 +23883,10 @@ def financials_universes(request: Request):
             out["stored_tickers"] = int((cur.fetchone() or [0])[0] or 0)
             cur.execute("SELECT pg_total_relation_size('company_financials')")
             out["stored_bytes"] = int((cur.fetchone() or [0])[0] or 0)
+    except Exception:
+        pass
+    try:
+        out["overnight"]["last_run"] = _kv_get("automation.last_run.fin_overnight") or None
     except Exception:
         pass
     return {"ok": True, **out}
@@ -23645,11 +23926,11 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
     try:
         if universe == "custom":
             tickers = list(extras)
-        elif universe in ("sp500", "nasdaq100", "sp500_nasdaq100", "broad", "indices"):
+        elif universe in ("sp500", "nasdaq100", "sp500_nasdaq100", "broad", "indices",
+                          "us_listed", "nasdaq_listed", "nyse_listed", "russell1000",
+                          "nasdaq_russell", "full", "overnight"):
             meta_rows = _fin_universe_rows(universe)
-            tickers = [r["ticker"] for r in meta_rows]
-            tickers = list(dict.fromkeys(tickers + extras))   # extras first? keep index order + extras
-            # Prefer index order, then extras not already included
+            # Prefer universe order, then extras not already included
             base = [r["ticker"] for r in meta_rows]
             for t in extras:
                 if t not in base:
@@ -23701,6 +23982,107 @@ def financials_sync_status(job_id: str, request: Request):
     if not job:
         return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
     return {"ok": True, **job}
+
+
+@app.post("/api/financials/overnight")
+def financials_overnight_now(request: Request, background_tasks: BackgroundTasks):
+    """Manually kick the overnight batch (same as 2:15 AM Pacific job). GP only.
+    Free SEC + Dropbox backup — no LLM tokens."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        if not analyst.get_sec_user_agent():
+            raise ValueError("no UA")
+    except Exception:
+        return JSONResponse({"ok": False, "error": "SEC_USER_AGENT not configured."}, status_code=400)
+    import uuid as _uuid
+    job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
+    background_tasks.add_task(_run_fin_overnight, job_id)
+    return {"ok": True, "job_id": job_id, "budget": _FIN_OVERNIGHT_BUDGET,
+            "years_back": _FIN_OVERNIGHT_YEARS,
+            "note": "Queued. Poll /api/financials/sync/{job_id}. Dropbox backup runs after the batch."}
+
+
+@app.post("/api/financials/backup")
+def financials_backup_now(request: Request):
+    """Push a slim gzip JSONL of company_financials to Dropbox now. GP only."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    ok, info = _dropbox_backup_financials()
+    if not ok:
+        return JSONResponse({"ok": False, "error": info}, status_code=400)
+    return {"ok": True, "path": info}
+
+
+# ── Overnight financials batch (free SEC, sequential, Dropbox backup) ────────
+def _auto_fin_overnight_worker() -> None:
+    """Daemon: each night pulls a budget of SEC financials for US-listed names
+    (never-synced first), then backs up company_financials to Dropbox.
+
+    Cost/memory posture:
+      • One ticker at a time — same peak RAM as a manual sync
+      • No LLM tokens
+      • Slim numeric rows only (metrics_json null)
+      • ~400 names/night default → full Nasdaq+NYSE fills over ~2 weeks, then
+        cheap refresh of oldest rows
+    Kill switch: FIN_OVERNIGHT_SYNC=0 or automation.fin_overnight.enabled=false.
+    """
+    import time as _time
+    # Let the rest of startup (DB pool, hydrate) finish before first check.
+    _time.sleep(45)
+    while True:
+        try:
+            if not _fin_overnight_enabled():
+                print("[fin-overnight] disabled — sleeping 1h")
+                _time.sleep(3600)
+                continue
+            cfg = _get_automation_settings().get(
+                "fin_overnight", _DEFAULT_AUTOMATION["fin_overnight"])
+            h, m = int(cfg.get("hour", 2)), int(cfg.get("minute", 15))
+            # No deploy catch-up: a 400-name SEC batch mid-day would compete with
+            # interactive use. Missed nights simply resume tomorrow (never-synced
+            # first). Manual kick: POST /api/financials/overnight.
+            wait_secs = _secs_until(h, m)
+            print(f"[fin-overnight] next run at {h:02d}:{m:02d} Pacific — "
+                  f"sleeping {wait_secs/3600:.1f}h (budget={_FIN_OVERNIGHT_BUDGET})")
+            _time.sleep(wait_secs)
+            if not _fin_overnight_enabled():
+                print("[fin-overnight] disabled after wake — skipping")
+                continue
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                print("[fin-overnight] no database — skipping")
+                _time.sleep(3600)
+                continue
+            try:
+                if not analyst.get_sec_user_agent():
+                    print("[fin-overnight] SEC_USER_AGENT missing — skipping")
+                    _time.sleep(3600)
+                    continue
+            except Exception:
+                print("[fin-overnight] SEC_USER_AGENT missing — skipping")
+                _time.sleep(3600)
+                continue
+            print(f"[fin-overnight] starting batch budget={_FIN_OVERNIGHT_BUDGET} "
+                  f"years={_FIN_OVERNIGHT_YEARS}", flush=True)
+            job = _run_fin_overnight()
+            detail = (job.get("label") or "ok")[:400]
+            ok = job.get("status") == "done"
+            _automation_record_run("fin_overnight", bool(ok), detail)
+            print(f"[fin-overnight] finished: {detail}", flush=True)
+            _time.sleep(60)
+        except Exception as _e:
+            print(f"[fin-overnight] error (retrying in 1h): {_e!s:.200}", flush=True)
+            try:
+                _automation_record_run("fin_overnight", False, str(_e)[:400])
+            except Exception:
+                pass
+            _time.sleep(3600)
+
+
+threading.Thread(target=_auto_fin_overnight_worker, daemon=True,
+                 name="fin-overnight-scheduler").start()
 
 
 # ─────────────────────────── Options wheel scanner ───────────────────────────

@@ -4925,13 +4925,15 @@ End with the sleeve block at this account's real market value so I can push it t
       <div class="panel-body" style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
           <strong>Source of truth = Postgres</strong> (<code>company_financials</code>) — queryable for charts &amp; peer comps.
-          Dropbox holds research docs, not this warehouse (S&amp;P-scale numbers are tens of MB, fine in DB).
-          Free universes: S&amp;P 500 (GICS) + Nasdaq-100. Full Nasdaq Composite (~3–4k) is too large for one SEC job.
+          <strong>Overnight batch</strong> (2:15 AM PT, free, sequential, no LLM) fills full Nasdaq + NYSE common stocks
+          (~covers Russell 1000 scale) at ~400 names/night, then backs up a slim dump to Dropbox
+          <code>…/Financials/company_financials.jsonl.gz</code>. Same RAM as interactive use — no Railway upsize needed.
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <label style="font-size:11px;color:var(--text-secondary);">Universe
             <select id="fin-universe" style="margin-left:4px;border:1px solid var(--border-default);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
-              <option value="sp500_nasdaq100">S&amp;P 500 + Nasdaq-100 (~550) — best for comps</option>
+              <option value="sp500_nasdaq100">S&amp;P 500 + Nasdaq-100 (~550) — quick comps</option>
+              <option value="us_listed">Full US listed (Nasdaq + NYSE) — overnight target</option>
               <option value="sp500">S&amp;P 500 only (~503)</option>
               <option value="nasdaq100">Nasdaq-100 only (~100)</option>
               <option value="reports">Saved reports only</option>
@@ -4940,10 +4942,12 @@ End with the sleeve block at this account's real market value so I can push it t
           </label>
           <label style="font-size:11px;color:var(--text-secondary);">years
             <input id="fin-years" type="number" min="1" max="20" value="7"
-              title="Use 5–7 for bulk index jobs (faster). 10+ for deep history on a short list."
+              title="Use 5–7 for bulk jobs. Overnight uses 6 by default."
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
           <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
+          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Run tonight's batch now (budget ~400 names + Dropbox backup)">🌙 Run overnight batch now</button>
+          <button id="fin-backup-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Push slim company_financials dump to Dropbox">☁️ Backup to Dropbox</button>
           <input id="fin-tickers" placeholder="extra tickers (optional) — merged into universe, or sole list if Custom"
             style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
         </div>
@@ -7706,6 +7710,10 @@ End with the sleeve block at this account's real market value so I can push it t
     if (!_finWired) {
       const sb = document.getElementById('fin-sync-btn');
       if (sb) sb.addEventListener('click', _syncFinancials);
+      const ob = document.getElementById('fin-overnight-btn');
+      if (ob) ob.addEventListener('click', _runFinOvernightNow);
+      const bb = document.getElementById('fin-backup-btn');
+      if (bb) bb.addEventListener('click', _runFinBackupNow);
       const cb = document.getElementById('fin-co-btn');
       if (cb) cb.addEventListener('click', _viewFinCompany);
       const ct = document.getElementById('fin-co-ticker');
@@ -8556,21 +8564,97 @@ End with the sleeve block at this account's real market value so I can push it t
         ? cov.map(c => '<span title="'+_trEsc(c.entity_name||'')+' · '+_trEsc(c.earliest||'')+' → '+_trEsc(c.latest||'')+'" style="display:inline-block;margin:0 6px 4px 0;font-family:\'SF Mono\',monospace;font-size:10.5px;background:var(--gray-100);border:1px solid var(--border-subtle);padding:1px 7px;border-radius:9px;">'+_trEsc(c.ticker)+' · '+c.quarters+'q/'+c.annuals+'y</span>').join('')
         : 'No financials stored yet — pick a universe and click “Sync from SEC”.';
     } catch(_) {}
-    // Universe counts + storage note
+    // Universe counts + overnight + storage note
     try {
       const u = await (await window.dgaFetch('/api/financials/universes')).json();
       const meta = document.getElementById('fin-universe-meta');
       if (meta && u && u.ok) {
         const bits = [];
-        if (u.sp500 && u.sp500.count) bits.push('S&P 500 list: ' + u.sp500.count);
-        if (u.nasdaq100 && u.nasdaq100.count) bits.push('Nasdaq-100: ' + u.nasdaq100.count);
-        if (u.sp500_nasdaq100 && u.sp500_nasdaq100.count) bits.push('Combined unique: ' + u.sp500_nasdaq100.count);
-        if (u.stored_tickers != null) bits.push('In DB now: ' + u.stored_tickers);
+        if (u.sp500 && u.sp500.count) bits.push('S&P 500: ' + u.sp500.count);
+        if (u.nasdaq100 && u.nasdaq100.count) bits.push('NDX: ' + u.nasdaq100.count);
+        if (u.us_listed && u.us_listed.count) bits.push('US listed: ' + u.us_listed.count);
+        if (u.stored_tickers != null) bits.push('In DB: ' + u.stored_tickers);
         if (u.stored_bytes) bits.push('Table ~' + (u.stored_bytes / 1e6).toFixed(1) + ' MB');
-        if (u.cap) bits.push('job cap ' + u.cap);
-        meta.textContent = bits.join(' · ') + ' · free lists, zero tokens';
+        if (u.overnight) {
+          bits.push('Overnight ' + (u.overnight.enabled ? 'ON' : 'OFF')
+            + ' · ' + (u.overnight.budget_per_night || '?') + '/night');
+          if (u.overnight.last_run && u.overnight.last_run.ts)
+            bits.push('last overnight ' + String(u.overnight.last_run.ts).slice(0, 16).replace('T', ' '));
+        }
+        meta.textContent = bits.join(' · ') + ' · free lists · zero tokens';
       }
     } catch(_) {}
+  }
+
+  async function _runFinOvernightNow() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-overnight-btn');
+    const box = h => { if (status) status.innerHTML = h; };
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
+    try {
+      const r = await window.dgaFetch('/api/financials/overnight', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      box('<div style="font-size:12px;color:var(--text-secondary);">🌙 Overnight batch queued · budget <strong>'
+        + (j.budget || '?') + '</strong> names · job <code>' + _trEsc(j.job_id) + '</code>. '
+        + 'Polls for up to 3h; Dropbox backup runs at the end.</div>');
+      if (j.job_id) _pollFinJob(j.job_id, btn, '🌙 Run overnight batch now');
+      else if (btn) { btn.disabled = false; btn.textContent = '🌙 Run overnight batch now'; }
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(e.message) + '</div>');
+      if (btn) { btn.disabled = false; btn.textContent = '🌙 Run overnight batch now'; }
+    }
+  }
+
+  async function _runFinBackupNow() {
+    const status = document.getElementById('fin-sync-status');
+    const btn = document.getElementById('fin-backup-btn');
+    const box = h => { if (status) status.innerHTML = h; };
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Uploading…'; }
+    try {
+      const r = await window.dgaFetch('/api/financials/backup', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
+      box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">☁️ Backed up: '
+        + _trEsc(j.path || 'ok') + '</div>');
+      if (window.toast) window.toast('Financials backed up to Dropbox', { type: 'success' });
+    } catch (e) {
+      box('<div style="font-size:12px;color:#b91c1c;">❌ Backup failed: ' + _trEsc(e.message) + '</div>');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '☁️ Backup to Dropbox'; }
+  }
+
+  function _pollFinJob(jobId, btn, restoreLabel) {
+    if (_finSyncPoll) { clearInterval(_finSyncPoll); _finSyncPoll = null; }
+    const status = document.getElementById('fin-sync-status');
+    const box = h => { if (status) status.innerHTML = h; };
+    const t0 = Date.now();
+    _finSyncPoll = setInterval(async () => {
+      if (Date.now() - t0 > 3 * 3600 * 1000) {
+        clearInterval(_finSyncPoll); _finSyncPoll = null;
+        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in background — check coverage later.</div>');
+        if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+        return;
+      }
+      try {
+        const s = await (await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(jobId))).json();
+        if (s.status === 'done') {
+          clearInterval(_finSyncPoll); _finSyncPoll = null;
+          const n = (s.result && s.result.periods_stored) || 0;
+          box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">✓ '
+            + _trEsc(s.label || 'Done') + (n ? ' · ' + n + ' periods' : '') + '</div>');
+          if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+          _loadFinCoverage();
+        } else if (s.status === 'error') {
+          clearInterval(_finSyncPoll); _finSyncPoll = null;
+          box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(s.error || s.label || 'failed') + '</div>');
+          if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
+        } else {
+          box('<div style="font-size:12px;color:var(--text-secondary);">' + _trEsc(s.label || 'Working…')
+            + (s.done != null && s.total ? ' · ' + s.done + '/' + s.total : '') + '</div>');
+        }
+      } catch (_) {}
+    }, 3000);
   }
 
   let _finSyncPoll = null;
