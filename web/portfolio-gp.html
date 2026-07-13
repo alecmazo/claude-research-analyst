@@ -3203,6 +3203,42 @@
   html[data-theme="dark"] a.rep-news-line { color: var(--text-tertiary); }
   html[data-theme="dark"] a.rep-news-line:hover { color: var(--brand-300) !important; }
 
+  /* ── LLM run status (model + cost under buttons / panels) ───────── */
+  .llm-run-status {
+    margin-top: 8px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    font-size: 11px;
+    color: #475569;
+    line-height: 1.4;
+  }
+  html[data-theme="dark"] .llm-run-status {
+    background: var(--bg-surface);
+    border-color: var(--border-subtle);
+    color: var(--text-secondary);
+  }
+  .llm-run-status .llm-run-pill {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+    vertical-align: 1px;
+  }
+  .llm-run-pill.vol { background: #dcfce7; color: #166534; }
+  .llm-run-pill.grok { background: #0A1628; color: #fff; }
+  .llm-run-pill.claude { background: #fef3c7; color: #92400e; }
+  .llm-run-status .llm-mono {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--text-primary, #0f172a);
+  }
+
   /* ── Rendered markdown (agentic answers: AI Analyst, Strategist, Transcripts) ── */
   .md-rendered p { margin: 0 0 9px; }
   .md-rendered p:last-child { margin-bottom: 0; }
@@ -6082,14 +6118,22 @@ End with the sleeve block at this account's real market value so I can push it t
         const job = await r.json();
         const pct = job.progress?.pct;
         const lbl = job.progress?.label || '';
+        // Surface model/provider from job result while running when available
+        const res = job.result || {};
+        const modelHint = res.model || res.provider || job.model || job.provider || '';
         if (pct != null) {
           const pctInt = Math.round(pct * 100);
           // If a progress renderer is supplied, use it (keeps the button clean).
           // Otherwise fall back to writing into the button text.
-          if (typeof onProgress === 'function') onProgress(pctInt, lbl);
-          else btn.textContent = pctInt + '% — ' + (lbl || '…');
+          if (typeof onProgress === 'function') onProgress(pctInt, lbl, job);
+          else {
+            const m = modelHint ? ' · ' + String(modelHint).slice(0, 22) : '';
+            btn.textContent = pctInt + '% — ' + (lbl || '…') + m;
+          }
         } else if (typeof onProgress === 'function') {
-          onProgress(null, lbl);
+          onProgress(null, lbl, job);
+        } else if (modelHint && btn && btn.disabled) {
+          btn.textContent = '⏳ ' + String(modelHint).slice(0, 28) + '…';
         }
         if (job.status === 'done')   { clearInterval(iv); btn.disabled=false; btn.textContent=idleLabel; onDone(job); }
         if (job.status === 'failed') { clearInterval(iv); btn.disabled=false; btn.textContent='❌ Failed'; setTimeout(()=>btn.textContent=idleLabel,3000); if(onFail) onFail(job); }
@@ -6101,6 +6145,228 @@ End with the sleeve block at this account's real market value so I can push it t
     }
     tick(); // immediate first check
     const iv = setInterval(tick, 3000);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // LLM ACTION CATALOG — which model + est. cost for every paid click
+  // ══════════════════════════════════════════════════════════════
+  // Populated by /api/config/models. Used for button titles, run banners,
+  // and progress labels so you always know what's running and ~how much.
+  window.DGA_LLM = window.DGA_LLM || {
+    grok: 'grok',
+    claude: 'claude',
+    volume: { enabled: false, model: '—', configured: false },
+    est: {},
+  };
+
+  function _llmRng(arr, fallback) {
+    if (Array.isArray(arr) && arr.length >= 2 && arr[0] != null)
+      return '≈ $' + Number(arr[0]).toFixed(arr[0] < 0.1 ? 3 : 2)
+        + '–' + Number(arr[1]).toFixed(arr[1] < 0.1 ? 3 : 2);
+    return fallback || '≈ cost varies';
+  }
+
+  /** Describe an LLM action for UI. Keys: report_grok|report_claude|report_both|
+   *  daily_brief|intelligence|prioritize|pulse|agentic|strategist|lab_claude|podcast */
+  function llmDescribe(action) {
+    const cfg = window.DGA_LLM || {};
+    const est = cfg.est || {};
+    const volOn = !!(cfg.volume && cfg.volume.enabled && cfg.volume.configured);
+    const volModel = (cfg.volume && cfg.volume.model) || 'volume';
+    const g = cfg.grok || 'grok';
+    const c = cfg.claude || 'claude';
+    const map = {
+      report_grok: {
+        action: 'Full equity report',
+        provider: 'grok',
+        model: g,
+        cost: _llmRng(est.grok_report, '≈ $0.30–0.60'),
+        paid: true,
+      },
+      report_claude: {
+        action: 'Full equity report',
+        provider: 'claude',
+        model: c,
+        cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
+        paid: true,
+      },
+      report_both: {
+        action: 'Full equity report (both engines)',
+        provider: 'grok+claude',
+        model: g + ' + ' + c,
+        cost: _llmRng(est.both_report, '≈ $0.80–1.60'),
+        paid: true,
+      },
+      daily_brief: volOn ? {
+        action: 'Daily brief (volume)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.daily_brief_volume, '≈ $0.01–0.05'),
+        paid: true,
+        note: 'Cheap volume model + free evidence pack',
+      } : {
+        action: 'Daily brief',
+        provider: 'grok',
+        model: g + ' + live X/web',
+        cost: _llmRng(est.daily_brief_grok, '≈ $0.15–0.50'),
+        paid: true,
+      },
+      intelligence: volOn ? {
+        action: 'Sector intelligence',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.intel_volume, '≈ $0.02–0.08'),
+        paid: true,
+      } : {
+        action: 'Sector intelligence',
+        provider: 'grok',
+        model: g + ' + live search',
+        cost: _llmRng(est.intel_grok, '≈ $0.20–0.60'),
+        paid: true,
+      },
+      prioritize: volOn ? {
+        action: 'Prioritize (Idea Generator)',
+        provider: 'volume',
+        model: volModel,
+        cost: _llmRng(est.prioritize_volume, '≈ $0.005–0.03'),
+        paid: true,
+      } : {
+        action: 'Prioritize (Idea Generator)',
+        provider: 'grok',
+        model: (cfg.volume && cfg.volume.routes && false) || (cfg.grok || 'grok-4.5') ,
+        // Prefer screen model name if we only have grok id
+        cost: _llmRng(est.prioritize_grok, '≈ $0.02–0.08'),
+        paid: true,
+      },
+      pulse: {
+        action: 'Market pulse / ticker scan',
+        provider: 'grok',
+        model: g + ' + live search',
+        cost: '≈ $' + Number(est.pulse_per_ticker || 0.03).toFixed(3) + ' / ticker',
+        paid: true,
+      },
+      agentic: {
+        action: 'DGA Capital Analyst (agentic)',
+        provider: 'claude',
+        model: cfg.agentic || c,
+        cost: _llmRng(est.agentic, '≈ $0.05–0.30'),
+        paid: true,
+      },
+      strategist: {
+        action: 'Portfolio Strategist',
+        provider: 'claude',
+        model: cfg.agentic || c,
+        cost: _llmRng(est.strategist, '≈ $0.30–1.00'),
+        paid: true,
+      },
+      lab_claude: {
+        action: 'LLM Lab · Claude compare report',
+        provider: 'claude',
+        model: c,
+        cost: _llmRng(est.claude_report, '≈ $0.50–1.00'),
+        paid: true,
+      },
+      podcast: {
+        action: 'Podcast script / audio',
+        provider: 'claude/grok',
+        model: 'Claude (script) + TTS',
+        cost: '≈ $0.20+ script · TTS extra',
+        paid: true,
+      },
+    };
+    // Fix prioritize model label when not volume
+    if (action === 'prioritize' && !volOn) {
+      map.prioritize.model = g; // screen uses GROK_SCREEN default via same Grok family
+    }
+    return map[action] || {
+      action: action || 'LLM job',
+      provider: '?',
+      model: '—',
+      cost: 'cost unknown',
+      paid: true,
+    };
+  }
+
+  function llmLabel(meta) {
+    if (!meta) return '';
+    return meta.provider.toUpperCase() + ' · ' + meta.model + ' · ' + meta.cost;
+  }
+
+  /** Short line for buttons / banners while a job runs. */
+  function llmRunningText(action, phase) {
+    const m = llmDescribe(action);
+    const ph = phase || 'Running';
+    return ph + ' · ' + m.model + ' · ' + m.cost;
+  }
+
+  /** Apply title + optional data attributes on a control so hover shows model/cost. */
+  function llmStampControl(el, action) {
+    if (!el) return;
+    const m = llmDescribe(action);
+    el.dataset.llmAction = action;
+    el.title = m.action + '\nModel: ' + m.model + '\nEst. cost: ' + m.cost
+      + (m.note ? '\n' + m.note : '')
+      + '\n(Actual $ shown when the job finishes, if available)';
+  }
+
+  /** Inject/update a small status line under a container. */
+  function llmSetStatus(el, action, phase, extra) {
+    if (!el) return;
+    const m = llmDescribe(action);
+    let line = el.querySelector('.llm-run-status');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'llm-run-status';
+      el.appendChild(line);
+    }
+    const phaseTxt = phase || 'Ready';
+    line.innerHTML =
+      '<span class="llm-run-pill ' + (m.provider === 'volume' ? 'vol' : (m.provider === 'claude' || String(m.provider).indexOf('claude') >= 0 ? 'claude' : 'grok')) + '">'
+      + (m.provider || '').toString().toUpperCase() + '</span> '
+      + '<strong>' + phaseTxt + '</strong> · '
+      + '<span class="llm-mono">' + (m.model || '—') + '</span> · '
+      + '<span>' + (m.cost || '') + '</span>'
+      + (extra ? ' · <span>' + extra + '</span>' : '');
+    line.style.display = '';
+  }
+
+  function llmToast(action, phase) {
+    const m = llmDescribe(action);
+    const msg = (phase || 'Starting') + ': ' + m.model + ' · ' + m.cost;
+    try {
+      if (window.toast) window.toast(msg, { type: 'info', ttl: 3200 });
+    } catch (_) {}
+  }
+
+  /** Re-stamp all known LLM controls after config load / volume toggle. */
+  function llmRefreshAllStamps() {
+    const pairs = [
+      ['#hero-run-btn', 'report_grok'], // refined below by engine
+      ['#run-brief-btn', 'daily_brief'],
+      ['#ideas-brief-run', 'daily_brief'],
+      ['#trending-run-brief', 'daily_brief'],
+      ['#run-intel-btn', 'intelligence'],
+      ['#idea-gen-prioritize', 'prioritize'],
+      ['#agentic-run-btn', 'agentic'],
+      ['#strat-run-btn', 'strategist'],
+      ['#lab-runclaude-btn', 'lab_claude'],
+      ['#tr-agentic-run-btn', 'agentic'],
+    ];
+    pairs.forEach(function (p) {
+      const el = document.querySelector(p[0]);
+      if (!el) return;
+      let act = p[1];
+      if (p[0] === '#hero-run-btn') {
+        const eng = (document.getElementById('hero-llm') || {}).value || 'grok';
+        act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+      }
+      llmStampControl(el, act);
+    });
+    // Static chips near brief/intel if present
+    const briefMeta = document.getElementById('brief-meta');
+    if (briefMeta && !briefMeta.dataset.llmStamped) {
+      briefMeta.dataset.llmStamped = '1';
+    }
   }
 
 
@@ -8545,13 +8811,17 @@ End with the sleeve block at this account's real market value so I can push it t
       }
     }
 
+    llmStampControl(btn, 'agentic');
     btn.addEventListener('click', async () => {
       const question = (qEl.value || '').trim();
       if (question.length < 4) { window.toast('Ask a real question.', {type:'warn'}); return; }
       _lastQuestion = question;
-      btn.disabled = true; btn.textContent = '⏳ Working…';
+      const meta = llmDescribe('agentic');
+      btn.disabled = true; btn.textContent = '⏳ ' + (meta.model || 'Claude').slice(0, 18) + '…';
+      llmToast('agentic', 'Starting analyst');
       out.style.display = 'block';
-      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">Starting…</div>';
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">'
+        + 'Starting · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
       const t0 = Date.now();
       try {
         const r0 = await window.dgaFetch('/api/research/agentic', {
@@ -8904,14 +9174,18 @@ End with the sleeve block at this account's real market value so I can push it t
       }
     }
 
+    llmStampControl(btn, 'strategist');
     btn.addEventListener('click', async () => {
       const selected = Array.from(fundSel.selectedOptions || []);
       const fundIds = selected.map(o => o.value).filter(Boolean);
       const file = fileEl.files && fileEl.files[0];
+      const meta = llmDescribe('strategist');
+      llmToast('strategist', 'Starting strategist');
       if (fundIds.length) {
         const label = selected.map(o => o.textContent).join(' + ') +
                       (fundIds.length > 1 ? ' (combined)' : '');
-        start({ fund_ids: fundIds }, label);
+        btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+        start({ fund_ids: fundIds }, label + ' · ' + meta.model + ' · ' + meta.cost);
       } else if (file) {
         // Upload → parse via the existing roundup upload parser, then strategist
         btn.disabled = true; btn.textContent = '⏳ Parsing file…';
@@ -8921,10 +9195,12 @@ End with the sleeve block at this account's real market value so I can push it t
           const uj = await up.json();
           if (!uj.ok) throw new Error(uj.detail || uj.error || 'Parse failed');
           // parse_only=true → just parsed positions, no podcast job spun up.
-          start({ positions: uj.positions || [] }, 'uploaded book');
+          btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+          start({ positions: uj.positions || [] }, 'uploaded book · ' + meta.model + ' · ' + meta.cost);
         } catch (e) {
           window.toast('Upload failed: ' + e.message, {type:'error'});
           btn.disabled = false; btn.textContent = '🧭 Run review';
+          llmStampControl(btn, 'strategist');
         }
       } else {
         window.toast('Pick a fund or upload a portfolio file.', {type:'warn'});
@@ -9411,10 +9687,16 @@ End with the sleeve block at this account's real market value so I can push it t
   async function runAnalysis() {
     const ticker = ($heroTicker.value || '').trim().toUpperCase().replace(/[^A-Z.]/g,'');
     if (!ticker) { $heroHint.style.color='var(--red)'; $heroHint.textContent='Enter a ticker first.'; return; }
+    const eng = document.getElementById('hero-llm')?.value || 'grok';
+    const act = eng === 'claude' ? 'report_claude' : eng === 'both' ? 'report_both' : 'report_grok';
+    const meta = llmDescribe(act);
     $heroBtn.disabled = true;
-    $heroBtn.innerHTML = '<span class="spin">⟳</span> Analyzing';
-    $heroHint.textContent = '';
-    _heroProgSet(null, 'Queued…');
+    $heroBtn.innerHTML = '<span class="spin">⟳</span> ' + meta.model.slice(0, 18);
+    $heroHint.style.color = 'var(--mid)';
+    $heroHint.textContent = 'Running ' + meta.model + ' · est. ' + meta.cost
+      + (document.getElementById('hero-gamma')?.checked ? ' + Gamma deck' : '');
+    llmToast(act, 'Starting full report');
+    _heroProgSet(null, meta.model + ' · queued…');
     _heroProgShow(true);
     try {
       const r = await window.dgaFetch('/api/analyze', {
@@ -9423,7 +9705,7 @@ End with the sleeve block at this account's real market value so I can push it t
         body: JSON.stringify({
           ticker,
           generate_gamma: document.getElementById('hero-gamma')?.checked === true,
-          llm_provider:   document.getElementById('hero-llm')?.value || 'grok',
+          llm_provider:   eng,
         }),
       });
       if (!r.ok) throw new Error('analyze ' + r.status);
@@ -9433,28 +9715,34 @@ End with the sleeve block at this account's real market value so I can push it t
       pollJob(job.job_id, '/api/jobs/', $heroBtn, '⚡ RUN',
         (j) => {
           _heroActiveJobId = null; _heroShowCancel(false);
-          _heroProgSet(100, 'Complete');
+          _heroProgSet(100, 'Complete · ' + meta.model);
           setTimeout(() => _heroProgShow(false), 650);
           loadReports();
           const tgt = j.result?.price_target ? ` · Target $${j.result.price_target}` : '';
           // Actual LLM spend for this run (token usage × live pricing).
           const c = j.result?.cost_usd;
-          const costTxt = (c != null && !isNaN(c)) ? ` · cost $${Number(c).toFixed(2)}` : '';
+          const costTxt = (c != null && !isNaN(c))
+            ? ` · actual $${Number(c).toFixed(2)}`
+            : ` · est. ${meta.cost}`;
+          const used = j.result?.model || meta.model;
           $heroHint.style.color = 'var(--green)';
-          $heroHint.textContent = `✅ ${ticker} analysis complete${costTxt}${tgt} — see Saved Reports below`;
+          $heroHint.textContent = `✅ ${ticker} · ${used}${costTxt}${tgt} — see Saved Reports`;
+          llmStampControl($heroBtn, act);
         },
         () => {
           _heroActiveJobId = null; _heroShowCancel(false);
           _heroProgShow(false);
           $heroHint.style.color='var(--red)'; $heroHint.textContent='Analysis failed — check logs.';
+          llmStampControl($heroBtn, act);
         },
-        (pctInt, lbl) => _heroProgSet(pctInt, lbl),   // polished progress renderer
+        (pctInt, lbl) => _heroProgSet(pctInt, (lbl || '…') + ' · ' + meta.model),
         () => {
           // Canceled — quiet reset, nothing was persisted server-side.
           _heroActiveJobId = null; _heroShowCancel(false);
           _heroProgShow(false);
           $heroHint.style.color = 'var(--dim)';
           $heroHint.textContent = 'Analysis canceled — nothing saved.';
+          llmStampControl($heroBtn, act);
         }
       );
     } catch (e) {
@@ -9464,6 +9752,7 @@ End with the sleeve block at this account's real market value so I can push it t
       _heroProgShow(false);
       $heroHint.style.color = 'var(--red)';
       $heroHint.textContent = 'Error: ' + (e.message || 'unknown');
+      llmStampControl($heroBtn, act);
     }
   }
   $heroBtn.addEventListener('click', runAnalysis);
@@ -9521,10 +9810,18 @@ End with the sleeve block at this account's real market value so I can push it t
       const r = await window.dgaFetch('/api/config/models');
       if (!r.ok) return;
       _HERO_MODELS = await r.json();
+      // Feed global catalog used by llmDescribe() for every LLM button
+      window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+        grok: _HERO_MODELS.grok,
+        claude: _HERO_MODELS.claude,
+        agentic: _HERO_MODELS.agentic,
+        volume: _HERO_MODELS.volume || { enabled: false },
+        est: _HERO_MODELS.est || {},
+      });
       const gc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="grok"]');
       const cc = document.querySelector('#hero-llm-chips .hero-llm-chip[data-llm="claude"]');
-      if (gc) gc.title = _HERO_MODELS.grok || 'Grok';
-      if (cc) cc.title = _HERO_MODELS.claude || 'Claude';
+      if (gc) gc.title = (_HERO_MODELS.grok || 'Grok') + ' · full report · ' + (_HERO_COST_EST.grok || '');
+      if (cc) cc.title = (_HERO_MODELS.claude || 'Claude') + ' · full report · ' + (_HERO_COST_EST.claude || '');
       const est = _HERO_MODELS.est;
       if (est) {
         const rng = a => '$' + a[0].toFixed(2) + '–' + a[1].toFixed(2);
@@ -9533,9 +9830,11 @@ End with the sleeve block at this account's real market value so I can push it t
         if (est.both_report)   _HERO_COST_EST.both   = rng(est.both_report);
         if (est.pulse_per_ticker) _PULSE_COST_PER_TICKER = est.pulse_per_ticker;
         if (typeof _updateHeroCost === 'function') _updateHeroCost();
-        _PULSE_PREFIXES.forEach(function(pfx) { _pulseCostEstimate(pfx, true); });
+        if (typeof _PULSE_PREFIXES !== 'undefined')
+          _PULSE_PREFIXES.forEach(function(pfx) { try { _pulseCostEstimate(pfx, true); } catch(_){} });
       }
       _updateHeroModelTag();
+      try { llmRefreshAllStamps(); } catch (_) {}
     } catch (e) { /* leave the em-dash placeholder */ }
   })();
 
@@ -10061,17 +10360,23 @@ End with the sleeve block at this account's real market value so I can push it t
     const prioBtn = document.getElementById('idea-gen-prioritize');
     const prioOut = document.getElementById('idea-gen-prioritize-result');
     if (prioBtn) {
+      llmStampControl(prioBtn, 'prioritize');
       prioBtn.addEventListener('click', async function(ev) {
         ev.stopPropagation();
+        const meta = llmDescribe('prioritize');
         const orig = prioBtn.textContent;
-        prioBtn.disabled = true; prioBtn.textContent = '⏳ ranking…';
+        prioBtn.disabled = true;
+        prioBtn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+        llmToast('prioritize', 'Prioritize');
         if (!_ideaFeedPanelOpen && body && panel) {
           _ideaFeedPanelOpen = true;
           body.style.display = 'block';
           panel.dataset.open = '1';
         }
         prioOut.style.display = 'block';
-        prioOut.innerHTML = '<em style="color:#92400e;">Grok 4.5 is screening your universe…</em>';
+        prioOut.innerHTML = '<em style="color:#92400e;">'
+          + meta.provider.toUpperCase() + ' · <strong>' + meta.model + '</strong> · '
+          + meta.cost + ' — screening universe…</em>';
         try {
           const r = await window.dgaFetch('/api/v2/research/prioritize?top_n=5', { method: 'POST' });
           const d = await r.json();
@@ -10089,14 +10394,15 @@ End with the sleeve block at this account's real market value so I can push it t
             if (b === 'stale')  return '<span title="Saved report >14 days old — refresh candidate" style="font-size:10px;">♻️</span>';
             return '<span title="Recently analyzed, quiet today" style="font-size:10px;opacity:0.5;">·</span>';
           };
-          // Header: now shows the union universe breakdown
           const bc = d.bucket_counts || {};
           const breakdown = (bc.active != null)
             ? ' · 🔥' + bc.active + ' active · ♻️' + bc.stale + ' stale · ·' + bc.fresh + ' fresh'
             : '';
-          const modelLbl = (d.model || 'grok-4.5').toString().toUpperCase();
+          const modelLbl = (d.model || meta.model || 'model').toString();
+          const provLbl = (d.provider || meta.provider || '').toString().toUpperCase();
           let html = '<div style="font-weight:800;font-size:11px;letter-spacing:0.5px;color:#92400e;margin-bottom:6px;">' +
-            '🎯 ' + modelLbl + ' RECOMMENDS (' + d.considered + ' considered' + breakdown + ' · ' + d.picks.length + ' picks)</div>';
+            '🎯 ' + provLbl + ' · ' + modelLbl + ' · ' + meta.cost
+            + ' — RECOMMENDS (' + d.considered + ' considered' + breakdown + ' · ' + d.picks.length + ' picks)</div>';
           d.picks.forEach(function(p) {
             const tk = esc(p.ticker || '');
             html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #fde68a;">' +
@@ -10105,7 +10411,7 @@ End with the sleeve block at this account's real market value so I can push it t
               '<span style="background:' + priColor(p.priority) + ';color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:3px;letter-spacing:0.5px;text-transform:uppercase;">' + esc(p.priority || 'med') + '</span>' +
               '<span style="color:#a16207;font-weight:700;font-family:\'SF Mono\',monospace;font-size:11px;">' + (p.score != null ? p.score : '—') + '</span>' +
               '<span style="flex:1;color:#78350f;font-size:11.5px;">' + esc(p.reason || '') + '</span>' +
-              '<button class="idea-prio-run" data-tk="' + tk + '" style="background:#0A1628;color:#fff;border:none;padding:4px 9px;border-radius:4px;font-size:10.5px;font-weight:700;cursor:pointer;">▶ Opus</button>' +
+              '<button class="idea-prio-run" data-tk="' + tk + '" title="Queue full Grok/Claude report (hero engine)" style="background:#0A1628;color:#fff;border:none;padding:4px 9px;border-radius:4px;font-size:10.5px;font-weight:700;cursor:pointer;">▶ Report</button>' +
               '</div>';
           });
           if (d.skipped && d.skipped.length) {
@@ -10115,7 +10421,6 @@ End with the sleeve block at this account's real market value so I can push it t
               '</div>';
           }
           prioOut.innerHTML = html;
-          // Wire ▶ Opus buttons — drop ticker into the hero analyze input + fire
           prioOut.querySelectorAll('.idea-prio-run').forEach(function(b) {
             b.addEventListener('click', function() {
               const tk = b.dataset.tk;
@@ -10130,6 +10435,7 @@ End with the sleeve block at this account's real market value so I can push it t
           prioOut.innerHTML = '❌ ' + e.message;
         } finally {
           prioBtn.disabled = false; prioBtn.textContent = orig;
+          llmStampControl(prioBtn, 'prioritize');
         }
       });
     }
@@ -13109,17 +13415,43 @@ End with the sleeve block at this account's real market value so I can push it t
   async function triggerBrief() {
     const btn = document.getElementById('run-brief-btn');
     if (!btn || btn.disabled) return;
-    btn.disabled = true; btn.textContent = '⏳ Running…';
+    const meta = llmDescribe('daily_brief');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + (meta.provider === 'volume' ? meta.model : 'Grok') + '…';
+    llmToast('daily_brief', 'Starting daily brief');
     // Surface progress in the content area so the user can SEE it working.
     const el = document.getElementById('brief-content');
-    if (el) el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Generating today’s brief (live search · ~30–60s)…</div>';
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost
+        + (meta.note ? '<br><span style="font-size:11px;opacity:0.85;">' + meta.note + '</span>' : '')
+        + '</div>';
+    }
     try {
       const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const job = await r.json();
-      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', () => loadBrief());
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function (j) {
+        loadBrief();
+        const res = (j && j.result) || {};
+        const used = res.model || meta.model;
+        const prov = res.provider || meta.provider;
+        if (el && el.querySelector('.tab-loading')) {
+          /* loadBrief will replace */
+        }
+        try {
+          window.toast && window.toast(
+            'Brief done · ' + prov + ' · ' + used + (res.cost_usd != null ? ' · $' + Number(res.cost_usd).toFixed(3) : ' · ' + meta.cost),
+            { type: 'info', ttl: 4000 }
+          );
+        } catch (_) {}
+        llmStampControl(btn, 'daily_brief');
+      }, function () {
+        llmStampControl(btn, 'daily_brief');
+      });
     } catch (e) {
       btn.disabled = false; btn.textContent = '📰 Run';
+      llmStampControl(btn, 'daily_brief');
       if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
     }
   }
@@ -13148,7 +13480,15 @@ End with the sleeve block at this account's real market value so I can push it t
     const btn    = document.getElementById('run-intel-btn');
     const sector = document.getElementById('intel-sector')?.value || 'Tech';
     if (!btn || btn.disabled) return;
-    btn.disabled = true; btn.textContent = '⏳ Running…';
+    const meta = llmDescribe('intelligence');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + meta.model.slice(0, 16) + '…';
+    llmToast('intelligence', 'Starting ' + sector + ' intel');
+    const el = document.getElementById('intel-content');
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+    }
     try {
       const r = await window.dgaFetch('/api/intelligence', {
         method: 'POST',
@@ -13158,8 +13498,23 @@ End with the sleeve block at this account's real market value so I can push it t
       if (!r.ok) throw new Error(r.status);
       const job = await r.json();
       pollJob(job.job_id, '/api/intelligence/', btn, '🧠 Run',
-        () => loadIntel());
-    } catch { btn.disabled=false; btn.textContent='🧠 Run'; }
+        function (j) {
+          loadIntel();
+          const res = (j && j.result) || {};
+          try {
+            window.toast && window.toast(
+              'Intel done · ' + (res.provider || meta.provider) + ' · ' + (res.model || meta.model) + ' · ' + meta.cost,
+              { type: 'info', ttl: 4000 }
+            );
+          } catch (_) {}
+          llmStampControl(btn, 'intelligence');
+        },
+        function () { llmStampControl(btn, 'intelligence'); }
+      );
+    } catch {
+      btn.disabled = false; btn.textContent = '🧠 Run';
+      llmStampControl(btn, 'intelligence');
+    }
   }
   document.getElementById('run-intel-btn')?.addEventListener('click', triggerIntel);
 
@@ -13458,17 +13813,34 @@ End with the sleeve block at this account's real market value so I can push it t
   async function _ideasRunBrief() {
     const btn = document.getElementById('ideas-brief-run');
     if (!btn || btn.disabled) return;
-    btn.disabled = true; btn.textContent = '⏳ Running…';
+    const meta = llmDescribe('daily_brief');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + meta.model.slice(0, 14) + '…';
+    llmToast('daily_brief', 'Starting daily brief');
     const el = document.getElementById('ideas-brief-content');
-    if (el) el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> Generating today’s brief (live search · ~30–60s)…</div>';
+    if (el) {
+      el.innerHTML = '<div class="tab-loading"><span class="spin">↻</span> '
+        + meta.action + ' · <strong>' + meta.model + '</strong> · ' + meta.cost + '</div>';
+    }
     try {
       const r = await window.dgaFetch('/api/daily-brief', { method: 'POST' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const job = await r.json();
       // Refresh BOTH brief views (Ideas card + the Research-tab Daily Pulse card).
-      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function() { _ideasLoadBrief(); loadBrief(); });
+      pollJob(job.job_id, '/api/daily-brief/', btn, '📰 Run', function (j) {
+        _ideasLoadBrief(); loadBrief();
+        const res = (j && j.result) || {};
+        try {
+          window.toast && window.toast(
+            'Brief done · ' + (res.provider || meta.provider) + ' · ' + (res.model || meta.model) + ' · ' + meta.cost,
+            { type: 'info', ttl: 4000 }
+          );
+        } catch (_) {}
+        llmStampControl(btn, 'daily_brief');
+      }, function () { llmStampControl(btn, 'daily_brief'); });
     } catch (e) {
       btn.disabled = false; btn.textContent = '📰 Run';
+      llmStampControl(btn, 'daily_brief');
       if (el) el.innerHTML = '<div class="tab-error">Couldn’t start the brief: ' + ((e && e.message) || e) + '</div>';
     }
   }
@@ -17472,6 +17844,28 @@ End with the sleeve block at this account's real market value so I can push it t
           if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
           try { window.toast && window.toast(d.message || (enabled ? 'Volume LLM on' : 'Rolled back to Grok'), { type: 'info', ttl: 3500 }); } catch (_) {}
           await refresh();
+          // Refresh button tooltips / catalog after toggle
+          try {
+            if (window.DGA_LLM) {
+              window.DGA_LLM.volume = Object.assign({}, window.DGA_LLM.volume || {}, d.volume || {
+                enabled: d.enabled,
+                model: d.model,
+                configured: d.configured,
+              });
+              if (d.est) window.DGA_LLM.est = Object.assign({}, window.DGA_LLM.est || {}, d.est || {});
+            }
+            // Re-fetch full models config so est.volume_active is fresh
+            const mr = await window.dgaFetch('/api/config/models');
+            if (mr.ok) {
+              const mj = await mr.json();
+              window.DGA_LLM = Object.assign(window.DGA_LLM || {}, {
+                grok: mj.grok, claude: mj.claude, agentic: mj.agentic,
+                volume: mj.volume || window.DGA_LLM.volume,
+                est: mj.est || window.DGA_LLM.est,
+              });
+            }
+            llmRefreshAllStamps();
+          } catch (_) {}
         } catch (e) {
           alert('Volume LLM toggle failed: ' + (e.message || e));
         }
@@ -20387,14 +20781,19 @@ End with the sleeve block at this account's real market value so I can push it t
   (function wireRunBriefBtn(){
     const btn = document.getElementById('trending-run-brief');
     if (!btn) return;
+    llmStampControl(btn, 'daily_brief');
     btn.addEventListener('click', async function(){
+      const meta = llmDescribe('daily_brief');
       const orig = btn.textContent;
-      btn.disabled = true; btn.textContent = '⏳ Running…';
+      btn.disabled = true;
+      btn.textContent = '⏳ ' + meta.model.slice(0, 12) + '…';
+      llmToast('daily_brief', 'Starting daily brief');
       try {
         const r = await window.dgaFetch('/api/daily-brief', { method:'POST' });
         const j = await r.json();
         if (!j.job_id) throw new Error('No job_id returned');
         const t0 = Date.now();
+        let lastProv = meta.provider, lastModel = meta.model;
         await new Promise((resolve, reject) => {
           const poll = setInterval(async () => {
             if ((Date.now() - t0) > 180000) {
@@ -20403,7 +20802,10 @@ End with the sleeve block at this account's real market value so I can push it t
             try {
               const pr = await window.dgaFetch('/api/daily-brief/' + j.job_id);
               const pj = await pr.json();
-              btn.textContent = '⏳ ' + (pj.status || 'running') + '…';
+              const res = pj.result || {};
+              if (res.model) lastModel = res.model;
+              if (res.provider) lastProv = res.provider;
+              btn.textContent = '⏳ ' + (lastModel || pj.status || 'run').toString().slice(0, 14) + '…';
               if (pj.status === 'completed' || pj.status === 'done') { clearInterval(poll); resolve(); }
               else if (pj.status === 'error' || pj.status === 'failed') {
                 clearInterval(poll); reject(new Error(pj.error || 'brief failed'));
@@ -20411,14 +20813,16 @@ End with the sleeve block at this account's real market value so I can push it t
             } catch(e) { /* transient */ }
           }, 2500);
         });
-        // Refresh both panels — Today's Movers reads the new brief,
-        // Idea Generator now sees the brief tickers in its universe.
+        try {
+          window.toast && window.toast('Brief done · ' + lastProv + ' · ' + lastModel + ' · ' + meta.cost, { type: 'info', ttl: 4000 });
+        } catch (_) {}
         loadTrendingTickers();
         try { if (typeof loadIdeaFeed === 'function') loadIdeaFeed(true); } catch {}
       } catch (e) {
         alert('Daily Brief failed: ' + e.message);
       } finally {
         btn.disabled = false; btn.textContent = orig;
+        llmStampControl(btn, 'daily_brief');
       }
     });
   })();

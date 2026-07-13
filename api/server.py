@@ -6048,11 +6048,28 @@ def config_models():
         c_hi = (45_000 * c_in + 16_000 * c_out) / 1e6
         # Market-pulse per ticker: tiny prompt + ~1-2 searches dominate.
         p_est = analyst.estimate_grok_cost(g_model, 2_500, 700, 1.5)
+        # Volume jobs (DeepSeek etc.): much smaller envelopes, no live-search surcharge.
+        # Host pricing varies — these are order-of-magnitude UI hints only.
+        vol = out.get("volume") or {}
+        vol_on = bool(vol.get("enabled"))
         out["est"] = {
             "grok_report":   [round(g_lo, 2), round(g_hi, 2)],
             "claude_report": [round(c_lo, 2), round(c_hi, 2)],
             "both_report":   [round(g_lo + c_lo, 2), round(g_hi + c_hi, 2)],
             "pulse_per_ticker": round(p_est, 3),
+            # Daily brief / intel when volume on vs Grok+live
+            "daily_brief_volume": [0.01, 0.05],
+            "daily_brief_grok":   [round(analyst.estimate_grok_cost(g_model, 8_000, 3_000, 3), 2),
+                                   round(analyst.estimate_grok_cost(g_model, 15_000, 6_000, 6), 2)],
+            "intel_volume":       [0.02, 0.08],
+            "intel_grok":         [round(analyst.estimate_grok_cost(g_model, 10_000, 4_000, 4), 2),
+                                   round(analyst.estimate_grok_cost(g_model, 20_000, 8_000, 8), 2)],
+            "prioritize_volume":  [0.005, 0.03],
+            "prioritize_grok":    [round(analyst.estimate_grok_cost(g_model, 6_000, 1_500, 0), 3),
+                                   round(analyst.estimate_grok_cost(g_model, 12_000, 3_000, 0), 2)],
+            "agentic":            [0.05, 0.30],
+            "strategist":         [0.30, 1.00],
+            "volume_active":      vol_on,
         }
     except Exception:
         pass    # estimates are optional — UI falls back to its static strings
