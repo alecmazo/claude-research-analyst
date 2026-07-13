@@ -8634,16 +8634,35 @@ End with the sleeve block at this account's real market value so I can push it t
     const status = document.getElementById('fin-sync-status');
     const box = h => { if (status) status.innerHTML = h; };
     const t0 = Date.now();
-    // Full US pull can run 6–12+ hours; keep polling for 14h then hand off to background.
+    let lastDone = -1, stuckSince = Date.now(), resumeAttempts = 0;
+    // Full US pull can run 6–12+ hours. Server keeps going even if this tab stops.
     _finSyncPoll = setInterval(async () => {
       if (Date.now() - t0 > 14 * 3600 * 1000) {
         clearInterval(_finSyncPoll); _finSyncPoll = null;
-        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in background on Railway — check coverage / badge later. Safe to close this tab.</div>');
+        box('<div style="font-size:12px;color:var(--text-secondary);">Still running on Railway in the background — safe to close this tab. Coverage badge will keep rising. Re-open Financials later or click Full pull again (only missing names).</div>');
         if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
         return;
       }
       try {
-        const s = await (await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(jobId))).json();
+        const r = await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(jobId));
+        const s = await r.json();
+        // Job lost from memory (deploy) but resumable — re-queue full pull of remaining
+        if (!s.ok && (r.status === 404 || s.resumable) && resumeAttempts < 3) {
+          resumeAttempts++;
+          box('<div style="font-size:12px;color:var(--text-secondary);">↻ Job handle lost (deploy?) — auto-resuming full pull of remaining missing names…</div>');
+          try {
+            const rr = await window.dgaFetch('/api/financials/overnight', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ full: true, years_back: 6 }),
+            });
+            const jj = await rr.json();
+            if (jj.ok && jj.job_id) {
+              clearInterval(_finSyncPoll); _finSyncPoll = null;
+              _pollFinJob(jj.job_id, btn, restoreLabel);
+              return;
+            }
+          } catch (_) {}
+        }
         if (s.status === 'done') {
           clearInterval(_finSyncPoll); _finSyncPoll = null;
           const n = (s.result && s.result.periods_stored) || 0;
@@ -8652,15 +8671,53 @@ End with the sleeve block at this account's real market value so I can push it t
           if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
           _loadFinCoverage();
         } else if (s.status === 'error') {
+          // Auto-retry full pull once on hard error (remaining missing only)
+          if (resumeAttempts < 2) {
+            resumeAttempts++;
+            box('<div style="font-size:12px;color:var(--warn-700,#92400e);">⚠ Error — waiting 30s then auto-resuming remaining names…</div>');
+            await new Promise(res => setTimeout(res, 30000));
+            try {
+              const rr = await window.dgaFetch('/api/financials/overnight', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ full: true, years_back: 6 }),
+              });
+              const jj = await rr.json();
+              if (jj.ok && jj.job_id) {
+                clearInterval(_finSyncPoll); _finSyncPoll = null;
+                _pollFinJob(jj.job_id, btn, restoreLabel);
+                return;
+              }
+            } catch (_) {}
+          }
           clearInterval(_finSyncPoll); _finSyncPoll = null;
           box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(s.error || s.label || 'failed') + '</div>');
           if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
         } else {
-          box('<div style="font-size:12px;color:var(--text-secondary);">' + _trEsc(s.label || 'Working…')
-            + (s.done != null && s.total ? ' · ' + s.done + '/' + s.total : '') + '</div>');
+          const done = s.done != null ? s.done : 0;
+          const total = s.total != null ? s.total : 0;
+          if (done !== lastDone) { lastDone = done; stuckSince = Date.now(); }
+          // First ticker XBRL can take 30–90s — show that explicitly
+          let extra = '';
+          if (done === 0 && total > 0 && Date.now() - stuckSince > 45000) {
+            extra = ' · first SEC extract can take 30–90s (normal)';
+          }
+          // Progress bar
+          const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+          box('<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">'
+            + _trEsc(s.label || 'Working…')
+            + (total ? ' · <strong>' + done + '/' + total + '</strong> (' + pct + '%)' : '')
+            + extra
+            + '<div style="margin-top:6px;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">'
+            + '<div style="height:100%;width:' + pct + '%;background:var(--blue,#5BB8D4);border-radius:99px;transition:width .3s;"></div></div>'
+            + '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px;">Server keeps running if you close this tab. On timeout/error it auto-resumes remaining names.</div>'
+            + '</div>');
+          // Refresh coverage badge occasionally
+          if (done > 0 && done % 25 === 0) _loadFinCoverage();
         }
-      } catch (_) {}
-    }, 3000);
+      } catch (_) {
+        // Network blip — keep polling; job is server-side
+      }
+    }, 2500);
   }
 
   let _finSyncPoll = null;

@@ -23822,21 +23822,60 @@ def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
             "errors": [f"{ticker}: {str(last_err)[:140]}"], "rate_limited": True}
 
 
+def _fin_job_set(job_id: str, **kw) -> None:
+    """Update in-memory job + durable kv checkpoint so restarts can resume."""
+    prev = _fin_sync_jobs.get(job_id) or {}
+    rec = {**prev, **kw, "updated_at": time.time(), "job_id": job_id}
+    _fin_sync_jobs[job_id] = rec
+    # Checkpoint every update for full pulls (cheap kv write) so client timeouts
+    # / deploys don't lose the "still running" signal.
+    try:
+        if str(job_id).startswith("FINFULL") or rec.get("universe") in (
+                "us_listed_full", "us_listed_overnight"):
+            _kv_put("fin_full_pull.checkpoint", {
+                "job_id": job_id,
+                "status": rec.get("status"),
+                "stage": rec.get("stage"),
+                "label": (rec.get("label") or "")[:240],
+                "done": rec.get("done"),
+                "total": rec.get("total"),
+                "stored": rec.get("stored"),
+                "ts": datetime.utcnow().isoformat() + "Z",
+            })
+    except Exception:
+        pass
+
+
 def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
     """Background worker: build/refresh the structured financials store.
-    Polite to SEC; pauses longer after rate-limit hits then continues."""
+    Polite to SEC; pauses longer after rate-limit hits then continues.
+    Never depends on the browser staying open — progress is server-side."""
     def _set(**kw):
-        _fin_sync_jobs[job_id] = {**(_fin_sync_jobs.get(job_id) or {}), **kw,
-                                   "updated_at": time.time()}
-    _set(stage="queued", status="running", label="Queued…", started_at=time.time(),
-         total=len(tickers), done=0, stored=0)
+        _fin_job_set(job_id, **kw)
+    # Preserve total if caller already set it; do NOT flash a dead "Queued…" label
+    # for minutes while the first SEC XBRL extract runs (can take 15–60s).
+    existing = _fin_sync_jobs.get(job_id) or {}
+    _set(stage="syncing", status="running",
+         label=existing.get("label") or f"Starting ({len(tickers)} names)…",
+         started_at=existing.get("started_at") or time.time(),
+         total=existing.get("total") or len(tickers),
+         done=existing.get("done") or 0,
+         stored=existing.get("stored") or 0)
     try:
         _ensure_financials_table()
-        total_stored, names_ok, all_errors = 0, 0, []
+        total_stored = int(existing.get("stored") or 0)
+        names_ok, all_errors = 0, []
         consecutive_rl = 0
-        for i, tk in enumerate(tickers):
-            _set(stage="syncing",
-                 label=f"📊 {tk} ({i+1}/{len(tickers)})…", done=i)
+        # Support resume: skip tickers already done this run if checkpoint has cursor
+        start_i = int(existing.get("done") or 0)
+        if start_i < 0 or start_i > len(tickers):
+            start_i = 0
+        for i in range(start_i, len(tickers)):
+            tk = tickers[i]
+            # Update BEFORE the SEC call so UI never sits on 0/N with "Queued"
+            _set(stage="syncing", status="running",
+                 label=f"📊 Pulling {tk} ({i+1}/{len(tickers)})…",
+                 done=i, current=tk)
             try:
                 r = _sync_one_ticker_financials(tk, years_back=years_back)
                 total_stored += r.get("stored", 0)
@@ -23847,15 +23886,13 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
                     all_errors.append(f"{tk}: {e}")
                 if r.get("rate_limited"):
                     consecutive_rl += 1
-                    # Cool-down between tickers after a hard rate-limit fail
                     cool = min(600, 30 * consecutive_rl)
-                    _set(label=f"⏳ Rate limited — cooling {cool}s before next…")
+                    _set(label=f"⏳ Rate limited after {tk} — waiting {cool}s then continuing "
+                               f"({i+1}/{len(tickers)})…")
                     print(f"[fin sync] cool-down {cool}s after rate limit "
                           f"(streak={consecutive_rl})", flush=True)
                     time.sleep(cool)
                 else:
-                    # ~4 tickers/sec max would be aggressive; stay well under
-                    # SEC's 10 req/s (each name makes several GETs).
                     time.sleep(0.35)
             except Exception as e:
                 all_errors.append(f"{tk}: {e!s:.100}")
@@ -23876,50 +23913,53 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
 
 def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None) -> dict:
     """Pull ALL never-synced US-listed names (no nightly budget), then backup.
-    Continues through rate limits by waiting and resuming. One ticker at a time."""
+    Continues through rate limits by waiting and resuming. One ticker at a time.
+    Progress is server-side — browser timeout does not stop the job."""
     years = years_back if years_back is not None else _FIN_OVERNIGHT_YEARS
-    # No budget cap — full missing list (can be thousands).
-    tickers = _fin_pick_overnight_batch(budget=50_000)
-    # Prefer pure missing: re-fetch ordered list without stale-refresh first
+    jid = job_id or ("FINFULL_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
+    # Mark running IMMEDIATELY so the UI leaves "Queuing…" within one poll.
+    _fin_job_set(jid, stage="preparing", status="running",
+                 label="📋 Building US-listed missing list…",
+                 started_at=time.time(), total=0, done=0, stored=0,
+                 universe="us_listed_full")
+    tickers: list[str] = []
     try:
+        _fin_job_set(jid, label="📋 Downloading free Nasdaq + NYSE symbol directories…")
         universe = [r["ticker"] for r in _fin_universe_us_listed()]
+        _fin_job_set(jid, label=f"📋 {len(universe)} symbols — checking which are already in DB…")
         have = set()
         with _fund_conn() as conn, conn.cursor() as cur:
             cur.execute("SELECT DISTINCT ticker FROM company_financials")
             have = {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
-        missing = [t for t in universe if t not in have]
-        # After missing are done, refresh oldest 0 this run — focus on coverage
-        tickers = missing if missing else tickers
+        tickers = [t for t in universe if t not in have]
+        if not tickers:
+            # Everything present — optional light refresh of oldest names
+            tickers = _fin_pick_overnight_batch(budget=_FIN_OVERNIGHT_BUDGET)
+            _fin_job_set(jid, label=f"All covered — refreshing {len(tickers)} oldest…")
     except Exception as e:
-        print(f"[fin-full] missing-list failed, using pick batch: {e!s:.120}", flush=True)
+        print(f"[fin-full] missing-list failed: {e!s:.160}", flush=True)
+        try:
+            tickers = _fin_pick_overnight_batch(budget=50_000)
+        except Exception:
+            tickers = []
 
-    jid = job_id or ("FINFULL_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
-    _fin_sync_jobs[jid] = {
-        "stage": "queued", "status": "running",
-        "label": f"Full US-listed pull ({len(tickers)} names)…",
-        "started_at": time.time(), "updated_at": time.time(),
-        "total": len(tickers), "done": 0, "stored": 0,
-        "universe": "us_listed_full",
-    }
+    _fin_job_set(jid, total=len(tickers), done=0,
+                 label=f"🚀 Full pull starting — {len(tickers)} names to go…")
     if not tickers:
-        _fin_sync_jobs[jid].update(
-            stage="done", status="done",
-            label="✓ Full pull: already covered (no missing names)",
-            result={"periods_stored": 0, "names": 0})
+        _fin_job_set(jid, stage="done", status="done",
+                     label="✓ Full pull: already covered (no missing names)",
+                     result={"periods_stored": 0, "names": 0})
         return _fin_sync_jobs[jid]
-    try:
-        meta = {r["ticker"]: r for r in _fin_universe_us_listed()}
-        _fin_persist_universe_meta([meta[t] for t in tickers if t in meta])
-    except Exception:
-        pass
+
+    # Skip bulk security_meta seed here — nasdaq/nyse free lists have no GICS,
+    # and 6k individual upserts delayed the first SEC pull by minutes. SP500
+    # GICS seed is enough for common comps; names fill in as reports land.
     print(f"[fin-full] starting {len(tickers)} tickers years={years} job={jid}", flush=True)
     _run_financials_sync(jid, tickers, years)
     backup_note = ""
     try:
-        _fin_sync_jobs[jid] = {**(_fin_sync_jobs.get(jid) or {}),
-                               "stage": "backup",
-                               "label": "☁️ Backing up financials to Dropbox…",
-                               "updated_at": time.time()}
+        _fin_job_set(jid, stage="backup",
+                     label="☁️ Backing up financials to Dropbox…")
         ok, info = _dropbox_backup_financials()
         backup_note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:80]})"
     except Exception as e:
@@ -23929,9 +23969,8 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None)
     result = dict(job.get("result") or {})
     result["backup"] = backup_note
     result["tickers_attempted"] = len(tickers)
-    _fin_sync_jobs[jid] = {**job, "label": label, "result": result,
-                           "stage": "done", "status": job.get("status") or "done",
-                           "updated_at": time.time()}
+    _fin_job_set(jid, label=label, result=result, stage="done",
+                 status=job.get("status") or "done")
     try:
         _kv_put("fin_full_pull.last", {
             "ts": datetime.utcnow().isoformat() + "Z",
@@ -23939,6 +23978,7 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None)
             "label": label[:300],
             "job_id": jid,
         })
+        _kv_put("fin_full_pull.running", {"ts": None})
     except Exception:
         pass
     return _fin_sync_jobs[jid]
@@ -24091,12 +24131,26 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
 
 @app.get("/api/financials/sync/{job_id}")
 def financials_sync_status(job_id: str, request: Request):
-    """Poll a financials sync job."""
+    """Poll a financials sync job. Falls back to durable checkpoint if the
+    in-memory job was lost (deploy) so the UI can still show progress / resume."""
     _claims_or_401(request)
     job = _fin_sync_jobs.get(job_id)
-    if not job:
-        return JSONResponse({"ok": False, "stage": "idle", "error": "no such job"}, status_code=404)
-    return {"ok": True, **job}
+    if job:
+        return {"ok": True, **job}
+    # Durable checkpoint from a full pull (may be this job or a successor)
+    try:
+        cp = _kv_get("fin_full_pull.checkpoint") or {}
+        if cp and (cp.get("job_id") == job_id or str(job_id).startswith("FINFULL")):
+            return {"ok": True, "from_checkpoint": True,
+                    "status": cp.get("status") or "running",
+                    "stage": cp.get("stage") or "syncing",
+                    "label": cp.get("label") or "Resuming from checkpoint…",
+                    "done": cp.get("done"), "total": cp.get("total"),
+                    "stored": cp.get("stored"), "job_id": cp.get("job_id") or job_id}
+    except Exception:
+        pass
+    return JSONResponse({"ok": False, "stage": "idle", "error": "no such job",
+                         "resumable": True}, status_code=404)
 
 
 @app.post("/api/financials/overnight")
@@ -24127,17 +24181,26 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
     import uuid as _uuid
     if full:
         job_id = "FINFULL_" + _uuid.uuid4().hex[:10]
-        background_tasks.add_task(_run_fin_full_pull, job_id, years)
+        # Daemon thread (not BackgroundTasks): multi-hour pulls must outlive the
+        # HTTP request lifecycle cleanly and keep running after the browser leaves.
+        _fin_job_set(job_id, stage="queued", status="running",
+                     label="Queued — starting worker thread…",
+                     started_at=time.time(), total=0, done=0, stored=0,
+                     universe="us_listed_full")
+        threading.Thread(target=_run_fin_full_pull, args=(job_id, years),
+                         daemon=True, name=f"fin-full-{job_id[-8:]}").start()
         return {"ok": True, "job_id": job_id, "mode": "full",
                 "years_back": years,
-                "note": "Full US-listed pull queued (all missing names). "
+                "note": "Full US-listed pull started in background thread. "
                         "On SEC 429: wait 10s→10min then resume. "
+                        "Browser timeout does NOT stop the job. "
                         "Poll /api/financials/sync/{job_id}."}
     job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
-    background_tasks.add_task(_run_fin_overnight, job_id)
+    threading.Thread(target=_run_fin_overnight, args=(job_id,),
+                     daemon=True, name=f"fin-over-{job_id[-8:]}").start()
     return {"ok": True, "job_id": job_id, "mode": "budget",
             "budget": _FIN_OVERNIGHT_BUDGET, "years_back": _FIN_OVERNIGHT_YEARS,
-            "note": "Budget batch queued. Poll /api/financials/sync/{job_id}."}
+            "note": "Budget batch started. Poll /api/financials/sync/{job_id}."}
 
 
 @app.post("/api/financials/backup")
