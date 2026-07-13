@@ -6037,17 +6037,12 @@ CLAUDE_MODEL = _optional_env("CLAUDE_MODEL", "claude-opus-4-8")
 # there too — the env var overrides this default. To save money on routine runs:
 #   Railway env var → CLAUDE_MODEL=claude-sonnet-4-6    (~1.7× cheaper)
 
-# Cheap screening tier — used for "which of these N tickers actually
-# deserves an Opus-quality full report this week?" Sonnet sits at the
-# sweet spot: ~80% of Opus quality on structured analysis, ~20% of the
-# cost ($3/$15 per Mtok). Don't use this for final reports — use it
-# to PRIORITIZE which tickers get the Opus treatment.
-#
-# Default is the latest VERIFIED Sonnet identifier. If a newer Sonnet
-# has shipped (e.g. 4.6) you can override via Railway env without a
-# redeploy:  CLAUDE_SCREEN_MODEL=claude-sonnet-4-6-<date>
-# Check the latest identifier here:
-#   https://docs.anthropic.com/en/docs/about-claude/models
+# Idea Generator "Prioritize" — Grok 4.5 triage (not Claude).
+# Override without redeploy:  GROK_SCREEN_MODEL=grok-4.5-latest
+GROK_SCREEN_MODEL = _optional_env("GROK_SCREEN_MODEL", "grok-4.5")
+
+# Claude screening tier — still used by podcast bolt-on screening, etc.
+# Do not repoint this at Grok; that path calls the Anthropic API.
 CLAUDE_SCREEN_MODEL = _optional_env("CLAUDE_SCREEN_MODEL", "claude-sonnet-4-5-20250929")
 
 
@@ -6059,7 +6054,7 @@ def get_claude_api_key() -> str:
 
 
 def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
-    """Sonnet-4.6 screening pass — rank N tickers by "deserves a full Opus report this week".
+    """Grok 4.5 screening pass — rank N tickers by "deserves a full report this week".
 
     Args:
         candidates: list of {ticker, name?, sector?, pct_change?, price?,
@@ -6071,22 +6066,21 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         {
           "ok":   bool,
           "picks": [{ticker, score (0-100), reason (1 sentence), priority (high|med|low)}],
-          "skipped": [{ticker, reason}],   # tickers NOT worth the Opus spend
+          "skipped": [{ticker, reason}],   # tickers NOT worth a full report
           "raw":  str,                      # raw JSON the LLM returned (debug)
         }
 
-    Cost: ~$0.01-0.03 per 20-ticker pass (input is tiny, output ~1KB).
-    Saves $0.10-0.30 of unnecessary Opus calls per skipped ticker.
+    Cost: small structured JSON call (no live search). Used by Idea Generator → Prioritize.
     """
     import json as _json
     if not candidates:
-        return {"ok": True, "picks": [], "skipped": [], "raw": ""}
+        return {"ok": True, "picks": [], "skipped": [], "raw": "", "model": GROK_SCREEN_MODEL}
 
     today = _today_local_str() if "_today_local_str" in globals() else ""
     sys_prompt = (
         "You are a hedge-fund research director triaging a universe of stocks. "
-        "Decide which deserve a FULL Opus-quality research report this week and "
-        "which can wait. You're cost-conscious — every Opus report costs ~$2 and "
+        "Decide which deserve a FULL research report this week and "
+        "which can wait. You're cost-conscious — every full report costs money and "
         "an analyst-day of review time. Don't recommend tickers where the recent "
         "data doesn't suggest anything actionable.\n\n"
         "Each candidate has a 'bucket' tag — use it to balance your picks:\n"
@@ -6112,20 +6106,20 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
     )
 
     try:
-        raw = call_claude(
+        raw = call_grok(
             system_prompt=sys_prompt,
             user_content=user,
-            model=CLAUDE_SCREEN_MODEL,
+            model=GROK_SCREEN_MODEL,
+            live_search=False,
         )
     except Exception as e:
         err = str(e)
-        # 'not_found_error' from Anthropic → bad model identifier. Surface a
-        # clear actionable message instead of the raw API blob.
-        if "not_found_error" in err or "model:" in err:
-            err = (f"Screen model '{CLAUDE_SCREEN_MODEL}' not found on your Anthropic account. "
-                   "Set CLAUDE_SCREEN_MODEL env var to a valid identifier "
-                   "(see https://docs.anthropic.com/en/docs/about-claude/models).")
-        return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": err[:400]}
+        if "model" in err.lower() and ("not found" in err.lower() or "404" in err or "does not exist" in err.lower()):
+            err = (f"Screen model '{GROK_SCREEN_MODEL}' not found on your xAI account. "
+                   "Set GROK_SCREEN_MODEL env var to a valid identifier "
+                   "(e.g. grok-4.5, grok-4.5-latest, grok-4.3).")
+        return {"ok": False, "picks": [], "skipped": [], "raw": "", "error": err[:400],
+                "model": GROK_SCREEN_MODEL}
 
     # Strip stray code fences if model misbehaves
     cleaned = raw.strip()
@@ -6137,13 +6131,13 @@ def screen_universe(candidates: list[dict], *, top_n: int = 5) -> dict:
         parsed = _json.loads(cleaned)
     except _json.JSONDecodeError:
         return {"ok": False, "picks": [], "skipped": [], "raw": raw,
-                "error": "screener returned invalid JSON"}
+                "error": "screener returned invalid JSON", "model": GROK_SCREEN_MODEL}
 
     return {
         "ok":      True,
         "picks":   parsed.get("picks") or [],
         "skipped": parsed.get("skipped") or [],
-        "model":   CLAUDE_SCREEN_MODEL,
+        "model":   GROK_SCREEN_MODEL,
         "raw":     raw,
     }
 

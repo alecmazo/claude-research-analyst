@@ -3723,7 +3723,7 @@ End with the sleeve block at this account's real market value so I can push it t
                 title="Refresh idea feed now (bypass 5-min cache)"
                 style="margin-left:8px;background:transparent;border:1px solid var(--panel-edge);color:var(--mid);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">↻</button>
         <button id="idea-gen-prioritize" type="button"
-                title="Cheap Sonnet 4.6 pre-screen — rank top tickers worth a full Opus analysis (~$0.02)"
+                title="Grok 4.5 pre-screen — rank top tickers worth a full report"
                 style="margin-left:4px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;">🎯 Prioritize</button>
         <span id="idea-gen-chev" style="margin-left:6px;font-size:11px;color:var(--blue);transition:transform .15s;">▼</span>
       </header>
@@ -9480,7 +9480,7 @@ End with the sleeve block at this account's real market value so I can push it t
           panel.dataset.open = '1';
         }
         prioOut.style.display = 'block';
-        prioOut.innerHTML = '<em style="color:#92400e;">Sonnet 4.6 is screening your universe…</em>';
+        prioOut.innerHTML = '<em style="color:#92400e;">Grok 4.5 is screening your universe…</em>';
         try {
           const r = await window.dgaFetch('/api/v2/research/prioritize?top_n=5', { method: 'POST' });
           const d = await r.json();
@@ -9503,8 +9503,9 @@ End with the sleeve block at this account's real market value so I can push it t
           const breakdown = (bc.active != null)
             ? ' · 🔥' + bc.active + ' active · ♻️' + bc.stale + ' stale · ·' + bc.fresh + ' fresh'
             : '';
+          const modelLbl = (d.model || 'grok-4.5').toString().toUpperCase();
           let html = '<div style="font-weight:800;font-size:11px;letter-spacing:0.5px;color:#92400e;margin-bottom:6px;">' +
-            '🎯 SONNET 4.6 RECOMMENDS (' + d.considered + ' considered' + breakdown + ' · ' + d.picks.length + ' picks)</div>';
+            '🎯 ' + modelLbl + ' RECOMMENDS (' + d.considered + ' considered' + breakdown + ' · ' + d.picks.length + ' picks)</div>';
           d.picks.forEach(function(p) {
             const tk = esc(p.ticker || '');
             html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #fde68a;">' +

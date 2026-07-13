@@ -6428,7 +6428,7 @@ _SECTOR_ETF_MAP = {
 
 @app.post("/api/v2/research/prioritize")
 def research_prioritize(request: Request, top_n: int = 5):
-    """Cheap Sonnet 4.6 pre-screen (Option C — hybrid universe).
+    """Grok 4.5 pre-screen (Option C — hybrid universe).
 
     Universe = (today's movers from idea-feed) ∪ (ALL saved-report tickers).
     Each candidate is tagged with a bucket signal that the screener uses
@@ -6439,10 +6439,11 @@ def research_prioritize(request: Request, top_n: int = 5):
       • bucket='fresh'  → no big move + last_report_at ≤ 14 days
                           (deprioritized — recently analyzed, quiet today)
 
-    Sonnet returns picks ideally mixing buckets so the UI gets a balanced
+    Grok 4.5 returns picks ideally mixing buckets so the UI gets a balanced
     "what to refresh / what to react to" list.
 
-    Cost: ~$0.02 per call.
+    Cost: small structured JSON call (no live search). Override model via
+    GROK_SCREEN_MODEL env (default grok-4.5).
     """
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
@@ -6523,7 +6524,7 @@ def research_prioritize(request: Request, top_n: int = 5):
         return {"ok": True, "picks": [], "skipped": [],
                 "note": "Nothing in universe — no movers and no saved reports."}
 
-    # Cap considered set to keep input cheap (Sonnet is reasonable at $0.02 per call;
+    # Cap considered set to keep input cheap (Grok 4.5 structured triage;
     # going past 100 tickers makes the input prompt bloat without much picking benefit)
     candidates.sort(key=lambda c: (
         0 if c["bucket"] == "active" else
@@ -6536,8 +6537,9 @@ def research_prioritize(request: Request, top_n: int = 5):
     bucket_counts = {b: sum(1 for c in candidates if c["bucket"] == b)
                      for b in ("active", "stale", "fresh")}
 
+    _screen_model = getattr(analyst, "GROK_SCREEN_MODEL", None) or "grok-4.5"
     print(f"🎯 [prioritize {lp_id}] {len(candidates)} candidates "
-          f"(active={bucket_counts['active']} stale={bucket_counts['stale']} fresh={bucket_counts['fresh']}) → Sonnet 4.6", flush=True)
+          f"(active={bucket_counts['active']} stale={bucket_counts['stale']} fresh={bucket_counts['fresh']}) → {_screen_model}", flush=True)
 
     result = analyst.screen_universe(candidates, top_n=top_n)
     if not result.get("ok"):
