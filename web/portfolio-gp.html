@@ -2773,10 +2773,22 @@
 
   
   /* ── Desk free feeds (Market Wire + Fund Filings) ────────────── */
+  section.panel[data-wid="fund-filings"],
+  section.panel[data-wid="market-wire"] {
+    overflow: visible; /* don't clip the scrollable body */
+  }
   .feed-panel-body {
     padding: 0;
-    max-height: 320px;
-    overflow-y: auto;
+    max-height: 480px;
+    overflow-x: hidden;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* Fund Filings: taller list — ~100-name coverage needs room to scroll */
+  section.panel[data-wid="fund-filings"] .feed-panel-body {
+    max-height: min(560px, 58vh);
+    min-height: 200px;
   }
   .feed-empty {
     padding: 14px 16px;
@@ -3908,17 +3920,17 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- Fund Filings — high-signal SEC EDGAR for book universe (no Form 4 noise). -->
+    <!-- Fund Filings — high-signal SEC EDGAR for saved-report universe (newest first). -->
     <section class="panel" data-wid="fund-filings">
       <header class="panel-head">
         <span class="panel-title">Fund Filings</span>
-        <span class="panel-badge" id="ff-badge" title="SEC EDGAR · book only">EDGAR</span>
+        <span class="panel-badge" id="ff-badge" title="SEC EDGAR · saved reports · newest first">EDGAR</span>
         <span class="panel-action" id="ff-asof" style="cursor:default;">—</span>
-        <button type="button" id="ff-refresh" class="panel-action" title="Refresh filings"
+        <button type="button" id="ff-refresh" class="panel-action" title="Refresh filings (bypass cache)"
                 style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:700;color:var(--blue);">↻</button>
       </header>
-      <div class="panel-body feed-panel-body" id="ff-body">
-        <div class="feed-empty">Loading SEC filings…</div>
+      <div class="panel-body feed-panel-body" id="ff-body" role="region" aria-label="Fund filings list">
+        <div class="feed-empty">Loading SEC filings across saved reports…</div>
       </div>
     </section>
 
@@ -6064,16 +6076,21 @@ End with the sleeve block at this account's real market value so I can push it t
       return;
     }
     if (!items.length) {
-      body.innerHTML = '<div class="feed-empty">No high-signal SEC filings for your book in the lookback window. '
-        + 'Universe needs positions, watchlist, or saved reports. Form 4 noise is excluded by design.</div>';
+      body.innerHTML = '<div class="feed-empty">No high-signal SEC filings in the last '
+        + (data.lookback_days || 30) + ' days for your saved-report universe'
+        + (data.universe_size != null ? ' (' + data.universe_size + ' tickers)' : '')
+        + '. Form 4 noise is excluded. Try refresh after reports load.</div>';
       return;
     }
+    // Sticky-ish list: rows only in scroll area; footer outside scroll feels better
+    // but keep footer inside for one container — pin via sticky CSS
     const rows = items.map(function (it) {
       const href = it.url || '#';
       const age = _feedRel(it.pub_ts, it.filed);
       const form = it.form || '';
       const chip = _formChipClass(form);
       const itemsNote = it.items ? (' · items ' + it.items) : '';
+      const ageCls = (it.age_days != null && it.age_days <= 3) ? ' style="color:#15803d;font-weight:700;"' : '';
       return '<a class="feed-row" href="' + _feedEsc(href) + '" target="_blank" rel="noopener">'
         + '<span class="feed-tk">' + _feedEsc(it.ticker || '') + '</span>'
         + '<div class="feed-row-main">'
@@ -6081,13 +6098,18 @@ End with the sleeve block at this account's real market value so I can push it t
         + '<div class="feed-row-meta">'
         + '<span class="feed-chip ' + chip + '">' + _feedEsc(form) + '</span>'
         + (it.filed ? '<span>filed ' + _feedEsc(it.filed) + '</span>' : '')
-        + (age ? '<span>' + age + ' ago</span>' : '')
+        + (age ? '<span' + ageCls + '>' + age + ' ago</span>' : '')
         + '</div></div></a>';
     }).join('');
     const n = data.universe_size != null ? data.universe_size : '—';
-    const foot = '<div class="feed-foot">EDGAR · book universe ' + n
-      + ' · 8-K / 10-Q/K / 13D-G / S-1 / proxy · no Form 4</div>';
+    const matched = data.total_matched != null ? data.total_matched : items.length;
+    const shown = items.length;
+    const foot = '<div class="feed-foot" style="position:sticky;bottom:0;">EDGAR · saved reports '
+      + n + ' · showing ' + shown + (matched > shown ? ' of ' + matched : '')
+      + ' · last ' + (data.lookback_days || 30) + 'd · newest first · no Form 4</div>';
     body.innerHTML = rows + foot;
+    // Ensure scroll starts at top (newest)
+    body.scrollTop = 0;
   }
   async function loadDeskFeeds(force) {
     const mwBody = document.getElementById('mw-body');
@@ -6115,10 +6137,14 @@ End with the sleeve block at this account's real market value so I can push it t
     }
 
     if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Loading macro wire…</div>';
-    if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Loading SEC filings…</div>';
+    if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Scanning SEC for saved-report universe (newest first)…</div>';
 
     try {
-      const r = await window.dgaFetch('/api/v2/news/desk-feeds?market_limit=12&filings_limit=14&days=14');
+      // force=1 only for client UX note — server cache is short; refresh bumps tab stale timer
+      const r = await window.dgaFetch(
+        '/api/v2/news/desk-feeds?market_limit=12&filings_limit=50&days=30'
+        + (force ? '&_=' + Date.now() : '')
+      );
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
       const market = d.market_wire || {};
@@ -6126,9 +6152,17 @@ End with the sleeve block at this account's real market value so I can push it t
       _renderMarketWire(mwBody, market);
       _renderFundFilings(ffBody, filings);
       if (mwAsOf) mwAsOf.textContent = market.as_of || d.as_of || '—';
-      if (ffAsOf) ffAsOf.textContent = filings.as_of || d.as_of || '—';
+      if (ffAsOf) {
+        const u = filings.universe_size != null ? filings.universe_size + ' tk · ' : '';
+        ffAsOf.textContent = u + (filings.as_of || d.as_of || '—');
+      }
       if (mwBadge) mwBadge.textContent = ((market.items || []).length || 0) + ' items';
-      if (ffBadge) ffBadge.textContent = ((filings.items || []).length || 0) + ' filings';
+      if (ffBadge) {
+        const n = (filings.items || []).length || 0;
+        const tot = filings.total_matched;
+        ffBadge.textContent = tot && tot > n ? (n + '/' + tot) : (n + ' filings');
+        ffBadge.title = filings.note || 'SEC EDGAR · saved reports · newest first';
+      }
     } catch (e) {
       if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Market wire unavailable: ' + _feedEsc(e.message) + '</div>';
       if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable.</div>';

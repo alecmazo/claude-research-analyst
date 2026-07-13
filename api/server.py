@@ -2408,7 +2408,11 @@ def _build_market_wire(limit: int = 14) -> dict:
 
 
 def _research_universe_tickers(lp_id: str | None) -> list[str]:
-    """Watchlist ∪ positions ∪ saved reports — same spirit as idea-feed."""
+    """Watchlist ∪ positions ∪ saved reports — used by lighter desk helpers."""
+    return _saved_report_tickers() or _research_universe_tickers_full(lp_id)
+
+
+def _research_universe_tickers_full(lp_id: str | None) -> list[str]:
     universe: set[str] = set()
 
     def _add(tk: str) -> None:
@@ -2417,7 +2421,6 @@ def _research_universe_tickers(lp_id: str | None) -> list[str]:
         tk = tk.strip().upper().rstrip("*")
         if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
             return
-        # Skip pure cash / money-market noise
         if tk in ("SPAXX", "FDRXX", "SPRXX", "VMFXX", "USD", "CASH"):
             return
         universe.add(tk)
@@ -2436,7 +2439,7 @@ def _research_universe_tickers(lp_id: str | None) -> list[str]:
                      WHERE archived IS NOT TRUE
                 """)
                 for row in cur.fetchall():
-                    _add(row[0] if not isinstance(row, (list, tuple)) else row[0])
+                    _add(row[0])
                 cur.execute("""
                     SELECT DISTINCT s.symbol
                       FROM tax_lots tl
@@ -2454,7 +2457,40 @@ def _research_universe_tickers(lp_id: str | None) -> list[str]:
     return sorted(universe)
 
 
-def _sec_recent_filings_for_cik(cik: str, ua: str, max_scan: int = 40) -> list[dict]:
+def _saved_report_tickers() -> list[str]:
+    """All non-archived saved-report tickers — primary Fund Filings universe (~100 names)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    try:
+        if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+            return out
+        with _fund_conn() as conn, conn.cursor() as cur:
+            # Newest reports first so if we ever partial-scan, fresher coverage wins
+            cur.execute("""
+                SELECT ticker, MAX(generated_at) AS ga
+                  FROM analyst_reports
+                 WHERE archived IS NOT TRUE
+                   AND ticker IS NOT NULL
+                   AND BTRIM(ticker) <> ''
+                 GROUP BY ticker
+                 ORDER BY ga DESC NULLS LAST
+            """)
+            for row in cur.fetchall():
+                tk = (row[0] or "").strip().upper().rstrip("*")
+                if not tk or tk in seen:
+                    continue
+                if not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+                    continue
+                if tk in ("SPAXX", "FDRXX", "SPRXX", "VMFXX", "USD", "CASH"):
+                    continue
+                seen.add(tk)
+                out.append(tk)
+    except Exception as e:
+        print(f"⚠️ [desk-feeds] saved-report universe: {e!s:.120}", flush=True)
+    return out
+
+
+def _sec_recent_filings_for_cik(cik: str, ua: str, max_scan: int = 80) -> list[dict]:
     """Return high-signal recent filings for one CIK (cached)."""
     now = time.time()
     hit = _CIK_SUB_CACHE.get(cik)
@@ -2499,9 +2535,60 @@ def _sec_recent_filings_for_cik(cik: str, ua: str, max_scan: int = 40) -> list[d
     return rows
 
 
-def _build_fund_filings(lp_id: str | None, limit: int = 16, days: int = 14) -> dict:
+def _filings_for_ticker(tk: str, ua: str, cutoff) -> tuple[list[dict], str | None]:
+    """Fetch high-signal filings for one ticker since cutoff. Returns (items, error)."""
+    import sec_edgar_xbrl as _edgar
+    try:
+        cik = _edgar.resolve_cik(tk, user_agent=ua)
+    except Exception as e:
+        return [], f"{tk}: cik {e!s:.60}"
+    items: list[dict] = []
+    try:
+        today = datetime.now(timezone.utc).date()
+        for row in _sec_recent_filings_for_cik(cik, ua, max_scan=80):
+            fdate = row.get("filed") or ""
+            try:
+                d = datetime.strptime(fdate[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if d < cutoff:
+                continue
+            age_days = (today - d).days
+            form = row.get("form") or ""
+            items_str = (row.get("items") or "").strip()
+            title_bits = [form]
+            if items_str:
+                title_bits.append(f"items {items_str}")
+            title = f"{tk} · {' · '.join(title_bits)}"
+            items.append({
+                "ticker": tk,
+                "title": title,
+                "form": form,
+                "filed": fdate[:10],
+                "age_days": age_days,
+                "items": items_str,
+                "url": row.get("url") or "",
+                "accession": row.get("accession") or "",
+                "publisher": "SEC EDGAR",
+                "source": "sec_edgar",
+                "priority": row.get("priority") or 50,
+                "pub_ts": int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()),
+            })
+    except Exception as e:
+        return items, f"{tk}: {e!s:.60}"
+    return items, None
+
+
+def _build_fund_filings(lp_id: str | None, limit: int = 50, days: int = 30) -> dict:
+    """High-signal EDGAR for the **saved-reports** universe, newest first.
+
+    Previous bugs: only first 28 alphabetical tickers, 12s timeout, sorted by
+    form priority (old 8-Ks outranked fresh filings). Fixed: full report list,
+    parallel SEC pulls, sort by filing date.
+    """
     now = time.time()
-    cache_key = f"{lp_id or 'anon'}|{int(limit)}|{int(days)}"
+    # Bump cache key version when ranking/universe rules change
+    cache_key = f"v2|{lp_id or 'anon'}|{int(limit)}|{int(days)}"
     hit = _FILINGS_CACHE.get(cache_key)
     if hit and (now - hit["ts"]) < _FILINGS_TTL:
         data = dict(hit["data"])
@@ -2517,64 +2604,49 @@ def _build_fund_filings(lp_id: str | None, limit: int = 16, days: int = 14) -> d
             "as_of": _pacific_time_str(),
         }
 
-    import sec_edgar_xbrl as _edgar
-    tickers = _research_universe_tickers(lp_id)
-    # Cap to keep SEC polite + first-paint latency bounded
-    tickers = tickers[:28]
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(3, min(int(days), 45)))).date()
+    # Primary universe = saved reports (user's ~100 tracked names)
+    tickers = _saved_report_tickers()
+    if not tickers:
+        # Fallback if no reports yet
+        tickers = _research_universe_tickers_full(lp_id)
+    # Hard cap for safety (SEC politeness) — full coverage list still ~100
+    tickers = tickers[:120]
+    lookback = max(7, min(int(days or 30), 60))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback)).date()
+    max_items = max(10, min(int(limit or 50), 80))
 
     items: list[dict] = []
     errors: list[str] = []
-    t0 = time.time()
-    for tk in tickers:
-        # Soft budget: never block the request more than ~12s on a cold cache
-        if time.time() - t0 > 12.0:
-            errors.append(f"timeout budget — scanned partial universe ({len(items)} items so far)")
-            break
-        try:
-            cik = _edgar.resolve_cik(tk, user_agent=ua)
-        except Exception as e:
-            errors.append(f"{tk}: cik {e!s:.60}")
-            continue
-        try:
-            for row in _sec_recent_filings_for_cik(cik, ua):
-                fdate = row.get("filed") or ""
-                try:
-                    d = datetime.strptime(fdate[:10], "%Y-%m-%d").date()
-                except Exception:
-                    continue
-                if d < cutoff:
-                    continue
-                age_days = (datetime.now(timezone.utc).date() - d).days
-                form = row.get("form") or ""
-                items_str = (row.get("items") or "").strip()
-                title_bits = [form]
-                if items_str:
-                    title_bits.append(f"items {items_str}")
-                title = f"{tk} · {' · '.join(title_bits)}"
-                items.append({
-                    "ticker": tk,
-                    "title": title,
-                    "form": form,
-                    "filed": fdate[:10],
-                    "age_days": age_days,
-                    "items": items_str,
-                    "url": row.get("url") or "",
-                    "accession": row.get("accession") or "",
-                    "publisher": "SEC EDGAR",
-                    "source": "sec_edgar",
-                    "priority": row.get("priority") or 50,
-                    "pub_ts": int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()),
-                })
-        except Exception as e:
-            errors.append(f"{tk}: {e!s:.60}")
-        # Be polite to SEC between uncached tickers
-        time.sleep(0.08)
+    scanned = 0
 
-    # Sort: priority then freshness; de-dupe by accession
+    # Parallel workers — SEC allows ~10 req/s with a proper User-Agent
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    workers = 6
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_filings_for_ticker, tk, ua, cutoff): tk for tk in tickers}
+            for fut in as_completed(futs, timeout=45):
+                scanned += 1
+                try:
+                    part, err = fut.result()
+                    if err:
+                        errors.append(err)
+                    if part:
+                        items.extend(part)
+                except Exception as e:
+                    errors.append(f"{futs[fut]}: {e!s:.60}")
+    except Exception as e:
+        # Timeout on as_completed — keep whatever we collected
+        errors.append(f"scan partial: {e!s:.80}")
+
+    # De-dupe by accession; sort NEWEST first (then form priority)
     seen_acc: set[str] = set()
     uniq: list[dict] = []
-    items.sort(key=lambda x: (-(x.get("priority") or 0), x.get("age_days") if x.get("age_days") is not None else 99))
+    items.sort(key=lambda x: (
+        x.get("age_days") if x.get("age_days") is not None else 999,
+        -(x.get("priority") or 0),
+        x.get("ticker") or "",
+    ))
     for it in items:
         acc = it.get("accession") or ""
         key = acc or f"{it.get('ticker')}|{it.get('form')}|{it.get('filed')}"
@@ -2589,12 +2661,23 @@ def _build_fund_filings(lp_id: str | None, limit: int = 16, days: int = 14) -> d
         "as_of": _pacific_time_str(),
         "ttl_seconds": _FILINGS_TTL,
         "universe_size": len(tickers),
-        "items": uniq[: max(5, min(int(limit or 16), 40))],
-        "errors": errors[:8],
-        "note": "High-signal EDGAR only (8-K, 10-Q/K, 13D/G, S-1, proxy). No Form 4 noise.",
+        "scanned": scanned,
+        "lookback_days": lookback,
+        "items": uniq[:max_items],
+        "total_matched": len(uniq),
+        "errors": errors[:12],
+        "note": (
+            f"Saved-reports universe ({len(tickers)} tickers) · "
+            f"high-signal EDGAR last {lookback}d · newest first · no Form 4"
+        ),
         "cached": False,
     }
     _FILINGS_CACHE[cache_key] = {"ts": now, "data": data}
+    print(
+        f"📁 [fund-filings] universe={len(tickers)} scanned={scanned} "
+        f"matched={len(uniq)} returned={len(data['items'])} lookback={lookback}d",
+        flush=True,
+    )
     return data
 
 
@@ -2641,15 +2724,15 @@ def news_market_wire(request: Request, limit: int = 14):
 
 
 @app.get("/api/v2/news/fund-filings")
-def news_fund_filings(request: Request, limit: int = 16, days: int = 14):
-    """Free SEC EDGAR fund feed for book universe. No LLM. No paid API."""
+def news_fund_filings(request: Request, limit: int = 50, days: int = 30):
+    """Free SEC EDGAR feed for saved-report universe. Newest first. No LLM."""
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
     return _build_fund_filings(lp_id, limit=limit, days=days)
 
 
 @app.get("/api/v2/news/desk-feeds")
-def news_desk_feeds(request: Request, market_limit: int = 12, filings_limit: int = 14, days: int = 14):
+def news_desk_feeds(request: Request, market_limit: int = 12, filings_limit: int = 50, days: int = 30):
     """Both Desk cards in one call, cross-deduped (filings own company EDGAR signal)."""
     claims = _claims_or_401(request)
     lp_id = claims.get("lp_id") or claims.get("email") or "anon"
@@ -2663,7 +2746,7 @@ def news_desk_feeds(request: Request, market_limit: int = 12, filings_limit: int
         "market_wire": market,
         "fund_filings": filings,
         "token_cost": 0,
-        "note": "Two cards, zero LLM tokens. Market = macro RSS; Filings = EDGAR book only.",
+        "note": "Two cards, zero LLM tokens. Market = macro RSS; Filings = saved-report EDGAR newest-first.",
     }
 
 
