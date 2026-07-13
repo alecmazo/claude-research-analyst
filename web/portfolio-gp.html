@@ -909,10 +909,14 @@
     .grid-2 { grid-template-columns: 1fr; }
   }
 
-  /* Saved reports table */
-  .rep-table { width: 100%; border-collapse: collapse; }
+  /* Saved reports table — ticker+news column claims width; price/tgt stay compact */
+  .rep-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
   .rep-table th {
-    text-align: left; padding: 8px 14px 6px;
+    text-align: left; padding: 8px 10px 6px;
     font-size: 9px; font-weight: 800;
     color: var(--mid); letter-spacing: 1.2px; text-transform: uppercase;
     border-bottom: 1px solid rgba(0,0,0,0.07);
@@ -923,10 +927,18 @@
   /* Sortable column headers in data-table */
   .data-table th[style*="cursor:pointer"]:hover { color: var(--blue); }
   .rep-table td {
-    padding: 7px 14px;
+    padding: 7px 10px;
     border-bottom: 1px solid rgba(0,0,0,0.04);
     font-size: 13px;
+    vertical-align: top;
   }
+  /* Col 1: ticker + news (majority of row). Col 2/3: tight numeric. */
+  .rep-table th:nth-child(1),
+  .rep-table td:nth-child(1) { width: auto; }
+  .rep-table th:nth-child(2),
+  .rep-table td:nth-child(2) { width: 78px; padding-left: 6px; padding-right: 8px; }
+  .rep-table th:nth-child(3),
+  .rep-table td:nth-child(3) { width: 100px; padding-left: 6px; padding-right: 10px; }
   .rep-table tbody tr { cursor: pointer; transition: background .12s; }
   .rep-table tbody tr:hover td { background: rgba(91,184,212,0.06); }
   .rep-tk { font-weight: 800; color: var(--text-primary); letter-spacing: 1px; font-size: 14px; }
@@ -3101,28 +3113,34 @@
     z-index: 2;
   }
 
-  /* ── Saved reports: inline news headline line ────────────────────── */
+  /* ── Saved reports: inline news headline (use full ticker column width) ── */
   a.rep-news-line,
   .rep-table .rep-news-line {
-    display: block !important;
-    margin-top: 6px;
-    font-size: 11px;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    margin-top: 5px;
+    font-size: 11.5px;
     color: var(--text-secondary);
-    line-height: 1.4;
+    line-height: 1.35;
     text-decoration: none;
-    max-width: 320px;
+    max-width: none;
+    width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    word-break: break-word;
     transition: color var(--t-fast), opacity .2s ease;
     font-weight: 500;
-    padding-right: 8px;
+    padding-right: 4px;
     cursor: pointer;
+    box-sizing: border-box;
   }
   a.rep-news-line::before {
-    content: '📰 ';
-    opacity: 0.6;
-    margin-right: 2px;
+    content: '· ';
+    opacity: 0.45;
+    font-weight: 800;
+    color: var(--blue);
   }
   a.rep-news-line:hover {
     color: var(--brand-500) !important;
@@ -6727,7 +6745,8 @@ End with the sleeve block at this account's real market value so I can push it t
       const rotating = [];   // lines that have >1 item to cycle through
       let injected = 0;
       const paint = function(line, item) {
-        const title = (item.title || '').slice(0, 90);
+        // Wider column → show more of the headline (was 90 chars / 320px cap)
+        const title = (item.title || '').slice(0, 160);
         const pub   = item.publisher ? ' · ' + item.publisher : '';
         line.href = item.url || '#';
         line.textContent = title + pub;
