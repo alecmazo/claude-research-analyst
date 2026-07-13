@@ -79,8 +79,8 @@
   /* ── TOP NAV BAR ─────────────────────────────────────────────── */
   .topbar {
     background: #fff;
-    padding: 10px 18px;
-    display: flex; align-items: center; gap: 16px;
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px;
     border-bottom: 1px solid var(--panel-edge);
     box-shadow: 0 1px 6px rgba(0,0,0,0.08);
     position: sticky; top: 0; z-index: 30;
@@ -100,11 +100,12 @@
     box-shadow: 0 0 0 1.5px var(--blue), 0 1px 4px rgba(0,0,0,0.12);
   }
 
-  /* Universal search */
+  /* Universal search — claim horizontal space; tabs stay compact */
   .search-wrap {
-    flex: 1;
+    flex: 1 1 380px;
     position: relative;
-    max-width: 540px;
+    min-width: 300px;
+    max-width: 720px;
   }
   .search-input {
     width: 100%;
@@ -113,7 +114,7 @@
     border: 1px solid var(--panel-edge);
     border-radius: 8px;
     color: var(--text-primary);
-    padding: 0 14px 0 36px;
+    padding: 0 52px 0 36px;
     font-size: 13px;
     outline: none;
     transition: border-color .15s, box-shadow .15s;
@@ -135,12 +136,16 @@
   }
   .topbar-right {
     margin-left: auto;
-    display: flex; align-items: center; gap: 14px;
+    display: flex; align-items: center; gap: 2px;
+    flex-shrink: 1;
+    min-width: 0;
   }
   .topbar-link {
     color: #475569; font-size: 11px; font-weight: 700;
-    letter-spacing: 1.3px; text-transform: uppercase;
+    letter-spacing: 0.6px; text-transform: uppercase;
     cursor: pointer;
+    padding: 5px 7px;
+    white-space: nowrap;
   }
   .topbar-link:hover { color: var(--blue); }
   .topbar-link.active { color: var(--blue); border-bottom: 2px solid var(--blue); padding-bottom: 4px; }
@@ -2216,18 +2221,19 @@
     background: rgba(255, 255, 255, 0.92);
     backdrop-filter: saturate(180%) blur(12px);
     -webkit-backdrop-filter: saturate(180%) blur(12px);
-    padding: 10px 24px;
+    padding: 10px 16px;
     height: 64px;
+    gap: 10px;
     border-bottom: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-xs);
   }
   .topbar-link {
     color: var(--text-secondary);
-    font-size: var(--text-sm);
+    font-size: 12px;
     font-weight: 500;
     letter-spacing: 0;
     text-transform: none;
-    padding: 6px 10px;
+    padding: 5px 6px;
     border-radius: var(--r-md);
     transition: color var(--t-fast), background var(--t-fast);
     border-bottom: none !important;
@@ -2243,9 +2249,9 @@
     flex: 0 0 auto;
     align-self: center;
     width: 1px;
-    height: 24px;
+    height: 22px;
     background: var(--gray-300);
-    margin: 0 7px;
+    margin: 0 3px;
   }
   .ribbon-wrap { top: 64px; }
   .brand-logo {
@@ -2256,7 +2262,12 @@
   }
   .status-dot { box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18); }
 
-  /* Search input refresh */
+  /* Search — wider field; tabs stay tight so the box can breathe */
+  .search-wrap {
+    flex: 1 1 400px;
+    min-width: 320px;
+    max-width: 760px;
+  }
   .search-input {
     background: var(--gray-50);
     border: 1px solid var(--border-subtle);
@@ -2277,6 +2288,7 @@
     font-family: var(--font-mono);
     border-radius: var(--r-sm);
   }
+  .topbar-right { gap: 2px; }
 
   /* ────────────────────────────────────────────────────────────────────
      Unified button system. All legacy button classes are normalized here.
@@ -3357,7 +3369,7 @@
            placeholder="Ticker or company — e.g. NVDA, AAPL, Apple"
            autocomplete="off" autocapitalize="characters" spellcheck="false"
            title="Type a ticker and press Enter for a free stock snapshot (no AI cost)">
-    <span class="search-kbd">⌘K / Enter</span>
+    <span class="search-kbd">⌘K</span>
     <div id="search-results"></div>
   </div>
 
