@@ -2182,6 +2182,491 @@ def get_ticker_news(tickers: str = "", limit: int = 1):
              "news": out, "ttl_seconds": _NEWS_TTL}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DESK NEWS FEEDS — free, no LLM tokens (Market Wire + Fund Filings)
+# Signal over noise: macro RSS only vs SEC EDGAR book filings; cross-deduped.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MARKET_WIRE_CACHE: dict = {"ts": 0.0, "data": None}
+_MARKET_WIRE_TTL = 1800  # 30 min — shared firm-wide
+_FILINGS_CACHE: dict = {}  # key → {ts, data}
+_FILINGS_TTL = 1800
+_CIK_SUB_CACHE: dict = {}  # cik → {ts, recent_rows}
+_CIK_SUB_TTL = 2700  # 45 min
+
+# Curated macro / policy wires only — NOT per-ticker Google news (that would
+# collide with Fund Filings and add retail noise).
+_MARKET_WIRE_FEEDS: list[tuple[str, str]] = [
+    ("Fed", "https://www.federalreserve.gov/feeds/press_all.xml"),
+    ("SEC press", "https://www.sec.gov/news/pressreleases.rss"),
+    ("Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
+    ("MarketWatch", "https://feeds.content.dowjones.io/public/rss/mw_topstories"),
+    ("CNBC Top", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+    ("CNBC Economy", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"),
+]
+
+# Boost = more "desk-relevant"; block = pure noise / retail clickbait.
+_WIRE_BOOST = re.compile(
+    r"\b(fed|fomc|powell|rate cut|rate hike|cpi|inflation|pce|payrolls|"
+    r"jobs report|gdp|recession|tariff|sanctions|treasury|yields?|"
+    r"oil|opec|earnings season|guidance|merger|acquisition|antitrust|"
+    r"sec charges|enforcement|bank stress|credit|default|war|ceasefire)\b",
+    re.I,
+)
+_WIRE_BLOCK = re.compile(
+    r"\b(you won'?t believe|what happens next|crypto meme|nft|horoscope|"
+    r"celebrity|recipe|how to get rich|this one stock|newsletter sponsor|"
+    r"giveaway|opinion: why i)\b",
+    re.I,
+)
+# Titles that are really company filings — owned by Fund Filings card.
+_WIRE_FILING_NOISE = re.compile(
+    r"\b(files?|filed|submits?|furnishes?)\b.*\b(8-?K|10-?Q|10-?K|form\s*4|"
+    r"13[dg]|proxy statement|s-1)\b|"
+    r"\b(8-?K|10-?Q|10-?K)\b.*\b(filing|filed|files)\b",
+    re.I,
+)
+
+# High-signal EDGAR forms only (Form 3/4/5 and bulk 13F are intentionally out).
+_FILING_SIGNAL: dict[str, int] = {
+    "8-K": 100, "8-K/A": 95,
+    "10-Q": 82, "10-Q/A": 78,
+    "10-K": 88, "10-K/A": 84,
+    "20-F": 80, "20-F/A": 76,
+    "6-K": 72,
+    "SC 13D": 92, "SC 13D/A": 88,
+    "SC 13G": 70, "SC 13G/A": 66,
+    "S-1": 90, "S-1/A": 86,
+    "F-1": 88, "F-1/A": 84,
+    "DEF 14A": 62, "DEFA14A": 58,
+    "PRE 14A": 55,
+}
+
+
+def _news_norm_title(title: str) -> str:
+    t = re.sub(r"\s+", " ", (title or "").lower()).strip()
+    t = re.sub(r"[^a-z0-9 $%.\-]+", "", t)
+    return t[:160]
+
+
+def _parse_rss_items(xml_text: str, source_label: str, limit: int = 12) -> list[dict]:
+    import xml.etree.ElementTree as _ET
+    from email.utils import parsedate_to_datetime
+    items: list[dict] = []
+    try:
+        root = _ET.fromstring(xml_text)
+    except Exception:
+        return []
+    # RSS 2.0 channel/item or Atom entry
+    channel = root.find("channel")
+    nodes = list(channel.findall("item")) if channel is not None else []
+    if not nodes:
+        # Atom
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        nodes = list(root.findall("a:entry", ns)) or list(root.findall("entry"))
+        for it in nodes[:limit]:
+            title = (it.findtext("{http://www.w3.org/2005/Atom}title")
+                     or it.findtext("title") or "").strip()
+            link_el = it.find("{http://www.w3.org/2005/Atom}link") or it.find("link")
+            link = ""
+            if link_el is not None:
+                link = (link_el.get("href") or (link_el.text or "")).strip()
+            pub = (it.findtext("{http://www.w3.org/2005/Atom}updated")
+                   or it.findtext("{http://www.w3.org/2005/Atom}published")
+                   or it.findtext("updated") or it.findtext("published") or "").strip()
+            pub_ts = None
+            if pub:
+                try:
+                    from datetime import datetime as _dt
+                    pub_ts = int(_dt.fromisoformat(pub.replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    try:
+                        pub_ts = int(parsedate_to_datetime(pub).timestamp())
+                    except Exception:
+                        pass
+            if title:
+                items.append({
+                    "title": title, "url": link, "publisher": source_label,
+                    "pub_ts": pub_ts, "source": "market_wire", "feed": source_label,
+                })
+        return items[:limit]
+
+    for it in nodes[:limit]:
+        title = (it.findtext("title") or "").strip()
+        link = (it.findtext("link") or "").strip()
+        pub = (it.findtext("pubDate") or "").strip()
+        src = (it.findtext("source") or "").strip() or source_label
+        pub_ts = None
+        if pub:
+            try:
+                pub_ts = int(parsedate_to_datetime(pub).timestamp())
+            except Exception:
+                pass
+        if not title:
+            continue
+        items.append({
+            "title": title, "url": link, "publisher": src,
+            "pub_ts": pub_ts, "source": "market_wire", "feed": source_label,
+        })
+    return items
+
+
+def _fetch_rss_url(url: str, timeout: float = 7.0) -> str:
+    import urllib.request as _req
+    req = _req.Request(url, headers={
+        "User-Agent": "DGA-Capital-Research/1.0 (portfolio.dgacapital.com; news desk)",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    })
+    with _req.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _market_wire_score(item: dict, now_ts: float) -> float:
+    title = item.get("title") or ""
+    if _WIRE_BLOCK.search(title):
+        return -1000.0
+    if _WIRE_FILING_NOISE.search(title):
+        return -1000.0
+    url = (item.get("url") or "").lower()
+    # Company EDGAR archives belong on Fund Filings, not Market Wire.
+    if "sec.gov/archives/edgar/data" in url or "/cgi-bin/browse-edgar" in url:
+        return -1000.0
+    score = 0.0
+    if _WIRE_BOOST.search(title):
+        score += 40.0
+    pub_ts = item.get("pub_ts")
+    if pub_ts:
+        age_h = max(0.0, (now_ts - float(pub_ts)) / 3600.0)
+        if age_h > 48:
+            return -1000.0  # hard cut: only last 48h
+        score += max(0.0, 30.0 - age_h)  # fresher → higher
+    else:
+        score -= 5.0
+    # Prefer policy wires slightly over general finance noise
+    feed = (item.get("feed") or "").lower()
+    if "fed" in feed:
+        score += 12.0
+    elif "sec press" in feed:
+        score += 8.0
+    return score
+
+
+def _build_market_wire(limit: int = 14) -> dict:
+    now = time.time()
+    c = _MARKET_WIRE_CACHE
+    if c["data"] is not None and (now - c["ts"]) < _MARKET_WIRE_TTL:
+        data = dict(c["data"])
+        data["items"] = (data.get("items") or [])[:limit]
+        data["cached"] = True
+        return data
+
+    raw: list[dict] = []
+    errors: list[str] = []
+    for label, url in _MARKET_WIRE_FEEDS:
+        try:
+            xml_text = _fetch_rss_url(url)
+            raw.extend(_parse_rss_items(xml_text, label, limit=10))
+        except Exception as e:
+            errors.append(f"{label}: {e!s:.80}")
+
+    # Intra-feed de-dupe by normalized title
+    seen: set[str] = set()
+    uniq: list[dict] = []
+    for it in raw:
+        key = _news_norm_title(it.get("title") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+
+    scored = []
+    for it in uniq:
+        s = _market_wire_score(it, now)
+        if s <= -500:
+            continue
+        it2 = dict(it)
+        it2["score"] = round(s, 1)
+        scored.append(it2)
+    scored.sort(key=lambda x: (-(x.get("score") or 0), -(x.get("pub_ts") or 0)))
+    items = scored[: max(5, min(int(limit or 14), 25))]
+
+    data = {
+        "ok": True,
+        "kind": "market_wire",
+        "as_of": _pacific_time_str(),
+        "ttl_seconds": _MARKET_WIRE_TTL,
+        "items": items,
+        "feeds_ok": len(_MARKET_WIRE_FEEDS) - len(errors),
+        "feeds_total": len(_MARKET_WIRE_FEEDS),
+        "errors": errors[:6],
+        "note": "Macro/policy wire only — company filings live on Fund Filings.",
+        "cached": False,
+    }
+    c["data"] = data
+    c["ts"] = now
+    return data
+
+
+def _research_universe_tickers(lp_id: str | None) -> list[str]:
+    """Watchlist ∪ positions ∪ saved reports — same spirit as idea-feed."""
+    universe: set[str] = set()
+
+    def _add(tk: str) -> None:
+        if not tk:
+            return
+        tk = tk.strip().upper().rstrip("*")
+        if not tk or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+            return
+        # Skip pure cash / money-market noise
+        if tk in ("SPAXX", "FDRXX", "SPRXX", "VMFXX", "USD", "CASH"):
+            return
+        universe.add(tk)
+
+    try:
+        if lp_id and lp_id != "anon":
+            for tk in (_wl_get_db(lp_id) or []):
+                _add(tk)
+    except Exception:
+        pass
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ticker FROM analyst_reports
+                     WHERE archived IS NOT TRUE
+                """)
+                for row in cur.fetchall():
+                    _add(row[0] if not isinstance(row, (list, tuple)) else row[0])
+                cur.execute("""
+                    SELECT DISTINCT s.symbol
+                      FROM tax_lots tl
+                      JOIN securities s ON s.id = tl.security_id
+                      JOIN funds      f ON f.id = tl.fund_id
+                     WHERE f.status     != 'closed'
+                       AND tl.closed_at  IS NULL
+                       AND tl.quantity   > 0
+                       AND COALESCE(s.asset_class, '') != 'cash'
+                """)
+                for row in cur.fetchall():
+                    _add(row[0])
+    except Exception as e:
+        print(f"⚠️ [desk-feeds] universe: {e!s:.120}", flush=True)
+    return sorted(universe)
+
+
+def _sec_recent_filings_for_cik(cik: str, ua: str, max_scan: int = 40) -> list[dict]:
+    """Return high-signal recent filings for one CIK (cached)."""
+    now = time.time()
+    hit = _CIK_SUB_CACHE.get(cik)
+    if hit and (now - hit["ts"]) < _CIK_SUB_TTL:
+        return hit["rows"]
+
+    rows: list[dict] = []
+    try:
+        import sec_edgar_xbrl as _edgar
+        subs = _edgar.fetch_submissions(cik, user_agent=ua)
+        recent = (subs or {}).get("filings", {}).get("recent", {}) or {}
+        forms = recent.get("form") or []
+        accs = recent.get("accessionNumber") or []
+        filed = recent.get("filingDate") or []
+        primary = recent.get("primaryDocument") or []
+        items_desc = recent.get("items") or []  # 8-K item numbers when present
+        n = min(len(forms), max_scan)
+        for i in range(n):
+            form = (forms[i] or "").strip()
+            pri = _FILING_SIGNAL.get(form)
+            if pri is None:
+                continue
+            acc = accs[i] if i < len(accs) else ""
+            fdate = filed[i] if i < len(filed) else ""
+            doc = primary[i] if i < len(primary) else ""
+            items = items_desc[i] if i < len(items_desc) else ""
+            url = _edgar.filing_url(cik, acc, doc) if acc else ""
+            rows.append({
+                "form": form,
+                "accession": acc,
+                "filed": fdate,
+                "primary_doc": doc,
+                "items": items,
+                "url": url,
+                "priority": pri,
+                "cik": cik,
+            })
+    except Exception as e:
+        print(f"⚠️ [filings cik={cik}] {e!s:.120}", flush=True)
+
+    _CIK_SUB_CACHE[cik] = {"ts": now, "rows": rows}
+    return rows
+
+
+def _build_fund_filings(lp_id: str | None, limit: int = 16, days: int = 14) -> dict:
+    now = time.time()
+    cache_key = f"{lp_id or 'anon'}|{int(limit)}|{int(days)}"
+    hit = _FILINGS_CACHE.get(cache_key)
+    if hit and (now - hit["ts"]) < _FILINGS_TTL:
+        data = dict(hit["data"])
+        data["cached"] = True
+        return data
+
+    try:
+        ua = analyst.get_sec_user_agent()
+    except Exception as e:
+        return {
+            "ok": False, "kind": "fund_filings", "items": [],
+            "error": f"SEC_USER_AGENT not configured: {e!s:.80}",
+            "as_of": _pacific_time_str(),
+        }
+
+    import sec_edgar_xbrl as _edgar
+    tickers = _research_universe_tickers(lp_id)
+    # Cap to keep SEC polite + first-paint latency bounded
+    tickers = tickers[:28]
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(3, min(int(days), 45)))).date()
+
+    items: list[dict] = []
+    errors: list[str] = []
+    t0 = time.time()
+    for tk in tickers:
+        # Soft budget: never block the request more than ~12s on a cold cache
+        if time.time() - t0 > 12.0:
+            errors.append(f"timeout budget — scanned partial universe ({len(items)} items so far)")
+            break
+        try:
+            cik = _edgar.resolve_cik(tk, user_agent=ua)
+        except Exception as e:
+            errors.append(f"{tk}: cik {e!s:.60}")
+            continue
+        try:
+            for row in _sec_recent_filings_for_cik(cik, ua):
+                fdate = row.get("filed") or ""
+                try:
+                    d = datetime.strptime(fdate[:10], "%Y-%m-%d").date()
+                except Exception:
+                    continue
+                if d < cutoff:
+                    continue
+                age_days = (datetime.now(timezone.utc).date() - d).days
+                form = row.get("form") or ""
+                items_str = (row.get("items") or "").strip()
+                title_bits = [form]
+                if items_str:
+                    title_bits.append(f"items {items_str}")
+                title = f"{tk} · {' · '.join(title_bits)}"
+                items.append({
+                    "ticker": tk,
+                    "title": title,
+                    "form": form,
+                    "filed": fdate[:10],
+                    "age_days": age_days,
+                    "items": items_str,
+                    "url": row.get("url") or "",
+                    "accession": row.get("accession") or "",
+                    "publisher": "SEC EDGAR",
+                    "source": "sec_edgar",
+                    "priority": row.get("priority") or 50,
+                    "pub_ts": int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()),
+                })
+        except Exception as e:
+            errors.append(f"{tk}: {e!s:.60}")
+        # Be polite to SEC between uncached tickers
+        time.sleep(0.08)
+
+    # Sort: priority then freshness; de-dupe by accession
+    seen_acc: set[str] = set()
+    uniq: list[dict] = []
+    items.sort(key=lambda x: (-(x.get("priority") or 0), x.get("age_days") if x.get("age_days") is not None else 99))
+    for it in items:
+        acc = it.get("accession") or ""
+        key = acc or f"{it.get('ticker')}|{it.get('form')}|{it.get('filed')}"
+        if key in seen_acc:
+            continue
+        seen_acc.add(key)
+        uniq.append(it)
+
+    data = {
+        "ok": True,
+        "kind": "fund_filings",
+        "as_of": _pacific_time_str(),
+        "ttl_seconds": _FILINGS_TTL,
+        "universe_size": len(tickers),
+        "items": uniq[: max(5, min(int(limit or 16), 40))],
+        "errors": errors[:8],
+        "note": "High-signal EDGAR only (8-K, 10-Q/K, 13D/G, S-1, proxy). No Form 4 noise.",
+        "cached": False,
+    }
+    _FILINGS_CACHE[cache_key] = {"ts": now, "data": data}
+    return data
+
+
+def _cross_dedupe_market_vs_filings(market: dict, filings: dict) -> dict:
+    """Ensure Market Wire never repeats Fund Filings signal.
+
+    Rules:
+      • Drop market items whose URL is an EDGAR archive (already scored out).
+      • Drop market items whose title mentions a book ticker + filing form.
+      • Drop market items with near-identical titles to a filing card line.
+    """
+    m_items = list((market or {}).get("items") or [])
+    f_items = list((filings or {}).get("items") or [])
+    book_tks = { (it.get("ticker") or "").upper() for it in f_items if it.get("ticker") }
+    filing_title_keys = { _news_norm_title(it.get("title") or "") for it in f_items }
+
+    kept = []
+    dropped = 0
+    for it in m_items:
+        title = it.get("title") or ""
+        nt = _news_norm_title(title)
+        if nt in filing_title_keys:
+            dropped += 1
+            continue
+        # "AAPL files 8-K …" when AAPL is in book
+        if book_tks and _WIRE_FILING_NOISE.search(title):
+            up = title.upper()
+            if any(re.search(rf"\b{re.escape(tk)}\b", up) for tk in book_tks):
+                dropped += 1
+                continue
+        kept.append(it)
+
+    out = dict(market or {})
+    out["items"] = kept
+    out["deduped_vs_filings"] = dropped
+    return out
+
+
+@app.get("/api/v2/news/market-wire")
+def news_market_wire(request: Request, limit: int = 14):
+    """Free macro Market Wire (RSS). No LLM. No paid news API."""
+    _claims_or_401(request)
+    return _build_market_wire(limit=limit)
+
+
+@app.get("/api/v2/news/fund-filings")
+def news_fund_filings(request: Request, limit: int = 16, days: int = 14):
+    """Free SEC EDGAR fund feed for book universe. No LLM. No paid API."""
+    claims = _claims_or_401(request)
+    lp_id = claims.get("lp_id") or claims.get("email") or "anon"
+    return _build_fund_filings(lp_id, limit=limit, days=days)
+
+
+@app.get("/api/v2/news/desk-feeds")
+def news_desk_feeds(request: Request, market_limit: int = 12, filings_limit: int = 14, days: int = 14):
+    """Both Desk cards in one call, cross-deduped (filings own company EDGAR signal)."""
+    claims = _claims_or_401(request)
+    lp_id = claims.get("lp_id") or claims.get("email") or "anon"
+    filings = _build_fund_filings(lp_id, limit=filings_limit, days=days)
+    market = _build_market_wire(limit=market_limit + 8)  # over-fetch then trim after dedupe
+    market = _cross_dedupe_market_vs_filings(market, filings)
+    market["items"] = (market.get("items") or [])[: max(5, min(int(market_limit or 12), 25))]
+    return {
+        "ok": True,
+        "as_of": _pacific_time_str(),
+        "market_wire": market,
+        "fund_filings": filings,
+        "token_cost": 0,
+        "note": "Two cards, zero LLM tokens. Market = macro RSS; Filings = EDGAR book only.",
+    }
+
+
 @app.get("/api/market/indices")
 def market_indices():
     """Return live quotes for the 11 instruments shown in the GP index ribbon.

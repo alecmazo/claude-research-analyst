@@ -2760,6 +2760,86 @@
   }
 
   
+  /* ── Desk free feeds (Market Wire + Fund Filings) ────────────── */
+  .feed-panel-body {
+    padding: 0;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .feed-empty {
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--dim);
+    line-height: 1.45;
+  }
+  .feed-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 9px 14px;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
+    text-decoration: none;
+    color: inherit;
+    transition: background .12s;
+  }
+  .feed-row:last-child { border-bottom: none; }
+  .feed-row:hover { background: rgba(91,184,212,0.06); }
+  .feed-row-main { flex: 1; min-width: 0; }
+  .feed-row-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--navy-light, #1e293b);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  html[data-theme="dark"] .feed-row-title { color: var(--text-primary); }
+  .feed-row-meta {
+    margin-top: 3px;
+    font-size: 10px;
+    color: var(--dim);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    align-items: center;
+  }
+  .feed-chip {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: #f1f5f9;
+    color: #475569;
+    text-transform: uppercase;
+  }
+  .feed-chip.form-8k { background: #fef3c7; color: #92400e; }
+  .feed-chip.form-10q,
+  .feed-chip.form-10k { background: #dbeafe; color: #1e40af; }
+  .feed-chip.form-13 { background: #f3e8ff; color: #6b21a8; }
+  .feed-chip.signal { background: rgba(91,184,212,0.15); color: #0e7490; }
+  .feed-tk {
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    font-size: 11px;
+    color: var(--blue);
+    min-width: 42px;
+    flex-shrink: 0;
+    padding-top: 1px;
+  }
+  .feed-foot {
+    padding: 8px 14px 10px;
+    font-size: 10px;
+    color: var(--dim);
+    border-top: 1px solid rgba(0,0,0,0.04);
+    background: #fafbfc;
+  }
+  html[data-theme="dark"] .feed-foot { background: var(--bg-surface); border-color: var(--border-subtle); }
+  html[data-theme="dark"] .feed-row { border-bottom-color: var(--border-subtle); }
+
   /* ── Book snapshot (Desk right rail) + shared chips ──────────── */
   .desk-stat-row {
     display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
@@ -3798,6 +3878,34 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
+
+    <!-- Market Wire — free macro RSS (no LLM). Company filings live below. -->
+    <section class="panel" data-wid="market-wire">
+      <header class="panel-head">
+        <span class="panel-title">Market Wire</span>
+        <span class="panel-badge" id="mw-badge" title="Free RSS · no tokens">FREE</span>
+        <span class="panel-action" id="mw-asof" style="cursor:default;">—</span>
+        <button type="button" id="mw-refresh" class="panel-action" title="Refresh wire"
+                style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:700;color:var(--blue);">↻</button>
+      </header>
+      <div class="panel-body feed-panel-body" id="mw-body">
+        <div class="feed-empty">Loading macro wire…</div>
+      </div>
+    </section>
+
+    <!-- Fund Filings — high-signal SEC EDGAR for book universe (no Form 4 noise). -->
+    <section class="panel" data-wid="fund-filings">
+      <header class="panel-head">
+        <span class="panel-title">Fund Filings</span>
+        <span class="panel-badge" id="ff-badge" title="SEC EDGAR · book only">EDGAR</span>
+        <span class="panel-action" id="ff-asof" style="cursor:default;">—</span>
+        <button type="button" id="ff-refresh" class="panel-action" title="Refresh filings"
+                style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:700;color:var(--blue);">↻</button>
+      </header>
+      <div class="panel-body feed-panel-body" id="ff-body">
+        <div class="feed-empty">Loading SEC filings…</div>
+      </div>
+    </section>
 
     <!-- Book Snapshot — live book summary (same positions API as Positions tab) -->
     <section class="panel" data-wid="book-snapshot">
@@ -5883,6 +5991,135 @@ End with the sleeve block at this account's real market value so I can push it t
     if (days < 7) return days + 'd ago';
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
+  // ── Desk free feeds: Market Wire + Fund Filings (zero LLM tokens) ──
+  function _feedEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function _feedRel(pubTs, filed) {
+    let ts = pubTs;
+    if (ts == null && filed) {
+      const d = new Date(filed + 'T12:00:00Z');
+      if (!isNaN(d.getTime())) ts = d.getTime() / 1000;
+    }
+    if (ts == null) return '';
+    const sec = Math.max(0, Date.now() / 1000 - Number(ts));
+    if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + 'm';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+    return Math.floor(sec / 86400) + 'd';
+  }
+  function _formChipClass(form) {
+    const f = String(form || '').toUpperCase();
+    if (f.indexOf('8-K') === 0) return 'form-8k';
+    if (f.indexOf('10-Q') === 0 || f.indexOf('10-K') === 0 || f.indexOf('20-F') === 0) return 'form-10q';
+    if (f.indexOf('13') >= 0) return 'form-13';
+    return '';
+  }
+  function _renderMarketWire(body, data) {
+    if (!body) return;
+    const items = (data && data.items) || [];
+    if (!items.length) {
+      body.innerHTML = '<div class="feed-empty">No high-signal macro items in the last 48h '
+        + '(or RSS sources were quiet). Filings for your book are in <strong>Fund Filings</strong> below.</div>';
+      return;
+    }
+    const rows = items.map(function (it) {
+      const href = it.url || '#';
+      const age = _feedRel(it.pub_ts);
+      const feed = it.feed || it.publisher || 'Wire';
+      return '<a class="feed-row" href="' + _feedEsc(href) + '" target="_blank" rel="noopener">'
+        + '<div class="feed-row-main">'
+        + '<div class="feed-row-title">' + _feedEsc(it.title || '') + '</div>'
+        + '<div class="feed-row-meta">'
+        + '<span class="feed-chip signal">' + _feedEsc(feed) + '</span>'
+        + (age ? '<span>' + age + ' ago</span>' : '')
+        + '</div></div></a>';
+    }).join('');
+    const foot = '<div class="feed-foot">Macro/policy only · free RSS · no tokens'
+      + (data.deduped_vs_filings ? ' · stripped ' + data.deduped_vs_filings + ' filing-like headlines' : '')
+      + '</div>';
+    body.innerHTML = rows + foot;
+  }
+  function _renderFundFilings(body, data) {
+    if (!body) return;
+    const items = (data && data.items) || [];
+    if (data && data.ok === false) {
+      body.innerHTML = '<div class="feed-empty">' + _feedEsc(data.error || 'Filings unavailable') + '</div>';
+      return;
+    }
+    if (!items.length) {
+      body.innerHTML = '<div class="feed-empty">No high-signal SEC filings for your book in the lookback window. '
+        + 'Universe needs positions, watchlist, or saved reports. Form 4 noise is excluded by design.</div>';
+      return;
+    }
+    const rows = items.map(function (it) {
+      const href = it.url || '#';
+      const age = _feedRel(it.pub_ts, it.filed);
+      const form = it.form || '';
+      const chip = _formChipClass(form);
+      const itemsNote = it.items ? (' · items ' + it.items) : '';
+      return '<a class="feed-row" href="' + _feedEsc(href) + '" target="_blank" rel="noopener">'
+        + '<span class="feed-tk">' + _feedEsc(it.ticker || '') + '</span>'
+        + '<div class="feed-row-main">'
+        + '<div class="feed-row-title">' + _feedEsc(form + itemsNote) + '</div>'
+        + '<div class="feed-row-meta">'
+        + '<span class="feed-chip ' + chip + '">' + _feedEsc(form) + '</span>'
+        + (it.filed ? '<span>filed ' + _feedEsc(it.filed) + '</span>' : '')
+        + (age ? '<span>' + age + ' ago</span>' : '')
+        + '</div></div></a>';
+    }).join('');
+    const n = data.universe_size != null ? data.universe_size : '—';
+    const foot = '<div class="feed-foot">EDGAR · book universe ' + n
+      + ' · 8-K / 10-Q/K / 13D-G / S-1 / proxy · no Form 4</div>';
+    body.innerHTML = rows + foot;
+  }
+  async function loadDeskFeeds(force) {
+    const mwBody = document.getElementById('mw-body');
+    const ffBody = document.getElementById('ff-body');
+    const mwAsOf = document.getElementById('mw-asof');
+    const ffAsOf = document.getElementById('ff-asof');
+    const mwBadge = document.getElementById('mw-badge');
+    const ffBadge = document.getElementById('ff-badge');
+    if (!mwBody && !ffBody) return;
+
+    if (!window._deskFeedsWired) {
+      window._deskFeedsWired = true;
+      const mwr = document.getElementById('mw-refresh');
+      const ffr = document.getElementById('ff-refresh');
+      if (mwr) mwr.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _tabLoadedAt.research = 0;
+        loadDeskFeeds(true);
+      });
+      if (ffr) ffr.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _tabLoadedAt.research = 0;
+        loadDeskFeeds(true);
+      });
+    }
+
+    if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Loading macro wire…</div>';
+    if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Loading SEC filings…</div>';
+
+    try {
+      const r = await window.dgaFetch('/api/v2/news/desk-feeds?market_limit=12&filings_limit=14&days=14');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const market = d.market_wire || {};
+      const filings = d.fund_filings || {};
+      _renderMarketWire(mwBody, market);
+      _renderFundFilings(ffBody, filings);
+      if (mwAsOf) mwAsOf.textContent = market.as_of || d.as_of || '—';
+      if (ffAsOf) ffAsOf.textContent = filings.as_of || d.as_of || '—';
+      if (mwBadge) mwBadge.textContent = ((market.items || []).length || 0) + ' items';
+      if (ffBadge) ffBadge.textContent = ((filings.items || []).length || 0) + ' filings';
+    } catch (e) {
+      if (mwBody) mwBody.innerHTML = '<div class="feed-empty">Market wire unavailable: ' + _feedEsc(e.message) + '</div>';
+      if (ffBody) ffBody.innerHTML = '<div class="feed-empty">Fund filings unavailable.</div>';
+    }
+  }
+
   async function loadBookSnapshot() {
     const bookBody = document.getElementById('desk-book-body');
     const bookMeta = document.getElementById('desk-book-meta');
@@ -5980,6 +6217,7 @@ End with the sleeve block at this account's real market value so I can push it t
       _pulseMount('rpulse-panel', 'rpulse');
       _pulseLoadLatest();
       loadBookSnapshot();
+      loadDeskFeeds();
     },
     builder:   () => _initBuilderTab(),
     lab:       () => _initLabTab(),
