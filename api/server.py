@@ -24414,16 +24414,28 @@ def _build_rank_cards(annuals, price, anchor_map, growth_pct):
     ]
 
     # ── DGA Value Rank ──  (lower price/value = better, except yields)
+    # Owner Earnings ≠ FCF: Buffett approx NI + D&A − CapEx. Only emit when we
+    # can compute it distinctly so the card doesn't double-count P/FCF.
     am = anchor_map or {}
     pe = pv(ratio(price, eps))
     eps_hist = [x for x in [g(r, "diluted_eps") for r in annuals][-10:] if x is not None and x > 0]
     shiller = pv(ratio(price, (sum(eps_hist) / len(eps_hist)) if eps_hist else None))
+    # PEG uses earnings-growth style input (caller passes rev/NI CAGR in % pts).
     peg = pv(ratio(pe, growth_pct)) if (pe and growth_pct and growth_pct > 0) else None
+    da = g(L, "dep_amort")
+    capex_raw = g(L, "capex")
+    owner_earn = None
+    if ni is not None and capex_raw is not None:
+        owner_earn = ni + (da or 0.0) - abs(capex_raw)
     val = [
-        _rk_row("PE Ratio", pe, "x", 15, 25, False),
-        _rk_row("Shiller PE", shiller, "x", 20, 30, False),
-        _rk_row("Price-to-Owner-Earnings", pv(ratio(mktcap, fcf)), "x", 15, 22, False),
-        _rk_row("PEG Ratio", peg, "x", 1.0, 2.0, False),
+        _rk_row("PE Ratio", pe, "x", 15, 25, False,
+                note="Price / diluted EPS (TTM when available)"),
+        _rk_row("Shiller PE", shiller, "x", 20, 30, False,
+                note="Price / 10y avg positive diluted EPS"),
+        _rk_row("Price-to-Owner-Earnings", pv(ratio(mktcap, owner_earn)), "x", 15, 22, False,
+                note="Mkt cap / (NI + D&A − CapEx) — Buffett approx; omitted if CapEx missing"),
+        _rk_row("PEG Ratio", peg, "x", 1.0, 2.0, False,
+                note="PE / revenue (or earnings) CAGR % — Lynch-style; not FCF growth"),
         _rk_row("PS Ratio", pv(ratio(mktcap, rev)), "x", 2, 5, False),
         _rk_row("PB Ratio", pv(ratio(price, bvps)), "x", 2, 4, False),
         _rk_row("Price-to-Free-Cash-Flow", pv(ratio(mktcap, fcf)), "x", 15, 25, False),
@@ -24461,12 +24473,201 @@ def _build_rank_cards(annuals, price, anchor_map, growth_pct):
             "value":              card("DGA Value Rank", val)}
 
 
+def _dash_debt_of(r) -> float | None:
+    """Total debt if any debt field is present; None when debt is unreported
+    (do NOT coerce missing → 0 — that flattens cash/debt charts to fake zeros)."""
+    td = _dash_f((r or {}).get("total_debt"))
+    if td is not None:
+        return td
+    ltd = _dash_f((r or {}).get("long_term_debt"))
+    std = _dash_f((r or {}).get("short_term_debt"))
+    if ltd is None and std is None:
+        return None
+    return (ltd or 0.0) + (std or 0.0)
+
+
+def _dash_cash_of(r) -> float | None:
+    c = _dash_f((r or {}).get("cash"))
+    sti = _dash_f((r or {}).get("short_term_investments"))
+    if c is None and sti is None:
+        return None
+    return (c or 0.0) + (sti or 0.0)
+
+
+def _dash_ttm_from_quarters(quarters: list) -> dict:
+    """Sum last ≤4 discrete quarters into a TTM block. Pure arithmetic."""
+    qs = [q for q in (quarters or []) if q][-4:]
+    if len(qs) < 2:
+        return {}
+    def s(k):
+        vals = [_dash_f(q.get(k)) for q in qs]
+        nums = [v for v in vals if v is not None]
+        return sum(nums) if nums else None
+    rev, ni, fcf, ocf, ebitda, opin = (s("revenue"), s("net_income"), s("free_cash_flow"),
+                                       s("operating_cash_flow"), s("ebitda"), s("operating_income"))
+    # Prefer sum of quarterly diluted EPS; else NI / latest shares.
+    eps_parts = [_dash_f(q.get("diluted_eps")) for q in qs]
+    eps_nums = [v for v in eps_parts if v is not None]
+    shares = (_dash_f(qs[-1].get("shares_outstanding"))
+              or _dash_f(qs[-1].get("diluted_shares")))
+    eps = sum(eps_nums) if eps_nums else ((ni / shares) if (ni is not None and shares) else None)
+    return {
+        "periods": len(qs),
+        "revenue": rev, "net_income": ni, "free_cash_flow": fcf,
+        "operating_cash_flow": ocf, "ebitda": ebitda, "operating_income": opin,
+        "eps": eps, "shares": shares,
+        "net_margin": (ni / rev) if (ni is not None and rev not in (None, 0)) else None,
+        "fcf_margin": (fcf / rev) if (fcf is not None and rev not in (None, 0)) else None,
+        "period_end": (qs[-1]["period_end"].isoformat()
+                       if qs[-1].get("period_end") else None),
+    }
+
+
+def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
+    """Sector/industry peers from the free store only (security_meta +
+    company_financials + market_quotes). No network, no LLM.
+
+    Returns {sector, industry, peers:[{ticker, name, is_subject, pe, ev_ebitda,
+    net_margin_pct, rev_yoy_pct, market_cap, price, …}], source}."""
+    out = {"sector": None, "industry": None, "peers": [], "source": "store"}
+    try:
+        meta = _db_meta([tk]).get(tk) or {}
+        sector = (meta.get("sector") or "").strip() or None
+        industry = (meta.get("industry") or "").strip() or None
+        out["sector"] = sector
+        out["industry"] = industry
+        if not sector and not industry:
+            # Still return the subject row so the UI can show a comps shell.
+            if subject_metrics:
+                out["peers"] = [{**subject_metrics, "ticker": tk, "is_subject": True}]
+            return out
+
+        with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+            # Prefer industry match; fall back to sector.
+            peers = []
+            if industry:
+                cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
+                                WHERE industry=%s AND symbol<>%s
+                                ORDER BY symbol LIMIT 40""", (industry, tk))
+                peers = cur.fetchall() or []
+            if len(peers) < 3 and sector:
+                cur.execute("""SELECT symbol, name, sector, industry FROM security_meta
+                                WHERE sector=%s AND symbol<>%s
+                                ORDER BY symbol LIMIT 40""", (sector, tk))
+                peers = cur.fetchall() or []
+            cand = [p["symbol"].upper() for p in peers if p.get("symbol")]
+            if not cand and not subject_metrics:
+                return out
+
+            # Latest annual row per candidate that is in the financials store.
+            fin_map = {}
+            prior_map = {}
+            if cand:
+                cur.execute("""
+                    SELECT DISTINCT ON (ticker)
+                           ticker, entity_name, revenue, net_income, ebitda,
+                           operating_income, free_cash_flow, diluted_eps,
+                           diluted_shares, shares_outstanding, total_debt,
+                           long_term_debt, short_term_debt, cash,
+                           short_term_investments, stockholders_equity,
+                           net_margin, period_end, fy
+                      FROM company_financials
+                     WHERE ticker = ANY(%s) AND period_type='annual'
+                     ORDER BY ticker, period_end DESC
+                """, (cand,))
+                for r in (cur.fetchall() or []):
+                    fin_map[r["ticker"].upper()] = r
+                # Prior-year revenue for YoY
+                prior_map = {}
+                cur.execute("""
+                    SELECT ticker, revenue, period_end FROM company_financials
+                     WHERE ticker = ANY(%s) AND period_type='annual'
+                     ORDER BY ticker, period_end DESC
+                """, (list(fin_map.keys()) or cand,))
+                seen_n = {}
+                for r in (cur.fetchall() or []):
+                    t = r["ticker"].upper()
+                    seen_n[t] = seen_n.get(t, 0) + 1
+                    if seen_n[t] == 2:          # second-most-recent FY
+                        prior_map[t] = _dash_f(r.get("revenue"))
+
+        quotes = _db_quotes(list(fin_map.keys()) + [tk]) if fin_map else _db_quotes([tk])
+
+        def row_metrics(tkr, fin, name=None, is_subject=False):
+            price = _dash_f((quotes.get(tkr) or {}).get("price"))
+            shares = _dash_f((fin or {}).get("shares_outstanding")) or _dash_f((fin or {}).get("diluted_shares"))
+            eps = _dash_f((fin or {}).get("diluted_eps"))
+            ni = _dash_f((fin or {}).get("net_income"))
+            if eps is None and ni is not None and shares:
+                eps = ni / shares
+            rev = _dash_f((fin or {}).get("revenue"))
+            ebitda = _dash_f((fin or {}).get("ebitda"))
+            debt = _dash_debt_of(fin or {})
+            cash = _dash_cash_of(fin or {}) or 0.0
+            mkt = (price * shares) if (price and shares) else None
+            ev = (mkt + (debt or 0.0) - cash) if mkt is not None else None
+            pe = (price / eps) if (price and eps and eps > 0) else None
+            ev_eb = (ev / ebitda) if (ev is not None and ebitda and ebitda > 0) else None
+            nm = _dash_f((fin or {}).get("net_margin"))
+            if nm is not None and abs(nm) <= 2:   # fraction → pct points
+                nm_pct = nm * 100.0
+            elif nm is not None:
+                nm_pct = nm
+            elif ni is not None and rev not in (None, 0):
+                nm_pct = ni / rev * 100.0
+            else:
+                nm_pct = None
+            prior = prior_map.get(tkr) if not is_subject else subject_metrics.get("_prior_rev")
+            yoy = ((rev / prior - 1.0) * 100.0) if (rev and prior and prior > 0) else None
+            return {
+                "ticker": tkr,
+                "name": name or (fin or {}).get("entity_name") or tkr,
+                "is_subject": is_subject,
+                "price": round(price, 2) if price is not None else None,
+                "market_cap": round(mkt) if mkt is not None else None,
+                "pe": round(pe, 2) if pe is not None else None,
+                "ev_ebitda": round(ev_eb, 2) if ev_eb is not None else None,
+                "net_margin_pct": round(nm_pct, 2) if nm_pct is not None else None,
+                "rev_yoy_pct": round(yoy, 2) if yoy is not None else None,
+                "revenue": rev,
+            }
+
+        rows_out = []
+        if subject_metrics:
+            rows_out.append({**{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
+                             "ticker": tk, "is_subject": True})
+        # Rank peers by market-cap proximity to subject when possible.
+        sub_mkt = subject_metrics.get("market_cap") if subject_metrics else None
+        peer_rows = []
+        for p in peers:
+            t = (p.get("symbol") or "").upper()
+            fin = fin_map.get(t)
+            if not fin:
+                continue
+            peer_rows.append(row_metrics(t, fin, name=p.get("name") or fin.get("entity_name")))
+        if sub_mkt:
+            peer_rows.sort(key=lambda r: abs((r.get("market_cap") or sub_mkt) - sub_mkt))
+        else:
+            peer_rows.sort(key=lambda r: -(r.get("market_cap") or 0))
+        rows_out.extend(peer_rows[: max(0, limit)])
+        out["peers"] = rows_out
+        out["source"] = ("industry" if industry and any(
+            (p.get("industry") == industry) for p in peers) else "sector")
+        return out
+    except Exception as e:
+        print(f"[fin-dash] peer comps failed {tk}: {e!s:.160}", flush=True)
+        if subject_metrics:
+            out["peers"] = [{**{k: v for k, v in subject_metrics.items() if not k.startswith("_")},
+                             "ticker": tk, "is_subject": True}]
+        return out
+
+
 @app.get("/api/financials/{ticker}/dashboard")
 def financials_dashboard(ticker: str, request: Request, period_type: str = "annual"):
-    """Chart-ready company dashboard: series for the six GuruFocus-style charts,
-    per-period ROIC/WACC estimates, buyback ratio, the DGA Score composite, the
-    DGA Value (mean of saved Grok + Claude price targets), and valuation anchors.
-    Pure DB — no LLM, no live network."""
+    """Chart-ready company dashboard: fundamentals series, ROIC/WACC, DGA Score,
+    DGA Value (mean of saved Grok/Claude targets), valuation anchors, TTM block,
+    and sector peer comps. Pure DB — no LLM tokens, no live network on the
+    request path (price history has its own free market-data endpoint)."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
@@ -24477,8 +24678,9 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
     rows = [r for r in _fin_rows_for_ticker(tk, pt)]
     rows.reverse()                                   # chronological, oldest first
     rows = rows[-(12 if pt == "annual" else 16):]    # last 12 FYs / 16 quarters
-    annuals = ([r for r in rows] if pt == "annual"
-               else [r for r in _fin_rows_for_ticker(tk, "annual")][::-1][-12:])
+    annuals_all = [r for r in _fin_rows_for_ticker(tk, "annual")][::-1]  # oldest→newest
+    annuals = annuals_all[-12:]
+    quarters_all = [r for r in _fin_rows_for_ticker(tk, "quarter")][::-1]
     if not rows:
         return {"ok": False, "error": f"No financials stored for {tk} — run "
                                       f"'Sync from SEC' on the Financials tab first."}
@@ -24510,7 +24712,7 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
     _tgts = [t for t in (pt_grok, pt_claude) if t and t > 0]
     dga_value = round(sum(_tgts) / len(_tgts), 2) if _tgts else None
 
-    # ── Per-period series with computed ROIC / WACC / buyback ratio ───
+    # ── Per-period series with computed ROIC / WACC / share Δ ───
     series = []
     prev_shares = None
     for r in rows:
@@ -24518,29 +24720,44 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
         label = (f"FY{fy}" if pt == "annual" else f"{fp}'{str(fy)[-2:]}")
         rev   = _dash_f(r.get("revenue"));            ni   = _dash_f(r.get("net_income"))
         ebitda = _dash_f(r.get("ebitda"));            opin = _dash_f(r.get("operating_income"))
-        cash  = (_dash_f(r.get("cash")) or 0) + (_dash_f(r.get("short_term_investments")) or 0)
-        debt  = _dash_f(r.get("total_debt"))
-        if debt is None:
-            debt = (_dash_f(r.get("long_term_debt")) or 0) + (_dash_f(r.get("short_term_debt")) or 0)
+        cash  = _dash_cash_of(r)
+        debt  = _dash_debt_of(r)
         ocf = _dash_f(r.get("operating_cash_flow")); fcf = _dash_f(r.get("free_cash_flow"))
         div = _dash_f(r.get("dividends"));           bb  = _dash_f(r.get("buybacks"))
-        sbc = None   # not extracted in the store (yet) — chart omits the series
+        # Buybacks stored as positive outflow magnitude — chart as positive spend.
+        if bb is not None:
+            bb = abs(bb)
+        if div is not None:
+            div = abs(div)
+        sbc = None   # not extracted in the store (yet)
         shares = _dash_f(r.get("shares_outstanding")) or _dash_f(r.get("diluted_shares"))
         eq  = _dash_f(r.get("stockholders_equity")); ta = _dash_f(r.get("total_assets"))
+        gm = _dash_f(r.get("gross_margin")); om = _dash_f(r.get("operating_margin"))
+        nm = _dash_f(r.get("net_margin"))
+        # Margins stored as fractions (0.15) → percent points for charts.
+        def _m_pct(m, num, den):
+            if m is not None:
+                return (m * 100.0) if abs(m) <= 2 else m
+            if num is not None and den not in (None, 0):
+                return num / den * 100.0
+            return None
+        gp = _dash_f(r.get("gross_profit"))
 
         # ROIC: NOPAT / (debt + equity − cash). Quarterly NOPAT annualized ×4.
         roic = None
+        cash_for_roic = cash or 0.0
         if opin is not None and eq is not None:
-            invested = (debt or 0) + eq - cash
+            invested = (debt or 0.0) + eq - cash_for_roic
             if invested and invested > 0:
                 nopat = opin * (1 - _DASH_TAX) * (4.0 if pt == "quarter" else 1.0)
                 roic = nopat / invested * 100.0
         # WACC est. — book-equity-weighted blend of est. CoE and after-tax CoD.
         wacc = None
         if eq is not None and eq > 0:
-            d = max(debt or 0, 0.0)
+            d = max(debt or 0.0, 0.0)
             wacc = (eq * _DASH_COE + d * _DASH_COD_AT) / (eq + d) * 100.0
-        # Buyback ratio: YoY share-count shrink (+) / dilution (−), %.
+        # Share-count change vs prior period in this series: shrink (+) / dilute (−).
+        # Annual view ≈ YoY; quarterly view ≈ sequential (QoQ) — UI labels accordingly.
         bb_ratio = None
         if shares and prev_shares and prev_shares > 0:
             bb_ratio = (prev_shares - shares) / prev_shares * 100.0
@@ -24550,11 +24767,14 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
             "label": label, "period_end": (r["period_end"].isoformat()
                                            if r.get("period_end") else None),
             "revenue": rev, "net_income": ni, "ebitda": ebitda,
-            "cash": cash or None, "debt": debt,
+            "cash": cash, "debt": debt,
             "ocf": ocf, "fcf": fcf, "dividends": div, "buybacks": bb, "sbc": sbc,
             "shares": shares, "buyback_ratio_pct": (round(bb_ratio, 3)
                                                     if bb_ratio is not None else None),
             "equity": eq, "assets": ta,
+            "gross_margin_pct": _m_pct(gm, gp, rev),
+            "operating_margin_pct": _m_pct(om, opin, rev),
+            "net_margin_pct": _m_pct(nm, ni, rev),
             "roic_pct": round(roic, 2) if roic is not None else None,
             "wacc_pct": round(wacc, 2) if wacc is not None else None,
         })
@@ -24566,17 +24786,28 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
     a_fcf = _col(annuals, "free_cash_flow")
     last = annuals[-1] if annuals else {}
     l_nm   = _dash_f(last.get("net_margin"))
+    # net_margin is a fraction (0.15); if missing, derive from NI/rev.
+    if l_nm is None:
+        _lr = _dash_f(last.get("revenue")); _ln = _dash_f(last.get("net_income"))
+        if _lr not in (None, 0) and _ln is not None:
+            l_nm = _ln / _lr
+    # Guard: if a bad row stored pct points (e.g. 15), normalize to fraction.
+    if l_nm is not None and abs(l_nm) > 2:
+        l_nm = l_nm / 100.0
     l_eq   = _dash_f(last.get("stockholders_equity"))
     l_ni   = _dash_f(last.get("net_income"))
     l_opin = _dash_f(last.get("operating_income"))
-    l_cash = (_dash_f(last.get("cash")) or 0) + (_dash_f(last.get("short_term_investments")) or 0)
-    l_debt = _dash_f(last.get("total_debt")) or 0
+    l_cash = _dash_cash_of(last) or 0.0
+    l_debt = _dash_debt_of(last)
+    l_debt_for_score = l_debt if l_debt is not None else 0.0
     l_fcf  = _dash_f(last.get("free_cash_flow"))
+    l_ebitda = _dash_f(last.get("ebitda"))
+    l_rev = _dash_f(last.get("revenue"))
 
     # Profitability: net margin + ROIC + ROE
     l_roic = None
-    if l_opin is not None and l_eq and (l_debt + l_eq - l_cash) > 0:
-        l_roic = l_opin * (1 - _DASH_TAX) / (l_debt + l_eq - l_cash) * 100
+    if l_opin is not None and l_eq and (l_debt_for_score + l_eq - l_cash) > 0:
+        l_roic = l_opin * (1 - _DASH_TAX) / (l_debt_for_score + l_eq - l_cash) * 100
     l_roe = (l_ni / l_eq * 100) if (l_ni is not None and l_eq and l_eq > 0) else None
     p_parts = [s for s in (_dash_lin(l_nm, 0, 0.20), _dash_lin(l_roic, 0, 18),
                            _dash_lin(l_roe, 0, 22)) if s is not None]
@@ -24590,21 +24821,24 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
         n = min(6, len(vv))            # up to 5 intervals
         return _dash_cagr(vv[-n], vv[-1], n - 1)
     g_rev = _cagr5(a_rev)
-    g_cf  = _cagr5(a_fcf) if any(v for v in a_fcf if v and v > 0) else _cagr5(a_ni)
+    g_ni  = _cagr5(a_ni)
+    g_cf  = _cagr5(a_fcf) if any(v for v in a_fcf if v and v > 0) else g_ni
     g_parts = [s for s in (_dash_lin(g_rev, 0, 0.15), _dash_lin(g_cf, 0, 0.15))
                if s is not None]
     growth = round(sum(g_parts) / len(g_parts)) if g_parts else None
 
     # Financial strength: cash/debt, debt/equity (inverted), FCF coverage
     fs_parts = []
-    if l_debt == 0:
+    if l_debt is None:
+        pass   # no debt disclosure — don't invent a perfect score
+    elif l_debt_for_score == 0:
         fs_parts.append(100.0)
     else:
-        fs_parts.append(_dash_lin(l_cash / l_debt, 0, 1.0) or 0)
+        fs_parts.append(_dash_lin(l_cash / l_debt_for_score, 0, 1.0) or 0)
         if l_eq and l_eq > 0:
-            fs_parts.append(_dash_lin(2.0 - (l_debt / l_eq), 0, 2.0) or 0)
+            fs_parts.append(_dash_lin(2.0 - (l_debt_for_score / l_eq), 0, 2.0) or 0)
         if l_fcf is not None:
-            fs_parts.append(_dash_lin(l_fcf / l_debt, 0, 0.5) or 0)
+            fs_parts.append(_dash_lin(l_fcf / l_debt_for_score, 0, 0.5) or 0)
     financial_strength = round(sum(fs_parts) / len(fs_parts)) if fs_parts else None
 
     # Predictability: positive-NI years + revenue-up years over last ≤10 FYs
@@ -24633,28 +24867,58 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
     dga_score = (round(sum(v * weights[k] for k, v in avail.items())
                        / sum(weights[k] for k in avail)) if avail else None)
 
-    # ── Valuation anchors (per share, latest FY) ───────────────────────
+    # ── TTM from last 4 quarters (preferred for trading multiples) ─────
+    ttm = _dash_ttm_from_quarters(quarters_all)
+
+    # ── Valuation anchors (per share) — prefer TTM EPS for earnings models ──
     valuation = []
     shares_l = (_dash_f(last.get("shares_outstanding"))
-                or _dash_f(last.get("diluted_shares")))
-    eps = _dash_f(last.get("diluted_eps"))
-    if eps is None and l_ni is not None and shares_l:
-        eps = l_ni / shares_l
+                or _dash_f(last.get("diluted_shares"))
+                or ttm.get("shares"))
+    eps_fy = _dash_f(last.get("diluted_eps"))
+    if eps_fy is None and l_ni is not None and shares_l:
+        eps_fy = l_ni / shares_l
+    eps_ttm = ttm.get("eps") if ttm else None
+    # Trading PE: TTM first; model anchors: TTM if available else FY.
+    eps = eps_ttm if (eps_ttm is not None and eps_ttm > 0) else eps_fy
     bvps = (l_eq / shares_l) if (l_eq is not None and shares_l) else None
 
-    # ── Key valuation ratios (P/E, P/B, Market Cap, EV) — store price × latest FY ──
-    # All pure-DB: price from market_quotes, the rest from the SEC store. Mirrors the
-    # GuruFocus header card. EPS uses TTM diluted EPS where stored, else NI / shares.
     mktcap = (price * shares_l) if (price and shares_l) else None
     pe_ratio = (price / eps) if (price and eps and eps > 0) else None
+    pe_fy = (price / eps_fy) if (price and eps_fy and eps_fy > 0) else None
     pb_ratio = (price / bvps) if (price and bvps and bvps > 0) else None
-    ev = (mktcap + (l_debt or 0) - (l_cash or 0)) if mktcap is not None else None
+    ev = (mktcap + (l_debt_for_score or 0) - (l_cash or 0)) if mktcap is not None else None
+    fcf_for_mult = ttm.get("free_cash_flow") if (ttm and ttm.get("free_cash_flow") is not None) else l_fcf
+    ebitda_for_mult = ttm.get("ebitda") if (ttm and ttm.get("ebitda") is not None) else l_ebitda
+    rev_for_mult = ttm.get("revenue") if (ttm and ttm.get("revenue") is not None) else l_rev
+    ev_ebitda = (ev / ebitda_for_mult) if (ev is not None and ebitda_for_mult and ebitda_for_mult > 0) else None
+    fcf_yield = (fcf_for_mult / mktcap * 100.0) if (fcf_for_mult is not None and mktcap and mktcap > 0) else None
+    # YoY growth (latest FY vs prior FY)
+    prior = annuals[-2] if len(annuals) >= 2 else None
+    rev_yoy = None
+    if prior and l_rev and _dash_f(prior.get("revenue")) not in (None, 0):
+        rev_yoy = (l_rev / _dash_f(prior.get("revenue")) - 1.0) * 100.0
+    ni_yoy = None
+    if prior and l_ni is not None and _dash_f(prior.get("net_income")) not in (None, 0):
+        pni = _dash_f(prior.get("net_income"))
+        if pni:
+            ni_yoy = (l_ni / pni - 1.0) * 100.0
+
     key_metrics = {
         "pe":               round(pe_ratio, 2) if pe_ratio is not None else None,
+        "pe_fy":            round(pe_fy, 2) if pe_fy is not None else None,
+        "pe_basis":         ("TTM" if (eps_ttm is not None and eps_ttm > 0) else "FY"),
         "pb":               round(pb_ratio, 2) if pb_ratio is not None else None,
         "market_cap":       round(mktcap)      if mktcap   is not None else None,
         "enterprise_value": round(ev)          if ev       is not None else None,
+        "ev_ebitda":        round(ev_ebitda, 2) if ev_ebitda is not None else None,
+        "fcf_yield_pct":    round(fcf_yield, 2) if fcf_yield is not None else None,
         "eps":              round(eps, 2)      if eps      is not None else None,
+        "eps_fy":           round(eps_fy, 2)   if eps_fy   is not None else None,
+        "rev_yoy_pct":      round(rev_yoy, 2)  if rev_yoy  is not None else None,
+        "ni_yoy_pct":       round(ni_yoy, 2)   if ni_yoy   is not None else None,
+        "net_margin_pct":   round(l_nm * 100, 2) if l_nm is not None else None,
+        "roic_pct":         round(l_roic, 2) if l_roic is not None else None,
     }
 
     def _anchor(label, v, kind="model"):
@@ -24667,11 +24931,13 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
         _anchor("Graham Number", (22.5 * eps * bvps) ** 0.5)
     if eps and eps > 0:
         _anchor("Earnings Power Value", eps / _DASH_COE)
-        if g_rev is not None:
-            _anchor("Peter Lynch Value", eps * _dash_clamp((g_rev * 100), 5, 25))
+        # Lynch: fair value ≈ EPS × earnings-growth rate (use rev CAGR as proxy).
+        g_lynch = g_rev if g_rev is not None else g_ni
+        if g_lynch is not None:
+            _anchor("Peter Lynch Value", eps * _dash_clamp((g_lynch * 100), 5, 25))
     _anchor("Book Value / share", bvps)
     if shares_l:
-        _anchor("Net Cash / share", (l_cash - l_debt) / shares_l)
+        _anchor("Net Cash / share", (l_cash - l_debt_for_score) / shares_l)
     if l_fcf and l_fcf > 0 and shares_l:
         # Simple 2-stage DCF on FCF/share: 5y at clamped hist growth, 3% terminal.
         g = _dash_clamp(g_cf if g_cf is not None else 0.05, 0.0, 0.15)
@@ -24694,24 +24960,61 @@ def financials_dashboard(ticker: str, request: Request, period_type: str = "annu
                    "Overvalued"                if prem <  0.30  else
                    "Significantly Overvalued")
 
-    # ── GuruFocus-style ranking cards (annual history → quality + Vs-History) ──
+    # ── Ranking cards — PEG uses rev (or NI) CAGR, NOT FCF growth ──
     anchor_map = {a["label"]: a["value"] for a in valuation}
-    growth_pct = (g_cf * 100) if g_cf is not None else (g_rev * 100 if g_rev is not None else None)
-    rank_cards = _build_rank_cards(annuals, price, anchor_map, growth_pct)
+    g_for_peg = g_rev if g_rev is not None else g_ni
+    growth_pct = (g_for_peg * 100) if g_for_peg is not None else None
+    # Prefer TTM EPS for value-rank PE when available.
+    rank_price = price
+    if annuals and eps_ttm is not None and eps_ttm > 0:
+        # Patch latest annual diluted_eps for rank-card PE only (copy, don't mutate store).
+        annuals_for_rank = [dict(a) for a in annuals]
+        annuals_for_rank[-1] = dict(annuals_for_rank[-1])
+        annuals_for_rank[-1]["diluted_eps"] = eps_ttm
+    else:
+        annuals_for_rank = annuals
+    rank_cards = _build_rank_cards(annuals_for_rank, rank_price, anchor_map, growth_pct)
+
+    # ── Peer comps (sector/industry from security_meta + SEC store) ──
+    subject_for_peers = {
+        "name": rows[-1].get("entity_name") or tk,
+        "price": round(price, 2) if price is not None else None,
+        "market_cap": key_metrics.get("market_cap"),
+        "pe": key_metrics.get("pe"),
+        "ev_ebitda": key_metrics.get("ev_ebitda"),
+        "net_margin_pct": key_metrics.get("net_margin_pct"),
+        "rev_yoy_pct": key_metrics.get("rev_yoy_pct"),
+        "revenue": rev_for_mult or l_rev,
+        "_prior_rev": _dash_f(prior.get("revenue")) if prior else None,
+    }
+    peers = _build_peer_comps(tk, subject_for_peers, limit=8)
+
+    meta = (_db_meta([tk]).get(tk) or {})
 
     return {"ok": True, "ticker": tk,
             "entity_name": rows[-1].get("entity_name") or tk,
+            "sector": meta.get("sector") or peers.get("sector"),
+            "industry": meta.get("industry") or peers.get("industry"),
             "period_type": pt, "series": series,
             "price": price, "rating": rating,
             "dga_value": dga_value, "verdict": verdict,
             "targets": {"grok": pt_grok, "claude": pt_claude, "as_of": targets_asof},
             "key_metrics": key_metrics,
+            "ttm": ttm,
+            "peers": peers,
             "rank_cards": rank_cards,
-            "dga_score": {"total": dga_score, "components": comps},
+            "dga_score": {"total": dga_score, "components": comps,
+                          "weights": weights},
             "valuation": valuation,
-            "notes": {"wacc": "WACC est.: 9% cost of equity / 4.3% after-tax debt, "
-                              "book-equity weighted",
-                      "roic": "NOPAT(21% tax) / (debt + equity − cash)"}}
+            "notes": {
+                "wacc": "WACC est.: 9% CoE / 4.3% after-tax CoD, book-equity weighted (no beta).",
+                "roic": "NOPAT (21% tax) / (debt + equity − cash). Quarterly NOPAT ×4.",
+                "pe": "Prefers TTM diluted EPS (sum of last ≤4 quarters) over last FY.",
+                "share_delta": ("YoY share change" if pt == "annual"
+                                else "Sequential (QoQ) share change — not annualized."),
+                "peers": "Peers from security_meta industry/sector + company_financials store.",
+                "tokens": "Dashboard is pure DB arithmetic — zero LLM tokens.",
+            }}
 
 
 # ── Interactive price chart (GuruFocus-style) — Tradier history, durable cache ─

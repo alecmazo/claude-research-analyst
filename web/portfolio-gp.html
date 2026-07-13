@@ -4877,11 +4877,11 @@ End with the sleeve block at this account's real market value so I can push it t
 <!-- ══ FINANCIALS TAB ══════════════════════════════════════════ -->
 <div id="tab-financials" class="tab-panel">
   <div class="wide-shell" style="max-width:1300px;margin:18px auto;padding:0 20px;">
-    <div class="tab-toolbar"><h2>Financial statements</h2></div>
+    <div class="tab-toolbar"><h2>Financials</h2></div>
     <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin:-6px 0 14px;">
-      Structured income statement, balance sheet, cash flow &amp; comprehensive income pulled from
-      <strong>SEC EDGAR XBRL</strong> — queryable, multi-year, quarterly + annual. Cash flow is
-      de-cumulated to discrete quarters; Q4 is derived (FY − Q1–Q3). $ in millions unless noted.
+      PM desk for any covered name: TTM multiples, peer comps, margin/ROIC trends, DGA Score &amp; Value.
+      Numbers come from <strong>SEC EDGAR XBRL</strong> (income, balance sheet, cash flow) + free market quotes —
+      no LLM tokens. Cash flow is de-cumulated to discrete quarters; Q4 = FY − Q1–Q3. $ as labeled.
     </div>
 
     <!-- ── Company dashboard (GuruFocus-style, zero LLM tokens) ── -->
@@ -4902,14 +4902,17 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div class="panel-body" style="padding:14px 16px;">
         <div id="fin-dash-empty" style="font-size:12px;color:var(--text-tertiary);">
-          Pick a covered ticker and hit View — six chart panels, a <strong>DGA Score</strong> and a
-          <strong>DGA Value</strong> (mean of your saved Grok + Claude price targets), all computed from
-          the persisted SEC XBRL store. Zero LLM cost per view.
+          Pick a covered ticker and hit View — PM desk: price + TTM multiples, peer comps,
+          margin/ROIC charts, <strong>DGA Score</strong>, and <strong>DGA Value</strong>
+          (mean of saved Grok + Claude targets). All from the free SEC XBRL store + market quotes. Zero LLM tokens.
         </div>
         <div id="fin-dash-head" style="display:none;"></div>
+        <div id="fin-dash-ttm" style="display:none;margin-top:12px;"></div>
         <div id="fin-dash-price" style="display:none;margin-top:12px;"></div>
-        <div id="fin-dash-grid" style="display:none;margin-top:12px;display:none;"></div>
+        <div id="fin-dash-grid" style="display:none;margin-top:12px;"></div>
+        <div id="fin-dash-peers" style="display:none;margin-top:14px;"></div>
         <div id="fin-dash-ranks" style="display:none;margin-top:14px;"></div>
+        <div id="fin-dash-notes" style="display:none;margin-top:10px;font-size:10.5px;color:var(--text-tertiary);line-height:1.45;"></div>
       </div>
     </section>
 
@@ -7887,6 +7890,9 @@ End with the sleeve block at this account's real market value so I can push it t
     if (grid) grid.style.display = 'none';
     const _rk = document.getElementById('fin-dash-ranks'); if (_rk) _rk.style.display = 'none';
     const _ph = document.getElementById('fin-dash-price'); if (_ph) _ph.style.display = 'none';
+    const _tt = document.getElementById('fin-dash-ttm'); if (_tt) _tt.style.display = 'none';
+    const _pr = document.getElementById('fin-dash-peers'); if (_pr) _pr.style.display = 'none';
+    const _nt = document.getElementById('fin-dash-notes'); if (_nt) _nt.style.display = 'none';
     try {
       const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/dashboard?period_type=' + _finDashPeriod);
       const d = await r.json();
@@ -7960,6 +7966,9 @@ End with the sleeve block at this account's real market value so I can push it t
     const grid = document.getElementById('fin-dash-grid');
     const S = d.series || [], labels = S.map(x => x.label);
     const col = k => S.map(x => x[k]);
+    const isAnnual = (d.period_type || 'annual') === 'annual';
+    const shareDeltaName = isAnnual ? 'Share Δ % (YoY)' : 'Share Δ % (QoQ)';
+    const shareDeltaNeg  = isAnnual ? 'Dilution % (YoY)' : 'Dilution % (QoQ)';
 
     // ── Header: identity · DGA Score · DGA Value + valuation anchors ──
     const sc = (d.dga_score || {}), comps = sc.components || {};
@@ -7975,18 +7984,24 @@ End with the sleeve block at this account's real market value so I can push it t
     const verdictCol = { 'Significantly Undervalued': _GF.green, 'Undervalued': '#65a30d',
       'Fairly Valued': _GF.orange, 'Overvalued': '#ea580c', 'Significantly Overvalued': _GF.red };
     const tg = d.targets || {};
-    // Key valuation ratios (GuruFocus-style) for the identity card — pure store data.
+    // Key valuation ratios — TTM PE preferred; pure store data.
     const km = d.key_metrics || {};
-    const _kmCell = (lbl, val) =>
+    const _sgn = v => v == null ? 'var(--text-primary)' : v >= 0 ? _GF.green : _GF.red;
+    const _kmCell = (lbl, val, colr) =>
       `<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">` +
       `<span style="font-size:11px;color:var(--text-tertiary);">${lbl}</span>` +
-      `<span style="font-size:12px;font-weight:700;color:var(--text-primary);font-variant-numeric:tabular-nums;">${val}</span></div>`;
+      `<span style="font-size:12px;font-weight:700;color:${colr || 'var(--text-primary)'};font-variant-numeric:tabular-nums;">${val}</span></div>`;
+    const peLbl = 'P/E' + (km.pe_basis ? ' (' + km.pe_basis + ')' : '');
     const kmGrid =
       `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);">` +
-        _kmCell('P/E',          km.pe != null ? km.pe.toFixed(2) : '—') +
+        _kmCell(peLbl,          km.pe != null ? km.pe.toFixed(2) : '—') +
         _kmCell('Market Cap',   _gfCap(km.market_cap)) +
-        _kmCell('P/B',          km.pb != null ? km.pb.toFixed(2) : '—') +
+        _kmCell('EV / EBITDA',  km.ev_ebitda != null ? km.ev_ebitda.toFixed(2) + '×' : '—') +
         _kmCell('Enterprise V', _gfCap(km.enterprise_value)) +
+        _kmCell('P/B',          km.pb != null ? km.pb.toFixed(2) : '—') +
+        _kmCell('FCF Yield',    km.fcf_yield_pct != null ? km.fcf_yield_pct.toFixed(1) + '%' : '—') +
+        _kmCell('Rev YoY',      km.rev_yoy_pct != null ? ((km.rev_yoy_pct>=0?'+':'') + km.rev_yoy_pct.toFixed(1) + '%') : '—', _sgn(km.rev_yoy_pct)) +
+        _kmCell('ROIC',         km.roic_pct != null ? km.roic_pct.toFixed(1) + '%' : '—') +
       `</div>`;
     const anchors = (d.valuation || []);
     const maxAbs = Math.max(d.price || 0, ...anchors.map(a => Math.abs(a.value)), 1);
@@ -8001,11 +8016,13 @@ End with the sleeve block at this account's real market value so I can push it t
         `</div><span style="font-size:11px;font-weight:700;color:var(--text-primary);width:66px;font-variant-numeric:tabular-nums;">$${a.value.toLocaleString('en-US',{maximumFractionDigits:2})}</span></div>`;
     }).join('');
 
+    const sectorLine = [d.sector, d.industry].filter(Boolean).map(_gfEsc).join(' · ');
     head.innerHTML =
       `<div style="display:grid;grid-template-columns:1.1fr 1fr 1.4fr;gap:14px;align-items:stretch;">` +
       // identity
       `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
         `<div style="font-size:15px;font-weight:800;color:var(--text-primary);">${_gfEsc(d.entity_name)} <span style="color:var(--text-tertiary);font-weight:600;">· ${_gfEsc(d.ticker)}</span></div>` +
+        (sectorLine ? `<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">${sectorLine}</div>` : '') +
         `<div style="font-size:22px;font-weight:800;color:var(--text-primary);margin-top:4px;font-variant-numeric:tabular-nums;">${d.price ? '$' + d.price.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}` +
         (d.rating ? ` <span style="font-size:10px;font-weight:800;letter-spacing:0.5px;color:${_GF.green};border:1px solid ${_GF.green};border-radius:4px;padding:1px 6px;vertical-align:middle;">${_gfEsc(d.rating).toUpperCase()}</span>` : '') + `</div>` +
         kmGrid +
@@ -8019,50 +8036,138 @@ End with the sleeve block at this account's real market value so I can push it t
         compRow('Profitability', comps.profitability) + compRow('Growth', comps.growth) +
         compRow('Fin. Strength', comps.financial_strength) + compRow('Predictability', comps.predictability) +
         compRow('Value', comps.value) +
+        `<div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">30% profit · 25% growth · 20% strength · 15% pred · 10% value</div>` +
       `</div>` +
       // DGA value + anchors
       `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
-        `<div style="display:flex;align-items:baseline;gap:10px;">` +
+        `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">` +
           `<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-secondary);">DGA VALUE™</span>` +
           `<span style="font-size:20px;font-weight:800;color:var(--text-primary);">${d.dga_value ? '$' + d.dga_value.toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</span>` +
-          (d.verdict ? `<span style="font-size:10px;font-weight:800;color:#7c5e00;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;color:${verdictCol[d.verdict]||'#7c5e00'};">${_gfEsc(d.verdict)}</span>` : '') +
+          (d.verdict ? `<span style="font-size:10px;font-weight:800;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;color:${verdictCol[d.verdict]||'#7c5e00'};">${_gfEsc(d.verdict)}</span>` : '') +
         `</div>` +
         `<div style="margin-top:8px;">${anchorRows || '<span style="font-size:11px;color:var(--text-tertiary);">No valuation anchors (need a saved report + financials).</span>'}</div>` +
         (d.price ? `<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:5px;">┆ dashed line = current price ($${d.price.toLocaleString('en-US',{maximumFractionDigits:2})})</div>` : '') +
       `</div></div>`;
     head.style.display = 'block';
 
-    // ── Six chart panels ──
+    // ── TTM strip (PM desk snapshot) ──
+    const ttmEl = document.getElementById('fin-dash-ttm');
+    const ttm = d.ttm || {};
+    if (ttmEl) {
+      if (ttm.periods) {
+        const cell = (lbl, val) =>
+          `<div style="flex:1;min-width:100px;"><div style="font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-tertiary);">${lbl}</div>` +
+          `<div style="font-size:14px;font-weight:800;color:var(--text-primary);font-variant-numeric:tabular-nums;margin-top:2px;">${val}</div></div>`;
+        ttmEl.innerHTML =
+          `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 14px;background:var(--bg-elevated);">` +
+          `<div style="font-size:10px;font-weight:800;letter-spacing:.6px;color:var(--text-secondary);margin-bottom:8px;">TTM SNAPSHOT · last ${ttm.periods} quarters${ttm.period_end ? ' through ' + _gfEsc(String(ttm.period_end).slice(0,10)) : ''}</div>` +
+          `<div style="display:flex;flex-wrap:wrap;gap:12px 20px;">` +
+            cell('Revenue', ttm.revenue != null ? '$' + _gfMoney(ttm.revenue) : '—') +
+            cell('Net Income', ttm.net_income != null ? '$' + _gfMoney(ttm.net_income) : '—') +
+            cell('FCF', ttm.free_cash_flow != null ? '$' + _gfMoney(ttm.free_cash_flow) : '—') +
+            cell('EPS', ttm.eps != null ? '$' + Number(ttm.eps).toFixed(2) : '—') +
+            cell('Net Margin', ttm.net_margin != null ? (ttm.net_margin * 100).toFixed(1) + '%' : '—') +
+            cell('FCF Margin', ttm.fcf_margin != null ? (ttm.fcf_margin * 100).toFixed(1) + '%' : '—') +
+          `</div></div>`;
+        ttmEl.style.display = 'block';
+      } else {
+        ttmEl.style.display = 'none';
+      }
+    }
+
+    // ── Chart panels (fundamentals + margins + ROIC) ──
     grid.innerHTML = [
       _gfChart({ labels, series: [
         { name:'Revenue', color:_GF.blue,  values: col('revenue') },
-        { name:'Net Income', color:_GF.green, values: col('net_income') },
-        { name:'EBITDA', color:_GF.orange, values: col('ebitda') }] }),
+        { name:'Net Income', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Loss', values: col('net_income') },
+        { name:'EBITDA', color:_GF.orange, colorNeg:_GF.red, nameNeg:'EBITDA (neg)', values: col('ebitda') }] }),
+      _gfChart({ labels, fmtL:_gfPctF, series: [
+        { name:'Gross Margin %', color:_GF.blue, values: col('gross_margin_pct') },
+        { name:'Op. Margin %', color:_GF.orange, values: col('operating_margin_pct') },
+        { name:'Net Margin %', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Margin % (neg)', values: col('net_margin_pct') }] }),
       _gfChart({ labels, series: [
-        { name:'Cash', color:_GF.green, values: col('cash') },
-        { name:'Debt', color:_GF.red,   values: col('debt') }] }),
+        { name:'Cash + STI', color:_GF.green, values: col('cash') },
+        { name:'Total Debt', color:_GF.red,   values: col('debt') }] }),
       _gfChart({ labels, series: [
-        { name:'Operating CF', color:_GF.orange, values: col('ocf') },
-        { name:'Free CF', color:_GF.blue, values: col('fcf') },
-        { name:'Net Income', color:_GF.green, values: col('net_income') },
+        { name:'Operating CF', color:_GF.orange, colorNeg:_GF.red, nameNeg:'OCF (neg)', values: col('ocf') },
+        { name:'Free CF', color:_GF.blue, colorNeg:_GF.red, nameNeg:'FCF (neg)', values: col('fcf') },
+        { name:'Net Income', color:_GF.green, colorNeg:_GF.red, nameNeg:'Net Loss', values: col('net_income') },
         { name:'Dividends', color:_GF.purple, values: col('dividends') },
         { name:'Buybacks', color:_GF.pink, values: col('buybacks') }] }),
       _gfChart({ labels, fmtL:_gfPctF, series: [
-        { name:'ROIC %', color:_GF.green, values: col('roic_pct') },
+        { name:'ROIC %', color:_GF.green, colorNeg:_GF.red, nameNeg:'ROIC % (neg)', values: col('roic_pct') },
         { name:'WACC % (est.)', color:_GF.red, values: col('wacc_pct') },
         { name:'ROIC − WACC', color:'var(--text-primary)', type:'line', values:
           S.map(x => (x.roic_pct != null && x.wacc_pct != null) ? x.roic_pct - x.wacc_pct : null) }] }),
       _gfChart({ labels, fmtL:_gfCount, fmtR:_gfPctF, clampR:{lo:-25, hi:25}, series: [
         { name:'Shares Outstanding', color:_GF.blue, values: col('shares') },
-        { name:'Buyback %', nameNeg:'Dilution %', color:_GF.green, colorNeg:_GF.red,
+        { name: shareDeltaName, nameNeg: shareDeltaNeg, color:_GF.green, colorNeg:_GF.red,
           axis:'R', values: col('buyback_ratio_pct') }] }),
       _gfChart({ labels, series: [
-        { name:'Stockholders Equity', color:_GF.green, values: col('equity') },
+        { name:'Stockholders Equity', color:_GF.green, colorNeg:_GF.red, nameNeg:'Equity (neg)', values: col('equity') },
         { name:'Total Assets', color:_GF.blue, values: col('assets') }] }),
     ].join('');
     grid.style.display = 'grid';
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
     grid.style.gap = '12px';
+
+    // ── Peer comps (sector/industry from free store) ──
+    const peersHost = document.getElementById('fin-dash-peers');
+    if (peersHost) {
+      const pc = d.peers || {};
+      const peers = pc.peers || [];
+      if (peers.length) {
+        const fmtX = v => v == null ? '—' : Number(v).toFixed(1) + '×';
+        const fmtP = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(1) + '%');
+        const fmtM = v => v == null ? '—' : _gfCap(v);
+        const headRow = `<tr style="font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--text-tertiary);">` +
+          `<th style="text-align:left;padding:4px 8px 6px 0;">Ticker</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Price</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Mkt Cap</th>` +
+          `<th style="text-align:right;padding:4px 6px;">P/E</th>` +
+          `<th style="text-align:right;padding:4px 6px;">EV/EBITDA</th>` +
+          `<th style="text-align:right;padding:4px 6px;">Net Mgn</th>` +
+          `<th style="text-align:right;padding:4px 0;">Rev YoY</th></tr>`;
+        const body = peers.map(p => {
+          const sub = p.is_subject;
+          const tkBtn = sub
+            ? `<strong style="color:var(--text-primary);">${_gfEsc(p.ticker)}</strong>`
+            : `<a href="#" data-fin-peer="${_gfEsc(p.ticker)}" style="color:var(--blue);font-weight:700;text-decoration:none;">${_gfEsc(p.ticker)}</a>`;
+          return `<tr style="border-top:1px solid var(--border-subtle);${sub ? 'background:rgba(91,184,212,0.08);' : ''}">` +
+            `<td style="padding:6px 8px 6px 0;font-family:'SF Mono',monospace;font-size:12px;">${tkBtn}` +
+              (p.name && p.name !== p.ticker ? `<span style="display:block;font-size:10px;color:var(--text-tertiary);font-family:inherit;font-weight:400;">${_gfEsc(String(p.name).slice(0,36))}</span>` : '') +
+            `</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.price != null ? '$' + Number(p.price).toLocaleString('en-US',{maximumFractionDigits:2}) : '—'}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtM(p.market_cap)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtX(p.pe)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${fmtX(p.ev_ebitda)}</td>` +
+            `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.net_margin_pct != null ? Number(p.net_margin_pct).toFixed(1) + '%' : '—'}</td>` +
+            `<td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;font-size:12px;color:${_sgn(p.rev_yoy_pct)};">${fmtP(p.rev_yoy_pct)}</td></tr>`;
+        }).join('');
+        const scope = [pc.industry, pc.sector].filter(Boolean).join(' · ') || 'covered names';
+        peersHost.innerHTML =
+          `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
+          `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">` +
+            `<span style="font-size:13px;font-weight:800;color:var(--text-primary);">Comparable companies</span>` +
+            `<span style="font-size:11px;color:var(--text-tertiary);">${_gfEsc(scope)} · free store · no tokens</span>` +
+          `</div>` +
+          `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;">${headRow}${body}</table></div>` +
+          `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">Peers ranked by market-cap proximity within the same industry (else sector). Click a ticker to load its dashboard. Sync more names to widen the peer set.</div>` +
+          `</div>`;
+        peersHost.style.display = 'block';
+        peersHost.querySelectorAll('[data-fin-peer]').forEach(a => {
+          a.addEventListener('click', e => {
+            e.preventDefault();
+            const t = a.getAttribute('data-fin-peer');
+            const inp = document.getElementById('fin-dash-ticker');
+            if (inp) inp.value = t;
+            _finDashLoad(t);
+          });
+        });
+      } else {
+        peersHost.style.display = 'none';
+      }
+    }
 
     // ── Ranking cards (Financial Strength / Profitability / DGA Value) ──
     const ranks = document.getElementById('fin-dash-ranks');
@@ -8072,7 +8177,18 @@ End with the sleeve block at this account's real market value so I can push it t
       ranks.style.display = html ? 'block' : 'none';
     }
 
-    // Interactive price chart (Tradier history) — defaults to YTD on each load.
+    // ── Methodology footnotes ──
+    const notesEl = document.getElementById('fin-dash-notes');
+    if (notesEl && d.notes) {
+      const n = d.notes;
+      notesEl.innerHTML =
+        `<strong style="color:var(--text-secondary);">Methodology</strong> · ` +
+        [n.pe, n.roic, n.wacc, n.share_delta, n.peers, n.tokens]
+          .filter(Boolean).map(_gfEsc).join(' · ');
+      notesEl.style.display = 'block';
+    }
+
+    // Interactive price chart (Tradier/Yahoo history) — defaults to YTD on each load.
     _finPriceLoad(d.ticker, _finPriceRange);
   }
 
