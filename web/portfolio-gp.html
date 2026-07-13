@@ -2760,75 +2760,7 @@
   }
 
   
-  /* ── Desk (morning home) ─────────────────────────────────────── */
-  .desk-shell {
-    max-width: 1400px; margin: 0 auto; padding: 16px 18px 40px;
-  }
-  .desk-top {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    gap: 16px; margin-bottom: 14px; flex-wrap: wrap;
-  }
-  .desk-kicker {
-    font-size: 10px; font-weight: 800; letter-spacing: 1.4px;
-    text-transform: uppercase; color: var(--blue);
-    margin-bottom: 4px;
-  }
-  .desk-title {
-    font-size: 22px; font-weight: 800; color: var(--navy-light, #1e293b);
-    letter-spacing: -0.3px; line-height: 1.15;
-  }
-  html[data-theme="dark"] .desk-title { color: var(--text-primary, #e2e8f0); }
-  .desk-sub {
-    font-size: 12px; color: var(--mid); margin-top: 4px;
-  }
-  .desk-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .desk-btn {
-    height: 34px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--panel-edge);
-    background: #fff; color: var(--navy-light); font-size: 11px; font-weight: 700;
-    letter-spacing: 0.4px; cursor: pointer;
-  }
-  .desk-btn:hover { border-color: var(--blue); color: var(--blue); }
-  .desk-btn.primary {
-    background: linear-gradient(180deg, var(--blue-light), var(--blue));
-    color: var(--navy); border-color: transparent;
-  }
-  html[data-theme="dark"] .desk-btn { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-default); }
-  .desk-grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr 1fr;
-    gap: 14px;
-  }
-  @media (max-width: 1100px) {
-    .desk-grid { grid-template-columns: 1fr 1fr; }
-  }
-  @media (max-width: 720px) {
-    .desk-grid { grid-template-columns: 1fr; }
-  }
-  .desk-card {
-    background: var(--panel, #fff);
-    border: 1px solid var(--panel-edge);
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    min-height: 140px;
-    display: flex; flex-direction: column;
-  }
-  .desk-card-wide { grid-column: 1 / -1; }
-  .desk-card-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 11px 14px 9px;
-    border-bottom: 1px solid rgba(0,0,0,0.06);
-    background: #fafbfc;
-  }
-  html[data-theme="dark"] .desk-card-head { background: var(--bg-surface); border-color: var(--border-subtle); }
-  .desk-card-title {
-    font-size: 10px; font-weight: 800; color: var(--blue);
-    letter-spacing: 1.3px; text-transform: uppercase;
-  }
-  .desk-card-meta {
-    margin-left: auto; font-size: 10px; color: var(--dim); font-weight: 600;
-  }
-  .desk-card-body { padding: 12px 14px 14px; flex: 1; }
+  /* ── Book snapshot (Desk right rail) + shared chips ──────────── */
   .desk-stat-row {
     display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
   }
@@ -3347,8 +3279,7 @@
   </div>
 
   <nav class="topbar-right">
-    <span class="topbar-link active" data-tab="desk">Desk</span>
-    <span class="topbar-link" data-tab="research">Research</span>
+    <span class="topbar-link active" data-tab="research">Desk</span>
     <span class="topbar-link" data-tab="positions">Positions</span>
     <span class="topbar-link" data-tab="ideas">Ideas</span>
     <span class="topbar-link" data-tab="fund">Fund</span>
@@ -3381,82 +3312,6 @@
 <!-- TAB PANELS                                                 -->
 <!-- ══════════════════════════════════════════════════════════ -->
 
-
-<!-- ══ DESK TAB — morning home (compose existing APIs; cache-first) ══ -->
-<div id="tab-desk" class="tab-panel active">
-  <div class="desk-shell">
-    <div class="desk-top">
-      <div>
-        <div class="desk-kicker">GP Terminal · Light desk</div>
-        <div class="desk-title" id="desk-title">Morning desk</div>
-        <div class="desk-sub" id="desk-sub">Book · pulse · stale coverage · movers. Cache-first; deep tools stay one click away.</div>
-      </div>
-      <div class="desk-actions">
-        <button type="button" class="desk-btn" data-desk-goto="research">Open Research</button>
-        <button type="button" class="desk-btn" data-desk-goto="positions">Book</button>
-        <button type="button" class="desk-btn primary" data-desk-goto="ideas">Ideas</button>
-        <button type="button" class="desk-btn" id="desk-refresh-btn">Refresh</button>
-      </div>
-    </div>
-
-    <div class="desk-grid">
-      <section class="desk-card">
-        <header class="desk-card-head">
-          <span class="desk-card-title">Book snapshot</span>
-          <span class="desk-card-meta" id="desk-book-meta">—</span>
-        </header>
-        <div class="desk-card-body" id="desk-book-body">
-          <div class="desk-muted">Loading positions…</div>
-        </div>
-      </section>
-
-      <section class="desk-card">
-        <header class="desk-card-head">
-          <span class="desk-card-title">Daily pulse</span>
-          <span class="desk-card-meta" id="desk-brief-meta">—</span>
-        </header>
-        <div class="desk-card-body" id="desk-brief-body">
-          <div class="desk-muted">Loading brief…</div>
-        </div>
-      </section>
-
-      <section class="desk-card">
-        <header class="desk-card-head">
-          <span class="desk-card-title">Needs attention</span>
-          <span class="desk-card-meta" id="desk-attn-meta">—</span>
-        </header>
-        <div class="desk-card-body" id="desk-attn-body">
-          <div class="desk-muted">Checking coverage…</div>
-        </div>
-      </section>
-
-      <section class="desk-card">
-        <header class="desk-card-head">
-          <span class="desk-card-title">Market movers</span>
-          <span class="desk-card-meta" id="desk-movers-meta">from idea feed</span>
-        </header>
-        <div class="desk-card-body" id="desk-movers-body">
-          <div class="desk-muted">Loading movers…</div>
-        </div>
-      </section>
-
-      <section class="desk-card desk-card-wide">
-        <header class="desk-card-head">
-          <span class="desk-card-title">Quick actions</span>
-          <span class="desk-card-meta">no auto LLM runs</span>
-        </header>
-        <div class="desk-card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button type="button" class="desk-btn primary" data-desk-goto="research" data-desk-focus="agentic-q">Ask analyst</button>
-          <button type="button" class="desk-btn" data-desk-goto="research" data-desk-focus="run-brief-btn">Run daily pulse</button>
-          <button type="button" class="desk-btn" data-desk-goto="ideas">Sector intelligence</button>
-          <button type="button" class="desk-btn" data-desk-goto="positions">Positions &amp; chart</button>
-          <button type="button" class="desk-btn" data-desk-goto="options">Options wheel</button>
-          <span class="desk-muted" style="margin-left:4px;">Tip: ⌘K search jumps to any ticker or report.</span>
-        </div>
-      </section>
-    </div>
-  </div>
-</div><!-- #tab-desk -->
 
 <!-- ══ POSITIONS TAB — Fidelity-style two-pane layout ═══════════════════ -->
 <div id="tab-positions" class="tab-panel">
@@ -3940,6 +3795,19 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div class="panel-body" style="padding:0" id="trending-rows">
         <div style="padding:14px;font-size:12px;color:var(--dim);text-align:center;">Loading…</div>
+      </div>
+    </section>
+
+
+    <!-- Book Snapshot — live book summary (same positions API as Positions tab) -->
+    <section class="panel" data-wid="book-snapshot">
+      <header class="panel-head">
+        <span class="panel-title">Book Snapshot</span>
+        <span class="panel-badge" id="desk-book-meta">—</span>
+        <span class="panel-action" id="desk-book-open" style="cursor:pointer;" title="Open Positions">Positions →</span>
+      </header>
+      <div class="panel-body" style="padding:12px 14px;" id="desk-book-body">
+        <div style="font-size:12px;color:var(--dim);">Loading book…</div>
       </div>
     </section>
 
@@ -5995,7 +5863,7 @@ End with the sleeve block at this account's real market value so I can push it t
 
 
   // ══════════════════════════════════════════════════════════════
-  // DESK — morning home (cache-first composition of existing APIs)
+  // BOOK SNAPSHOT — right-rail card on Desk (research shell)
   // ══════════════════════════════════════════════════════════════
   function _deskEsc(s) {
     return String(s == null ? '' : s)
@@ -6015,82 +5883,27 @@ End with the sleeve block at this account's real market value so I can push it t
     if (days < 7) return days + 'd ago';
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
-  function _deskBriefTeaser(md) {
-    if (!md) return '';
-    const plain = String(md)
-      .replace(/```[\s\S]*?```/g, ' ')
-      .replace(/[#>*_`\[\]()]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return plain.slice(0, 280) + (plain.length > 280 ? '…' : '');
-  }
-  async function loadDesk() {
-    const titleEl = document.getElementById('desk-title');
-    const subEl = document.getElementById('desk-sub');
-    const hour = new Date().getHours();
-    const greet = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
-    if (titleEl) titleEl.textContent = greet + ' · desk';
-    if (subEl) {
-      subEl.textContent = new Date().toLocaleString('en-US', {
-        weekday: 'long', month: 'long', day: 'numeric',
-        hour: 'numeric', minute: '2-digit'
-      }) + ' · light terminal · cache-first';
-    }
-
-    // Wire action buttons once
-    if (!window._deskWired) {
-      window._deskWired = true;
-      document.querySelectorAll('[data-desk-goto]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          const tab = btn.getAttribute('data-desk-goto');
-          const focus = btn.getAttribute('data-desk-focus');
-          if (tab) showTab(tab);
-          if (focus) {
-            setTimeout(function () {
-              const el = document.getElementById(focus);
-              if (!el) return;
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              if (el.tagName === 'BUTTON') el.focus();
-              else if (el.focus) el.focus();
-            }, 200);
-          }
-        });
-      });
-      const ref = document.getElementById('desk-refresh-btn');
-      if (ref) ref.addEventListener('click', function () {
-        _tabLoadedAt.desk = 0;
-        loadDesk();
-      });
-    }
-
+  async function loadBookSnapshot() {
     const bookBody = document.getElementById('desk-book-body');
     const bookMeta = document.getElementById('desk-book-meta');
-    const briefBody = document.getElementById('desk-brief-body');
-    const briefMeta = document.getElementById('desk-brief-meta');
-    const attnBody = document.getElementById('desk-attn-body');
-    const attnMeta = document.getElementById('desk-attn-meta');
-    const moversBody = document.getElementById('desk-movers-body');
-    const moversMeta = document.getElementById('desk-movers-meta');
+    const openBtn = document.getElementById('desk-book-open');
+    if (openBtn && !openBtn._wired) {
+      openBtn._wired = true;
+      openBtn.addEventListener('click', function () { showTab('positions'); });
+    }
+    if (!bookBody) return;
 
-    const safeJson = async function (url) {
+    async function safeJson(url) {
       try {
         const r = await window.dgaFetch(url);
         if (!r.ok) return null;
         return await r.json();
       } catch (e) { return null; }
-    };
+    }
 
-    // Same positions endpoint as Positions tab; watchlist is a soft fallback
     let pos = await safeJson('/api/v2/lp/me/positions');
     if (!pos) pos = await safeJson('/api/watchlist');
-    const [brief, reports, ideas, scan] = await Promise.all([
-      safeJson('/api/daily-brief/latest'),
-      safeJson('/api/reports'),
-      safeJson('/api/v2/research/idea-feed?threshold=2.5'),
-      safeJson('/api/scan/latest'),
-    ]);
 
-    // Book snapshot — try positions-shaped payload, fall back to watchlist
     try {
       let totalMV = null, dayAbs = null, count = 0, asOf = '';
       if (pos && Array.isArray(pos.positions)) {
@@ -6110,156 +5923,47 @@ End with the sleeve block at this account's real market value so I can push it t
       } else if (pos && Array.isArray(pos.tickers)) {
         count = pos.tickers.length;
       }
-      if (bookMeta) bookMeta.textContent = asOf ? ('as of ' + _deskRel(asOf)) : 'live when available';
-      if (bookBody) {
-        if (totalMV != null) {
-          const dayCls = dayAbs == null ? '' : (dayAbs >= 0 ? 'up' : 'dn');
-          const dayStr = dayAbs == null ? '—' : ((dayAbs >= 0 ? '+' : '') + fmtUSD(dayAbs));
-          bookBody.innerHTML = `
-            <div class="desk-stat-row">
-              <div>
-                <div class="desk-stat-lbl">Total market value</div>
-                <div class="desk-stat-val">${_deskEsc(fmtUSD(totalMV))}</div>
-              </div>
-              <div>
-                <div class="desk-stat-lbl">Today</div>
-                <div class="desk-stat-val" style="font-size:18px;">
-                  <span class="desk-chip ${dayCls}">${_deskEsc(dayStr)}</span>
-                </div>
-              </div>
-              <div>
-                <div class="desk-stat-lbl">Positions</div>
-                <div class="desk-stat-val" style="font-size:18px;">${count}</div>
-              </div>
-            </div>
-            <div style="margin-top:12px;">
-              <button type="button" class="desk-btn" data-desk-goto="positions">Open book →</button>
-            </div>`;
-          bookBody.querySelectorAll('[data-desk-goto]').forEach(function (b) {
-            b.addEventListener('click', function () { showTab(b.getAttribute('data-desk-goto')); });
-          });
-        } else {
-          bookBody.innerHTML = `<div class="desk-muted">Book detail loads on the Positions tab.
-            ${count ? (count + ' watchlist names ready.') : 'Connect / open Positions for live NAV.'}</div>
-            <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-open-pos">Open Positions →</button></div>`;
-          const b = document.getElementById('desk-open-pos');
-          if (b) b.onclick = function () { showTab('positions'); };
-        }
-      }
-    } catch (e) {
-      if (bookBody) bookBody.innerHTML = '<div class="desk-muted">Book snapshot unavailable.</div>';
-    }
 
-    // Daily brief teaser
-    try {
-      if (brief && (brief.markdown || brief.brief_md || brief.report_md || brief.status === 'done')) {
-        const md = brief.markdown || brief.brief_md || brief.report_md || brief.result || '';
-        const when = brief.generated_at || brief.finished_at || brief.created_at;
-        if (briefMeta) briefMeta.textContent = when ? _deskRel(when) : 'cached';
-        const teaser = _deskBriefTeaser(typeof md === 'string' ? md : '');
-        if (briefBody) {
-          briefBody.innerHTML = teaser
-            ? `<div class="desk-muted" style="color:var(--navy-light);line-height:1.55;">${_deskEsc(teaser)}</div>
-               <div style="margin-top:10px;display:flex;gap:8px;">
-                 <button type="button" class="desk-btn primary" id="desk-open-brief">Read on Research →</button>
-               </div>`
-            : `<div class="desk-muted">Brief on file but empty body.</div>
-               <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-open-brief">Open Research →</button></div>`;
-          const b = document.getElementById('desk-open-brief');
-          if (b) b.onclick = function () { showTab('research'); };
+      if (bookMeta) bookMeta.textContent = asOf ? _deskRel(asOf) : (count ? (count + ' names') : '—');
+
+      if (totalMV != null) {
+        const dayCls = dayAbs == null ? '' : (dayAbs >= 0 ? 'up' : 'dn');
+        const dayStr = dayAbs == null ? '—' : ((dayAbs >= 0 ? '+' : '') + fmtUSD(dayAbs));
+        // Top 5 contributors by market value
+        let topHtml = '';
+        if (pos.positions && pos.positions.length) {
+          const top = pos.positions.slice().sort(function (a, b) {
+            return (b.market_value || 0) - (a.market_value || 0);
+          }).slice(0, 5);
+          topHtml = '<ul class="desk-list" style="margin-top:10px;">' + top.map(function (p) {
+            const tk = p.symbol || p.ticker || '—';
+            const mv = p.market_value != null ? fmtUSD(p.market_value) : '—';
+            const dp = p.day_change_pct != null ? Number(p.day_change_pct)
+                     : (p.pct_change != null ? Number(p.pct_change) : null);
+            const cls = dp == null ? '' : (dp >= 0 ? 'up' : 'dn');
+            const dps = dp == null ? '' : ('<span class="desk-chip ' + cls + '">' + (dp >= 0 ? '+' : '') + dp.toFixed(1) + '%</span>');
+            return '<li style="cursor:default;"><span class="desk-tk">' + _deskEsc(tk) + '</span>'
+              + dps + '<span class="desk-muted" style="margin-left:auto;">' + _deskEsc(mv) + '</span></li>';
+          }).join('') + '</ul>';
         }
+        bookBody.innerHTML =
+          '<div class="desk-stat-row">'
+          + '<div><div class="desk-stat-lbl">Total MV</div>'
+          + '<div class="desk-stat-val" style="font-size:22px;">' + _deskEsc(fmtUSD(totalMV)) + '</div></div>'
+          + '<div><div class="desk-stat-lbl">Today</div>'
+          + '<div class="desk-stat-val" style="font-size:16px;"><span class="desk-chip ' + dayCls + '">' + _deskEsc(dayStr) + '</span></div></div>'
+          + '<div><div class="desk-stat-lbl">Positions</div>'
+          + '<div class="desk-stat-val" style="font-size:16px;">' + count + '</div></div>'
+          + '</div>'
+          + topHtml;
       } else {
-        if (briefMeta) briefMeta.textContent = 'none yet';
-        if (briefBody) {
-          briefBody.innerHTML = `<div class="desk-muted">No daily pulse cached. Generate from Research when ready (does not auto-run).</div>
-            <div style="margin-top:10px;"><button type="button" class="desk-btn" id="desk-run-brief">Go to Daily Pulse →</button></div>`;
-          const b = document.getElementById('desk-run-brief');
-          if (b) b.onclick = function () { showTab('research'); };
-        }
+        bookBody.innerHTML =
+          '<div class="desk-muted">Book detail loads when positions are available. '
+          + (count ? (count + ' watchlist names ready.') : 'Open Positions after a SnapTrade sync or YTD upload.')
+          + '</div>';
       }
     } catch (e) {
-      if (briefBody) briefBody.innerHTML = '<div class="desk-muted">Brief unavailable.</div>';
-    }
-
-    // Needs attention — stale reports (>14d) or failed attempts
-    try {
-      const list = Array.isArray(reports) ? reports : [];
-      const stale = [];
-      const failed = [];
-      list.forEach(function (rep) {
-        const when = rep.generated_at || rep.last_attempt_at;
-        const ageDays = when ? (Date.now() - new Date(when).getTime()) / 86400000 : 999;
-        if (rep.last_attempt_status === 'failed') failed.push(rep);
-        else if (ageDays > 14) stale.push(Object.assign({}, rep, { _age: ageDays }));
-      });
-      stale.sort(function (a, b) { return (b._age || 0) - (a._age || 0); });
-      if (attnMeta) attnMeta.textContent = list.length + ' reports';
-      const rows = failed.slice(0, 3).map(function (r) {
-        return `<li data-tk="${_deskEsc(r.ticker)}"><span class="desk-tk">${_deskEsc(r.ticker)}</span>
-          <span class="desk-chip warn">FAILED</span><span class="desk-muted">retry analysis</span></li>`;
-      }).concat(stale.slice(0, 6).map(function (r) {
-        return `<li data-tk="${_deskEsc(r.ticker)}"><span class="desk-tk">${_deskEsc(r.ticker)}</span>
-          <span class="desk-chip warn">${Math.floor(r._age)}d</span>
-          <span class="desk-muted">${_deskEsc(r.rating || 'stale coverage')}</span></li>`;
-      }));
-      if (attnBody) {
-        if (!rows.length) {
-          attnBody.innerHTML = '<div class="desk-muted">Coverage looks fresh — no stale (&gt;14d) or failed reports.</div>';
-        } else {
-          attnBody.innerHTML = `<ul class="desk-list">${rows.join('')}</ul>`;
-          attnBody.querySelectorAll('li[data-tk]').forEach(function (li) {
-            li.addEventListener('click', function () { openReport(li.getAttribute('data-tk')); });
-          });
-        }
-      }
-    } catch (e) {
-      if (attnBody) attnBody.innerHTML = '<div class="desk-muted">Could not load coverage list.</div>';
-    }
-
-    // Movers — idea feed, fall back to scan
-    try {
-      let items = [];
-      if (ideas && Array.isArray(ideas.items)) items = ideas.items;
-      else if (ideas && Array.isArray(ideas.ideas)) items = ideas.ideas;
-      else if (ideas && Array.isArray(ideas.results)) items = ideas.results;
-      else if (scan && scan.results) {
-        const ent = scan.results;
-        if (Array.isArray(ent)) items = ent;
-        else if (typeof ent === 'object') {
-          items = Object.keys(ent).map(function (k) {
-            return Object.assign({ ticker: k }, ent[k] || {});
-          });
-        }
-      }
-      if (moversMeta) {
-        moversMeta.textContent = items.length ? (items.length + ' signals') : '—';
-      }
-      if (moversBody) {
-        if (!items.length) {
-          moversBody.innerHTML = '<div class="desk-muted">No mover signals cached. Open Ideas or run a scan from Research.</div>';
-        } else {
-          const top = items.slice(0, 8).map(function (it) {
-            const tk = it.ticker || it.symbol || it.tk || '—';
-            const pct = it.pct_change != null ? Number(it.pct_change)
-                      : (it.change_pct != null ? Number(it.change_pct)
-                      : (it.pct != null ? Number(it.pct) : null));
-            const cls = pct == null ? '' : (pct >= 0 ? 'up' : 'dn');
-            const reason = it.reason || it.headline || it.summary || it.classification || '';
-            return `<li data-tk="${_deskEsc(tk)}"><span class="desk-tk">${_deskEsc(tk)}</span>
-              ${pct != null ? `<span class="desk-chip ${cls}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>` : ''}
-              <span class="desk-muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_deskEsc(String(reason).slice(0, 90))}</span></li>`;
-          });
-          moversBody.innerHTML = `<ul class="desk-list">${top.join('')}</ul>`;
-          moversBody.querySelectorAll('li[data-tk]').forEach(function (li) {
-            li.addEventListener('click', function () {
-              const tk = li.getAttribute('data-tk');
-              if (tk && tk !== '—') openReport(tk);
-            });
-          });
-        }
-      }
-    } catch (e) {
-      if (moversBody) moversBody.innerHTML = '<div class="desk-muted">Movers unavailable.</div>';
+      bookBody.innerHTML = '<div class="desk-muted">Book snapshot unavailable.</div>';
     }
   }
 
@@ -6267,7 +5971,6 @@ End with the sleeve block at this account's real market value so I can push it t
   // TAB ROUTING
   // ══════════════════════════════════════════════════════════════
   const TAB_LOADERS = {
-    desk:      () => loadDesk(),
     positions: () => loadGPPositions(),
     options:   () => loadOptionsTab(),
     research:  () => {
@@ -6276,6 +5979,7 @@ End with the sleeve block at this account's real market value so I can push it t
       // persisted results — a scan NEVER auto-runs from tab activation.
       _pulseMount('rpulse-panel', 'rpulse');
       _pulseLoadLatest();
+      loadBookSnapshot();
     },
     builder:   () => _initBuilderTab(),
     lab:       () => _initLabTab(),
@@ -20826,9 +20530,9 @@ End with the sleeve block at this account's real market value so I can push it t
   loadWatchlist();
   loadReports();
   loadTrendingTickers();
-  // Desk is the default landing tab (light terminal home)
+  // Desk (research shell) is the default landing tab
   initLiveMarkets();
-  showTab('desk');
+  showTab('research');
 
   // ── Archived Reports (Settings tab) ───────────────────────────────────────
   async function loadArchivedReports() {

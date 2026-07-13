@@ -75,7 +75,7 @@ Human greenlit high-ROI package: **GP → mobile research → LP**, light termin
 
 | Surface | Change |
 |---------|--------|
-| **GP** `web/portfolio-gp.html` | New **Desk** landing tab (cache-first: book, daily pulse teaser, stale coverage, movers). Nav primary: Desk · Research · Positions · Ideas · Fund; labs secondary. **Light theme default** (dark only if user saved preference). Report modal: **hero metrics + TOC + freshness + Compare**. |
+| **GP** `web/portfolio-gp.html` | **Desk** = former Research shell (pulse, analyst, movers, reports). **Book Snapshot** card on right rail. Nav: Desk · Positions · Ideas · Fund; labs secondary. **Light theme default**. Report modal: hero + TOC + freshness + Compare. (Standalone Desk tab removed 2026-07-13 — duplicated Research.) |
 | **Mobile research** `web/index.html`, `app.js`, `style.css` | Home retitled **Today** with desk snapshot (reports / stale / brief), needs-attention list, report **hero + TOC + freshness**. Cache-bust `?v=ui68-today`. |
 | **LP** `web/portfolio-lp.html` | **Portfolio narrative** strip under hero (plain-English total, blended YTD, strongest/softest sleeve, as-of chips). |
 
