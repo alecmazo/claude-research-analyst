@@ -1,5 +1,7 @@
 # DGA Capital Research Analyst — Claude Edition
 
+> **Multi-agent handoff:** Before non-trivial edits, read **[LLM_COORDINATION.md](./LLM_COORDINATION.md)** (claims, surfaces map, sync rules for Grok / Fable / Claude).
+
 Runs an institutional-quality equity research pipeline end-to-end:
 **SEC EDGAR XBRL filing → Excel workbooks → Grok 4.20 reasoning → Word report with bordered tables → optional Gamma.app deck.**
 

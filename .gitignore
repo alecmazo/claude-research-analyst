@@ -30,8 +30,9 @@ portfolio_runs/
 # Downloaded financial data (large, regenerable via SEC EDGAR)
 stock-financials/
 
-# Claude Code internal state
+# Claude Code / Grok / local agent internal state (do not commit)
 .claude/
+.grok/
 
 # OS
 .DS_Store
