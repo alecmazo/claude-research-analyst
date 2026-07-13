@@ -2733,21 +2733,26 @@ def search_resolve(q: str = ""):
 
     results: list[dict] = []
 
-    # Heuristic: looks like a ticker → try direct resolution first
-    if len(query) <= 6 and re.fullmatch(r"[A-Za-z0-9.\-]+", query):
+    # Heuristic: looks like a ticker → always offer it first (even if Yahoo
+    # .info is empty — live quote / stock-info will still work free).
+    if len(query) <= 10 and re.fullmatch(r"[A-Za-z0-9.\-]+", query):
+        sym = query.upper()
+        longname = None
+        exchange = None
         try:
             info = _builder_call_timeout(
-                lambda: getattr(yf.Ticker(query.upper()), "info", {}) or {}, 6.0, {}) or {}
+                lambda: getattr(yf.Ticker(sym), "info", {}) or {}, 6.0, {}) or {}
             longname = info.get("longName") or info.get("shortName")
-            if longname:
-                results.append({
-                    "ticker":   query.upper(),
-                    "name":     longname,
-                    "exchange": info.get("exchange") or info.get("fullExchangeName"),
-                    "score":    1.0,
-                })
+            exchange = info.get("exchange") or info.get("fullExchangeName")
         except Exception:
             pass
+        # Always include exact symbol so top-bar Enter works for any ticker
+        results.append({
+            "ticker":   sym,
+            "name":     longname or "Free snapshot",
+            "exchange": exchange or "LIVE",
+            "score":    1.0 if longname else 0.95,
+        })
 
     # Yahoo autocomplete via yfinance.Search()
     try:
@@ -6785,6 +6790,67 @@ def get_stock_info(ticker: str):
             } if r else {"exists": False})
     except Exception as e:
         out["warning"] = str(e)[:160]
+
+    # Free live enrichment (Yahoo via existing helpers) when local store is thin.
+    # Still zero LLM tokens — used by top-bar ticker lookup for any symbol.
+    need_quote = not (out.get("quote") or {}).get("price")
+    need_meta = not (out.get("meta") or {}).get("name")
+    if need_quote or need_meta:
+        try:
+            if need_quote:
+                snap = analyst.fetch_market_snapshot(_resolve_ticker_alias(tk)) or {}
+                if snap.get("price") is not None:
+                    out["quote"] = {
+                        "price": snap.get("price"),
+                        "prev_close": snap.get("prev_close") or snap.get("previous_close"),
+                        "pct_change": snap.get("pct_change"),
+                        "realized_vol": (out.get("quote") or {}).get("realized_vol"),
+                        "as_of": _pacific_time_str(),
+                        "live": True,
+                    }
+                    out["live_source"] = "yahoo"
+            if need_meta and yf is not None:
+                info = _builder_call_timeout(
+                    lambda: getattr(yf.Ticker(_resolve_ticker_alias(tk)), "info", {}) or {},
+                    8.0, {}) or {}
+                name = info.get("longName") or info.get("shortName")
+                if name or info.get("sector") or info.get("industry"):
+                    out["meta"] = {
+                        "name": name or tk,
+                        "sector": info.get("sector"),
+                        "industry": info.get("industry"),
+                        "analyst_target": info.get("targetMeanPrice"),
+                    }
+                if not out.get("derived"):
+                    mcap = info.get("marketCap")
+                    pe = info.get("trailingPE") or info.get("forwardPE")
+                    if mcap or pe:
+                        out["derived"] = {
+                            "market_cap": float(mcap) if mcap else None,
+                            "pe": round(float(pe), 1) if pe else None,
+                            "fcf_yield_pct": None,
+                            "net_cash": None,
+                            "debt_to_equity": info.get("debtToEquity"),
+                        }
+                # 52w from live info when store empty
+                if not out.get("range52w"):
+                    hi = info.get("fiftyTwoWeekHigh")
+                    lo = info.get("fiftyTwoWeekLow")
+                    px = (out.get("quote") or {}).get("price")
+                    if hi and lo:
+                        out["range52w"] = {
+                            "high": float(hi), "low": float(lo),
+                            "off_high_pct": (round((px / float(hi) - 1) * 100, 2)
+                                             if px and hi else None),
+                            "ytd_pct": None,
+                            "one_year_pct": None,
+                        }
+        except Exception as e:
+            out["live_warning"] = str(e)[:120]
+    if "saved_report" not in out:
+        out["saved_report"] = {"exists": False}
+    out["free"] = True
+    out["token_cost"] = 0
     _STOCK_INFO_CACHE[tk] = (time.time(), out)
     if len(_STOCK_INFO_CACHE) > 400:
         _STOCK_INFO_CACHE.pop(next(iter(_STOCK_INFO_CACHE)), None)

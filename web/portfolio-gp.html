@@ -3353,8 +3353,11 @@
 
   <div class="search-wrap" id="search-wrap">
     <span class="search-icon">⌕</span>
-    <input id="search-input" class="search-input" placeholder="Search ticker, company, or topic — e.g. NVDA, “Apple”, “lithium miners”" autocomplete="off">
-    <span class="search-kbd">⌘K</span>
+    <input id="search-input" class="search-input"
+           placeholder="Ticker or company — e.g. NVDA, AAPL, Apple"
+           autocomplete="off" autocapitalize="characters" spellcheck="false"
+           title="Type a ticker and press Enter for a free stock snapshot (no AI cost)">
+    <span class="search-kbd">⌘K / Enter</span>
     <div id="search-results"></div>
   </div>
 
@@ -9432,46 +9435,97 @@ End with the sleeve block at this account's real market value so I can push it t
     } catch {}
   }
 
-  // ── Universal search ────────────────────────────────────────────
+  // ── Universal search → free on-site stock peek (no LLM, no GuruFocus) ──
   const $search = document.getElementById('search-input');
   const $sr = document.getElementById('search-results');
   let searchDebounce = null;
   let searchSeq = 0;
 
-  $search.addEventListener('input', () => {
-    clearTimeout(searchDebounce);
-    const q = $search.value.trim();
-    if (q.length < 2) { $sr.classList.remove('open'); $sr.innerHTML = ''; return; }
-    searchDebounce = setTimeout(() => doSearch(q), 250);
-  });
-  $search.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const first = $sr.querySelector('.sr-item');
-      if (first) first.click();
-    } else if (e.key === 'Escape') {
-      $sr.classList.remove('open');
-    }
-  });
+  function _isTickerLike(q) {
+    return /^[A-Za-z][A-Za-z0-9.\-]{0,9}$/.test((q || '').trim());
+  }
+  function _normalizeTickerQuery(q) {
+    return String(q || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '');
+  }
+
+  if ($search) {
+    $search.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      const q = $search.value.trim();
+      // Allow 1-char for tickers (F, T, V…); companies need 2+
+      if (!q || (q.length < 2 && !_isTickerLike(q))) {
+        if ($sr) { $sr.classList.remove('open'); $sr.innerHTML = ''; }
+        return;
+      }
+      searchDebounce = setTimeout(() => doSearch(q), 220);
+    });
+    $search.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = $search.value.trim();
+        const first = $sr && $sr.querySelector('.sr-item[data-ticker]');
+        if (first) {
+          first.click();
+          return;
+        }
+        // Exact ticker Enter — open free snapshot immediately (no wait on dropdown)
+        if (_isTickerLike(q)) {
+          const tk = _normalizeTickerQuery(q);
+          if (tk) {
+            $search.value = '';
+            if ($sr) $sr.classList.remove('open');
+            openStockPeek(tk);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        if ($sr) $sr.classList.remove('open');
+        $search.blur();
+      }
+    });
+  }
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#search-wrap')) $sr.classList.remove('open');
+    if ($sr && !e.target.closest('#search-wrap')) $sr.classList.remove('open');
+  });
+  // ⌘K / Ctrl+K focuses the top ticker box
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) {
+        if (e.target !== $search) return;
+      }
+      if ($search) {
+        e.preventDefault();
+        $search.focus();
+        $search.select();
+      }
+    }
   });
 
   async function doSearch(q) {
+    if (!$sr) return;
     const mySeq = ++searchSeq;
+    const tickerLike = _isTickerLike(q);
     try {
+      $sr.innerHTML = '<div class="sr-item" style="opacity:0.6;cursor:default;"><span class="sr-name">Searching…</span></div>';
+      $sr.classList.add('open');
       const r = await window.dgaFetch('/api/search/resolve?q=' + encodeURIComponent(q));
       if (!r.ok) throw new Error('search ' + r.status);
       const data = await r.json();
       if (mySeq !== searchSeq) return; // stale
-      const results = data.results || [];
+      let results = data.results || [];
+      // If Yahoo search is empty but query looks like a ticker, still offer it
+      if (!results.length && tickerLike) {
+        const tk = _normalizeTickerQuery(q);
+        results = [{ ticker: tk, name: 'Open free snapshot', exchange: 'LIVE' }];
+      }
       if (!results.length) {
-        $sr.innerHTML = `<div class="sr-item" style="opacity:0.5; cursor:default;"><span class="sr-name">No matches</span></div>`;
+        $sr.innerHTML = '<div class="sr-item" style="opacity:0.5;cursor:default;"><span class="sr-name">No matches — try a ticker like AAPL</span></div>';
       } else {
         $sr.innerHTML = results.map(r => `
-          <div class="sr-item" data-ticker="${r.ticker}">
-            <span class="sr-tk">${r.ticker}</span>
+          <div class="sr-item" data-ticker="${String(r.ticker || '').replace(/"/g, '')}">
+            <span class="sr-tk">${r.ticker || ''}</span>
             <span class="sr-name">${r.name || ''}</span>
-            <span class="sr-ex">${r.exchange || ''}</span>
+            <span class="sr-ex">${r.exchange || 'FREE'}</span>
           </div>
         `).join('');
         $sr.querySelectorAll('.sr-item[data-ticker]').forEach(item => {
@@ -9479,13 +9533,150 @@ End with the sleeve block at this account's real market value so I can push it t
             const tk = item.getAttribute('data-ticker');
             $search.value = '';
             $sr.classList.remove('open');
-            openGuruFocus(tk);
+            openStockPeek(tk);   // on-site free data — never GuruFocus / never auto-AI
           });
         });
       }
       $sr.classList.add('open');
     } catch (e) {
       console.warn('[search]', e);
+      // Offline / API error: still allow ticker Enter path
+      if (tickerLike) {
+        const tk = _normalizeTickerQuery(q);
+        $sr.innerHTML = `<div class="sr-item" data-ticker="${tk}">
+          <span class="sr-tk">${tk}</span>
+          <span class="sr-name">Open free snapshot</span>
+          <span class="sr-ex">LIVE</span>
+        </div>`;
+        $sr.querySelector('.sr-item[data-ticker]')?.addEventListener('click', () => {
+          $search.value = '';
+          $sr.classList.remove('open');
+          openStockPeek(tk);
+        });
+        $sr.classList.add('open');
+      }
+    }
+  }
+
+  // Free stock peek modal — /api/stock-info (Yahoo live fallback, $0 tokens)
+  function openStockPeek(ticker) {
+    const tk = _normalizeTickerQuery(ticker);
+    if (!tk) return;
+    // Prefer dedicated modal; falls back to legacy name for any external callers
+    openFreeStockModal(tk);
+  }
+
+  async function openFreeStockModal(tk) {
+    // Remove prior
+    const old = document.getElementById('stock-peek-modal');
+    if (old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'stock-peek-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9200;';
+    overlay.innerHTML = `
+      <div class="dga-dialog" style="width:min(560px,94vw);height:auto;max-height:88vh;resize:both;">
+        <div class="dga-dialog-handle" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--panel-edge);">
+          <span style="font-size:16px;font-weight:800;letter-spacing:0.8px;color:var(--text-primary);">${tk}</span>
+          <span style="font-size:9px;font-weight:800;letter-spacing:0.6px;padding:2px 7px;border-radius:4px;background:rgba(34,197,94,0.12);color:#15803d;">FREE · NO AI</span>
+          <span id="sp-price" style="font-size:14px;font-weight:800;font-variant-numeric:tabular-nums;margin-left:4px;"></span>
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <button type="button" id="sp-wl" class="tab-btn" style="font-size:10px;">+ Watchlist</button>
+            <button type="button" id="sp-close" style="background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);border-radius:5px;padding:3px 12px;cursor:pointer;font-size:14px;">✕</button>
+          </div>
+        </div>
+        <div id="sp-body" class="dga-dialog-body" style="padding:14px 16px 18px;">
+          <div class="tab-loading"><span class="spin">↻</span> Loading free snapshot…</div>
+        </div>
+        <div style="padding:10px 16px 12px;border-top:1px solid var(--panel-edge);display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fafbfc;">
+          <span style="font-size:10px;color:var(--dim);flex:1;">Yahoo / local store · $0 tokens. AI only if you click Run analysis.</span>
+          <button type="button" id="sp-report" class="tab-btn" style="display:none;font-size:10px;">Open report</button>
+          <button type="button" id="sp-ai" class="tab-btn" style="font-size:10px;background:var(--blue);color:#0A1628;border:none;font-weight:800;">Run AI analysis</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const close = () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    };
+    overlay.querySelector('#sp-close').onclick = close;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const dlg = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    if (dlg && handle && typeof _initDragModal === 'function') _initDragModal(dlg, handle);
+
+    const body = overlay.querySelector('#sp-body');
+    const priceEl = overlay.querySelector('#sp-price');
+    try {
+      const r = await window.dgaFetch('/api/stock-info/' + encodeURIComponent(tk));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      // Reuse the free stock-info HTML builder from the positions expander
+      if (typeof _sieHTML === 'function') {
+        body.innerHTML = _sieHTML(tk, d, null);
+        // Hide the expander's internal "Run AI" — footer has one deliberate control
+        const innerRun = body.querySelector('[data-sie-run]');
+        if (innerRun) innerRun.style.display = 'none';
+        const rep = body.querySelector('[data-sie-report]');
+        if (rep) {
+          const footRep = overlay.querySelector('#sp-report');
+          if (footRep) {
+            footRep.style.display = '';
+            footRep.onclick = () => { close(); openReport(tk); };
+          }
+          rep.addEventListener('click', (e) => { e.stopPropagation(); close(); openReport(tk); });
+        }
+      } else {
+        const q = d.quote || {};
+        const m = d.meta || {};
+        body.innerHTML = `<div style="font-size:14px;font-weight:700;">${m.name || tk}</div>
+          <div style="margin-top:8px;font-size:13px;">Price: ${q.price != null ? '$' + Number(q.price).toFixed(2) : '—'}
+          ${q.pct_change != null ? ' (' + (q.pct_change >= 0 ? '+' : '') + Number(q.pct_change).toFixed(2) + '%)' : ''}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--dim);">${m.sector || ''} ${m.industry ? '· ' + m.industry : ''}</div>`;
+      }
+      const q = d.quote || {};
+      if (priceEl && q.price != null) {
+        const pct = q.pct_change;
+        const cls = pct == null ? '' : (pct >= 0 ? 'up' : 'dn');
+        priceEl.innerHTML = '$' + Number(q.price).toFixed(2)
+          + (pct != null ? ' <span class="' + cls + '">' + (pct >= 0 ? '+' : '') + Number(pct).toFixed(2) + '%</span>' : '');
+      }
+    } catch (e) {
+      body.innerHTML = '<div class="tab-error">Could not load ' + tk + ': ' + (e.message || e) + '</div>';
+    }
+
+    const wlBtn = overlay.querySelector('#sp-wl');
+    if (wlBtn) {
+      wlBtn.onclick = async () => {
+        try {
+          const r = await window.dgaFetch('/api/watchlist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tk }),
+          });
+          if (!r.ok) throw new Error('watchlist ' + r.status);
+          wlBtn.textContent = '✓ On watchlist';
+          wlBtn.disabled = true;
+          try { if (typeof loadWatchlist === 'function') loadWatchlist(); } catch (_) {}
+        } catch (err) {
+          wlBtn.textContent = 'Watchlist failed';
+        }
+      };
+    }
+    const aiBtn = overlay.querySelector('#sp-ai');
+    if (aiBtn) {
+      aiBtn.onclick = () => {
+        close();
+        showTab('research');
+        const input = document.getElementById('hero-ticker');
+        const btn = document.getElementById('hero-run-btn');
+        if (input) input.value = tk;
+        if (input && input.scrollIntoView) input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Do NOT auto-click Run — user must confirm (costs tokens)
+        try { window.toast && window.toast(tk + ' ready — click RUN for AI (costs tokens)', { type: 'info', ttl: 3500 }); } catch (_) {}
+      };
     }
   }
 
@@ -18634,10 +18825,10 @@ End with the sleeve block at this account's real market value so I can push it t
     }
   });
 
-  // ── Ticker click → GuruFocus ─────────────────────────────────
+  // ── Ticker click → free on-site snapshot (legacy name kept for callers) ──
   function openGuruFocus(ticker) {
-    if (!ticker) return;
-    window.open('https://www.gurufocus.com/stock/' + encodeURIComponent(ticker) + '/summary', '_blank', 'noopener');
+    // Historical name; now opens FREE on-site data, not GuruFocus (no paywall, no tokens).
+    openStockPeek(ticker);
   }
 
   // ══════════════════════════════════════════════════════════════
