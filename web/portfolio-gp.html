@@ -6723,7 +6723,7 @@ End with the sleeve block at this account's real market value so I can push it t
       },
     };
     // Fix prioritize model label when not volume
-    if (action === 'prioritize' && !volOn) {
+    if (action === 'prioritize' && !volFor('prioritize')) {
       map.prioritize.model = g; // screen uses GROK_SCREEN default via same Grok family
     }
     return map[action] || {
@@ -8304,15 +8304,16 @@ End with the sleeve block at this account's real market value so I can push it t
       : `<div style="height:9px;border-radius:3px;background:var(--gray-100,#f1f5f9);overflow:hidden;" title="${_gfEsc((title || '') + ' · ' + pct + 'th pct')}">` +
           `<div style="height:100%;width:${Math.max(3, Math.min(100, pct))}%;background:${col || '#94a3b8'};border-radius:3px;"></div></div>`;
     const rows = (c.metrics || []).map(m => {
-      // Rating = own-history percentile (hist_pct). Fallback for old payloads: quality*100.
-      const ratePct = m.hist_pct != null ? m.hist_pct
-        : (m.quality != null ? Math.round(m.quality * 100) : null);
-      const rateCol = m.hist_color || m.rating || '#94a3b8';
-      // Vs Industry = ind_pct only — never fall back to history or absolute thresholds.
+      // Rating = own-history percentile ONLY. Never fall back to quality/industry —
+      // quality often equals ind_pct when multi-year prices are missing (value multiples),
+      // which made Rating and Vs Industry look identical (MSFT Value Rank ticket).
+      const ratePct = m.hist_pct != null ? m.hist_pct : null;
+      const rateCol = m.hist_color || '#94a3b8';
+      // Vs Industry = ind_pct only — never fall back to history.
       const indPct = m.ind_pct != null ? m.ind_pct : null;
       const indCol = m.ind_color || '#94a3b8';
       const tip = [m.note,
-        ratePct != null ? ('Rating: ' + ratePct + 'th pct of own history') : 'Rating: n/a (need ≥3 FY of this metric)',
+        ratePct != null ? ('Rating: ' + ratePct + 'th pct of own history') : 'Rating: blank (need multi-year history for this metric)',
         indPct != null ? ('Industry: ' + indPct + 'th pct of peers') : 'Industry: blank (need ≥3 peers with this metric)',
       ].filter(Boolean).join(' · ');
       return `<div style="display:grid;grid-template-columns:${GC};gap:8px;align-items:center;` +

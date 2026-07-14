@@ -26168,25 +26168,30 @@ def _rk_percentile(current, vals, higher_better, min_n=3):
 
 def _rk_row(name, value, fmt, higher_better, series=None, peer_vals=None, note=None):
     """Build one metric row.
-    hist_pct → Rating bar (own history). ind_pct → Vs Industry bar (peers only).
-    quality  → 0–1 from hist percentile (fallback: industry) for card /10."""
+    hist_pct → Rating bar (own history only — blank if no multi-year series).
+    ind_pct  → Vs Industry bar (peers only — blank if &lt;3 peers).
+    quality  → 0–1 for card /10: prefer history, else industry (score only).
+    Never copy industry into hist_pct — that made Rating and Vs Industry identical.
+    """
     hist_vals = [x for x in (series or []) if x is not None]
     # Own history: need ≥3 observations including current era
     hp = _rk_percentile(value, hist_vals, higher_better, min_n=3)
     # Industry: peers only, never invent a number
     ip = _rk_percentile(value, peer_vals, higher_better, min_n=3)
+    # Card /10 may use industry when history missing (value multiples with only
+    # current price). UI Rating bar uses hist_pct alone so bars never twin.
     q = (hp / 100.0) if hp is not None else ((ip / 100.0) if ip is not None else None)
     return {
         "name": name,
         "value": (round(value, 4) if isinstance(value, (int, float)) else value),
         "fmt": fmt,
-        # Rating column = company history comparison
+        # Rating column = company history comparison ONLY
         "hist_pct": hp, "hist_color": _rk_pct_color(hp),
         # Vs Industry column (blank when no peer sample)
         "ind_pct": ip, "ind_color": _rk_pct_color(ip),
-        # legacy keys kept for older clients (mobile) — map to history rating
+        # quality drives card rank /10 (may be industry when hist blank)
         "quality": q,
-        "rating": _rk_pct_color(hp) or _rk_pct_color(ip) or "#cbd5e1",
+        "rating": _rk_pct_color(hp) or "#cbd5e1",
         "note": note,
         "higher_better": higher_better,
     }
