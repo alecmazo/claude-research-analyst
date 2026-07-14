@@ -4928,10 +4928,11 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div class="panel-body" style="padding:14px 16px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
-          <strong>Source of truth = Postgres</strong> (<code>company_financials</code>) — queryable for charts &amp; peer comps.
-          <strong>Overnight batch</strong> (2:15 AM PT, free, sequential, no LLM) fills full Nasdaq + NYSE common stocks
-          (~covers Russell 1000 scale) at ~400 names/night, then backs up a slim dump to Dropbox
-          <code>…/Financials/company_financials.jsonl.gz</code>. Same RAM as interactive use — no Railway upsize needed.
+          <strong>Source of truth = Postgres</strong> (<code>company_financials</code>).
+          <strong>⬇️ Sync from SEC</strong> uses the <em>Universe</em> menu only (e.g. Saved reports = just those tickers).
+          <strong>🚀 Full pull</strong> ignores the menu and fills gaps across all US-listed (supervisor chunks).
+          <strong>Not live:</strong> new 10-Q/10-Ks are <em>not</em> pushed the moment they file — refresh is overnight (oldest names) or a manual Sync.
+          Chunk progress <code>43/150</code> = attempts; <code>+N new</code> = names that actually landed (many listed symbols have no usable XBRL).
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <label style="font-size:11px;color:var(--text-secondary);">Universe
@@ -4949,10 +4950,10 @@ End with the sleeve block at this account's real market value so I can push it t
               title="Use 5–7 for bulk jobs. Overnight uses 6 by default."
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
-          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;">⬇️ Sync from SEC</button>
-          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Pull ALL missing US-listed names now. On SEC 429 waits up to 10 min then continues. Dropbox backup at end.">🚀 Full pull now (all missing)</button>
+          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;" title="Pull SEC data for the Universe selected in the dropdown (and optional tickers box). Does NOT use the full US supervisor.">⬇️ Sync from SEC</button>
+          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Ignore Universe menu. Resume missing-only across full US list in chunks. Never overwrites stored names.">🚀 Full pull now (all missing)</button>
           <button id="fin-backup-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Push slim company_financials dump to Dropbox">☁️ Backup to Dropbox</button>
-          <input id="fin-tickers" placeholder="extra tickers (optional) — merged into universe, or sole list if Custom"
+          <input id="fin-tickers" placeholder="extra tickers (optional) — used by Sync; sole list if Universe=Custom"
             style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
         </div>
         <div id="fin-sync-status" style="margin-top:10px;"></div>
