@@ -4143,26 +4143,35 @@
   }
 
   // Sort state for reports table (persists across re-renders within the session)
-  // Default: 'date' = when the report was last successfully run (newest first).
+  // Default: 'date' = freshest report first (as-of / content date, then run time).
   // Click TGT/Upside to switch to upside sort.
   let _repSortMode = 'date';   // 'date' | 'upside'
   let _repSortDir  = 'desc';
 
-  /** Epoch ms of when this report was last run (successful Grok/Claude gen preferred). */
+  /** Epoch ms for "freshness" sort — newest report content first.
+   * Prefer report_date / claude_report_date (analysis as-of). Pipeline
+   * generated_at can be bulk-stamped by hydration and is a weak signal when
+   * every row shares the same day. */
   function _repRunAtMs(rep) {
     if (!rep) return 0;
     const times = [];
-    // Prefer successful report generation timestamps (when analysis actually completed)
-    if (rep.generated_at) times.push(new Date(rep.generated_at).getTime());
-    if (rep.claude_generated_at) times.push(new Date(rep.claude_generated_at).getTime());
-    if (times.length) {
-      const best = Math.max.apply(null, times.filter(function (n) { return !isNaN(n); }));
-      if (best > 0) return best;
+    function _push(v) {
+      if (v == null || v === '') return;
+      const t = new Date(v).getTime();
+      if (!isNaN(t) && t > 0) times.push(t);
     }
-    // Fall back to last attempt (includes failed retries) only if no success ts
-    if (rep.last_attempt_at) {
-      const t = new Date(rep.last_attempt_at).getTime();
-      if (!isNaN(t)) return t;
+    // Content as-of first (what PMs mean by "freshest report")
+    _push(rep.report_date);
+    _push(rep.claude_report_date);
+    if (times.length) {
+      return Math.max.apply(null, times);
+    }
+    // Fall back to pipeline timestamps
+    _push(rep.generated_at);
+    _push(rep.claude_generated_at);
+    _push(rep.last_attempt_at);
+    if (times.length) {
+      return Math.max.apply(null, times);
     }
     return 0;
   }

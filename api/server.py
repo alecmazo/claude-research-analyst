@@ -9572,11 +9572,70 @@ def _hydrate_orphaned_claude_reports() -> None:
         print(f"❌ [hydrate] claude outer error: {_e!s:.200}", flush=True)
 
 
+def _parse_report_date_ts(val) -> float:
+    """Parse report as-of strings ('May 22, 2026') or datetimes → epoch seconds.
+
+    Returns 0 when unparseable. Used to sort Saved Reports by content freshness.
+    """
+    if val is None or val == "":
+        return 0.0
+    if hasattr(val, "timestamp"):
+        try:
+            return float(val.timestamp())
+        except Exception:
+            return 0.0
+    s = str(val).strip()
+    if not s:
+        return 0.0
+    # ISO first
+    try:
+        iso = s.replace("Z", "+00:00")
+        return datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        pass
+    # Common narrative headers: "May 22, 2026" / "May 8, 2026"
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).timestamp()
+        except Exception:
+            continue
+    return 0.0
+
+
+def _report_freshness_ts(row: dict) -> float:
+    """Newest-first sort key for saved reports.
+
+    Prefer the report's *as-of* date (what the analysis is about). Pipeline
+    ``generated_at`` can be bulk-stamped by hydration and is a weak signal when
+    every row shares the same day — content date is what PMs mean by "fresh."
+    Fall back to generation / last-attempt timestamps when as-of is missing.
+    """
+    best = 0.0
+    for k in ("report_date", "claude_report_date"):
+        best = max(best, _parse_report_date_ts(row.get(k)))
+    if best > 0:
+        return best
+    for k in ("generated_at", "claude_generated_at", "last_attempt_at"):
+        v = row.get(k)
+        if v is None:
+            continue
+        if hasattr(v, "timestamp"):
+            try:
+                best = max(best, float(v.timestamp()))
+            except Exception:
+                pass
+        else:
+            best = max(best, _parse_report_date_ts(v))
+    return best
+
+
 @app.get("/api/reports")
 def list_reports(request: Request = None):
     if request is not None and _request_is_demo(request):
         rows = _kv_get("demo.reports") or []
-        return [{k: v for k, v in r.items() if k != "report_md"} for r in rows]
+        demo = [{k: v for k, v in r.items() if k != "report_md"} for r in rows]
+        demo.sort(key=_report_freshness_ts, reverse=True)
+        return demo
     """Return all tickers that have saved reports.
 
     Each entry now includes an extracted summary (`rating`, `price_target`,
@@ -9703,6 +9762,8 @@ def list_reports(request: Request = None):
                         "last_attempt_status": r.get("last_attempt_status"),
                         "last_attempt_error":  r.get("last_attempt_error"),
                     })
+                # Freshest content first (as-of date), not bulk hydration stamp.
+                out.sort(key=_report_freshness_ts, reverse=True)
                 return out
         except Exception as _e:
             print(f"[analyst_reports] list_reports DB query failed (falling back): {_e!s:.200}")
@@ -9732,7 +9793,9 @@ def list_reports(request: Request = None):
             "price_target":  summary.get("price_target"),
             "current_price": summary.get("current_price"),
             "upside_pct":    summary.get("upside_pct"),
+            "report_date":   summary.get("report_date") or summary.get("as_of"),
         })
+    reports.sort(key=_report_freshness_ts, reverse=True)
     return reports
 
 
