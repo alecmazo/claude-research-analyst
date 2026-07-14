@@ -33,12 +33,33 @@ TITLE_TARGETS = [
     "Director of Culture",
 ]
 
+WEDDING_TITLE_TARGETS = [
+    "Owner",
+    "Founder",
+    "Lead Planner",
+    "Senior Wedding Planner",
+    "Wedding Planner",
+    "Director of Events",
+    "Event Director",
+    "Wedding Coordinator",
+    "Sales Manager",
+    "Director of Sales",
+    "Catering Sales",
+    "Wedding Sales Manager",
+]
+
 ROLE_KEYWORDS = [
     "people", "people ops", "people operations", "human resources", " hr",
     "hr ", "chro", "talent", "employee experience", "employee engagement",
     "learning", "l&d", "l and d", "events", "event ", "wellness", "culture",
     "chief of staff", "workplace", "internal communications", "recruiting",
     "people partner", "hrbp", "benefits",
+]
+
+WEDDING_ROLE_KEYWORDS = [
+    "planner", "wedding", "event", "events", "owner", "founder", "principal",
+    "coordinator", "design", "sales", "catering", "hospitality", "venue",
+    "bridal", "celebration",
 ]
 
 
@@ -279,14 +300,22 @@ def _scrape_team_page(website: str) -> list[dict[str, Any]]:
     return found
 
 
-def _role_inbox_fallbacks(domain: str) -> list[dict[str, Any]]:
+def _role_inbox_fallbacks(domain: str, *, wedding_mode: bool = False) -> list[dict[str, Any]]:
     if not domain:
         return []
-    boxes = [
-        ("People / HR team", "people@" + domain, "People Ops (guess)"),
-        ("Events team", "events@" + domain, "Corporate events (guess)"),
-        ("HR team", "hr@" + domain, "HR (guess)"),
-    ]
+    if wedding_mode:
+        boxes = [
+            ("Events / Weddings", "events@" + domain, "Events (guess)"),
+            ("Weddings team", "weddings@" + domain, "Weddings (guess)"),
+            ("Info", "info@" + domain, "General (guess)"),
+            ("Hello", "hello@" + domain, "General (guess)"),
+        ]
+    else:
+        boxes = [
+            ("People / HR team", "people@" + domain, "People Ops (guess)"),
+            ("Events team", "events@" + domain, "Corporate events (guess)"),
+            ("HR team", "hr@" + domain, "HR (guess)"),
+        ]
     return [
         {
             "name": label,
@@ -302,14 +331,33 @@ def _role_inbox_fallbacks(domain: str) -> list[dict[str, Any]]:
     ]
 
 
-def linkedin_search_targets(company: str) -> list[dict[str, str]]:
+def linkedin_search_targets(company: str, *, wedding_mode: bool = False) -> list[dict[str, str]]:
+    titles = WEDDING_TITLE_TARGETS[:8] if wedding_mode else TITLE_TARGETS[:8]
     out = []
-    for title in TITLE_TARGETS[:8]:
+    for title in titles:
         q = f"{title} {company}"
         out.append({
             "title": title,
             "linkedin_search": f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(q)}",
         })
+    return out
+
+
+def _boost_wedding_contacts(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Re-score Hunter/scrape hits for planner / venue roles."""
+    out = []
+    for c in contacts:
+        c = dict(c)
+        pos = (c.get("title") or "").lower()
+        name = (c.get("name") or "").lower()
+        boost = 0
+        if any(k in pos for k in WEDDING_ROLE_KEYWORDS):
+            boost += 6
+        if any(k in name for k in ("wedding", "event", "planner")):
+            boost += 2
+        c["role_fit_score"] = int(c.get("role_fit_score") or 0) + boost
+        out.append(c)
+    out.sort(key=lambda x: (-x.get("role_fit_score", 0), -x.get("confidence", 0)))
     return out
 
 
@@ -319,17 +367,27 @@ def find_contacts(
     website: str = "",
     industry: str = "",
     package_id: str = "",
+    wedding_mode: bool = False,
 ) -> dict[str, Any]:
+    # Auto-detect wedding book industries
+    ind = (industry or "").lower()
+    if not wedding_mode and any(k in ind for k in ("wedding", "planner", "venue", "bridal")):
+        wedding_mode = True
+
     domain = _domain_from_website(website, company)
     hunter_result = _hunter_domain_search(domain, company=company, limit=10)
     hunter_contacts = hunter_result.get("contacts") or []
     diagnostics = hunter_result.get("diagnostics") or {}
+    diagnostics["wedding_mode"] = wedding_mode
 
     contacts: list[dict[str, Any]] = list(hunter_contacts)
 
     # Scrape only if Hunter found nothing useful
     if not hunter_contacts:
         contacts.extend(_scrape_team_page(website or (f"https://{domain}" if domain else "")))
+
+    if wedding_mode:
+        contacts = _boost_wedding_contacts(contacts)
 
     # Dedup
     deduped: list[dict[str, Any]] = []
@@ -349,7 +407,7 @@ def find_contacts(
     hunter_personal = [c for c in deduped if c.get("source") == "hunter.io" and c.get("email")]
     if not hunter_personal:
         # Only then add role inboxes
-        for rb in _role_inbox_fallbacks(domain):
+        for rb in _role_inbox_fallbacks(domain, wedding_mode=wedding_mode):
             if rb["email"].lower() not in seen:
                 deduped.append(rb)
 
@@ -359,16 +417,19 @@ def find_contacts(
     ) or next((c for c in deduped if c.get("email")), None) or (deduped[0] if deduped else {})
 
     summary = _method_summary(deduped, diagnostics, domain)
+    if wedding_mode and summary:
+        summary = "Wedding/planner mode · " + summary
 
     return {
         "company": company,
         "domain": domain,
         "contacts": deduped[:12],
         "primary": primary,
-        "linkedin_targets": linkedin_search_targets(company),
+        "linkedin_targets": linkedin_search_targets(company, wedding_mode=wedding_mode),
         "hunter_enabled": diagnostics.get("hunter_key_present", False),
         "hunter_diagnostics": diagnostics,
         "method_summary": summary,
+        "wedding_mode": wedding_mode,
     }
 
 

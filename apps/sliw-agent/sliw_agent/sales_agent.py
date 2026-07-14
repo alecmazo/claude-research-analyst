@@ -77,6 +77,14 @@ def run_sales_agent(
     if not p:
         raise KeyError(prospect_id)
     book = p.get("book") or "corporate"
+    # Wedding book uses planner/venue partnership agent
+    if book == "wedding":
+        from .wedding_agent import run_wedding_sales_agent
+        return run_wedding_sales_agent(
+            prospect_id,
+            live_gamma=live_gamma,
+            find_people=find_people,
+        )
     company = p.get("company") or ""
 
     # Always use Edyta's published Gamma packages site (not auto-generated decks)

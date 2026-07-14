@@ -1,94 +1,252 @@
 [
   {
-    "company": "Couple \u2014 sample Bay Area (replace)",
-    "industry": "Wedding couple",
-    "geo": "Marin / SF",
-    "signals": [
-      "engaged",
-      "first dance"
-    ],
-    "notes": "Placeholder \u2014 replace with real couple from venue/planner",
-    "package_hint": "package_10",
-    "priority": 3
-  },
-  {
-    "company": "The Lodge at the Presidio (planner outreach)",
-    "industry": "Wedding venue",
+    "company": "Cole Drake Events",
+    "industry": "Wedding planner",
     "geo": "San Francisco, CA",
-    "signals": [
-      "venue partnership",
-      "first dance"
-    ],
-    "notes": "Venue partnership for couple referrals",
+    "website": "https://www.coledrake.com",
+    "signals": ["planner partnership", "first dance", "luxury", "referral"],
+    "notes": "High-end SF planner — strong referral partner for DWTS first-dance packages.",
     "package_hint": "dream",
-    "priority": 8
+    "priority": 10
   },
   {
-    "company": "Cavallo Point (planner outreach)",
-    "industry": "Wedding venue",
-    "geo": "Sausalito, CA",
-    "signals": [
-      "venue partnership"
-    ],
-    "notes": "Marin luxury venue \u2014 studio proximity",
+    "company": "Shannon Leahy Events",
+    "industry": "Wedding planner",
+    "geo": "Napa / San Francisco Bay Area",
+    "website": "https://www.shannonleahy.com",
+    "signals": ["planner partnership", "luxury", "wine country", "first dance"],
+    "notes": "Wine-country + Bay Area luxury weddings — Dream Wedding Dance fit.",
+    "package_hint": "dream",
+    "priority": 10
+  },
+  {
+    "company": "Contagious Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.contagiousevents.com",
+    "signals": ["planner partnership", "first dance", "referral"],
+    "notes": "Full-service Bay Area planner network — volume referral potential.",
+    "package_hint": "package_10",
+    "priority": 9
+  },
+  {
+    "company": "Mango Muse Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.mangomuseevents.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Creative SF Bay planner — design-forward couples.",
+    "package_hint": "package_10",
+    "priority": 9
+  },
+  {
+    "company": "Bash, Please",
+    "industry": "Wedding planner",
+    "geo": "San Francisco, CA",
+    "website": "https://www.bashplease.com",
+    "signals": ["planner partnership", "luxury", "first dance"],
+    "notes": "Stylish SF events — couples who want a memorable first dance moment.",
     "package_hint": "dream",
     "priority": 9
   },
   {
-    "company": "Brazilian Room Tilden (planner outreach)",
-    "industry": "Wedding venue",
-    "geo": "Berkeley, CA",
-    "signals": [
-      "venue partnership"
-    ],
-    "notes": "East Bay wedding venue referrals",
+    "company": "So Happi Together",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.sohappitogether.com",
+    "signals": ["planner partnership", "first dance", "referral"],
+    "notes": "Bay Area planner — warm brand fit for Edyta’s teaching style.",
     "package_hint": "package_10",
-    "priority": 6
+    "priority": 9
   },
   {
-    "company": "Thomas Fogarty Winery (planner outreach)",
-    "industry": "Wedding venue",
-    "geo": "Woodside, CA",
-    "signals": [
-      "venue partnership",
-      "first dance"
-    ],
-    "notes": "Peninsula winery weddings",
+    "company": "Amy Nichols Special Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.amynichols.com",
+    "signals": ["planner partnership", "luxury", "first dance"],
+    "notes": "Established Bay Area planner — multi-couple referral channel.",
     "package_hint": "dream",
+    "priority": 9
+  },
+  {
+    "company": "Birch SF",
+    "industry": "Wedding planner",
+    "geo": "San Francisco, CA",
+    "website": "https://www.birchsf.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "SF design + planning studio — first-dance upgrade offering.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Alison Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.alisonevents.com",
+    "signals": ["planner partnership", "luxury", "referral"],
+    "notes": "Luxury Bay Area planner — Dream package partnership.",
+    "package_hint": "dream",
+    "priority": 9
+  },
+  {
+    "company": "A Savvy Event",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.asavvyevent.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Full-service planner — practical first-dance packages for couples.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Brill Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.brilliantevents.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Bay Area planning firm — add Edyta as preferred first-dance vendor.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Frances Lane",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.franceslane.com",
+    "signals": ["planner partnership", "luxury", "first dance"],
+    "notes": "Premium SF Bay planner — choreography + day-of support pitch.",
+    "package_hint": "dream",
+    "priority": 9
+  },
+  {
+    "company": "Perfect Details",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.perfectdetails.com",
+    "signals": ["planner partnership", "first dance", "referral"],
+    "notes": "Long-standing Bay Area planner — steady couple pipeline.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Weddings by Alexis",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.weddingsbyalexis.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Bay Area wedding planner — private lesson + 10-pack offerings.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Evntiv",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.evntiv.com",
+    "signals": ["planner partnership", "luxury", "first dance"],
+    "notes": "High-touch planning — Dream Wedding Dance referral partner.",
+    "package_hint": "dream",
+    "priority": 8
+  },
+  {
+    "company": "Stanlee Gatti Designs",
+    "industry": "Wedding planner",
+    "geo": "San Francisco, CA",
+    "website": "https://www.stanleegatti.com",
+    "signals": ["planner partnership", "luxury", "first dance"],
+    "notes": "Iconic SF event designer — luxury first-dance production fit.",
+    "package_hint": "dream",
+    "priority": 10
+  },
+  {
+    "company": "Katie & Co. Events",
+    "industry": "Wedding planner",
+    "geo": "Marin / San Francisco Bay Area",
+    "website": "https://www.katieandcoevents.com",
+    "signals": ["planner partnership", "first dance", "marin"],
+    "notes": "Marin-adjacent planner — studio proximity in San Rafael.",
+    "package_hint": "package_10",
+    "priority": 9
+  },
+  {
+    "company": "Joyfully Gathered",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.joyfullygathered.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Warm, couple-centric brand — Edyta teaching philosophy alignment.",
+    "package_hint": "package_10",
+    "priority": 8
+  },
+  {
+    "company": "Blue Sky Events",
+    "industry": "Wedding planner",
+    "geo": "San Francisco Bay Area",
+    "website": "https://www.blueskyevents.com",
+    "signals": ["planner partnership", "first dance", "referral"],
+    "notes": "Bay Area planner / coordinator network for couple intros.",
+    "package_hint": "package_10",
     "priority": 7
   },
   {
-    "company": "Sbragia Family Vineyards events",
-    "industry": "Wedding venue",
-    "geo": "Sonoma / Napa",
-    "signals": [
-      "venue partnership"
-    ],
-    "notes": "Wine country wedding circuit",
-    "package_hint": "package_10",
-    "priority": 6
-  },
-  {
-    "company": "Bay Area wedding planner network \u2014 sample",
+    "company": "The Stylish Soiree",
     "industry": "Wedding planner",
     "geo": "San Francisco Bay Area",
-    "signals": [
-      "planner partnership"
-    ],
-    "notes": "Planner channel for couple intros",
+    "website": "https://www.thestylishsoiree.com",
+    "signals": ["planner partnership", "first dance"],
+    "notes": "Design-led Bay Area planning — package pitch for first dance.",
     "package_hint": "package_10",
+    "priority": 7
+  },
+  {
+    "company": "Cavallo Point Lodge",
+    "industry": "Wedding venue",
+    "geo": "Sausalito, CA",
+    "website": "https://www.cavallopoint.com",
+    "signals": ["venue partnership", "luxury", "first dance"],
+    "notes": "Marin luxury lodge — studio proximity; preferred vendor pitch.",
+    "package_hint": "dream",
+    "priority": 9
+  },
+  {
+    "company": "The Lodge at the Presidio",
+    "industry": "Wedding venue",
+    "geo": "San Francisco, CA",
+    "website": "https://www.lodgeatthepresidio.com",
+    "signals": ["venue partnership", "first dance"],
+    "notes": "SF venue — couple referral + on-site first-dance coaching.",
+    "package_hint": "dream",
     "priority": 8
   },
   {
-    "company": "Marin wedding planner collective \u2014 sample",
-    "industry": "Wedding planner",
-    "geo": "Marin County, CA",
-    "signals": [
-      "planner partnership",
-      "first dance"
-    ],
-    "notes": "Local planner channel near studio",
+    "company": "Thomas Fogarty Winery",
+    "industry": "Wedding venue",
+    "geo": "Woodside, CA",
+    "website": "https://www.fogartywinery.com",
+    "signals": ["venue partnership", "first dance", "luxury"],
+    "notes": "Peninsula winery weddings — Dream package production.",
     "package_hint": "dream",
-    "priority": 9
+    "priority": 8
+  },
+  {
+    "company": "Brazilian Room at Tilden",
+    "industry": "Wedding venue",
+    "geo": "Berkeley, CA",
+    "website": "https://www.brazilianroom.org",
+    "signals": ["venue partnership", "first dance"],
+    "notes": "East Bay venue — package_10 first-dance prep for couples.",
+    "package_hint": "package_10",
+    "priority": 7
+  },
+  {
+    "company": "Sbragia Family Vineyards",
+    "industry": "Wedding venue",
+    "geo": "Sonoma / Napa, CA",
+    "website": "https://www.sbragia.com",
+    "signals": ["venue partnership", "wine country", "first dance"],
+    "notes": "Wine country wedding circuit — planner + venue dual pitch.",
+    "package_hint": "package_10",
+    "priority": 7
   }
 ]

@@ -146,15 +146,23 @@
           <div id="edyta-list" class="leads-list"></div>
         </section>
 
-        <!-- WEDDINGS (compact) -->
+        <!-- WEDDINGS -->
         <section class="view" id="view-weddings">
           <div class="panel callout">
-            <h3>Wedding Agent</h3>
-            <p>Parallel book. Import seeds, then work each lead the same step-by-step way from Library / Work.</p>
+            <h3>Wedding Agent — planners first</h3>
+            <p>
+              Bay Area wedding planners and venues are the real pipeline: partnership pitch → couple referrals → Edyta books.
+              Import scores every lead. Click any card to open Work and run the wedding sales agent (contacts + pro pitch).
+            </p>
           </div>
-          <div class="toolbar">
-            <button class="btn primary sm" id="btn-wedding-import" type="button">Import wedding seeds</button>
+          <div class="toolbar wedding-toolbar">
+            <button class="btn primary sm" id="btn-wedding-import" type="button">Import &amp; score seeds</button>
+            <button class="btn ghost sm" id="btn-wedding-refresh" type="button">Refresh list</button>
+            <span class="muted" id="wedding-summary">—</span>
           </div>
+          <p class="hint-line" id="wedding-hint">
+            Planners rank highest (referral volume). Venues next. Sample/placeholder couples are demoted.
+          </p>
           <div class="prospect-grid" id="wedding-grid"></div>
         </section>
 

@@ -254,7 +254,15 @@ function showView(name) {
   $("#view-eyebrow").textContent = e;
   if (name === "library") renderLibrary();
   if (name === "edyta") renderEdyta();
-  if (name === "weddings") renderWeddings();
+  if (name === "weddings") {
+    if (!state.wedding?.length) {
+      api("/wedding/ready?limit=40")
+        .then((r) => { state.wedding = r.items || []; renderWeddings(); })
+        .catch(() => renderWeddings());
+    } else {
+      renderWeddings();
+    }
+  }
   if (name === "partners") renderPartners();
   if (name === "materials") loadMaterials();
   if (name === "work") renderReady();
@@ -541,13 +549,18 @@ async function renderWorkstream() {
 
   // Pitch meta (no email body here — body lives only in sequence section below)
   const agent = state._lastAgent;
-  const pitchUrl = agent?.pitch_url || agent?.master_deck_url || p.master_deck_url || p.gamma_url;
+  const isWedding = (p.book || agent?.book) === "wedding";
+  const pitchUrl = agent?.pitch_url || agent?.master_deck_url || p.master_deck_url || p.gamma_url
+    || (isWedding ? "https://edytasliwinska.com/weddings" : "https://edytasliwinska.com/corporate");
+  const siteLabel = isWedding ? "Weddings page" : "Corporate page";
+  const siteHref = isWedding ? "https://edytasliwinska.com/weddings" : "https://edytasliwinska.com/corporate";
   out.innerHTML += `
     <div class="agent-card">
-      <p class="eyebrow">Assets (links in the email — not attachments)</p>
+      <p class="eyebrow">${isWedding ? "Wedding assets (planner / venue pitch)" : "Assets (links in the email — not attachments)"}</p>
       <p class="muted">
         ${pitchUrl ? `<a href="${esc(pitchUrl)}" target="_blank" rel="noopener">Packages overview</a>` : "—"}
-        · <a href="https://edytasliwinska.com/corporate" target="_blank" rel="noopener">Corporate page</a>
+        · <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(siteLabel)}</a>
+        ${isWedding ? " · Partnership-first outreach" : ""}
       </p>
       <p class="muted" style="margin-top:8px">
         <strong>Email sequence:</strong> only <em>Email 1 — first touch</em> until you send.
@@ -833,15 +846,59 @@ function renderEdyta() {
 function renderWeddings() {
   const rows = state.wedding || [];
   const grid = $("#wedding-grid");
+  const summary = $("#wedding-summary");
+  if (summary) {
+    const planners = rows.filter((p) => /planner/i.test(p.industry || "")).length;
+    const venues = rows.filter((p) => /venue|winery|hotel/i.test(p.industry || "")).length;
+    const a = rows.filter((p) => p.tier === "A").length;
+    summary.textContent = rows.length
+      ? `${rows.length} leads · ${planners} planners · ${venues} venues · ${a} tier A`
+      : "No wedding leads yet — Import & score seeds";
+  }
   if (!rows.length) {
-    grid.innerHTML = `<div class="panel empty-state" style="grid-column:1/-1"><h3>No wedding leads</h3></div>`;
+    grid.innerHTML = `<div class="panel empty-state" style="grid-column:1/-1">
+      <h3>No wedding leads scored yet</h3>
+      <p class="muted">Click <strong>Import &amp; score seeds</strong> to load Bay Area planners + venues into the wedding CRM.</p>
+    </div>`;
     return;
   }
-  grid.innerHTML = rows.map((p) => `
-    <article class="prospect-card">
-      <h4>${esc(p.company)}</h4>
-      <p class="meta">${esc(p.industry)} · ${esc(p.stage)}</p>
-    </article>`).join("");
+  grid.innerHTML = rows.map((p) => {
+    const isPlanner = /planner/i.test(p.industry || "");
+    const isVenue = /venue|winery|hotel|lodge/i.test(p.industry || "");
+    const channel = isPlanner ? "Planner partner" : isVenue ? "Venue partner" : (p.channel_label || p.industry || "Wedding");
+    return `
+    <article class="prospect-card wedding-card ${state.focusId === p.id ? "active" : ""}" data-work="${esc(p.id)}" role="button" tabindex="0">
+      <div class="wedding-card-top">
+        ${brandMarkHtml(p.company, p.website, { size: "md" })}
+        <div class="wedding-card-copy">
+          <div class="top">
+            <h4>${esc(p.company)}</h4>
+            <span class="${tierClass(p.tier)}">${esc(p.tier || "—")}</span>
+          </div>
+          <p class="meta">${esc(channel)} · ${esc(p.geo || "Bay Area")}</p>
+        </div>
+        <div class="score-ring" title="ICP score">${p.score ?? "—"}</div>
+      </div>
+      <p class="wedding-card-pkg">${esc(p.package || "—")}</p>
+      <div class="foot">
+        <span>${esc(p.stage || "scored")}${p.has_draft ? " · draft ready" : ""}${p.has_contact ? " · contacts" : ""}</span>
+        <span class="wedding-open">Open in Work →</span>
+      </div>
+    </article>`;
+  }).join("");
+  grid.querySelectorAll("[data-work]").forEach((card) => {
+    const open = () => {
+      showView("work");
+      focusLead(card.dataset.work, { autoAgent: true });
+    };
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderPartners() {
@@ -874,24 +931,25 @@ async function fullRefresh() {
       if (imp.imported > 0) toast(`Synced ${imp.imported} new leads into CRM`);
     } catch (_) {}
 
-    const [ready, edyta, lib, wedding, partners, me] = await Promise.all([
+    const [ready, edyta, lib, weddingReady, partners, me] = await Promise.all([
       api("/work/ready?limit=8"),
       api("/edyta-home"),
       api("/library"),
-      api("/wedding/prospects").catch(() => []),
+      api("/wedding/ready?limit=40").catch(() => ({ items: [] })),
       api("/partnerships").catch(() => []),
       api("/me").catch(() => null),
     ]);
     state.ready = ready.items || [];
     state.edyta = edyta;
     state.library = lib.rows || [];
-    state.wedding = wedding;
+    state.wedding = weddingReady.items || weddingReady || [];
     state.partners = partners;
     if (me?.name) $("#brand-user").textContent = me.name;
     $("#lib-summary").textContent =
       `${lib.total} qualified · ${lib.in_crm} in CRM · ${lib.pending} pending · ${lib.tier_a} tier A`;
     renderReady();
     renderEdyta();
+    renderWeddings();
   } catch (e) {
     toast(e.message);
   } finally {
@@ -952,11 +1010,26 @@ function boot() {
   $("#lib-status")?.addEventListener("change", renderLibrary);
 
   $("#btn-wedding-import")?.addEventListener("click", async () => {
+    busy(true, "Importing & scoring Bay Area planners…");
     try {
-      const r = await api("/wedding/library/import", { method: "POST" });
-      toast(`Wedding +${r.imported}`);
-      state.wedding = await api("/wedding/prospects");
+      const r = await api("/wedding/library/import?limit=40&rescore=true", { method: "POST" });
+      const ready = await api("/wedding/ready?limit=40");
+      state.wedding = ready.items || [];
       renderWeddings();
+      toast(
+        `Wedding desk: +${r.imported || 0} new · ${r.rescored || 0} rescored · `
+        + `${r.planners || 0} planners · ${r.tier_a || 0} tier A`
+      );
+    } catch (e) { toast(e.message); }
+    finally { busy(false); }
+  });
+
+  $("#btn-wedding-refresh")?.addEventListener("click", async () => {
+    try {
+      const ready = await api("/wedding/ready?limit=40");
+      state.wedding = ready.items || [];
+      renderWeddings();
+      toast("Wedding list refreshed");
     } catch (e) { toast(e.message); }
   });
 

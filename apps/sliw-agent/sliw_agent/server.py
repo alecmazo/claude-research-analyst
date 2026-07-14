@@ -52,7 +52,9 @@ from .master_deck import (
 from .wedding_agent import (
     import_wedding_library,
     run_wedding_pipeline,
+    run_wedding_sales_agent,
     seed_default_partnerships,
+    wedding_ready_list,
 )
 from .wedding_bible import WEDDING_PACKAGES, package_to_dict as wedding_pkg_dict
 from .talent_bible import (
@@ -683,6 +685,21 @@ def create_api_router() -> APIRouter:
         require_sliw_access(request)
         return crm.list_prospects(book="wedding")
 
+    @r.get("/wedding/ready")
+    def wedding_ready(request: Request, limit: int = 30) -> dict[str, Any]:
+        """Scored, ranked wedding leads for the Weddings tab (click → Work)."""
+        require_sliw_access(request)
+        items = wedding_ready_list(limit=limit)
+        prospects = crm.list_prospects(book="wedding")
+        return {
+            "items": items,
+            "total": len(prospects),
+            "planners": sum(1 for p in prospects if "planner" in (p.get("industry") or "").lower()),
+            "venues": sum(1 for p in prospects if "venue" in (p.get("industry") or "").lower()),
+            "tier_a": sum(1 for p in prospects if p.get("tier") == "A"),
+            "tier_b": sum(1 for p in prospects if p.get("tier") == "B"),
+        }
+
     @r.get("/wedding/pipeline/summary")
     def wedding_summary(request: Request) -> dict[str, Any]:
         require_sliw_access(request)
@@ -691,6 +708,8 @@ def create_api_router() -> APIRouter:
             "stages": crm.pipeline_summary(book="wedding"),
             "total": len(prospects),
             "leads": len(crm.interested_leads(book="wedding")),
+            "planners": sum(1 for p in prospects if "planner" in (p.get("industry") or "").lower()),
+            "tier_a": sum(1 for p in prospects if p.get("tier") == "A"),
         }
 
     @r.post("/wedding/pipeline")
@@ -717,9 +736,33 @@ def create_api_router() -> APIRouter:
             raise HTTPException(400, str(exc)) from exc
 
     @r.post("/wedding/library/import")
-    def wedding_lib_import(request: Request, limit: int = 20) -> dict[str, Any]:
+    def wedding_lib_import(
+        request: Request,
+        limit: int = 40,
+        rescore: bool = True,
+    ) -> dict[str, Any]:
+        """Import Bay Area planner/venue seeds, score them, make them Work-ready."""
         require_sliw_access(request)
-        return import_wedding_library(limit=limit)
+        return import_wedding_library(
+            limit=limit,
+            draft_email=False,
+            rescore_existing=rescore,
+            run_agent=False,
+        )
+
+    @r.post("/wedding/prospects/{prospect_id}/sales-agent")
+    def wedding_sales_agent(
+        prospect_id: str,
+        request: Request,
+        live_gamma: bool = False,
+    ) -> dict[str, Any]:
+        require_sliw_access(request)
+        try:
+            return run_wedding_sales_agent(prospect_id, live_gamma=live_gamma)
+        except KeyError:
+            raise HTTPException(404, "Wedding prospect not found") from None
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @r.get("/wedding/leads")
     def wedding_leads(request: Request) -> list[dict[str, Any]]:

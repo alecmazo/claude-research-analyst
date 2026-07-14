@@ -216,6 +216,13 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
     stage = p.get("stage") or "research"
     agent_ran = bool(p.get("sales_agent_ran_at") or p.get("agent_status"))
 
+    book = p.get("book") or "corporate"
+    is_wedding = book == "wedding"
+    agent_detail = (
+        "Agent finds planner/venue contacts, partnership pitch, drafts first-touch"
+        if is_wedding else
+        "Agent finds buyers, picks portfolio/light/full pitch, drafts outreach"
+    )
     steps = [
         {
             "id": "qualify",
@@ -225,9 +232,9 @@ def workstream_for_prospect(prospect_id: str) -> dict[str, Any]:
         },
         {
             "id": "agent",
-            "title": "Sales agent run",
-            "done": agent_ran and has_contact and has_draft,
-            "detail": "Agent finds buyers, picks portfolio/light/full pitch, drafts outreach",
+            "title": "Sales agent run" if not is_wedding else "Wedding sales agent",
+            "done": agent_ran and (has_contact or has_draft) and has_draft,
+            "detail": agent_detail,
         },
         {
             "id": "send",
