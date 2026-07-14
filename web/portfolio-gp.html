@@ -8410,7 +8410,8 @@ End with the sleeve block at this account's real market value so I can push it t
             `<td style="text-align:right;padding:6px;font-variant-numeric:tabular-nums;font-size:12px;">${p.net_margin_pct != null ? Number(p.net_margin_pct).toFixed(1) + '%' : '—'}</td>` +
             `<td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;font-size:12px;color:${_sgn(p.rev_yoy_pct)};">${fmtP(p.rev_yoy_pct)}</td></tr>`;
         }).join('');
-        const scope = [pc.industry, pc.sector].filter(Boolean).join(' · ') || 'covered names';
+        const scope = [pc.industry || pc.group_id, pc.sector].filter(Boolean).join(' · ') || 'covered names';
+        const methodNote = pc.note || 'Sell-side style: same industry / business model + similar market-cap band (not whole-sector mega-caps).';
         peersHost.innerHTML =
           `<div style="border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;background:var(--bg-elevated);">` +
           `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">` +
@@ -8418,7 +8419,7 @@ End with the sleeve block at this account's real market value so I can push it t
             `<span style="font-size:11px;color:var(--text-tertiary);">${_gfEsc(scope)} · free store · no tokens</span>` +
           `</div>` +
           `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;">${headRow}${body}</table></div>` +
-          `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">Peers ranked by market-cap proximity within the same industry (else sector). Click a ticker to load its dashboard. Sync more names to widen the peer set.</div>` +
+          `<div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">${_gfEsc(methodNote)} Click a ticker to load its dashboard. Pull SEC data for more names to fill multiples.</div>` +
           `</div>`;
         peersHost.style.display = 'block';
         peersHost.querySelectorAll('[data-fin-peer]').forEach(a => {
