@@ -4148,32 +4148,31 @@
   let _repSortMode = 'date';   // 'date' | 'upside'
   let _repSortDir  = 'desc';
 
-  /** Epoch ms for "freshness" sort — newest report content first.
-   * Prefer report_date / claude_report_date (analysis as-of). Pipeline
-   * generated_at can be bulk-stamped by hydration and is a weak signal when
-   * every row shares the same day. */
-  function _repRunAtMs(rep) {
-    if (!rep) return 0;
-    const times = [];
-    function _push(v) {
-      if (v == null || v === '') return;
+  /** Sort key components for "freshest report first".
+   * Prefer report_date / claude_report_date. Rows with an as-of outrank
+   * bulk-stamped generated_at-only rows. Returns { tier, ms } where tier
+   * 1 = has content date, 0 = pipeline ts only. */
+  function _repFreshness(rep) {
+    if (!rep) return { tier: 0, ms: 0 };
+    function _ms(v) {
+      if (v == null || v === '') return 0;
       const t = new Date(v).getTime();
-      if (!isNaN(t) && t > 0) times.push(t);
+      return (!isNaN(t) && t > 0) ? t : 0;
     }
-    // Content as-of first (what PMs mean by "freshest report")
-    _push(rep.report_date);
-    _push(rep.claude_report_date);
-    if (times.length) {
-      return Math.max.apply(null, times);
-    }
-    // Fall back to pipeline timestamps
-    _push(rep.generated_at);
-    _push(rep.claude_generated_at);
-    _push(rep.last_attempt_at);
-    if (times.length) {
-      return Math.max.apply(null, times);
-    }
-    return 0;
+    const content = Math.max(_ms(rep.report_date), _ms(rep.claude_report_date));
+    if (content > 0) return { tier: 1, ms: content };
+    const gen = Math.max(
+      _ms(rep.claude_generated_at),
+      _ms(rep.generated_at),
+      _ms(rep.last_attempt_at)
+    );
+    return { tier: 0, ms: gen };
+  }
+
+  /** Epoch ms used for display / data-run-at (content date preferred). */
+  function _repRunAtMs(rep) {
+    const f = _repFreshness(rep);
+    return f.ms || 0;
   }
 
   // Format the "x ago" relative date used in the dateStr column. Falls back
@@ -4221,10 +4220,12 @@
     const tbody = document.getElementById('reports-tbody');
     document.getElementById('reports-count').textContent = String(reports.length);
 
-    // Always sort by last successful run (newest → oldest) unless upside mode.
+    // Freshest report first (as-of date → oldest) unless upside mode.
     if (_repSortMode !== 'upside') {
       reports = reports.slice().sort(function(a, b) {
-        return _repRunAtMs(b) - _repRunAtMs(a);
+        const fa = _repFreshness(a), fb = _repFreshness(b);
+        if (fb.tier !== fa.tier) return fb.tier - fa.tier;
+        return fb.ms - fa.ms;
       });
     }
 
