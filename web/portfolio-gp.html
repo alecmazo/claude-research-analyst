@@ -65,16 +65,99 @@
     background: var(--warn-50, #fffbeb); border: 1px solid var(--warn-500, #d97706);
     border-radius: 4px; padding: 0 4px; vertical-align: middle; line-height: 1.5;
   }
-  /* Settings tab: light visual grouping headers */
+  /* Settings tab — dense multi-card layout */
   .settings-group-head {
     grid-column: 1 / -1;
-    margin: 6px 0 12px; padding-top: 4px;
-    font-size: 11px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+    margin: 14px 0 8px; padding: 0 0 5px;
+    font-size: 10px; font-weight: 800; letter-spacing: 1.3px; text-transform: uppercase;
     color: var(--text-tertiary, #94a3b8);
     border-bottom: 1px solid var(--panel-edge);
-    padding-bottom: 6px;
+    scroll-margin-top: 100px;
   }
-  .settings-group-head:not(:first-child) { margin-top: 10px; }
+  .settings-group-head:first-child { margin-top: 4px; }
+  #tab-settings .wide-shell.settings-shell {
+    max-width: 1280px; padding: 10px 14px 28px;
+  }
+  .settings-jump {
+    position: sticky; top: 52px; z-index: 20;
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 8px 0 10px; margin: 0 0 8px;
+    background: linear-gradient(#f0f4f8 70%, rgba(240,244,248,0));
+  }
+  html[data-theme="dark"] .settings-jump {
+    background: linear-gradient(var(--bg-app, #0b1220) 70%, transparent);
+  }
+  .settings-jump a {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px;
+    color: var(--text-secondary, #64748b); text-decoration: none;
+    border: 1px solid var(--panel-edge); border-radius: 999px;
+    padding: 4px 10px; background: var(--panel, #fff);
+  }
+  .settings-jump a:hover { color: var(--blue); border-color: var(--blue); }
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+  .settings-grid > .panel,
+  .settings-grid > .settings-group-head { margin: 0 !important; }
+  .settings-span-2 { grid-column: 1 / -1; }
+  #tab-settings .panel {
+    margin-bottom: 0;
+  }
+  #tab-settings .panel > .panel-head,
+  #tab-settings .panel > details > summary.panel-head {
+    padding: 8px 12px; min-height: 36px;
+  }
+  #tab-settings .panel-title { font-size: 12.5px; }
+  #tab-settings .panel-badge { font-size: 9px; padding: 1px 6px; }
+  #tab-settings .settings-card-body {
+    padding: 10px 12px 12px;
+    font-size: 11.5px;
+    color: #475569;
+    line-height: 1.45;
+  }
+  #tab-settings .settings-help {
+    font-size: 10px; color: #94a3b8; line-height: 1.4; margin-top: 8px;
+  }
+  #tab-settings .settings-form { padding: 10px 12px; }
+  #tab-settings .settings-row { margin-bottom: 7px; gap: 8px; }
+  #tab-settings .settings-label { width: 72px; font-size: 10px; }
+  #tab-settings .settings-input { min-width: 0; height: 30px; font-size: 11.5px; }
+  #tab-settings .tab-btn { font-size: 11px; height: 28px; padding: 0 10px; }
+  #tab-settings .tab-btn.sm { height: 24px; font-size: 10px; padding: 0 8px; }
+  #tab-settings .btn-primary { font-size: 11px; height: 28px; padding: 0 12px; }
+  #tab-settings .auto-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 0; border-bottom: 1px solid var(--panel-edge);
+  }
+  #tab-settings .auto-row:last-of-type { border-bottom: none; }
+  #tab-settings .auto-label { flex: 1; min-width: 140px; }
+  #tab-settings .auto-label strong { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-primary); }
+  #tab-settings .auto-label span { font-size: 9.5px; color: var(--dim); }
+  #tab-settings .auto-toggle { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+  #tab-settings .auto-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+  #tab-settings .auto-slider {
+    width: 34px; height: 18px; background: #cbd5e1; border-radius: 10px;
+    transition: background .2s; position: relative; flex-shrink: 0;
+  }
+  #tab-settings .auto-slider::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .2s;
+  }
+  #tab-settings .auto-toggle input:checked + .auto-slider { background: var(--blue); }
+  #tab-settings .auto-toggle input:checked + .auto-slider::after { transform: translateX(16px); }
+  #tab-settings .auto-time-input {
+    width: 76px; padding: 4px 6px; border: 1px solid var(--panel-edge);
+    border-radius: 6px; font-size: 11.5px; color: var(--text-primary); background: #fff;
+  }
+  #tab-settings .auto-next { font-size: 9.5px; color: var(--dim); min-width: 72px; }
+  @media (max-width: 960px) {
+    .settings-grid { grid-template-columns: 1fr; }
+    .settings-span-2 { grid-column: auto; }
+    .settings-jump { top: 48px; }
+  }
 
   /* Value Line financial sheet */
   .fin-vl-chip {
@@ -5753,232 +5836,204 @@ End with the sleeve block at this account's real market value so I can push it t
 
 <!-- ══ SETTINGS TAB ════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-panel">
-  <div class="wide-shell">
+  <div class="wide-shell settings-shell">
 
+    <div class="settings-jump" role="navigation" aria-label="Settings sections">
+      <a href="#set-support">Support</a>
+      <a href="#set-models">Models</a>
+      <a href="#set-connections">Connections</a>
+      <a href="#set-publishing">Publishing</a>
+      <a href="#set-security">Security</a>
+      <a href="#set-users">Users &amp; Funds</a>
+      <a href="#set-system">System</a>
+    </div>
 
-    <h3 class="settings-group-head">Support · fix trail</h3>
-
-    <!-- 🛟 Support tickets — GP-only; filed from the floating button bottom-right -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">🛟 Support tickets &amp; fix trail</span>
-        <span class="panel-badge" id="support-trail-badge" style="background:#fef3c7;color:#92400e;">—</span>
-        <span style="flex:1"></span>
-        <button type="button" id="support-trail-refresh" class="tab-btn" style="margin-right:6px;">↻ Refresh</button>
-        <button type="button" id="support-trail-file" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ File ticket</button>
-      </header>
-      <div style="padding:16px 18px;">
-        <p style="font-size:12px;color:#475569;line-height:1.55;margin:0 0 12px;">
-          Use the <strong>🛟 Support</strong> button (bottom-right on every tab) to report a problem.
-          Each ticket stores your description + an automatic screenshot of the page.
-          <strong>Filing works anytime</strong> (no terminal needed). Auto-diagnosis runs in the background via LLM.
-          <strong>Code fixes</strong> still need a coding-agent session in this workspace
-          (open Grok here and say “fix open support tickets”) — Railway cannot safely push git on its own.
-        </p>
-        <div id="support-trail-list" style="font-size:12px;color:#64748b;">Loading…</div>
-      </div>
-    </section>
-
-    <h3 class="settings-group-head">Models · Option 4 harness</h3>
-
-    <!-- Volume LLM — cheap model for daily volume; full reports stay Grok+Claude -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">⚡ Volume LLM (cheap daily jobs)</span>
-        <span class="panel-badge" id="volume-llm-badge" style="background:#f1f5f9;color:#64748b;">…</span>
-      </header>
-      <div style="padding:16px 18px;">
-        <p style="font-size:12px;color:#475569;line-height:1.55;margin:0 0 12px;">
-          <strong>Option 4:</strong> daily brief, sector intelligence, and Idea Generator
-          <em>Prioritize</em> can run on a cheap OpenAI-compatible open model
-          (e.g. DeepSeek). <strong>Full equity reports stay Grok + Claude only</strong>
-          (hero Analyze + LLM Lab). <strong>Podcasts unchanged</strong> (Claude/Grok script path).
-        </p>
-        <div id="volume-llm-status" style="font-size:12px;color:#64748b;margin-bottom:12px;line-height:1.5;">Loading…</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button type="button" id="volume-llm-enable" class="btn-primary" style="padding:0 16px;height:34px;font-size:12px;">
-            Use cheap volume model
-          </button>
-          <button type="button" id="volume-llm-rollback" class="tab-btn" style="height:34px;font-size:12px;border:1px solid #dc2626;color:#b91c1c;">
-            ↩ Roll back to Grok for volume
-          </button>
-          <button type="button" id="volume-llm-refresh" class="tab-btn" style="height:34px;font-size:12px;">↻ Refresh status</button>
+    <!-- ── Support ── -->
+    <h3 class="settings-group-head" id="set-support">Support · fix trail</h3>
+    <div class="settings-grid">
+      <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">🛟 Support tickets &amp; fix trail</span>
+          <span class="panel-badge" id="support-trail-badge" style="background:#fef3c7;color:#92400e;">—</span>
+          <span style="flex:1"></span>
+          <button type="button" id="support-trail-refresh" class="tab-btn" style="margin-right:4px;">↻</button>
+          <button type="button" id="support-trail-file" class="btn-primary">+ File ticket</button>
+        </header>
+        <div class="settings-card-body">
+          <p style="margin:0 0 8px;font-size:11px;color:#64748b;line-height:1.45;">
+            Use <strong>🛟 Support</strong> (bottom-right) to file with auto-screenshot. Diagnosis runs in background; code fixes need a coding-agent session.
+          </p>
+          <div id="support-trail-list" style="font-size:11.5px;color:#64748b;max-height:280px;overflow:auto;">Loading…</div>
         </div>
-        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
-          Railway / .env: <code>VOLUME_LLM_API_KEY</code>,
-          <code>VOLUME_LLM_BASE_URL</code> (default DeepSeek),
-          <code>VOLUME_LLM_MODEL</code> (default <code>deepseek-chat</code>),
-          optional <code>VOLUME_LLM_ENABLED=false</code> to force env-level off.
-          Toggle above survives redeploys via DB. Rollback never touches full-report or podcast models.
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
-    <h3 class="settings-group-head">Data Connections</h3>
-
-    <!-- 🔗 Linked accounts — SnapTrade (Fidelity holdings) -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">🔗 Linked Accounts · Fidelity (SnapTrade)</span>
-        <span class="panel-badge" id="snaptrade-badge" style="background:#f1f5f9;color:#64748b;">…</span>
-        <span style="flex:1"></span>
-        <button id="snaptrade-activity" type="button" class="tab-btn" style="margin-right:6px;">📊 YTD Activity</button>
-        <button id="snaptrade-ytdtest" type="button" class="tab-btn" style="margin-right:6px;">🧮 YTD Test</button>
-        <button id="snaptrade-debug" type="button" class="tab-btn" style="margin-right:6px;">🐞 Diagnose</button>
-        <button id="snaptrade-refresh" type="button" class="tab-btn" style="margin-right:6px;" title="Rarely needed — ↻ Sync now refreshes Fidelity automatically first. Use this only to re-pull without importing.">⟳ Force refresh</button>
-        <button id="snaptrade-sync" type="button" class="tab-btn" style="margin-right:6px;">↻ Sync</button>
-        <button id="snaptrade-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect Fidelity</button>
-      </header>
-      <div style="padding:16px 18px;">
-        <div id="snaptrade-body" style="font-size:12px;color:#475569;">Loading…</div>
-        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
-          Connects Fidelity via SnapTrade (read-only — holdings only, no trading). Your brokerage
-          credentials are entered on the brokerage's own page and never reach this server; the SnapTrade
-          secret is encrypted at rest. GP-only. Set <code>SNAPTRADE_CLIENT_ID</code> /
-          <code>SNAPTRADE_CONSUMER_KEY</code> + <code>DATA_ENCRYPTION_KEY</code> on Railway to enable.
-        </div>
-      </div>
-    </section>
-
-    <!-- 🔗 Linked accounts — Plaid (non-Fidelity banks; Fidelity left Plaid Oct 2023) -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">🔗 Linked Accounts · Plaid (non-Fidelity)</span>
-        <span class="panel-badge" id="plaid-badge" style="background:#f1f5f9;color:#64748b;">…</span>
-        <span style="flex:1"></span>
-        <button id="plaid-connect" type="button" class="btn-primary" style="padding:0 14px;height:30px;font-size:12px;">+ Connect bank</button>
-      </header>
-      <div style="padding:16px 18px;">
-        <div id="plaid-body" style="font-size:12px;color:#475569;">Loading…</div>
-        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
-          Connects via Plaid Link → Fidelity OAuth. Your Fidelity credentials are entered on Fidelity's
-          page and never reach this server. The access token is encrypted at rest. GP-only.
-          Set <code>PLAID_CLIENT_ID</code> / <code>PLAID_SECRET</code> / <code>PLAID_ENV</code> and
-          <code>DATA_ENCRYPTION_KEY</code> on Railway to enable.
-        </div>
-      </div>
-    </section>
-
-    <h3 class="settings-group-head">Publishing</h3>
-
-    <!-- 📡 Podcast distribution — RSS feed + landing page links for syndication -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">📡 Podcast Distribution (RSS / Apple / Spotify)</span>
-        <span class="panel-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
-      </header>
-      <div style="padding:16px 18px;">
-        <div style="font-size:11px;color:#64748b;margin-bottom:14px;line-height:1.55;">
-          Public RSS feed for syndication to Apple Podcasts / Spotify for Creators / Overcast / Pocket Casts.
-          Paste the URL below into each platform's "Submit a Podcast" / "Add by RSS" form.
-          <strong style="color:#92400e;">Submit only after counsel sign-off on the audio disclaimer wording.</strong>
-        </div>
-        <div style="margin-bottom:10px;">
-          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">RSS feed URL</label>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input id="rss-feed-url" readonly value=""
-              style="flex:1;height:32px;border:1px solid #cbd5e1;border-radius:6px;padding:0 11px;font-size:11.5px;font-family:'SF Mono',monospace;color:#1e293b;background:#f8fafc;">
-            <button id="rss-feed-copy" type="button" class="tab-btn">📋 Copy</button>
-            <a id="rss-feed-open" href="" target="_blank" rel="noopener" class="tab-btn" style="text-decoration:none;background:#fff;border:1px solid #cbd5e1;color:#475569;">▶ View XML</a>
+    <!-- ── Models ── -->
+    <h3 class="settings-group-head" id="set-models">Models · volume harness</h3>
+    <div class="settings-grid">
+      <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">⚡ Volume LLM (cheap daily jobs)</span>
+          <span class="panel-badge" id="volume-llm-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;align-items:start;">
+            <div>
+              <p style="margin:0 0 8px;font-size:11px;color:#64748b;line-height:1.45;">
+                <strong>Option 4:</strong> daily brief, sector intel, Idea Generator <em>Prioritize</em> can use a cheap OpenAI-compatible model (e.g. DeepSeek).
+                Full equity reports stay Grok + Claude; podcasts unchanged.
+              </p>
+              <div id="volume-llm-status" style="font-size:11.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">Loading…</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                <button type="button" id="volume-llm-enable" class="btn-primary">Use cheap volume model</button>
+                <button type="button" id="volume-llm-rollback" class="tab-btn" style="border:1px solid #dc2626;color:#b91c1c;">↩ Roll back to Grok</button>
+                <button type="button" id="volume-llm-refresh" class="tab-btn">↻ Status</button>
+              </div>
+            </div>
+            <div class="settings-help" style="margin:0;padding:8px 10px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle,#e2e8f0);border-radius:8px;">
+              Env: <code>VOLUME_LLM_API_KEY</code>, <code>VOLUME_LLM_BASE_URL</code>, <code>VOLUME_LLM_MODEL</code>, optional <code>VOLUME_LLM_ENABLED=false</code>.
+              Toggle survives redeploys via DB. Rollback never touches full-report or podcast models.
+            </div>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:14px;">
-          <a href="https://podcastsconnect.apple.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">🍎 Apple Podcasts Connect →</a>
-          <a href="https://podcasters.spotify.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">🟢 Spotify for Creators →</a>
-          <a href="https://podcasters.google.com/" target="_blank" rel="noopener" style="display:block;text-align:center;padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:11.5px;font-weight:700;color:#0A1628;text-decoration:none;">📺 YouTube Studio →</a>
-        </div>
-        <div style="margin-top:14px;padding:10px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;font-size:10.5px;color:#92400e;line-height:1.55;">
-          <strong>Before submitting:</strong> Set <code>PODCAST_RSS_ARTWORK_URL</code> on Railway to a hosted 3000×3000 PNG/JPG (Apple requires square cover art ≥1400px). Override channel title / description / author via <code>PODCAST_RSS_TITLE</code> / <code>_DESCRIPTION</code> / <code>_AUTHOR</code> env vars.
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
-    <!-- ⚖️ Compliance disclaimer (audio intro/outro for every episode) -->
-    <section class="panel" data-collapsible="1" style="margin-bottom:18px;">
-      <header class="panel-head">
-        <span class="panel-title">⚖️ Podcast Compliance Disclaimer</span>
-        <span class="panel-badge" id="disc-status" style="background:#dcfce7;color:#166534;">ON</span>
-      </header>
-      <div style="padding:16px 18px;">
-        <div style="font-size:11px;color:#64748b;margin-bottom:14px;line-height:1.55;">
-          Audio disclaimer appended to every podcast episode (intro + outro). Applied at the
-          NEXT audio generation — doesn't retroactively re-render existing episodes.
-          <strong style="color:#92400e;">Review the wording with your securities counsel before public RSS launch.</strong>
+    <!-- ── Connections ── -->
+    <h3 class="settings-group-head" id="set-connections">Data connections</h3>
+    <div class="settings-grid">
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">🔗 Fidelity · SnapTrade</span>
+          <span class="panel-badge" id="snaptrade-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;">
+            <button id="snaptrade-activity" type="button" class="tab-btn sm">📊 YTD</button>
+            <button id="snaptrade-ytdtest" type="button" class="tab-btn sm">🧮 YTD Test</button>
+            <button id="snaptrade-debug" type="button" class="tab-btn sm">🐞 Diag</button>
+            <button id="snaptrade-refresh" type="button" class="tab-btn sm" title="Re-pull without importing">⟳ Force</button>
+            <button id="snaptrade-sync" type="button" class="tab-btn sm">↻ Sync</button>
+            <button id="snaptrade-connect" type="button" class="btn-primary" style="margin-left:auto;">+ Connect</button>
+          </div>
+          <div id="snaptrade-body" style="font-size:11.5px;color:#475569;">Loading…</div>
+          <div class="settings-help">Read-only holdings via SnapTrade. Creds stay on brokerage site. Needs <code>SNAPTRADE_*</code> + <code>DATA_ENCRYPTION_KEY</code>.</div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-primary);">
-            <input type="checkbox" id="disc-intro-enabled" checked>
-            <strong>Intro disclaimer</strong> (before first turn)
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-primary);">
-            <input type="checkbox" id="disc-outro-enabled" checked>
-            <strong>Outro disclaimer</strong> (after last turn)
-          </label>
-        </div>
-        <div style="margin-bottom:12px;">
-          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">Intro text</label>
-          <textarea id="disc-intro-text" rows="3" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px 11px;font-size:12px;font-family:inherit;line-height:1.5;color:#1e293b;background:#fff;resize:vertical;"></textarea>
-          <div style="text-align:right;font-size:9.5px;color:#94a3b8;margin-top:2px;"><span id="disc-intro-len">0</span> ch / 800 max</div>
-        </div>
-        <div style="margin-bottom:12px;">
-          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">Outro text</label>
-          <textarea id="disc-outro-text" rows="3" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px 11px;font-size:12px;font-family:inherit;line-height:1.5;color:#1e293b;background:#fff;resize:vertical;"></textarea>
-          <div style="text-align:right;font-size:9.5px;color:#94a3b8;margin-top:2px;"><span id="disc-outro-len">0</span> ch / 800 max</div>
-        </div>
-        <div style="margin-bottom:14px;">
-          <label style="display:block;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--text-primary);text-transform:uppercase;margin-bottom:4px;">Disclaimer voice</label>
-          <select id="disc-voice" style="width:240px;height:32px;border:1px solid #cbd5e1;border-radius:6px;padding:0 9px;font-size:12px;color:#1e293b;background:#fff;">
-            <option value="alloy">alloy — neutral (recommended)</option>
-            <option value="echo">echo — calm male</option>
-            <option value="onyx">onyx — deep male</option>
-            <option value="nova">nova — bright female</option>
-            <option value="shimmer">shimmer — soft female</option>
-            <option value="ash">ash — rich, slightly raspy male</option>
-            <option value="sage">sage — measured female</option>
-            <option value="fable">fable — British storyteller</option>
-          </select>
-          <span style="font-size:10.5px;color:#64748b;margin-left:10px;">Use a voice DIFFERENT from your cast so listeners hear it as a notice.</span>
-        </div>
-        <div style="display:flex;gap:10px;">
-          <button id="disc-save-btn" type="button" class="tab-btn">💾 Save</button>
-          <button id="disc-reset-btn" type="button" class="tab-btn" style="background:#fff;border:1px solid #cbd5e1;color:#475569;">↺ Reset to defaults</button>
-          <span id="disc-msg" style="margin-left:auto;font-size:11px;color:#64748b;align-self:center;"></span>
-        </div>
-      </div>
-    </section>
+      </section>
 
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">🔗 Banks · Plaid</span>
+          <span class="panel-badge" id="plaid-badge" style="background:#f1f5f9;color:#64748b;">…</span>
+          <span style="flex:1"></span>
+          <button id="plaid-connect" type="button" class="btn-primary">+ Connect bank</button>
+        </header>
+        <div class="settings-card-body">
+          <div id="plaid-body" style="font-size:11.5px;color:#475569;">Loading…</div>
+          <div class="settings-help">Non-Fidelity banks (Fidelity left Plaid Oct 2023). Needs <code>PLAID_*</code> + <code>DATA_ENCRYPTION_KEY</code>.</div>
+        </div>
+      </section>
+    </div>
 
-      <!-- Archived Reports -->
-      <section class="panel" data-collapsible="1" data-expanded="1" style="margin-bottom:18px;">
+    <!-- ── Publishing ── -->
+    <h3 class="settings-group-head" id="set-publishing">Publishing</h3>
+    <div class="settings-grid">
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">📡 Podcast RSS</span>
+          <span class="panel-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="font-size:10.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">
+            Public feed for Apple / Spotify / Overcast. <strong style="color:#92400e;">Counsel sign-off before submit.</strong>
+          </div>
+          <label style="display:block;font-size:9.5px;font-weight:800;letter-spacing:0.8px;color:var(--text-primary);text-transform:uppercase;margin-bottom:3px;">RSS URL</label>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+            <input id="rss-feed-url" readonly value=""
+              style="flex:1;height:28px;border:1px solid #cbd5e1;border-radius:6px;padding:0 8px;font-size:10.5px;font-family:'SF Mono',monospace;color:#1e293b;background:#f8fafc;">
+            <button id="rss-feed-copy" type="button" class="tab-btn sm">📋</button>
+            <a id="rss-feed-open" href="" target="_blank" rel="noopener" class="tab-btn sm" style="text-decoration:none;background:#fff;border:1px solid #cbd5e1;color:#475569;">▶ XML</a>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+            <a href="https://podcastsconnect.apple.com/" target="_blank" rel="noopener" style="text-align:center;padding:7px 6px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:10.5px;font-weight:700;color:#0A1628;text-decoration:none;">🍎 Apple</a>
+            <a href="https://podcasters.spotify.com/" target="_blank" rel="noopener" style="text-align:center;padding:7px 6px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:10.5px;font-weight:700;color:#0A1628;text-decoration:none;">🟢 Spotify</a>
+            <a href="https://podcasters.google.com/" target="_blank" rel="noopener" style="text-align:center;padding:7px 6px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:10.5px;font-weight:700;color:#0A1628;text-decoration:none;">📺 YT</a>
+          </div>
+          <div class="settings-help">Set <code>PODCAST_RSS_ARTWORK_URL</code> (≥1400px square). Optional <code>PODCAST_RSS_TITLE</code> / <code>_DESCRIPTION</code> / <code>_AUTHOR</code>.</div>
+        </div>
+      </section>
+
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">⚖️ Podcast disclaimer</span>
+          <span class="panel-badge" id="disc-status" style="background:#dcfce7;color:#166534;">ON</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="font-size:10.5px;color:#64748b;margin-bottom:8px;line-height:1.4;">
+            Audio intro/outro on next generate. <strong style="color:#92400e;">Review with counsel before public RSS.</strong>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-primary);">
+              <input type="checkbox" id="disc-intro-enabled" checked>
+              <strong>Intro</strong>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-primary);">
+              <input type="checkbox" id="disc-outro-enabled" checked>
+              <strong>Outro</strong>
+            </label>
+          </div>
+          <label style="display:block;font-size:9.5px;font-weight:800;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:2px;">Intro text</label>
+          <textarea id="disc-intro-text" rows="2" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px;font-size:11px;font-family:inherit;line-height:1.4;color:#1e293b;background:#fff;resize:vertical;"></textarea>
+          <div style="text-align:right;font-size:9px;color:#94a3b8;"><span id="disc-intro-len">0</span>/800</div>
+          <label style="display:block;font-size:9.5px;font-weight:800;letter-spacing:0.8px;text-transform:uppercase;margin:4px 0 2px;">Outro text</label>
+          <textarea id="disc-outro-text" rows="2" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px;font-size:11px;font-family:inherit;line-height:1.4;color:#1e293b;background:#fff;resize:vertical;"></textarea>
+          <div style="text-align:right;font-size:9px;color:#94a3b8;"><span id="disc-outro-len">0</span>/800</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+            <select id="disc-voice" style="flex:1;min-width:140px;height:28px;border:1px solid #cbd5e1;border-radius:6px;padding:0 6px;font-size:11px;color:#1e293b;background:#fff;">
+              <option value="alloy">alloy — neutral</option>
+              <option value="echo">echo — calm male</option>
+              <option value="onyx">onyx — deep male</option>
+              <option value="nova">nova — bright female</option>
+              <option value="shimmer">shimmer — soft female</option>
+              <option value="ash">ash — rich male</option>
+              <option value="sage">sage — measured female</option>
+              <option value="fable">fable — British</option>
+            </select>
+            <button id="disc-save-btn" type="button" class="tab-btn">💾 Save</button>
+            <button id="disc-reset-btn" type="button" class="tab-btn sm" style="background:#fff;border:1px solid #cbd5e1;color:#475569;">↺ Defaults</button>
+            <span id="disc-msg" style="font-size:10.5px;color:#64748b;"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel settings-span-2" data-collapsible="1">
         <header class="panel-head">
           <span class="panel-title">Archived Reports</span>
           <span class="panel-badge" id="archived-count">—</span>
-          <button id="restore-all-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">↩ Restore All</button>
+          <button id="restore-all-btn" class="tab-btn sm" style="margin-left:auto;">↩ Restore All</button>
         </header>
-        <div id="archived-list" style="padding:10px 14px;font-size:12px;color:var(--dim);">Loading…</div>
+        <div id="archived-list" class="settings-card-body" style="color:var(--dim);max-height:200px;overflow:auto;">Loading…</div>
       </section>
+    </div>
 
-    <div class="wide-grid-2">
-
-      <h3 class="settings-group-head">Security</h3>
-
-      <!-- 🔐 Two-Factor Authentication (TOTP) -->
-      <section class="panel" data-collapsible="1">
+    <!-- ── Security ── -->
+    <h3 class="settings-group-head" id="set-security">Security</h3>
+    <div class="settings-grid">
+      <section class="panel" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
-          <span class="panel-title">🔐 Two-Factor Authentication</span>
+          <span class="panel-title">🔐 Two-Factor Auth</span>
           <span class="panel-badge" id="mfa-badge" style="background:#f1f5f9;color:#64748b;">…</span>
           <span style="flex:1"></span>
-          <button id="mfa-toggle-btn" type="button" class="tab-btn" style="display:none;">…</button>
+          <button id="mfa-toggle-btn" type="button" class="tab-btn sm" style="display:none;">…</button>
         </header>
-        <div style="padding:14px 16px;">
-          <div id="mfa-body" style="font-size:12.5px;color:#475569;line-height:1.5;">Loading…</div>
+        <div class="settings-card-body">
+          <div id="mfa-body" style="font-size:11.5px;color:#475569;line-height:1.45;">Loading…</div>
         </div>
       </section>
 
-      <!-- Change Own Password -->
-      <section class="panel" data-collapsible="1">
+      <section class="panel" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
-          <span class="panel-title">Change Your Password</span>
+          <span class="panel-title">Change password</span>
         </header>
         <div class="settings-form">
           <div class="settings-row">
@@ -5987,303 +6042,173 @@ End with the sleeve block at this account's real market value so I can push it t
           </div>
           <div class="settings-row">
             <span class="settings-label">New</span>
-            <input id="pw-new" type="password" class="settings-input" placeholder="New password (≥8 chars)">
+            <input id="pw-new" type="password" class="settings-input" placeholder="New password (≥8)">
           </div>
           <div class="settings-row">
             <span class="settings-label">Confirm</span>
-            <input id="pw-confirm" type="password" class="settings-input" placeholder="Confirm new password">
+            <input id="pw-confirm" type="password" class="settings-input" placeholder="Confirm">
           </div>
           <div class="settings-row">
-            <button id="pw-save-btn" class="tab-btn" style="margin-left:110px;">Save Password</button>
+            <button id="pw-save-btn" class="tab-btn" style="margin-left:72px;">Save Password</button>
           </div>
-          <div id="pw-msg" style="font-size:12px;padding:0 0 4px 110px;min-height:18px;"></div>
+          <div id="pw-msg" style="font-size:11px;padding:0 0 2px 72px;min-height:16px;"></div>
         </div>
-        <div style="border-top:1px solid var(--panel-edge);padding:12px 14px;">
-          <div style="font-size:10px;color:var(--dim);letter-spacing:0.5px;" id="build-info">—</div>
+        <div style="border-top:1px solid var(--panel-edge);padding:8px 12px;">
+          <div style="font-size:9.5px;color:var(--dim);letter-spacing:0.4px;" id="build-info">—</div>
         </div>
       </section>
+    </div>
 
-
-
-
-      <h3 class="settings-group-head">Users</h3>
-
-      <!-- LP User Management -->
-      <section class="panel" data-collapsible="1" data-expanded="1" style="grid-column:1/-1;">
+    <!-- ── Users & funds ── -->
+    <h3 class="settings-group-head" id="set-users">Users &amp; funds</h3>
+    <div class="settings-grid">
+      <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
           <span class="panel-title">LP User Management</span>
           <span class="panel-badge" id="lp-count-badge">—</span>
-          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add LP</button>
+          <button id="lp-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;">+ Add LP</button>
         </header>
-        <div id="lp-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1px;margin-bottom:10px;">NEW LP ACCOUNT</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+        <div id="lp-add-form" style="display:none;padding:10px 12px;border-bottom:1px solid var(--panel-edge);background:rgba(91,184,212,0.04);">
+          <div style="font-size:9.5px;font-weight:800;color:var(--blue);letter-spacing:0.8px;margin-bottom:8px;">NEW LP ACCOUNT</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end;">
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="lp-new-name" type="text" class="settings-input" placeholder="e.g. Jane Smith" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">FULL NAME</div>
+              <input id="lp-new-name" type="text" class="settings-input" placeholder="Jane Smith" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">EMAIL</div>
               <input id="lp-new-email" type="email" class="settings-input" placeholder="jane@example.com" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INITIAL PASSWORD</div>
-              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temporary password (≥6 chars)" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">INITIAL PASSWORD</div>
+              <input id="lp-new-pw" type="text" class="settings-input" placeholder="Temp (≥6)" style="width:100%;">
             </div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;height:34px;">Create LP</button>
-              <div id="lp-new-msg" style="font-size:10px;min-height:14px;"></div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <button id="lp-new-save-btn" class="tab-btn" style="width:100%;">Create LP</button>
+              <div id="lp-new-msg" style="font-size:10px;min-height:12px;"></div>
             </div>
           </div>
         </div>
-        <div id="lp-roster" class="tab-loading">Loading…</div>
+        <div id="lp-roster" class="tab-loading" style="padding:8px 12px;">Loading…</div>
       </section>
 
-      <!-- Admin User Management -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+      <section class="panel settings-span-2" data-collapsible="1">
         <header class="panel-head">
           <span class="panel-title">Admin User Management</span>
           <span class="panel-badge" style="background:rgba(201,168,76,0.15);color:#a88a3a;border:1px solid rgba(201,168,76,0.30);">GOD MODE</span>
-          <button id="admin-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;font-size:9px;padding:0 10px;">+ Add Admin</button>
+          <button id="admin-add-toggle-btn" class="tab-btn sm" style="margin-left:auto;">+ Add Admin</button>
         </header>
-        <div id="admin-add-form" style="display:none;padding:14px;border-bottom:1px solid var(--panel-edge);background:rgba(201,168,76,0.04);">
-          <div style="font-size:10px;font-weight:800;color:#c9a84c;letter-spacing:1px;margin-bottom:6px;">NEW ADMIN ACCOUNT</div>
-          <div style="font-size:10px;color:var(--dim);margin-bottom:10px;">Admin users have full access to both the GP and LP dashboards. Use for testing or trusted advisors.</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+        <div id="admin-add-form" style="display:none;padding:10px 12px;border-bottom:1px solid var(--panel-edge);background:rgba(201,168,76,0.04);">
+          <div style="font-size:9.5px;font-weight:800;color:#c9a84c;letter-spacing:0.8px;margin-bottom:4px;">NEW ADMIN ACCOUNT</div>
+          <div style="font-size:10px;color:var(--dim);margin-bottom:8px;">Full GP + LP access. For testing or trusted advisors.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end;">
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="admin-new-name" type="text" class="settings-input" placeholder="e.g. Test Admin" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">FULL NAME</div>
+              <input id="admin-new-name" type="text" class="settings-input" placeholder="Test Admin" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">EMAIL</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">EMAIL</div>
               <input id="admin-new-email" type="email" class="settings-input" placeholder="admin@example.com" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">PASSWORD</div>
-              <input id="admin-new-pw" type="text" class="settings-input" placeholder="Password (≥6 chars)" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">PASSWORD</div>
+              <input id="admin-new-pw" type="text" class="settings-input" placeholder="≥6 chars" style="width:100%;">
             </div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <button id="admin-new-save-btn" class="tab-btn" style="width:100%;height:34px;background:linear-gradient(135deg,#c9a84c,#a88a3a);color:#0A1628;border:none;">Create Admin</button>
-              <div id="admin-new-msg" style="font-size:10px;min-height:14px;"></div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <button id="admin-new-save-btn" class="tab-btn" style="width:100%;background:linear-gradient(135deg,#c9a84c,#a88a3a);color:#0A1628;border:none;">Create Admin</button>
+              <div id="admin-new-msg" style="font-size:10px;min-height:12px;"></div>
             </div>
-            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-top:4px;">
-              <input type="checkbox" id="admin-new-demo" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;">
-              <label for="admin-new-demo" style="font-size:11px;color:var(--dim);cursor:pointer;">
-                <strong>Demo Mode</strong> — anonymises LP identities; read-only access to admin write operations
+            <div style="grid-column:1/-1;display:flex;align-items:center;gap:6px;">
+              <input type="checkbox" id="admin-new-demo" style="accent-color:var(--blue);width:13px;height:13px;cursor:pointer;">
+              <label for="admin-new-demo" style="font-size:10.5px;color:var(--dim);cursor:pointer;">
+                <strong>Demo Mode</strong> — anonymise LPs; read-only on admin writes
               </label>
             </div>
           </div>
         </div>
-        <div id="admin-roster" style="padding:12px 14px;font-size:11px;color:var(--dim);">Loading…</div>
+        <div id="admin-roster" style="padding:10px 12px;font-size:11px;color:var(--dim);">Loading…</div>
       </section>
 
-      <!-- Create Fund / Managed Account -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+      <section class="panel settings-span-2" data-collapsible="1">
         <header class="panel-head">
           <span class="panel-title">Fund Administration</span>
           <span class="panel-badge">GP ONLY</span>
         </header>
-        <div style="padding:14px;">
-
-          <!-- ── Rename existing fund / account ── -->
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Rename Fund / Account</div>
-          <div style="display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) minmax(120px,1fr) auto;gap:10px;align-items:end;margin-bottom:18px;">
+        <div class="settings-card-body">
+          <div style="font-size:9.5px;font-weight:800;color:var(--blue);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:6px;">Rename</div>
+          <div style="display:grid;grid-template-columns:minmax(160px,2fr) minmax(100px,1fr) minmax(90px,1fr) auto;gap:8px;align-items:end;margin-bottom:12px;">
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SELECT</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">SELECT</div>
               <select id="rn-fund" class="settings-input" style="width:100%;">
-                <option value="">— choose fund or account —</option>
+                <option value="">— fund or account —</option>
               </select>
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="rn-name" type="text" class="settings-input" placeholder="New full name" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">FULL NAME</div>
+              <input id="rn-name" type="text" class="settings-input" placeholder="New name" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">CODE</div>
               <input id="rn-short" type="text" class="settings-input" placeholder="CODE" style="width:100%;text-transform:uppercase;" maxlength="12">
             </div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button id="rn-save-btn" class="tab-btn" style="width:100%;height:34px;">Rename</button>
-              <div id="rn-msg" style="font-size:11px;min-height:16px;"></div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <button id="rn-save-btn" class="tab-btn" style="width:100%;">Rename</button>
+              <div id="rn-msg" style="font-size:10px;min-height:14px;"></div>
             </div>
           </div>
-
-          <hr style="border:none;border-top:1px solid var(--panel-edge);margin-bottom:14px;">
-
-          <!-- ── Create new fund / account ── -->
-          <div style="font-size:10px;font-weight:800;color:var(--blue);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;">Create New Fund / Account</div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:10px;">Use the Fund tab to set NAV and view LP detail after creation.</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
+          <hr style="border:none;border-top:1px solid var(--panel-edge);margin-bottom:10px;">
+          <div style="font-size:9.5px;font-weight:800;color:var(--blue);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;">Create new</div>
+          <div style="font-size:10px;color:var(--dim);margin-bottom:8px;">Set NAV on Fund tab after creation.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;align-items:end;">
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">FULL NAME</div>
-              <input id="cf-name" type="text" class="settings-input" placeholder="e.g. DGA Capital Fund IV, LP" style="width:100%;">
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">FULL NAME</div>
+              <input id="cf-name" type="text" class="settings-input" placeholder="DGA Capital Fund IV, LP" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">SHORT CODE</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">CODE</div>
               <input id="cf-short" type="text" class="settings-input" placeholder="DGAF-IV" style="width:100%;text-transform:uppercase;" maxlength="12">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">TYPE</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">TYPE</div>
               <select id="cf-type" class="settings-input" style="width:100%;">
                 <option value="lp_fund">LP Fund</option>
                 <option value="managed_account">Managed Account</option>
               </select>
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">INCEPTION DATE</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">INCEPTION</div>
               <input id="cf-inception" type="date" class="settings-input" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">MGMT FEE %</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">MGMT %</div>
               <input id="cf-mgmt" type="number" class="settings-input" value="1.5" step="0.1" min="0" max="5" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">CARRY %</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">CARRY %</div>
               <input id="cf-carry" type="number" class="settings-input" value="20" step="1" min="0" max="50" style="width:100%;">
             </div>
             <div>
-              <div style="font-size:10px;font-weight:700;color:var(--dim);margin-bottom:4px;letter-spacing:0.5px;">HURDLE %</div>
+              <div style="font-size:9px;font-weight:700;color:var(--dim);margin-bottom:3px;">HURDLE %</div>
               <input id="cf-hurdle" type="number" class="settings-input" value="8" step="0.5" min="0" max="20" style="width:100%;">
             </div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button id="cf-create-btn" class="tab-btn" style="width:100%;height:34px;">Create</button>
-              <div id="cf-msg" style="font-size:11px;min-height:16px;"></div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <button id="cf-create-btn" class="tab-btn" style="width:100%;">Create</button>
+              <div id="cf-msg" style="font-size:10px;min-height:14px;"></div>
             </div>
           </div>
         </div>
       </section>
+    </div>
 
-      <h3 class="settings-group-head">System</h3>
-
-    <!-- 🚂 Railway cost & memory — live container metrics + estimated monthly bill -->
-    <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
-      <header class="panel-head">
-        <span class="panel-title">🚂 Railway Cost &amp; Memory</span>
-        <span class="panel-badge" id="rw-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
-        <span style="flex:1"></span>
-        <button id="rw-refresh" type="button" class="tab-btn">↻ Refresh</button>
-      </header>
-      <div style="padding:16px 18px;">
-        <div id="rw-body" style="font-size:12px;color:#475569;">Loading live usage…</div>
-        <div style="margin-top:12px;font-size:10px;color:#94a3b8;line-height:1.5;">
-          Estimated from this container's live cgroup usage × Railway's published per-unit prices
-          (memory $10/GB·mo, vCPU $20/vCPU·mo). Egress &amp; volume not metered here.
-          Override rates with <code>RAILWAY_PRICE_MEM_GB_MONTH</code> / <code>RAILWAY_PRICE_VCPU_MONTH</code> /
-          <code>RAILWAY_BASE_FEE_MONTH</code> / <code>RAILWAY_INCLUDED_CREDIT</code> env vars to match your plan.
-        </div>
-      </div>
-    </section>
-
-      <!-- Email Diagnostics -->
-      <section class="panel" data-collapsible="1">
-        <header class="panel-head">
-          <span class="panel-title">Email Diagnostics</span>
-          <span class="panel-badge">Resend</span>
-        </header>
-        <div style="padding:14px;">
-          <div style="font-size:11px;color:var(--dim);margin-bottom:12px;line-height:1.6;">
-            Use this panel to verify that Resend is configured correctly and can deliver email.
-            <strong>Run Diagnostics</strong> checks your API key and domain status.
-            <strong>Send Test Email</strong> fires a real message end-to-end.
-          </div>
-
-          <!-- Test email row -->
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-            <input id="email-test-addr" type="email" class="settings-input"
-              placeholder="recipient@example.com" style="flex:1;min-width:180px;">
-            <button id="email-test-btn" class="tab-btn" style="white-space:nowrap;">📨 Send Test Email</button>
-            <button id="email-diag-btn" class="tab-btn sm" style="white-space:nowrap;font-size:9px;padding:0 12px;">🔍 Run Diagnostics</button>
-          </div>
-
-          <!-- Result area -->
-          <div id="email-diag-result" style="display:none;margin-top:10px;border-radius:8px;border:1px solid var(--panel-edge);overflow:hidden;">
-            <!-- filled by JS -->
-          </div>
-        </div>
-      </section>
-
-      <!-- Demo Sandbox -->
-      <section class="panel" data-collapsible="1">
-        <header class="panel-head">
-          <span class="panel-title">🎭 Demo Sandbox</span>
-          <span class="panel-badge">PROSPECTS</span>
-        </header>
-        <div style="padding:14px;font-size:12px;color:var(--text-secondary);line-height:1.55;">
-          Shareable demo logins over a fully <strong>synthetic</strong> fund + two managed
-          accounts (real tickers &amp; live prices, fictitious everything else). Demo sessions
-          can never see real data; AI outputs are pre-generated samples (zero token cost).
-          <div id="demo-sandbox-status" style="margin:8px 0;color:var(--text-tertiary);">—</div>
-          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
-              LP funds
-              <input id="demo-n-funds" type="number" min="1" max="4" value="1"
-                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
-            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
-              Managed accounts
-              <input id="demo-n-managed" type="number" min="0" max="6" value="2"
-                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
-            <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;">
-              Watchlist size
-              <input id="demo-wl-count" type="number" min="0" max="25" value="10"
-                     style="width:48px;height:26px;text-align:center;border-radius:6px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button id="demo-reseed-btn" type="button" class="btn-primary"
-                    style="padding:0 14px;height:28px;font-size:11.5px;">↻ Seed / Reset demo data</button>
-            <span id="demo-reseed-note" style="font-size:11px;color:var(--text-tertiary);"></span>
-          </div>
-          <div style="margin-top:6px;font-size:10.5px;color:var(--text-tertiary);">Re-running overrides the previous demo entirely (e.g. switch 1 fund / 2 accounts → 2 funds / 3 accounts).</div>
-        </div>
-      </section>
-
-      <!-- Automation Schedule -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+    <!-- ── System ── -->
+    <h3 class="settings-group-head" id="set-system">System</h3>
+    <div class="settings-grid">
+      <section class="panel settings-span-2" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
           <span class="panel-title">Automation Schedule</span>
-          <span class="panel-badge">Pacific Time</span>
+          <span class="panel-badge">Pacific</span>
         </header>
-        <div style="padding:16px 14px;">
-
-          <!-- toggle + time row helper styles (scoped inline) -->
-          <style>
-            .auto-row {
-              display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-              padding: 10px 0; border-bottom:1px solid var(--panel-edge);
-            }
-            .auto-row:last-child { border-bottom:none; }
-            .auto-label {
-              flex:1; min-width:160px;
-            }
-            .auto-label strong {
-              display:block; font-size:12px; font-weight:700; color:var(--text-primary);
-            }
-            .auto-label span {
-              font-size:10px; color:var(--dim);
-            }
-            /* pill toggle switch */
-            .auto-toggle { position:relative; display:inline-flex; align-items:center; cursor:pointer; }
-            .auto-toggle input { opacity:0; width:0; height:0; position:absolute; }
-            .auto-slider {
-              width:38px; height:20px; background:#cbd5e1; border-radius:10px;
-              transition:background .2s; position:relative; flex-shrink:0;
-            }
-            .auto-slider::after {
-              content:''; position:absolute; top:3px; left:3px;
-              width:14px; height:14px; border-radius:50%;
-              background:#fff; transition:transform .2s;
-            }
-            .auto-toggle input:checked + .auto-slider { background:var(--blue); }
-            .auto-toggle input:checked + .auto-slider::after { transform:translateX(18px); }
-            .auto-time-input {
-              width:80px; padding:5px 8px; border:1px solid var(--panel-edge);
-              border-radius:6px; font-size:12px; color:var(--text-primary);
-              background:#fff; cursor:pointer;
-            }
-            .auto-time-input:focus { border-color:var(--blue); outline:none; }
-            .auto-next { font-size:10px; color:var(--dim); min-width:90px; }
-          </style>
-
-          <!-- Daily Brief row -->
+        <div class="settings-card-body">
           <div class="auto-row">
             <div class="auto-label">
               <strong>🌐 Daily Pulse</strong>
@@ -6296,12 +6221,10 @@ End with the sleeve block at this account's real market value so I can push it t
             <input type="time" id="auto-brief-time" class="auto-time-input" value="08:00">
             <span class="auto-next" id="auto-brief-next">—</span>
           </div>
-
-          <!-- Market Pulse row -->
           <div class="auto-row">
             <div class="auto-label">
               <strong>⚡ Market Pulse Scan</strong>
-              <span>Scans all saved report tickers — merges into Market Pulse</span>
+              <span>All saved-report tickers → Market Pulse</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-pulse-enabled" checked>
@@ -6310,12 +6233,10 @@ End with the sleeve block at this account's real market value so I can push it t
             <input type="time" id="auto-pulse-time" class="auto-time-input" value="08:15">
             <span class="auto-next" id="auto-pulse-next">—</span>
           </div>
-
-          <!-- SnapTrade Sync row -->
           <div class="auto-row">
             <div class="auto-label">
               <strong>🔗 SnapTrade Sync</strong>
-              <span>Pulls Fidelity holdings into Positions &amp; live NAV (pre-market)</span>
+              <span>Fidelity holdings → Positions &amp; NAV (pre-market)</span>
             </div>
             <label class="auto-toggle" title="Enable / disable">
               <input type="checkbox" id="auto-snap-enabled">
@@ -6324,45 +6245,102 @@ End with the sleeve block at this account's real market value so I can push it t
             <input type="time" id="auto-snap-time" class="auto-time-input" value="06:00">
             <span class="auto-next" id="auto-snap-next">—</span>
           </div>
-
-          <!-- Save button -->
-          <div style="margin-top:14px; display:flex; align-items:center; gap:12px;">
+          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
             <button id="auto-save-btn" class="tab-btn">Save Schedule</button>
-            <span id="auto-save-msg" style="font-size:11px; color:var(--dim);"></span>
+            <span id="auto-save-msg" style="font-size:10.5px;color:var(--dim);"></span>
           </div>
         </div>
       </section>
 
-      <!-- System Info — app version + service health (was buried) -->
-      <section class="panel" data-collapsible="1" style="grid-column:1/-1;">
+      <section class="panel" data-collapsible="1" data-expanded="1">
         <header class="panel-head">
-          <span class="panel-title">🖥 System Info</span>
+          <span class="panel-title">🚂 Railway cost</span>
+          <span class="panel-badge" id="rw-badge" style="background:#dbeafe;color:#1e40af;">LIVE</span>
+          <span style="flex:1"></span>
+          <button id="rw-refresh" type="button" class="tab-btn sm">↻</button>
+        </header>
+        <div class="settings-card-body">
+          <div id="rw-body" style="font-size:11.5px;color:#475569;">Loading live usage…</div>
+          <div class="settings-help">Est. from cgroup × Railway rates. Override via <code>RAILWAY_PRICE_*</code> env.</div>
+        </div>
+      </section>
+
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">Email diagnostics</span>
+          <span class="panel-badge">Resend</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="font-size:10.5px;color:var(--dim);margin-bottom:8px;line-height:1.4;">
+            Verify Resend config and delivery.
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+            <input id="email-test-addr" type="email" class="settings-input"
+              placeholder="recipient@example.com" style="flex:1;min-width:140px;">
+            <button id="email-test-btn" class="tab-btn sm">📨 Test</button>
+            <button id="email-diag-btn" class="tab-btn sm">🔍 Diag</button>
+          </div>
+          <div id="email-diag-result" style="display:none;border-radius:6px;border:1px solid var(--panel-edge);overflow:hidden;"></div>
+        </div>
+      </section>
+
+      <section class="panel" data-collapsible="1">
+        <header class="panel-head">
+          <span class="panel-title">🎭 Demo sandbox</span>
+          <span class="panel-badge">PROSPECTS</span>
+        </header>
+        <div class="settings-card-body">
+          <div style="font-size:10.5px;color:var(--text-secondary);line-height:1.4;margin-bottom:6px;">
+            Synthetic fund + managed accounts for demos. Demo sessions never see real data.
+          </div>
+          <div id="demo-sandbox-status" style="margin:0 0 6px;color:var(--text-tertiary);font-size:11px;">—</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+            <label style="font-size:10.5px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+              LP funds
+              <input id="demo-n-funds" type="number" min="1" max="4" value="1"
+                     style="width:42px;height:24px;text-align:center;border-radius:5px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+            <label style="font-size:10.5px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+              Managed
+              <input id="demo-n-managed" type="number" min="0" max="6" value="2"
+                     style="width:42px;height:24px;text-align:center;border-radius:5px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+            <label style="font-size:10.5px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+              Watchlist
+              <input id="demo-wl-count" type="number" min="0" max="25" value="10"
+                     style="width:42px;height:24px;text-align:center;border-radius:5px;border:1px solid var(--panel-edge);background:var(--bg-elevated,transparent);color:var(--text-primary);"></label>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <button id="demo-reseed-btn" type="button" class="btn-primary">↻ Seed / Reset</button>
+            <span id="demo-reseed-note" style="font-size:10px;color:var(--text-tertiary);"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-collapsible="1" data-expanded="1">
+        <header class="panel-head">
+          <span class="panel-title">🖥 System info</span>
           <span class="panel-badge" id="sys-info-badge">—</span>
         </header>
-        <div style="padding:12px 14px;font-size:11.5px;color:#475569;line-height:1.7;font-family:'SF Mono',monospace;">
-          <div>Build:           <strong id="sys-build">—</strong></div>
-          <div>Server commit:   <strong id="sys-commit">—</strong></div>
-          <div>Backend status:  <strong id="sys-backend">—</strong></div>
-          <div>DB status:       <strong id="sys-db">—</strong></div>
-          <div>RSS feed:        <a id="sys-rss" href="" target="_blank" rel="noopener" style="color:#5BB8D4;">—</a></div>
+        <div class="settings-card-body" style="font-family:'SF Mono',monospace;font-size:10.5px;line-height:1.65;">
+          <div>Build: <strong id="sys-build">—</strong></div>
+          <div>Commit: <strong id="sys-commit">—</strong></div>
+          <div>Backend: <strong id="sys-backend">—</strong></div>
+          <div>DB: <strong id="sys-db">—</strong></div>
+          <div>RSS: <a id="sys-rss" href="" target="_blank" rel="noopener" style="color:#5BB8D4;">—</a></div>
         </div>
-        <div style="border-top:1px solid var(--border-subtle);padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <button id="replay-tour-btn" class="tab-btn" onclick="window.startDGATour && window.startDGATour();">
-            🗺 Take the tour
-          </button>
-          <span style="font-size:11.5px;color:var(--text-tertiary);">Replay the first-run onboarding any time.</span>
+        <div style="border-top:1px solid var(--border-subtle);padding:8px 12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button id="replay-tour-btn" class="tab-btn sm" onclick="window.startDGATour && window.startDGATour();">🗺 Tour</button>
+          <span style="font-size:10.5px;color:var(--text-tertiary);">Replay onboarding</span>
         </div>
-        <div id="model-check-row" style="border-top:1px solid var(--border-subtle);padding:12px 14px;">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button id="model-check-btn" class="tab-btn">🤖 Check AI Analyst model</button>
-            <span style="font-size:11.5px;color:var(--text-tertiary);">Verify the configured <code>AGENTIC_MODEL</code> is live (lists models + pings it).</span>
+        <div id="model-check-row" style="border-top:1px solid var(--border-subtle);padding:8px 12px;">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <button id="model-check-btn" class="tab-btn sm">🤖 Check model</button>
+            <span style="font-size:10px;color:var(--text-tertiary);"><code>AGENTIC_MODEL</code> live ping</span>
           </div>
-          <pre id="model-check-out" style="display:none;margin-top:10px;font-size:11px;font-family:'SF Mono',monospace;color:var(--text-primary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:6px;padding:10px 12px;max-height:260px;overflow:auto;"></pre>
+          <pre id="model-check-out" style="display:none;margin-top:8px;font-size:10px;font-family:'SF Mono',monospace;color:var(--text-primary);white-space:pre-wrap;background:var(--bg-subtle,#f8fafc);border-radius:6px;padding:8px;max-height:200px;overflow:auto;"></pre>
         </div>
       </section>
-
-
     </div>
+
   </div>
 </div><!-- #tab-settings -->
 
