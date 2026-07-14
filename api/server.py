@@ -26992,15 +26992,17 @@ def _build_peer_comps(tk: str, subject_metrics: dict, limit: int = 8) -> dict:
                 "ticker": tk, "is_subject": True,
             })
         peer_rows = []
+        # Preserve sell-side order from resolve_peer_tickers (industry first).
+        # Do NOT re-sort purely by mkt-cap — that promoted Consumer Cyclical
+        # mega-caps (AMZN/HD/SBUX) over true auto peers (F/GM) for TSLA.
+        rank_pos = {t: i for i, t in enumerate(ordered)}
         for t in ordered:
             fin = fin_map.get(t)
             if not fin:
                 continue
             peer_rows.append(row_metrics(
                 t, fin, name=name_by.get(t) or fin.get("entity_name")))
-        # Secondary sort by size proximity among the selected set
-        if sub_mkt:
-            peer_rows.sort(key=lambda r: abs((r.get("market_cap") or sub_mkt) - sub_mkt))
+        peer_rows.sort(key=lambda r: rank_pos.get(r.get("ticker") or "", 999))
         rows_out.extend(peer_rows[: max(0, limit)])
         out["peers"] = rows_out
         return out

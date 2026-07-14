@@ -151,16 +151,29 @@ _INDUSTRY_GROUPS: list[dict] = [
     },
     {
         "id": "auto_manufacturers",
-        "priority": 95,
-        "keywords": ["auto manufacturers", "automobiles", "auto makers"],
-        "exclude": ["parts", "components", "dealership"],
-        "peers": ["TSLA", "F", "GM", "RIVN", "LCID", "STLA", "TM", "HMC"],
+        "priority": 100,
+        "keywords": [
+            # Yahoo/GICS: "Automobile Manufacturers" (not "auto manufacturers")
+            "automobile manufacturers", "auto manufacturers", "automobiles",
+            "auto makers", "automobile manufacturer", "auto manufacturer",
+            "car manufacturers", "vehicle manufacturers", "ev manufacturers",
+            "electric vehicle", "automotive manufacturers",
+        ],
+        "exclude": ["parts", "components", "dealership", "retail"],
+        "peers": [
+            # Sell-side style: global OEMs + pure-play EV (not retail CD names)
+            "TSLA", "F", "GM", "RIVN", "LCID", "STLA", "TM", "HMC",
+            "NIO", "XPEV", "LI", "RACE", "MBLY",
+        ],
     },
     {
         "id": "auto_parts",
         "priority": 90,
-        "keywords": ["auto parts", "auto components", "auto & truck dealerships"],
-        "exclude": [],
+        "keywords": [
+            "auto parts", "auto components", "auto & truck dealerships",
+            "automotive parts", "automotive retail",
+        ],
+        "exclude": ["manufacturers"],
         "peers": ["APTV", "BWA", "LEA", "MGA", "ALV", "GNTX", "DORM", "AXL", "KMX", "AN", "PAG"],
     },
     {
@@ -574,6 +587,9 @@ def _norm(s: str | None) -> str:
     t = str(s).lower().strip()
     t = t.replace("—", "-").replace("–", "-").replace("&", " and ")
     t = re.sub(r"\s+", " ", t)
+    # Yahoo/GICS uses "Automobile Manufacturers"; curated keywords often say
+    # "auto manufacturers". Collapse automobile(s) → auto so both match.
+    t = re.sub(r"\bautomobiles?\b", "auto", t)
     return t
 
 
@@ -618,18 +634,22 @@ def market_cap_band(mcap: float | None) -> tuple[float, float]:
 
     Sell-side desks keep peers in a comparable size sleeve; mega-caps only
     vs other mega/large, small-caps not vs $2T platforms.
+
+    Auto OEMs are the classic exception: TSLA (~$1T+) is still compared to
+    GM/F (~$40–60B) on MS/GS auto desks — band is wide for mega names so
+    true industry peers are not replaced by same-sector retail (HD/SBUX).
     """
     if not mcap or mcap <= 0:
-        return (0.15, 8.0)
-    if mcap >= 200e9:          # mega
-        return (0.15, 6.0)     # allow $30B+ peers for $200B+ names
+        return (0.10, 10.0)
+    if mcap >= 200e9:          # mega — allow ~$20B+ industry peers (GM/F vs TSLA)
+        return (0.02, 8.0)
     if mcap >= 50e9:           # large
-        return (0.25, 4.0)
+        return (0.15, 5.0)
     if mcap >= 10e9:           # upper mid / lower large
-        return (0.30, 3.5)
+        return (0.25, 4.0)
     if mcap >= 2e9:            # mid
-        return (0.35, 3.0)
-    return (0.40, 4.0)         # small — slightly wider
+        return (0.30, 3.5)
+    return (0.35, 4.0)         # small — slightly wider
 
 
 def size_score(subject_mcap: float | None, peer_mcap: float | None) -> float:
@@ -762,41 +782,61 @@ def resolve_peer_tickers(
 
     ranked = sorted(scores.keys(), key=_sort_key)
 
+    same_ind_set = set(store_same_ind)
+
     # Size filter: soft for curated industry-group members (sell-side still
-    # puts NVDA next to INTC even though mcap ratio is extreme). Hard filter
-    # only for non-curated sector dumps.
+    # puts NVDA next to INTC / TSLA next to GM even when mcap ratio is extreme).
+    # Hard filter only for pure sector dumps — never drop same-GICS industry
+    # names from the store (that is what produced HD/SBUX as "TSLA comps").
     if subject_mcap and not group:
-        tight = [s for s in ranked
-                 if s == target or in_size_band(subject_mcap, mcaps.get(s), soft=False)
-                 or mcaps.get(s) is None]
+        def _keep_no_group(s: str, soft: bool) -> bool:
+            if s == target or s in same_ind_set:
+                return True
+            if mcaps.get(s) is None:
+                return True
+            return in_size_band(subject_mcap, mcaps.get(s), soft=soft)
+
+        tight = [s for s in ranked if _keep_no_group(s, soft=False)]
         if len([s for s in tight if s != target]) >= max(4, limit // 2):
             ranked = tight
         else:
-            soft = [s for s in ranked
-                    if s == target or in_size_band(subject_mcap, mcaps.get(s), soft=True)
-                    or mcaps.get(s) is None]
+            soft = [s for s in ranked if _keep_no_group(s, soft=True)]
             if len([s for s in soft if s != target]) >= 3:
                 ranked = soft
     elif subject_mcap and group:
-        # Keep all curated; size-filter only pure store/sector fillers
+        # Keep all curated + same-industry store; size-filter only sector fillers
         kept = []
         for s in ranked:
             if s == target:
                 kept.append(s)
                 continue
-            if s in curated_rank and curated_rank[s] < 40:
+            if s in curated_rank and curated_rank[s] < 50:
                 kept.append(s)  # always keep top curated industry peers
+            elif s in same_ind_set:
+                kept.append(s)
             elif in_size_band(subject_mcap, mcaps.get(s), soft=True) or mcaps.get(s) is None:
                 kept.append(s)
-        if len([s for s in kept if s != target]) >= 4:
+        if len([s for s in kept if s != target]) >= 3:
             ranked = kept
 
     peers = [s for s in ranked if s != target][: max(1, min(int(limit), 20))]
 
+    # Prefer true industry peers in the final window (curated / same GICS first)
+    def _industry_first(s: str) -> tuple:
+        in_cur = 0 if s in curated_rank else 1
+        in_ind = 0 if s in same_ind_set else 1
+        return (in_cur, in_ind, -scores.get(s, 0.0), curated_rank.get(s, 500), s)
+
+    peers = sorted(peers, key=_industry_first)[: max(1, min(int(limit), 20))]
+
     if group and any(p in curated for p in peers):
         method = "industry_group"
-    elif store_same_ind:
-        method = "industry_store"
+    elif any(p in same_ind_set for p in peers) or (store_same_ind and not group):
+        method = "industry_store" if any(p in same_ind_set for p in peers) else (
+            "industry_group" if group else "mixed"
+        )
+    elif group:
+        method = "industry_group"
     elif any(scores.get(p, 0) >= 40 for p in peers):
         method = "sector_fallback"
     else:
