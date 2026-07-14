@@ -4916,10 +4916,10 @@ End with the sleeve block at this account's real market value so I can push it t
       </div>
     </section>
 
-    <!-- ── Sync / build ──
-         Coverage chips collapse by default when the store is large (thousands of
-         names after a full pull). Expand via the summary row; code is live now
-         so after the pull finishes a refresh already stays compact. -->
+    <!-- ── Financials store (low-cost Railway posture) ──
+         Viewing dashboards is free/DB-only. SEC pulls are free (no LLM) but use
+         CPU/egress — so auto only hits followed names nightly + a light monthly
+         pass over the rest. Full US backfill is opt-in / advanced. -->
     <section class="panel" id="fin-store-panel">
       <header class="panel-head">
         <span class="panel-title">📊 Financials store</span>
@@ -4927,37 +4927,84 @@ End with the sleeve block at this account's real market value so I can push it t
         <span id="fin-store-compact-hint" style="font-size:10.5px;color:var(--text-tertiary);margin-left:4px;"></span>
       </header>
       <div class="panel-body" style="padding:14px 16px;">
-        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">
-          <strong>Source of truth = Postgres</strong> (<code>company_financials</code>).
-          <strong>⬇️ Sync from SEC</strong> uses the <em>Universe</em> menu only (e.g. Saved reports = just those tickers).
-          <strong>🚀 Full pull</strong> ignores the menu and fills gaps across all US-listed (supervisor chunks).
-          <strong>Not live:</strong> new 10-Q/10-Ks are <em>not</em> pushed the moment they file — refresh is overnight (oldest names) or a manual Sync.
-          Chunk progress <code>43/150</code> = attempts; <code>+N new</code> = names that actually landed (many listed symbols have no usable XBRL).
+        <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:12px;padding:10px 12px;background:var(--gray-50,#f8fafc);border:1px solid var(--border-subtle);border-radius:8px;">
+          <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">How this works (cheap by design)</div>
+          <ol style="margin:0;padding-left:18px;">
+            <li><strong>Browsing</strong> company history, screens, rank cards = Postgres only. No SEC, no LLM, no Railway burn.</li>
+            <li><strong>⬇️ Pull SEC data</strong> downloads filings for the set you pick in the menu (or a custom ticker). Insert-only — never overwrites existing periods.</li>
+            <li><strong>Nightly auto</strong> (toggle below) re-checks only <em>your companies</em> — saved reports + watchlist — for new 10-Q/10-K periods.</li>
+            <li><strong>Monthly auto</strong> lightly refreshes the oldest names already in the store (not the whole US list). Insert-only.</li>
+            <li>New filings are <em>not</em> live the second they drop; they land on the next nightly (followed) or monthly (store) pass, or when you pull manually.</li>
+          </ol>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <label style="font-size:11px;color:var(--text-secondary);">Universe
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <label style="font-size:11px;color:var(--text-secondary);">Pull for
             <select id="fin-universe" style="margin-left:4px;border:1px solid var(--border-default);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
-              <option value="sp500_nasdaq100">S&amp;P 500 + Nasdaq-100 (~550) — quick comps</option>
-              <option value="us_listed">Full US listed (Nasdaq + NYSE) — overnight target</option>
-              <option value="sp500">S&amp;P 500 only (~503)</option>
-              <option value="nasdaq100">Nasdaq-100 only (~100)</option>
+              <option value="followed" selected>My companies (reports + watchlist)</option>
               <option value="reports">Saved reports only</option>
-              <option value="custom">Custom tickers only</option>
+              <option value="custom">Custom ticker(s)…</option>
+              <option value="sp500_nasdaq100">S&amp;P 500 + Nasdaq-100 comps (~550)</option>
+              <option value="sp500">S&amp;P 500 only</option>
+              <option value="nasdaq100">Nasdaq-100 only</option>
             </select>
           </label>
           <label style="font-size:11px;color:var(--text-secondary);">years
             <input id="fin-years" type="number" min="1" max="20" value="7"
-              title="Use 5–7 for bulk jobs. Overnight uses 6 by default."
+              title="How many years of history to request from SEC. 5–7 is enough for most work."
               style="width:48px;border:1px solid var(--border-default);border-radius:5px;padding:3px 6px;font-size:12px;margin-left:4px;background:var(--bg-elevated);color:var(--text-primary);">
           </label>
-          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;" title="Pull SEC data for the Universe selected in the dropdown (and optional tickers box). Does NOT use the full US supervisor.">⬇️ Sync from SEC</button>
-          <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Ignore Universe menu. Resume missing-only across full US list in chunks. Never overwrites stored names.">🚀 Full pull now (all missing)</button>
-          <button id="fin-backup-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;" title="Push slim company_financials dump to Dropbox">☁️ Backup to Dropbox</button>
-          <input id="fin-tickers" placeholder="extra tickers (optional) — used by Sync; sole list if Universe=Custom"
-            style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:7px 10px;font-size:12px;background:var(--bg-elevated);color:var(--text-primary);">
+          <button id="fin-sync-btn" class="btn-primary" style="padding:0 16px;"
+            title="Download SEC XBRL for the selection above. Free SEC data; insert-only; no overwrite.">⬇️ Pull SEC data</button>
+          <button id="fin-backup-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;"
+            title="Push slim company_financials dump to Dropbox">☁️ Backup</button>
         </div>
-        <div id="fin-sync-status" style="margin-top:10px;"></div>
+
+        <!-- Shown when universe = custom (or always available as optional extras for other modes) -->
+        <div id="fin-custom-row" style="display:none;margin-bottom:8px;">
+          <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">
+            Ticker(s) to pull from SEC <span style="color:var(--text-tertiary);">(comma or space separated)</span>
+          </label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input id="fin-tickers" placeholder="e.g. NVDA, AMD, INTC"
+              style="flex:1;min-width:220px;border:1px solid var(--border-default);border-radius:6px;padding:8px 12px;font-size:13px;text-transform:uppercase;background:var(--bg-elevated);color:var(--text-primary);font-family:'SF Mono',monospace;">
+            <button id="fin-custom-pull-btn" class="btn-primary" style="padding:0 14px;font-size:12px;"
+              title="Pull SEC data for the ticker(s) above only">Pull these tickers</button>
+          </div>
+        </div>
+
+        <div id="fin-auto-row" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;margin-bottom:8px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);cursor:pointer;user-select:none;"
+            title="Every night: re-check SEC for new filings on saved reports + watchlist only. Low cost.">
+            <input type="checkbox" id="fin-nightly-toggle" style="width:15px;height:15px;accent-color:var(--blue,#0ea5e9);">
+            <span><strong>Nightly auto</strong> · my companies only</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);cursor:pointer;user-select:none;"
+            title="Once a month: refresh oldest names already in the store (not followed). Insert-only; no full US crawl.">
+            <input type="checkbox" id="fin-monthly-toggle" style="width:15px;height:15px;accent-color:var(--blue,#0ea5e9);">
+            <span><strong>Monthly auto</strong> · rest of store</span>
+          </label>
+          <span id="fin-auto-hint" style="font-size:10.5px;color:var(--text-tertiary);"></span>
+        </div>
+
+        <div id="fin-sync-status" style="margin-top:8px;"></div>
         <div id="fin-universe-meta" style="margin-top:6px;font-size:11px;color:var(--text-tertiary);"></div>
+
+        <details id="fin-advanced" style="margin-top:10px;font-size:11.5px;color:var(--text-secondary);">
+          <summary style="cursor:pointer;user-select:none;font-weight:600;color:var(--text-secondary);">Advanced · optional full-US gap fill</summary>
+          <div style="margin-top:8px;padding:10px 12px;border:1px dashed var(--border-default);border-radius:8px;line-height:1.5;">
+            <p style="margin:0 0 8px;">Not needed for day-to-day use. Runs one chunk of missing US-listed names (insert-only). Continuous backfill stays <strong>off</strong> unless you enable it — keeps Railway quiet.</p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button id="fin-overnight-btn" class="btn-secondary" style="padding:0 12px;font-size:12px;"
+                title="One missing-only chunk of US-listed names. Does not overwrite. Does not start continuous fill.">Run one US gap-fill chunk</button>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;"
+                title="If on, a background supervisor keeps filling US gaps in chunks. Higher CPU — leave off unless you want the whole exchange list.">
+                <input type="checkbox" id="fin-us-backfill-toggle" style="width:14px;height:14px;">
+                Continuous US backfill (off by default)
+              </label>
+            </div>
+          </div>
+        </details>
 
         <!-- Coverage chips: collapsed by default when store is large -->
         <details id="fin-coverage-details" style="margin-top:10px;" open>
@@ -7719,14 +7766,54 @@ End with the sleeve block at this account's real market value so I can push it t
 
   // ══ Financials tab ═══════════════════════════════════════════════
   let _finWired = false;
+  function _finSyncUniverseUI() {
+    const sel = document.getElementById('fin-universe');
+    const row = document.getElementById('fin-custom-row');
+    const tickers = document.getElementById('fin-tickers');
+    if (!sel || !row) return;
+    const isCustom = sel.value === 'custom';
+    row.style.display = isCustom ? 'block' : 'none';
+    if (isCustom && tickers) {
+      tickers.placeholder = 'e.g. NVDA, AMD, INTC';
+      setTimeout(() => { try { tickers.focus(); } catch (_) {} }, 30);
+    }
+  }
   function _initFinancialsTab() {
     if (!_finWired) {
       const sb = document.getElementById('fin-sync-btn');
       if (sb) sb.addEventListener('click', _syncFinancials);
+      const cpb = document.getElementById('fin-custom-pull-btn');
+      if (cpb) cpb.addEventListener('click', () => {
+        const sel = document.getElementById('fin-universe');
+        if (sel) sel.value = 'custom';
+        _finSyncUniverseUI();
+        _syncFinancials();
+      });
+      const uni = document.getElementById('fin-universe');
+      if (uni) uni.addEventListener('change', _finSyncUniverseUI);
+      const ft = document.getElementById('fin-tickers');
+      if (ft) {
+        ft.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        ft.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const sel = document.getElementById('fin-universe');
+            if (sel && sel.value !== 'custom') sel.value = 'custom';
+            _finSyncUniverseUI();
+            _syncFinancials();
+          }
+        });
+      }
       const ob = document.getElementById('fin-overnight-btn');
       if (ob) ob.addEventListener('click', _runFinOvernightNow);
       const bb = document.getElementById('fin-backup-btn');
       if (bb) bb.addEventListener('click', _runFinBackupNow);
+      const nt = document.getElementById('fin-nightly-toggle');
+      if (nt) nt.addEventListener('change', () => _saveFinAutoSettings());
+      const mt = document.getElementById('fin-monthly-toggle');
+      if (mt) mt.addEventListener('change', () => _saveFinAutoSettings());
+      const ut = document.getElementById('fin-us-backfill-toggle');
+      if (ut) ut.addEventListener('change', () => _saveFinAutoSettings());
       const cb = document.getElementById('fin-co-btn');
       if (cb) cb.addEventListener('click', _viewFinCompany);
       const ct = document.getElementById('fin-co-ticker');
@@ -7753,8 +7840,10 @@ End with the sleeve block at this account's real market value so I can push it t
         });
       });
       _finWired = true;
+      _finSyncUniverseUI();
     }
     _loadFinCoverage();
+    _loadFinSettings();
     // Fill the dashboard's ticker datalist from store coverage (cheap DB call).
     window.dgaFetch('/api/financials/coverage').then(r => r.json()).then(d => {
       const list = document.getElementById('fin-dash-list');
@@ -8609,7 +8698,7 @@ End with the sleeve block at this account's real market value so I can push it t
       }
       if (el) {
         if (!cov.length) {
-          el.innerHTML = 'No financials stored yet — pick a universe and click “Sync from SEC”.';
+          el.innerHTML = 'No financials stored yet — choose <em>My companies</em> or <em>Custom ticker(s)</em> and click “Pull SEC data”.';
         } else {
           // Cap rendered chips for DOM perf; full count stays on the badge.
           const show = cov.slice(0, FIN_COVERAGE_CHIP_CAP);
@@ -8639,48 +8728,103 @@ End with the sleeve block at this account's real market value so I can push it t
       }
       _finCoverageSyncChevron();
     } catch(_) {}
-    // Universe counts + overnight + storage note
+    // Universe counts + automation status
     try {
       const u = await (await window.dgaFetch('/api/financials/universes')).json();
       const meta = document.getElementById('fin-universe-meta');
       if (meta && u && u.ok) {
         const bits = [];
-        if (u.sp500 && u.sp500.count) bits.push('S&P 500: ' + u.sp500.count);
-        if (u.nasdaq100 && u.nasdaq100.count) bits.push('NDX: ' + u.nasdaq100.count);
-        if (u.us_listed && u.us_listed.count) bits.push('US listed: ' + u.us_listed.count);
-        if (u.stored_tickers != null) bits.push('In DB: ' + u.stored_tickers);
+        if (u.followed && u.followed.count != null)
+          bits.push('My companies: ' + u.followed.count);
+        if (u.stored_tickers != null) bits.push('In DB: ' + Number(u.stored_tickers).toLocaleString());
         if (u.stored_bytes) bits.push('Table ~' + (u.stored_bytes / 1e6).toFixed(1) + ' MB');
-        if (u.overnight) {
-          bits.push('Overnight ' + (u.overnight.enabled ? 'ON' : 'OFF')
-            + ' · ' + (u.overnight.budget_per_night || '?') + '/night');
-          if (u.overnight.last_run && u.overnight.last_run.ts)
-            bits.push('last overnight ' + String(u.overnight.last_run.ts).slice(0, 16).replace('T', ' '));
+        if (u.nightly) {
+          bits.push('Nightly ' + (u.nightly.enabled ? 'ON' : 'OFF'));
+          const last = u.nightly.last;
+          if (last && (last.ts || last.at))
+            bits.push('last nightly ' + String(last.ts || last.at).slice(0, 16).replace('T', ' '));
         }
-        meta.textContent = bits.join(' · ') + ' · free lists · zero tokens';
+        if (u.monthly) bits.push('Monthly ' + (u.monthly.enabled ? 'ON' : 'OFF'));
+        if (u.us_backfill) bits.push('US backfill ' + (u.us_backfill.enabled ? 'ON' : 'OFF'));
+        meta.textContent = bits.join(' · ') + ' · free SEC · zero LLM tokens · browse = free';
       }
     } catch(_) {}
+  }
+
+  async function _loadFinSettings() {
+    try {
+      const s = await (await window.dgaFetch('/api/financials/settings')).json();
+      if (!s || !s.ok) return;
+      const nt = document.getElementById('fin-nightly-toggle');
+      const mt = document.getElementById('fin-monthly-toggle');
+      const ut = document.getElementById('fin-us-backfill-toggle');
+      if (nt && s.fin_nightly) nt.checked = !!s.fin_nightly.enabled;
+      if (mt && s.fin_monthly) mt.checked = !!s.fin_monthly.enabled;
+      if (ut && s.fin_us_backfill) ut.checked = !!s.fin_us_backfill.enabled;
+      const hint = document.getElementById('fin-auto-hint');
+      if (hint) {
+        const n = s.followed_count != null ? s.followed_count : '?';
+        let t = n + ' followed names';
+        if (s.fin_nightly && s.fin_nightly.last && s.fin_nightly.last.ts)
+          t += ' · last nightly ' + String(s.fin_nightly.last.ts).slice(0, 16).replace('T', ' ');
+        hint.textContent = t;
+      }
+    } catch (_) {}
+  }
+
+  let _finSettingsSaving = false;
+  async function _saveFinAutoSettings() {
+    if (_finSettingsSaving) return;
+    _finSettingsSaving = true;
+    const nt = document.getElementById('fin-nightly-toggle');
+    const mt = document.getElementById('fin-monthly-toggle');
+    const ut = document.getElementById('fin-us-backfill-toggle');
+    try {
+      const body = {
+        fin_nightly: { enabled: !!(nt && nt.checked) },
+        fin_monthly: { enabled: !!(mt && mt.checked) },
+        fin_us_backfill: { enabled: !!(ut && ut.checked) },
+      };
+      const r = await window.dgaFetch('/api/financials/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'Save failed');
+      if (window.toast) {
+        window.toast(
+          'Saved · nightly ' + (body.fin_nightly.enabled ? 'ON' : 'OFF')
+          + ' · monthly ' + (body.fin_monthly.enabled ? 'ON' : 'OFF')
+          + (body.fin_us_backfill.enabled ? ' · US backfill ON' : ''),
+          { type: 'success' });
+      }
+      await _loadFinSettings();
+      await _loadFinCoverage();
+    } catch (e) {
+      if (window.toast) window.toast('Could not save auto settings: ' + (e.message || e), { type: 'error' });
+    }
+    _finSettingsSaving = false;
   }
 
   async function _runFinOvernightNow() {
     const status = document.getElementById('fin-sync-status');
     const btn = document.getElementById('fin-overnight-btn');
     const box = h => { if (status) status.innerHTML = h; };
-    const restore = '🚀 Full pull now (all missing)';
+    const restore = 'Run one US gap-fill chunk';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
     try {
-      // full=true: all missing US-listed; on 429 wait up to 10 min and resume
+      // One optional missing-only chunk — does NOT enable continuous supervisor
       const r = await window.dgaFetch('/api/financials/overnight', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full: true, years_back: 6 }),
+        body: JSON.stringify({ mode: 'us_chunk', years_back: 6 }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
-      box('<div style="font-size:12px;color:var(--text-secondary);">🚀 <strong>Resume missing-only</strong> · keeping <strong>'
+      box('<div style="font-size:12px;color:var(--text-secondary);">🔧 <strong>One US gap-fill chunk</strong> · keeping <strong>'
         + (j.have != null ? Number(j.have).toLocaleString() : '?') + '</strong> stored · <strong>'
-        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps · chunks of '
+        + (j.missing != null ? Number(j.missing).toLocaleString() : '?') + '</strong> gaps remaining · chunk size '
         + (j.chunk != null ? j.chunk : '~150')
-        + ' advance via durable cursor (deploys won’t restart the same batch) · job <code>'
-        + _trEsc(j.job_id || '') + '</code>. No overwrite.</div>');
+        + ' · job <code>' + _trEsc(j.job_id || '') + '</code>. Insert-only · continuous backfill stays off unless toggled.</div>');
       if (j.job_id) _pollFinJob(j.job_id, btn, restore);
       else if (btn) { btn.disabled = false; btn.textContent = restore; }
     } catch (e) {
@@ -8713,25 +8857,25 @@ End with the sleeve block at this account's real market value so I can push it t
     const box = h => { if (status) status.innerHTML = h; };
     const t0 = Date.now();
     let lastDone = -1, stuckSince = Date.now(), resumeAttempts = 0;
-    // Full US pull can run 6–12+ hours. Server keeps going even if this tab stops.
+    // Chunk jobs are short; followed/monthly jobs are also bounded. Server continues if tab closes.
     _finSyncPoll = setInterval(async () => {
-      if (Date.now() - t0 > 14 * 3600 * 1000) {
+      if (Date.now() - t0 > 4 * 3600 * 1000) {
         clearInterval(_finSyncPoll); _finSyncPoll = null;
-        box('<div style="font-size:12px;color:var(--text-secondary);">Still running on Railway in the background — safe to close this tab. Coverage badge will keep rising. Re-open Financials later or click Full pull again (only missing names).</div>');
+        box('<div style="font-size:12px;color:var(--text-secondary);">Still running in the background — safe to close this tab. Re-open Financials later; coverage updates as rows land.</div>');
         if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
         return;
       }
       try {
         const r = await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(jobId));
         const s = await r.json();
-        // Job lost from memory (deploy) but resumable — re-queue full pull of remaining
-        if (!s.ok && (r.status === 404 || s.resumable) && resumeAttempts < 3) {
+        // Job lost from memory (deploy) — offer one re-queue of a single chunk only
+        if (!s.ok && (r.status === 404 || s.resumable) && resumeAttempts < 2) {
           resumeAttempts++;
-          box('<div style="font-size:12px;color:var(--text-secondary);">↻ Job handle lost (deploy?) — auto-resuming full pull of remaining missing names…</div>');
+          box('<div style="font-size:12px;color:var(--text-secondary);">↻ Job handle lost (deploy?) — starting one more gap-fill chunk…</div>');
           try {
             const rr = await window.dgaFetch('/api/financials/overnight', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ full: true, years_back: 6 }),
+              body: JSON.stringify({ mode: 'us_chunk', years_back: 6 }),
             });
             const jj = await rr.json();
             if (jj.ok && jj.job_id) {
@@ -8747,31 +8891,12 @@ End with the sleeve block at this account's real market value so I can push it t
           box('<div style="background:var(--success-50);border:1px solid #bbf7d0;color:var(--success-700);border-radius:8px;padding:9px 12px;font-size:12px;">✓ '
             + _trEsc(s.label || 'Done') + (n ? ' · ' + n + ' periods' : '') + '</div>');
           if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
-          // After a bulk pull finishes, collapse the huge ticker list so the page stays usable.
           try {
             const det = document.getElementById('fin-coverage-details');
-            if (det) det.dataset.userToggled = '';  // allow auto-collapse
+            if (det) det.dataset.userToggled = '';
           } catch (_) {}
           _loadFinCoverage().then(() => _finCoverageCollapse(true));
         } else if (s.status === 'error') {
-          // Auto-retry full pull once on hard error (remaining missing only)
-          if (resumeAttempts < 2) {
-            resumeAttempts++;
-            box('<div style="font-size:12px;color:var(--warn-700,#92400e);">⚠ Error — waiting 30s then auto-resuming remaining names…</div>');
-            await new Promise(res => setTimeout(res, 30000));
-            try {
-              const rr = await window.dgaFetch('/api/financials/overnight', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ full: true, years_back: 6 }),
-              });
-              const jj = await rr.json();
-              if (jj.ok && jj.job_id) {
-                clearInterval(_finSyncPoll); _finSyncPoll = null;
-                _pollFinJob(jj.job_id, btn, restoreLabel);
-                return;
-              }
-            } catch (_) {}
-          }
           clearInterval(_finSyncPoll); _finSyncPoll = null;
           box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(s.error || s.label || 'failed') + '</div>');
           if (btn) { btn.disabled = false; btn.textContent = restoreLabel; }
@@ -8785,7 +8910,6 @@ End with the sleeve block at this account's real market value so I can push it t
           if (done === 0 && total > 0 && Date.now() - stuckSince > 45000) {
             extra = ' · first SEC extract can take 30–90s (normal)';
           }
-          // 50/150 = attempts, NOT +50 store names. Only +names_ok grows the badge.
           const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
           const stats = (namesOk != null)
             ? (' · <strong style="color:var(--success-700,#15803d);">+' + namesOk + ' new names</strong>'
@@ -8799,10 +8923,8 @@ End with the sleeve block at this account's real market value so I can push it t
             + '<div style="margin-top:6px;height:6px;border-radius:99px;background:var(--gray-100,#f1f5f9);overflow:hidden;">'
             + '<div style="height:100%;width:' + pct + '%;background:var(--blue,#5BB8D4);border-radius:99px;transition:width .3s;"></div></div>'
             + '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px;">'
-            + 'Tried count ≠ store count. Badge grows only when SEC returns usable filings for a new ticker. '
-            + 'Many OTC/shells return nothing. Chunk end refreshes the badge.</div>'
+            + 'Tried count ≠ store growth. Badge grows only when SEC returns usable filings. Insert-only — no overwrite.</div>'
             + '</div>');
-          // Refresh coverage whenever a new name lands (or every 5 tries)
           if (done > 0 && (done % 5 === 0 || (namesOk != null && namesOk > 0 && done % 3 === 0))) {
             _loadFinCoverage();
           }
@@ -8814,55 +8936,70 @@ End with the sleeve block at this account's real market value so I can push it t
   }
 
   let _finSyncPoll = null;
+  function _finRestorePullButtons() {
+    const btn = document.getElementById('fin-sync-btn');
+    const cpb = document.getElementById('fin-custom-pull-btn');
+    if (btn) { btn.disabled = false; btn.textContent = '⬇️ Pull SEC data'; }
+    if (cpb) { cpb.disabled = false; cpb.textContent = 'Pull these tickers'; }
+  }
   async function _syncFinancials() {
     const status = document.getElementById('fin-sync-status');
     const btn = document.getElementById('fin-sync-btn');
-    const years = parseInt(document.getElementById('fin-years').value || '7', 10);
-    const universe = (document.getElementById('fin-universe') || {}).value || 'sp500_nasdaq100';
-    const tickers = (document.getElementById('fin-tickers').value || '')
+    const cpb = document.getElementById('fin-custom-pull-btn');
+    const years = parseInt((document.getElementById('fin-years') || {}).value || '7', 10);
+    const universe = (document.getElementById('fin-universe') || {}).value || 'followed';
+    const tickers = ((document.getElementById('fin-tickers') || {}).value || '')
       .toUpperCase().split(/[^A-Z.]+/).filter(Boolean);
-    const box = h => { status.innerHTML = h; };
-    btn.disabled = true; btn.textContent = '⏳ Queuing…';
+    const box = h => { if (status) status.innerHTML = h; };
+    if (universe === 'custom' && !tickers.length) {
+      box('<div style="font-size:12px;color:#b91c1c;">Enter at least one ticker (e.g. NVDA) then pull.</div>');
+      _finSyncUniverseUI();
+      const ti = document.getElementById('fin-tickers');
+      if (ti) try { ti.focus(); } catch (_) {}
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; }
+    if (cpb) { cpb.disabled = true; cpb.textContent = '⏳…'; }
     if (_finSyncPoll) { clearInterval(_finSyncPoll); _finSyncPoll = null; }
     try {
       const r = await window.dgaFetch('/api/financials/sync', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ years_back: years, tickers, universe }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          years_back: years,
+          tickers,
+          universe,
+          refresh: true,  // re-hit SEC so new quarters can insert
+        }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || j.detail || 'Failed');
       const nTk = (j.count != null ? j.count : (j.tickers || []).length);
-      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for <strong>'+nTk+'</strong> names'
-        + (j.universe ? ' · universe <code>'+_trEsc(j.universe)+'</code>' : '')
-        + ' · this can take 20–60+ min for index universes; leave the tab open or come back later.</div>');
-      const t0 = Date.now();
-      // 3h window for bulk S&P jobs (was 25 min — too short for ~550 names)
-      _finSyncPoll = setInterval(async () => {
-        if (Date.now() - t0 > 3 * 3600 * 1000) { clearInterval(_finSyncPoll); _finSyncPoll=null; box('<div style="font-size:12px;color:var(--text-secondary);">Still working in the background — re-open Financials later; coverage will grow as rows land.</div>'); btn.disabled=false; btn.textContent='⬇️ Sync from SEC'; return; }
-        try {
-          const s = await (await window.dgaFetch('/api/financials/sync/' + encodeURIComponent(j.job_id))).json();
-          if (s.status === 'done') {
-            clearInterval(_finSyncPoll); _finSyncPoll=null;
-            const n = (s.result && s.result.periods_stored) || 0;
-            const errs = (s.result && s.result.errors) || [];
-            const ok = n > 0;
-            const errHtml = errs.length ? '<div style="margin-top:6px;font-family:\'SF Mono\',monospace;font-size:10.5px;color:#92400e;max-height:120px;overflow:auto;">'+errs.map(e=>_trEsc(e)).join('<br>')+'</div>' : '';
-            box('<div style="background:'+(ok?'var(--success-50);border:1px solid #bbf7d0;color:var(--success-700)':'var(--warn-50);border:1px solid #fde68a;color:var(--warn-700)')+';border-radius:8px;padding:9px 12px;font-size:12px;">'+(ok?'✓ ':'⚠ ')+_trEsc(s.label||'Done')+errHtml+'</div>');
-            if (ok) window.toast('✓ Financials synced from SEC.', {type:'success'});
-            btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
-            _loadFinCoverage();
-          } else if (s.status === 'error') {
-            clearInterval(_finSyncPoll); _finSyncPoll=null;
-            box('<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12px;color:#b91c1c;">❌ '+_trEsc(s.error||s.label||'failed')+'</div>');
-            btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
-          } else {
-            box('<div style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:#0ea5e9;animation:spin 1.4s linear infinite;display:inline-block;"></span>'+_trEsc(s.label||'Working…')+'</div>');
-          }
-        } catch(_) {}
-      }, 2500);
+      const uniLabel = {
+        followed: 'my companies',
+        reports: 'saved reports',
+        custom: 'custom ticker(s)',
+        sp500_nasdaq100: 'S&P+NDX comps',
+        sp500: 'S&P 500',
+        nasdaq100: 'Nasdaq-100',
+      }[j.universe] || j.universe || universe;
+      box('<div style="font-size:12px;color:var(--text-secondary);">📊 Pulling SEC XBRL for <strong>' + nTk
+        + '</strong> names · <code>' + _trEsc(uniLabel) + '</code>'
+        + (nTk > 80 ? ' · large set can take a while; safe to leave the tab' : ' · usually a few minutes')
+        + '. Insert-only (no overwrite).</div>');
+      if (!j.job_id) { _finRestorePullButtons(); return; }
+      // Poll progress; restore both pull buttons when done
+      const restoreLabel = '⬇️ Pull SEC data';
+      _pollFinJob(j.job_id, btn, restoreLabel);
+      const watch = setInterval(() => {
+        if (!_finSyncPoll) {
+          clearInterval(watch);
+          _finRestorePullButtons();
+        }
+      }, 800);
+      setTimeout(() => { try { clearInterval(watch); } catch (_) {} }, 4 * 3600 * 1000);
     } catch (e) {
-      box('<div style="font-size:12px;color:#b91c1c;">❌ '+_trEsc(e.message)+'</div>');
-      btn.disabled=false; btn.textContent='⬇️ Sync from SEC';
+      box('<div style="font-size:12px;color:#b91c1c;">❌ ' + _trEsc(e.message) + '</div>');
+      _finRestorePullButtons();
     }
   }
 
@@ -8894,7 +9031,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await (await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '?period_type=' + period)).json();
       if (!d.ok) throw new Error(d.error || 'Failed');
       const rows = d.rows || [];
-      if (!rows.length) { out.innerHTML = 'No '+period+' data for '+_trEsc(tk)+'. Try “Sync from SEC” first.'; return; }
+      if (!rows.length) { out.innerHTML = 'No '+period+' data for '+_trEsc(tk)+'. Use “Pull SEC data” (or Custom ticker) first.'; return; }
       // Trend sparklines (chronological, oldest → newest).
       const chrono = [...rows].reverse();
       const series = k => chrono.map(r => (r[k] === null || r[k] === undefined) ? null : Number(r[k]));
@@ -8929,7 +9066,7 @@ End with the sleeve block at this account's real market value so I can push it t
       const d = await (await window.dgaFetch('/api/financials/screen?period_type=' + period + '&order=' + order + '&desc=true')).json();
       if (!d.ok) throw new Error(d.error || 'Failed');
       const rows = d.rows || [];
-      if (!rows.length) { out.innerHTML = 'Nothing stored yet — “Sync from SEC” first.'; return; }
+      if (!rows.length) { out.innerHTML = 'Nothing stored yet — use “Pull SEC data” first.'; return; }
       const cols = _FIN_COLS;
       const head = '<tr><th style="text-align:left;padding-right:6px;">Name</th><th style="text-align:left;padding-right:8px;">Period</th>' +
         cols.map(c=>'<th style="text-align:right;padding:0 6px;'+(c.k===order?'color:var(--blue);':'')+'">'+c.l+'</th>').join('') + '</tr>';

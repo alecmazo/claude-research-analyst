@@ -11206,10 +11206,16 @@ _DEFAULT_AUTOMATION: dict = {
     # hands-off replacement for the manual CSV imports. On by default; a saved
     # automation.settings override (the UI toggle) still wins.
     "snaptrade_sync": {"enabled": True, "hour": 6, "minute": 0},
-    # Overnight SEC financials batch (free, sequential, no LLM). Fills
-    # us_listed (Nasdaq + NYSE common) over successive nights, then Dropbox
-    # backup. Safe on Railway without upsizing memory.
-    "fin_overnight": {"enabled": True, "hour": 2, "minute": 15},
+    # Nightly: SEC refresh for FOLLOWED names only (saved reports + watchlist).
+    # Insert-only new periods — does not overwrite. Free, tiny set, low Railway cost.
+    "fin_nightly": {"enabled": True, "hour": 2, "minute": 30},
+    # Monthly: light refresh of the REST of company_financials (oldest first).
+    # day = day-of-month (1–28). Insert-only. Off-hours, small budget.
+    "fin_monthly": {"enabled": True, "hour": 3, "minute": 15, "day": 1},
+    # Legacy key — maps to fin_nightly for older clients; prefer fin_nightly.
+    "fin_overnight": {"enabled": True, "hour": 2, "minute": 30},
+    # Continuous full-US backfill supervisor — OFF by default (expensive / noisy).
+    "fin_us_backfill": {"enabled": False},
 }
 
 def _get_automation_settings() -> dict:
@@ -11226,6 +11232,22 @@ def _secs_until(hour: int, minute: int, pacific_offset=None) -> float:
     if now >= target:
         target += timedelta(days=1)
     return (target - now).total_seconds()
+
+
+def _secs_until_dom(day: int, hour: int, minute: int) -> float:
+    """Seconds until next day-of-month at HH:MM Pacific (day clamped 1–28)."""
+    day = max(1, min(int(day or 1), 28))
+    hour = max(0, min(int(hour or 0), 23))
+    minute = max(0, min(int(minute or 0), 59))
+    now = _now_pacific()
+    # Walk forward at most ~32 days to hit the next matching DOM.
+    for i in range(0, 40):
+        cand = (now + timedelta(days=i)).replace(
+            hour=hour, minute=minute, second=0, microsecond=0)
+        if cand.day == day and cand > now:
+            return (cand - now).total_seconds()
+    # Fallback: ~30 days
+    return float(30 * 86400)
 
 def _automation_record_run(job: str, ok, detail: str = "") -> None:
     """Persist per-scheduler run status so the UI / health endpoint can show it.
@@ -11289,7 +11311,8 @@ def get_automation_settings_endpoint():
 def save_automation_settings_endpoint(request: Request):
     body = _request_json_sync(request)
     current = _get_automation_settings()
-    for job in ("daily_brief", "market_pulse", "snaptrade_sync", "fin_overnight"):
+    for job in ("daily_brief", "market_pulse", "snaptrade_sync",
+                "fin_nightly", "fin_monthly", "fin_overnight", "fin_us_backfill"):
         if job in body and isinstance(body[job], dict):
             patch = body[job]
             if "enabled" in patch:
@@ -11298,6 +11321,18 @@ def save_automation_settings_endpoint(request: Request):
                 current[job]["hour"] = max(0, min(23, int(patch["hour"])))
             if "minute" in patch:
                 current[job]["minute"] = max(0, min(59, int(patch["minute"])))
+            if "day" in patch and job == "fin_monthly":
+                current[job]["day"] = max(1, min(28, int(patch["day"])))
+            # Keep legacy fin_overnight aligned with fin_nightly when either is patched
+            if job == "fin_nightly":
+                lo = dict(current.get("fin_overnight") or {})
+                if "enabled" in patch:
+                    lo["enabled"] = bool(patch["enabled"])
+                if "hour" in patch:
+                    lo["hour"] = current[job]["hour"]
+                if "minute" in patch:
+                    lo["minute"] = current[job]["minute"]
+                current["fin_overnight"] = lo
     _kv_put("automation.settings", current)
     print(f"[automation] settings updated: {current}")
     return current
@@ -23547,17 +23582,162 @@ def _fin_persist_universe_meta(rows: list[dict]) -> int:
     return n
 
 
-def _fin_overnight_enabled() -> bool:
-    """Env kill-switch wins; else automation.settings.fin_overnight.enabled."""
-    env = (os.environ.get("FIN_OVERNIGHT_SYNC") or "").strip().lower()
+def _fin_nightly_enabled() -> bool:
+    """Nightly refresh for followed names (reports + watchlist)."""
+    env = (os.environ.get("FIN_NIGHTLY") or os.environ.get("FIN_OVERNIGHT_SYNC") or "").strip().lower()
     if env in ("0", "false", "off", "no"):
         return False
     if env in ("1", "true", "on", "yes"):
         return True
     try:
-        return bool(_get_automation_settings().get("fin_overnight", {}).get("enabled", True))
+        raw = _kv_get("automation.settings") or {}
+        s = _get_automation_settings()
+        if "fin_nightly" in raw:
+            return bool(s.get("fin_nightly", {}).get("enabled", True))
+        # Fall back to legacy fin_overnight key if never migrated
+        if "fin_overnight" in raw:
+            return bool(s.get("fin_overnight", {}).get("enabled", True))
+        return bool(s.get("fin_nightly", {}).get("enabled", True))
     except Exception:
         return True
+
+
+def _fin_monthly_enabled() -> bool:
+    env = (os.environ.get("FIN_MONTHLY") or "").strip().lower()
+    if env in ("0", "false", "off", "no"):
+        return False
+    if env in ("1", "true", "on", "yes"):
+        return True
+    try:
+        return bool(_get_automation_settings().get("fin_monthly", {}).get("enabled", True))
+    except Exception:
+        return True
+
+
+def _fin_us_backfill_enabled() -> bool:
+    """Continuous full-US chunk supervisor — OFF by default (keeps Railway quiet)."""
+    env = (os.environ.get("FIN_US_BACKFILL") or "").strip().lower()
+    if env in ("0", "false", "off", "no"):
+        return False
+    if env in ("1", "true", "on", "yes"):
+        return True
+    try:
+        return bool(_get_automation_settings().get("fin_us_backfill", {}).get("enabled", False))
+    except Exception:
+        return False
+
+
+def _fin_overnight_enabled() -> bool:
+    """Backward-compat alias → nightly followed refresh."""
+    return _fin_nightly_enabled()
+
+
+def _fin_followed_tickers() -> list[str]:
+    """Tickers the GP actually follows: saved reports ∪ all watchlists.
+    Small set — safe for nightly SEC refresh without taxing Railway."""
+    out: set[str] = set()
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return []
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            try:
+                cur.execute("""SELECT DISTINCT UPPER(ticker) FROM analyst_reports
+                                WHERE archived IS NOT TRUE AND ticker IS NOT NULL""")
+                for (t,) in (cur.fetchall() or []):
+                    if t and re.match(r"^[A-Z][A-Z0-9.]{0,6}$", str(t)):
+                        out.add(str(t))
+            except Exception as e:
+                print(f"[fin] followed reports: {e!s:.100}", flush=True)
+            try:
+                cur.execute("""SELECT DISTINCT UPPER(ticker) FROM watchlists
+                                WHERE ticker IS NOT NULL""")
+                for (t,) in (cur.fetchall() or []):
+                    if t and re.match(r"^[A-Z][A-Z0-9.]{0,6}$", str(t)):
+                        out.add(str(t))
+            except Exception as e:
+                print(f"[fin] followed watchlist: {e!s:.100}", flush=True)
+    except Exception as e:
+        print(f"[fin] followed tickers failed: {e!s:.120}", flush=True)
+    return sorted(out)
+
+
+def _fin_store_oldest_tickers(limit: int = 200, exclude: set[str] | None = None) -> list[str]:
+    """Oldest-updated names already in company_financials (for monthly refresh)."""
+    exclude = exclude or set()
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker FROM company_financials
+                 GROUP BY ticker
+                 ORDER BY MAX(updated_at) ASC NULLS FIRST
+                 LIMIT %s
+            """, (max(1, min(int(limit), 500)),))
+            return [str(r[0]).upper() for r in (cur.fetchall() or [])
+                    if r and r[0] and str(r[0]).upper() not in exclude]
+    except Exception as e:
+        print(f"[fin] oldest tickers failed: {e!s:.120}", flush=True)
+        return []
+
+
+def _run_fin_nightly_followed(job_id: str | None = None) -> dict:
+    """Nightly: refresh SEC for followed names only. Insert new periods; never
+    overwrite existing period rows. Tiny universe → low Railway cost."""
+    years = _FIN_OVERNIGHT_YEARS
+    tickers = _fin_followed_tickers()
+    jid = job_id or ("FINNIGHT_" + datetime.utcnow().strftime("%Y%m%d"))
+    _fin_job_set(jid, stage="queued", status="running",
+                 label=f"Nightly my-universe refresh ({len(tickers)} names)…",
+                 started_at=time.time(), total=len(tickers), done=0, stored=0,
+                 universe="followed")
+    if not tickers:
+        _fin_job_set(jid, stage="done", status="done",
+                     label="✓ Nightly: no saved reports or watchlist tickers",
+                     result={"periods_stored": 0, "names": 0})
+        return _fin_sync_jobs[jid]
+    # skip_if_stored=False → re-hit SEC so NEW quarter/FY period_end can insert
+    _run_financials_sync(jid, tickers, years, skip_if_stored=False)
+    try:
+        _kv_put("fin_nightly.last", {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "count": len(tickers),
+            "job_id": jid,
+            "label": (_fin_sync_jobs.get(jid) or {}).get("label"),
+        })
+    except Exception:
+        pass
+    return _fin_sync_jobs.get(jid) or {}
+
+
+def _run_fin_monthly_store(job_id: str | None = None) -> dict:
+    """Monthly: light refresh of the rest of the store (oldest first, exclude
+    followed names already covered nightly). Insert-only new periods."""
+    years = _FIN_OVERNIGHT_YEARS
+    followed = set(_fin_followed_tickers())
+    tickers = _fin_store_oldest_tickers(limit=200, exclude=followed)
+    jid = job_id or ("FINMONTH_" + datetime.utcnow().strftime("%Y%m"))
+    _fin_job_set(jid, stage="queued", status="running",
+                 label=f"Monthly store refresh ({len(tickers)} oldest non-followed)…",
+                 started_at=time.time(), total=len(tickers), done=0, stored=0,
+                 universe="store_monthly")
+    if not tickers:
+        _fin_job_set(jid, stage="done", status="done",
+                     label="✓ Monthly: nothing to refresh",
+                     result={"periods_stored": 0, "names": 0})
+        return _fin_sync_jobs[jid]
+    _run_financials_sync(jid, tickers, years, skip_if_stored=False)
+    try:
+        ok, info = _dropbox_backup_financials()
+        note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:60]})"
+        job = _fin_sync_jobs.get(jid) or {}
+        _fin_job_set(jid, label=(job.get("label") or "Monthly done") + note)
+        _kv_put("fin_monthly.last", {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "count": len(tickers),
+            "job_id": jid,
+        })
+    except Exception:
+        pass
+    return _fin_sync_jobs.get(jid) or {}
 
 
 def _fin_pick_overnight_batch(budget: int) -> list[str]:
@@ -24398,28 +24578,15 @@ def _fin_start_chunk_async(years: int | None = None, max_names: int | None = Non
 
 
 def _auto_fin_supervisor_worker() -> None:
-    """Always-on loop: if names are still missing and no live lease, start the
-    next cursor-advanced missing-only chunk. Recovers from total stalls within
-    ~3 minutes (stale lease). Never overwrites stored tickers."""
+    """Optional full-US backfill (OFF by default). Only runs when
+    fin_us_backfill is enabled — otherwise sleeps and costs nothing."""
     import time as _time
-    _time.sleep(45)   # short boot delay — then immediately try to resume
-    print("[fin-supervisor] online — will resume missing-only if lease stale",
-          flush=True)
-    # Immediate kick after boot if gaps remain (deploy recovery)
-    try:
-        miss, have_n, _ = _fin_missing_tickers()
-        if miss and not _fin_lease_is_live(120):
-            jid = _fin_start_chunk_async(max_names=_FIN_CHUNK_SIZE,
-                                         reason="boot-resume")
-            print(f"[fin-supervisor] boot-resume job={jid} have={have_n} "
-                  f"missing={len(miss)} cursor={_fin_get_cursor()}", flush=True)
-    except Exception as e:
-        print(f"[fin-supervisor] boot-resume error: {e!s:.160}", flush=True)
-
+    _time.sleep(90)
+    print("[fin-supervisor] online (US backfill opt-in only)", flush=True)
     while True:
         try:
-            if not _fin_overnight_enabled():
-                _time.sleep(300)
+            if not _fin_us_backfill_enabled():
+                _time.sleep(600)  # check toggle every 10 min
                 continue
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
                 _time.sleep(300)
@@ -24431,48 +24598,30 @@ def _auto_fin_supervisor_worker() -> None:
             except Exception:
                 _time.sleep(600)
                 continue
-
             try:
                 missing, have_n, uni_n = _fin_missing_tickers()
             except Exception as e:
                 print(f"[fin-supervisor] missing list error: {e!s:.120}", flush=True)
-                _time.sleep(120)
+                _time.sleep(180)
                 continue
-
             if not missing:
-                print(f"[fin-supervisor] IDLE — have={have_n}/{uni_n} missing=0. "
-                      f"Next check in 12h.", flush=True)
+                print(f"[fin-supervisor] US backfill complete have={have_n}/{uni_n}",
+                      flush=True)
                 _time.sleep(12 * 3600)
                 continue
-
-            # Live lease → worker healthy; wait and recheck
             if _fin_lease_is_live(150):
-                _time.sleep(45)
-                continue
-
-            # No live lease but gaps remain → start next chunk (cursor-advanced)
-            jid = _fin_start_chunk_async(
-                max_names=_FIN_CHUNK_SIZE,
-                reason="continue")
-            if jid:
-                print(f"[fin-supervisor] launched {jid} have={have_n} "
-                      f"missing={len(missing)} cursor={_fin_get_cursor()}",
-                      flush=True)
                 _time.sleep(60)
-            else:
-                # Could not start — clear wedged in-memory flag if lease is dead
-                age = _fin_lease_age_s()
-                if age is None or age > 180:
-                    with _FIN_WORKER_LOCK:
-                        _FIN_WORKER_ACTIVE = False
-                    print("[fin-supervisor] cleared wedged worker flag", flush=True)
-                _time.sleep(45)
+                continue
+            jid = _fin_start_chunk_async(max_names=_FIN_CHUNK_SIZE, reason="continue")
+            print(f"[fin-supervisor] chunk={jid} have={have_n} missing={len(missing)}",
+                  flush=True)
+            _time.sleep(90 if jid else 45)
         except Exception as e:
             print(f"[fin-supervisor] loop error: {e!s:.200}", flush=True)
-            _time.sleep(60)
+            _time.sleep(120)
 
 
-# Start continuous missing-only supervisor (alongside overnight scheduler)
+# Opt-in US backfill supervisor (disabled by default via fin_us_backfill)
 threading.Thread(target=_auto_fin_supervisor_worker, daemon=True,
                  name="fin-supervisor").start()
 
@@ -24492,32 +24641,56 @@ def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
 
 @app.get("/api/financials/universes")
 def financials_universes(request: Request):
-    """List free index universes available for bulk SEC sync (counts only —
-    does not hit SEC). Used by the Financials store UI."""
+    """Universe counts + low-cost automation status for the Financials store UI.
+    Does not hit SEC."""
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
         raise HTTPException(403, "GP only")
+    followed = _fin_followed_tickers()
     out = {
-        "reports": {"label": "Saved reports", "note": "Your analyzed names only"},
+        "followed": {
+            "label": "My companies",
+            "count": len(followed),
+            "note": "Saved reports ∪ watchlist — nightly auto target",
+            "sample": followed[:12],
+        },
+        "reports": {"label": "Saved reports only", "note": "Analyzed names only"},
         "sp500": {"label": "S&P 500", "count": None, "note": "Free GICS list (~503)"},
         "nasdaq100": {"label": "Nasdaq-100", "count": None, "note": "Free Wikipedia list (~100)"},
         "sp500_nasdaq100": {"label": "S&P 500 + Nasdaq-100", "count": None,
-                            "note": "Quick comps set (~550 unique)"},
-        "us_listed": {"label": "Full US listed (Nasdaq + NYSE common)", "count": None,
-                      "note": "Overnight target — free symbol dirs; covers full Nasdaq + Russell-scale"},
-        "custom": {"label": "Custom tickers", "note": "Use the ticker box only"},
+                            "note": "Optional comps set (~550) — manual only"},
+        "us_listed": {"label": "Full US listed", "count": None,
+                      "note": "Opt-in backfill only (fin_us_backfill) — not default"},
+        "custom": {"label": "Custom tickers", "note": "Enter symbols in the ticker field"},
         "cap": _FIN_SYNC_CAP,
-        "overnight": {
-            "enabled": _fin_overnight_enabled(),
-            "budget_per_night": _FIN_OVERNIGHT_BUDGET,
+        "nightly": {
+            "enabled": _fin_nightly_enabled(),
             "years_back": _FIN_OVERNIGHT_YEARS,
-            "note": "Sequential 1-at-a-time SEC pulls — same RAM as interactive; no LLM cost. "
-                    "Dropbox backup after each night. Env FIN_OVERNIGHT_SYNC=0 to disable.",
+            "note": "Nightly SEC refresh of followed names only. Insert new periods; never overwrite.",
+            "last": _kv_get("fin_nightly.last") or _kv_get("automation.last_run.fin_nightly"),
+        },
+        "monthly": {
+            "enabled": _fin_monthly_enabled(),
+            "note": "Once a month: oldest non-followed store names. Insert-only.",
+            "last": _kv_get("fin_monthly.last") or _kv_get("automation.last_run.fin_monthly"),
+        },
+        "us_backfill": {
+            "enabled": _fin_us_backfill_enabled(),
+            "note": "Continuous full-US gap fill — OFF by default (saves Railway CPU).",
+        },
+        # Legacy alias for older UI bits
+        "overnight": {
+            "enabled": _fin_nightly_enabled(),
+            "budget_per_night": None,
+            "years_back": _FIN_OVERNIGHT_YEARS,
+            "note": "Alias of nightly followed refresh (not full US).",
+            "last_run": _kv_get("automation.last_run.fin_nightly")
+                        or _kv_get("automation.last_run.fin_overnight"),
         },
         "storage": {
             "primary": "Postgres company_financials (queryable, slim numerics)",
             "files": "stock-financials/{TICKER}/ Excel (report pipeline, optional)",
-            "dropbox_backup": f"App folder{_DBX_FIN_BACKUP} (gzip JSONL after overnight)",
+            "dropbox_backup": f"App folder{_DBX_FIN_BACKUP} (gzip JSONL after monthly)",
         },
     }
     for key in ("sp500", "nasdaq100", "sp500_nasdaq100", "us_listed"):
@@ -24531,10 +24704,12 @@ def financials_universes(request: Request):
             out["stored_tickers"] = int((cur.fetchone() or [0])[0] or 0)
             cur.execute("SELECT pg_total_relation_size('company_financials')")
             out["stored_bytes"] = int((cur.fetchone() or [0])[0] or 0)
-    except Exception:
-        pass
-    try:
-        out["overnight"]["last_run"] = _kv_get("automation.last_run.fin_overnight") or None
+            try:
+                cur.execute("SELECT COUNT(DISTINCT ticker) FROM analyst_reports "
+                            "WHERE archived IS NOT TRUE AND ticker IS NOT NULL")
+                out["reports"]["count"] = int((cur.fetchone() or [0])[0] or 0)
+            except Exception:
+                pass
     except Exception:
         pass
     return {"ok": True, **out}
@@ -24566,26 +24741,26 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
         body = _request_json_sync(req)
     except Exception:
         body = {}
-    years_back = max(1, min(int((body or {}).get("years_back") or 10), 20))
-    universe = str((body or {}).get("universe") or "reports").strip().lower()
+    years_back = max(1, min(int((body or {}).get("years_back") or 7), 20))
+    universe = str((body or {}).get("universe") or "followed").strip().lower()
     extras = [t.upper().strip() for t in ((body or {}).get("tickers") or []) if t and str(t).strip()]
+    # refresh=True (default for manual Sync): re-hit SEC so new quarters insert
+    refresh = bool((body or {}).get("refresh", True))
     tickers: list[str] = []
     meta_rows: list[dict] = []
     try:
-        if universe == "custom":
+        if universe in ("custom", "one", "ticker"):
             tickers = list(extras)
-        elif universe in ("sp500", "nasdaq100", "sp500_nasdaq100", "broad", "indices",
-                          "us_listed", "nasdaq_listed", "nyse_listed", "russell1000",
-                          "nasdaq_russell", "full", "overnight"):
-            meta_rows = _fin_universe_rows(universe)
-            # Prefer universe order, then extras not already included
-            base = [r["ticker"] for r in meta_rows]
+            if not tickers:
+                return JSONResponse(
+                    {"ok": False, "error": "Enter at least one ticker for Custom."},
+                    status_code=400)
+        elif universe in ("followed", "mine", "my", "watchlist_reports"):
+            tickers = _fin_followed_tickers()
             for t in extras:
-                if t not in base:
-                    base.append(t)
-            tickers = base
-        else:
-            # reports (default): saved analyst reports, then any extras
+                if t not in tickers:
+                    tickers.append(t)
+        elif universe in ("reports", "saved"):
             try:
                 with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
                     cur.execute("SELECT ticker FROM analyst_reports WHERE archived IS NOT TRUE ORDER BY ticker")
@@ -24595,10 +24770,21 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
             for t in extras:
                 if t not in tickers:
                     tickers.append(t)
+        elif universe in ("sp500", "nasdaq100", "sp500_nasdaq100", "us_listed"):
+            meta_rows = _fin_universe_rows(universe)
+            base = [r["ticker"] for r in meta_rows]
+            for t in extras:
+                if t not in base:
+                    base.append(t)
+            tickers = base
+        else:
+            tickers = _fin_followed_tickers()
+            for t in extras:
+                if t not in tickers:
+                    tickers.append(t)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Universe resolve failed: {e!s:.160}"}, status_code=400)
 
-    # Seed sector/industry for comps (free GICS/wiki — no tokens)
     if meta_rows:
         try:
             _fin_persist_universe_meta(meta_rows)
@@ -24607,19 +24793,28 @@ def financials_sync(req: Request, background_tasks: BackgroundTasks):
 
     tickers = [t for t in tickers if t][:_FIN_SYNC_CAP]
     if not tickers:
-        return JSONResponse({"ok": False, "error": "No tickers to sync. Pick a universe or enter tickers."},
-                            status_code=400)
+        return JSONResponse(
+            {"ok": False,
+             "error": "No tickers to sync. Use My companies (reports+watchlist), "
+                      "or Custom with a ticker symbol."},
+            status_code=400)
     import uuid as _uuid
     job_id = "FINSYNC_" + _uuid.uuid4().hex[:12]
-    _fin_sync_jobs[job_id] = {"stage": "queued", "status": "running", "label": "Queued…",
-                               "started_at": time.time(), "updated_at": time.time(),
-                               "total": len(tickers), "done": 0, "stored": 0,
-                               "universe": universe}
-    background_tasks.add_task(_run_financials_sync, job_id, tickers, years_back)
-    print(f"📊 [fin sync] queued {job_id}  universe={universe}  "
-          f"{len(tickers)} tickers  yrs={years_back}", flush=True)
+    _fin_job_set(job_id, stage="queued", status="running",
+                 label=f"Sync {universe}: {len(tickers)} names…",
+                 started_at=time.time(), total=len(tickers), done=0, stored=0,
+                 universe=universe)
+    # Manual Sync always refresh-mode so new filings can insert for known names
+    threading.Thread(
+        target=_run_financials_sync,
+        args=(job_id, tickers, years_back),
+        kwargs={"skip_if_stored": not refresh},
+        daemon=True, name=f"fin-sync-{job_id[-8:]}",
+    ).start()
+    print(f"📊 [fin sync] {job_id} universe={universe} n={len(tickers)} "
+          f"yrs={years_back} refresh={refresh}", flush=True)
     return {"ok": True, "job_id": job_id, "tickers": tickers, "universe": universe,
-            "count": len(tickers), "cap": _FIN_SYNC_CAP}
+            "count": len(tickers), "cap": _FIN_SYNC_CAP, "refresh": refresh}
 
 
 @app.get("/api/financials/sync/{job_id}")
@@ -24648,12 +24843,12 @@ def financials_sync_status(job_id: str, request: Request):
 
 @app.post("/api/financials/overnight")
 def financials_overnight_now(request: Request, background_tasks: BackgroundTasks):
-    """Manually kick a financials batch. GP only. Free SEC + Dropbox backup.
+    """Manual financials jobs (GP only). Free SEC — no LLM.
 
-    Body (optional): { full?: bool, years_back?: int }
-      full=true  → pull ALL missing US-listed names (no nightly budget);
-                   on SEC 429 waits up to 10 min then continues.
-      full=false → one overnight budget batch (~400 names).
+    Body: { mode?: "nightly"|"monthly"|"us_chunk", years_back?: int }
+      nightly  (default) — refresh followed names (reports + watchlist)
+      monthly            — light refresh of oldest non-followed store names
+      us_chunk           — one optional full-US missing chunk (opt-in backfill)
     """
     claims = _claims_or_401(request)
     if claims.get("role") not in ("gp", "admin"):
@@ -24667,50 +24862,112 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
         body = _request_json_sync(request) or {}
     except Exception:
         body = {}
-    full = bool((body or {}).get("full", True))   # default full for "as soon as possible"
-    years = (body or {}).get("years_back")
+    # Back-compat: full=true → us_chunk
+    if body.get("full") is True and not body.get("mode"):
+        mode = "us_chunk"
+    else:
+        mode = str(body.get("mode") or "nightly").strip().lower()
+    years = body.get("years_back")
     years = int(years) if years is not None else _FIN_OVERNIGHT_YEARS
     years = max(3, min(years, 12))
     import uuid as _uuid
-    if full:
-        # Report how many we will skip vs pull (never overwrites stored names)
-        have_n = miss_n = uni_n = 0
-        try:
-            miss, have_n, uni_n = _fin_missing_tickers()
-            miss_n = len(miss)
-        except Exception:
-            pass
-        # Chunked resume — supervisor keeps chaining until missing is empty.
-        # One giant multi-hour thread was stalling around ~1–2k names on Railway.
-        # Force steal lease if stale so a wedged worker can't block Resume forever
-        job_id = _fin_start_chunk_async(years=years, max_names=_FIN_CHUNK_SIZE,
-                                        reason="force")
-        if not job_id:
-            live = None
-            now = time.time()
-            for jid, j in list(_fin_sync_jobs.items()):
-                if (str(jid).startswith(("FINFULL", "FINCHUNK"))
-                        and j.get("status") == "running"
-                        and now - float(j.get("updated_at") or 0) < 180):
-                    live = jid
-                    break
-            return {"ok": True, "job_id": live, "mode": "full",
-                    "have": have_n, "missing": miss_n, "universe": uni_n,
-                    "note": f"Worker already running (missing-only). Keeping {have_n:,} "
-                            f"stored; {miss_n:,} gaps left. Wait ~3 min if stuck, then click again."}
-        return {"ok": True, "job_id": job_id, "mode": "full",
-                "years_back": years, "chunk": _FIN_CHUNK_SIZE,
-                "have": have_n, "missing": miss_n, "universe": uni_n,
-                "note": f"Resume missing-only chunk ({_FIN_CHUNK_SIZE}/batch). "
-                        f"Will NOT touch {have_n:,} stored names; {miss_n:,} gaps. "
-                        f"Supervisor auto-chains next chunks. "
-                        f"Poll /api/financials/sync/{job_id}."}
-    job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
-    threading.Thread(target=_run_fin_overnight, args=(job_id,),
-                     daemon=True, name=f"fin-over-{job_id[-8:]}").start()
-    return {"ok": True, "job_id": job_id, "mode": "budget",
-            "budget": _FIN_OVERNIGHT_BUDGET, "years_back": _FIN_OVERNIGHT_YEARS,
-            "note": "Budget batch started. Poll /api/financials/sync/{job_id}."}
+
+    if mode in ("nightly", "followed", "mine"):
+        job_id = "FINNIGHT_M_" + _uuid.uuid4().hex[:8]
+        threading.Thread(target=_run_fin_nightly_followed, args=(job_id,),
+                         daemon=True, name=f"fin-night-{job_id[-6:]}").start()
+        n = len(_fin_followed_tickers())
+        return {"ok": True, "job_id": job_id, "mode": "nightly", "count": n,
+                "note": f"Refreshing {n} followed names (reports+watchlist). "
+                        f"Insert-only new periods — no overwrite."}
+
+    if mode in ("monthly", "store"):
+        job_id = "FINMONTH_M_" + _uuid.uuid4().hex[:8]
+        threading.Thread(target=_run_fin_monthly_store, args=(job_id,),
+                         daemon=True, name=f"fin-month-{job_id[-6:]}").start()
+        return {"ok": True, "job_id": job_id, "mode": "monthly",
+                "note": "Monthly store refresh (oldest non-followed). Insert-only."}
+
+    # Optional US backfill chunk
+    have_n = miss_n = uni_n = 0
+    try:
+        miss, have_n, uni_n = _fin_missing_tickers()
+        miss_n = len(miss)
+    except Exception:
+        pass
+    job_id = _fin_start_chunk_async(years=years, max_names=_FIN_CHUNK_SIZE, reason="force")
+    if not job_id:
+        return {"ok": True, "job_id": None, "mode": "us_chunk",
+                "have": have_n, "missing": miss_n,
+                "note": "US backfill worker busy — try again in a few minutes."}
+    return {"ok": True, "job_id": job_id, "mode": "us_chunk", "chunk": _FIN_CHUNK_SIZE,
+            "have": have_n, "missing": miss_n, "universe": uni_n,
+            "note": f"One US-listed missing chunk ({_FIN_CHUNK_SIZE}). "
+                    f"Enable fin_us_backfill for continuous fill. No overwrite."}
+
+
+@app.get("/api/financials/settings")
+def financials_settings_get(request: Request):
+    """Nightly / monthly / US-backfill toggles for the Financials store UI."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    s = _get_automation_settings()
+    followed = _fin_followed_tickers()
+    return {
+        "ok": True,
+        "followed_count": len(followed),
+        "followed_sample": followed[:12],
+        "fin_nightly": {
+            "enabled": _fin_nightly_enabled(),
+            "hour": s.get("fin_nightly", {}).get("hour", 2),
+            "minute": s.get("fin_nightly", {}).get("minute", 30),
+            "last": _kv_get("fin_nightly.last"),
+        },
+        "fin_monthly": {
+            "enabled": _fin_monthly_enabled(),
+            "hour": s.get("fin_monthly", {}).get("hour", 3),
+            "minute": s.get("fin_monthly", {}).get("minute", 15),
+            "day": s.get("fin_monthly", {}).get("day", 1),
+            "last": _kv_get("fin_monthly.last"),
+        },
+        "fin_us_backfill": {
+            "enabled": _fin_us_backfill_enabled(),
+            "note": "Off by default. Continuous full-US gap fill — higher CPU.",
+        },
+    }
+
+
+@app.post("/api/financials/settings")
+def financials_settings_post(request: Request):
+    """Update fin_nightly / fin_monthly / fin_us_backfill toggles (GP only)."""
+    claims = _claims_or_401(request)
+    if claims.get("role") not in ("gp", "admin"):
+        raise HTTPException(403, "GP only")
+    try:
+        body = _request_json_sync(request) or {}
+    except Exception:
+        body = {}
+    current = _kv_get("automation.settings") or {}
+    for key in ("fin_nightly", "fin_monthly", "fin_us_backfill", "fin_overnight"):
+        if key in body and isinstance(body[key], dict):
+            prev = dict(current.get(key) or {})
+            prev.update({k: body[key][k] for k in body[key]
+                         if k in ("enabled", "hour", "minute", "day")})
+            if "enabled" in body[key]:
+                prev["enabled"] = bool(body[key]["enabled"])
+            current[key] = prev
+            # Keep legacy fin_overnight in sync with fin_nightly
+            if key == "fin_nightly":
+                lo = dict(current.get("fin_overnight") or {})
+                lo["enabled"] = bool(prev.get("enabled", True))
+                if "hour" in prev:
+                    lo["hour"] = prev["hour"]
+                if "minute" in prev:
+                    lo["minute"] = prev["minute"]
+                current["fin_overnight"] = lo
+    _kv_put("automation.settings", current)
+    return financials_settings_get(request)
 
 
 @app.post("/api/financials/backup")
@@ -24725,91 +24982,120 @@ def financials_backup_now(request: Request):
     return {"ok": True, "path": info}
 
 
-# ── Overnight financials batch (free SEC, sequential, Dropbox backup) ────────
-def _auto_fin_overnight_worker() -> None:
-    """Daemon: each night pulls a budget of SEC financials for US-listed names
-    (never-synced first), then backs up company_financials to Dropbox.
+# ── Low-cost financials schedulers (followed nightly + store monthly) ────────
+def _auto_fin_nightly_worker() -> None:
+    """Daemon: each night refresh SEC filings for FOLLOWED names only
+    (saved reports ∪ watchlist). Insert new periods; never overwrite.
 
-    Cost/memory posture:
-      • One ticker at a time — same peak RAM as a manual sync
-      • No LLM tokens
-      • Slim numeric rows only (metrics_json null)
-      • ~400 names/night default → full Nasdaq+NYSE fills over ~2 weeks, then
-        cheap refresh of oldest rows
-    Kill switch: FIN_OVERNIGHT_SYNC=0 or automation.fin_overnight.enabled=false.
+    Tiny universe → negligible Railway cost. Viewing dashboards stays free/DB.
+    Kill: FIN_NIGHTLY=0 or automation.fin_nightly.enabled=false.
     """
     import time as _time
-    # Let the rest of startup (DB pool, hydrate) finish before first check.
-    _time.sleep(60)
-    # Continuous filling is handled by _auto_fin_supervisor_worker (chunked).
-    # Overnight loop only does scheduled budget refreshes once coverage is healthy.
-
+    _time.sleep(75)  # let DB pool / hydrate finish
+    print("[fin-nightly] scheduler online (followed names only)", flush=True)
     while True:
         try:
-            if not _fin_overnight_enabled():
-                print("[fin-overnight] disabled — sleeping 1h")
+            if not _fin_nightly_enabled():
+                print("[fin-nightly] disabled — sleeping 1h", flush=True)
                 _time.sleep(3600)
                 continue
             cfg = _get_automation_settings().get(
-                "fin_overnight", _DEFAULT_AUTOMATION["fin_overnight"])
-            h, m = int(cfg.get("hour", 2)), int(cfg.get("minute", 15))
-            # No deploy catch-up for the scheduled budget batch (avoids daytime
-            # SEC storms). Bootstrap full-pull above handles "fill as soon as
-            # possible" after deploys when coverage is incomplete.
+                "fin_nightly", _DEFAULT_AUTOMATION["fin_nightly"])
+            h, m = int(cfg.get("hour", 2)), int(cfg.get("minute", 30))
             wait_secs = _secs_until(h, m)
-            print(f"[fin-overnight] next run at {h:02d}:{m:02d} Pacific — "
-                  f"sleeping {wait_secs/3600:.1f}h (budget={_FIN_OVERNIGHT_BUDGET})")
+            print(f"[fin-nightly] next at {h:02d}:{m:02d} PT — "
+                  f"sleep {wait_secs/3600:.1f}h", flush=True)
             _time.sleep(wait_secs)
-            if not _fin_overnight_enabled():
-                print("[fin-overnight] disabled after wake — skipping")
+            if not _fin_nightly_enabled():
                 continue
             if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
-                print("[fin-overnight] no database — skipping")
+                print("[fin-nightly] no database — skip", flush=True)
                 _time.sleep(3600)
                 continue
             try:
                 if not analyst.get_sec_user_agent():
-                    print("[fin-overnight] SEC_USER_AGENT missing — skipping")
+                    print("[fin-nightly] SEC_USER_AGENT missing — skip", flush=True)
                     _time.sleep(3600)
                     continue
             except Exception:
-                print("[fin-overnight] SEC_USER_AGENT missing — skipping")
+                print("[fin-nightly] SEC_USER_AGENT missing — skip", flush=True)
                 _time.sleep(3600)
                 continue
-            # Supervisor already fills gaps in chunks. Overnight budget only
-            # refreshes when coverage is already large (maintenance mode).
-            stored_n = 0
+            n = len(_fin_followed_tickers())
+            print(f"[fin-nightly] starting followed refresh n={n}", flush=True)
+            job = _run_fin_nightly_followed()
+            detail = (job.get("label") or "ok")[:400]
+            ok = job.get("status") == "done"
+            _automation_record_run("fin_nightly", ok, detail)
+            # Keep legacy key for older health UIs
             try:
-                with _fund_conn() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(DISTINCT ticker) FROM company_financials")
-                    stored_n = int((cur.fetchone() or [0])[0] or 0)
+                _automation_record_run("fin_overnight", ok, detail)
             except Exception:
                 pass
-            if stored_n < 4000:
-                jid = _fin_start_chunk_async(max_names=_FIN_CHUNK_SIZE,
-                                             reason="overnight-fill")
-                detail = f"chunk launched {jid} have={stored_n}" if jid else f"worker busy have={stored_n}"
-                _automation_record_run("fin_overnight", True, detail[:400])
-                print(f"[fin-overnight] {detail}", flush=True)
-            else:
-                print(f"[fin-overnight] starting budget refresh={_FIN_OVERNIGHT_BUDGET}",
-                      flush=True)
-                job = _run_fin_overnight()
-                detail = (job.get("label") or "ok")[:400]
-                _automation_record_run("fin_overnight", job.get("status") == "done", detail)
-                print(f"[fin-overnight] finished: {detail}", flush=True)
+            print(f"[fin-nightly] finished: {detail}", flush=True)
             _time.sleep(60)
         except Exception as _e:
-            print(f"[fin-overnight] error (retrying in 1h): {_e!s:.200}", flush=True)
+            print(f"[fin-nightly] error (retry 1h): {_e!s:.200}", flush=True)
             try:
-                _automation_record_run("fin_overnight", False, str(_e)[:400])
+                _automation_record_run("fin_nightly", False, str(_e)[:400])
             except Exception:
                 pass
             _time.sleep(3600)
 
 
-threading.Thread(target=_auto_fin_overnight_worker, daemon=True,
-                 name="fin-overnight-scheduler").start()
+def _auto_fin_monthly_worker() -> None:
+    """Daemon: once a month, light refresh of oldest non-followed store names.
+    Insert-only new periods. Keeps the warehouse from going fully stale without
+    continuous full-US backfill."""
+    import time as _time
+    _time.sleep(120)
+    print("[fin-monthly] scheduler online (oldest non-followed)", flush=True)
+    while True:
+        try:
+            if not _fin_monthly_enabled():
+                print("[fin-monthly] disabled — sleeping 6h", flush=True)
+                _time.sleep(6 * 3600)
+                continue
+            cfg = _get_automation_settings().get(
+                "fin_monthly", _DEFAULT_AUTOMATION["fin_monthly"])
+            day = int(cfg.get("day", 1))
+            h, m = int(cfg.get("hour", 3)), int(cfg.get("minute", 15))
+            wait_secs = _secs_until_dom(day, h, m)
+            print(f"[fin-monthly] next day={day} at {h:02d}:{m:02d} PT — "
+                  f"sleep {wait_secs/3600:.1f}h", flush=True)
+            _time.sleep(max(60.0, wait_secs))
+            if not _fin_monthly_enabled():
+                continue
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                _time.sleep(6 * 3600)
+                continue
+            try:
+                if not analyst.get_sec_user_agent():
+                    _time.sleep(6 * 3600)
+                    continue
+            except Exception:
+                _time.sleep(6 * 3600)
+                continue
+            print("[fin-monthly] starting store refresh", flush=True)
+            job = _run_fin_monthly_store()
+            detail = (job.get("label") or "ok")[:400]
+            _automation_record_run("fin_monthly", job.get("status") == "done", detail)
+            print(f"[fin-monthly] finished: {detail}", flush=True)
+            # Avoid double-fire same calendar day if clock skew / quick restart
+            _time.sleep(3600)
+        except Exception as _e:
+            print(f"[fin-monthly] error (retry 6h): {_e!s:.200}", flush=True)
+            try:
+                _automation_record_run("fin_monthly", False, str(_e)[:400])
+            except Exception:
+                pass
+            _time.sleep(6 * 3600)
+
+
+threading.Thread(target=_auto_fin_nightly_worker, daemon=True,
+                 name="fin-nightly-scheduler").start()
+threading.Thread(target=_auto_fin_monthly_worker, daemon=True,
+                 name="fin-monthly-scheduler").start()
 
 
 # ─────────────────────────── Options wheel scanner ───────────────────────────
