@@ -23662,13 +23662,25 @@ def _dropbox_backup_financials() -> tuple:
 
 def _run_fin_overnight(job_id: str | None = None) -> dict:
     """One overnight batch: pull SEC for budget tickers, then Dropbox backup.
-    Sequential, slim, free — designed for Railway without memory upsizing."""
+    Sequential, slim, free — designed for Railway without memory upsizing.
+
+    If true gaps remain → missing-only fill (skip stored).
+    If coverage is full → light refresh of oldest names so NEW quarter/FY
+    period_end rows can insert (existing periods still not overwritten)."""
     budget = _FIN_OVERNIGHT_BUDGET
     years = _FIN_OVERNIGHT_YEARS
     tickers = _fin_pick_overnight_batch(budget)
+    # Are we still filling gaps, or maintenance-refreshing known names?
+    try:
+        still_missing, _, _ = _fin_missing_tickers()
+        refresh_mode = len(still_missing) == 0
+    except Exception:
+        refresh_mode = False
     jid = job_id or ("FINOVER_" + datetime.utcnow().strftime("%Y%m%d") + "_" + str(int(time.time()) % 100000))
     _fin_sync_jobs[jid] = {
-        "stage": "queued", "status": "running", "label": f"Overnight batch ({len(tickers)} names)…",
+        "stage": "queued", "status": "running",
+        "label": (f"Overnight refresh ({len(tickers)} oldest)…" if refresh_mode
+                  else f"Overnight fill ({len(tickers)} missing)…"),
         "started_at": time.time(), "updated_at": time.time(),
         "total": len(tickers), "done": 0, "stored": 0, "universe": "us_listed_overnight",
     }
@@ -23683,7 +23695,8 @@ def _run_fin_overnight(job_id: str | None = None) -> dict:
         _fin_persist_universe_meta([meta[t] for t in tickers if t in meta])
     except Exception:
         pass
-    _run_financials_sync(jid, tickers, years)
+    # refresh_mode must re-hit SEC so new period_end rows can insert
+    _run_financials_sync(jid, tickers, years, skip_if_stored=not refresh_mode)
     # Dropbox backup after the batch (best-effort)
     backup_note = ""
     try:
@@ -23799,6 +23812,56 @@ def _fin_ticker_already_stored(ticker: str) -> bool:
         return False
 
 
+def _ensure_fin_skip_table() -> None:
+    """Tickers we tried and got no usable XBRL — so the supervisor does not
+    retry them forever (would burn Railway CPU for no gain)."""
+    if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+        return
+    try:
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS company_financials_skip (
+                    ticker     TEXT PRIMARY KEY,
+                    reason     TEXT,
+                    attempts   INTEGER DEFAULT 1,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        print(f"[fin] skip table ensure failed: {e!s:.120}", flush=True)
+
+
+def _fin_mark_no_data(ticker: str, reason: str = "no usable SEC XBRL") -> None:
+    """Record that this ticker was attempted and produced nothing — stop retrying."""
+    if not ticker:
+        return
+    try:
+        _ensure_fin_skip_table()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO company_financials_skip (ticker, reason, attempts, updated_at)
+                VALUES (%s, %s, 1, now())
+                ON CONFLICT (ticker) DO UPDATE SET
+                  reason=EXCLUDED.reason,
+                  attempts=company_financials_skip.attempts + 1,
+                  updated_at=now()
+            """, (ticker.upper(), (reason or "")[:200]))
+            conn.commit()
+    except Exception as e:
+        print(f"[fin] mark no-data {ticker}: {e!s:.100}", flush=True)
+
+
+def _fin_skip_set() -> set[str]:
+    try:
+        _ensure_fin_skip_table()
+        with _fund_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT ticker FROM company_financials_skip")
+            return {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
+    except Exception:
+        return set()
+
+
 def _fin_is_rate_limit_error(msg: str) -> bool:
     m = (msg or "").lower()
     return any(x in m for x in ("429", "rate limit", "rate-limit", "too many requests",
@@ -23883,10 +23946,17 @@ def _fin_job_set(job_id: str, **kw) -> None:
         pass
 
 
-def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
+def _run_financials_sync(job_id: str, tickers: list, years_back: int,
+                         skip_if_stored: bool = True) -> None:
     """Background worker: build/refresh the structured financials store.
     Polite to SEC; pauses longer after rate-limit hits then continues.
-    Never depends on the browser staying open — progress is server-side."""
+    Never depends on the browser staying open — progress is server-side.
+
+    skip_if_stored=True  → initial fill / resume (don't re-touch completed names)
+    skip_if_stored=False → maintenance refresh (re-hit SEC; insert-only still
+                           means existing periods are not overwritten, but NEW
+                           quarter/FY period_end rows can land)
+    """
     def _set(**kw):
         _fin_job_set(job_id, **kw)
     # Preserve total if caller already set it; do NOT flash a dead "Queued…" label
@@ -23920,7 +23990,7 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
                  names_fail=names_fail, names_skip=names_skip)
             try:
                 r = _sync_one_ticker_financials(tk, years_back=years_back,
-                                                skip_if_stored=True)
+                                                skip_if_stored=skip_if_stored)
                 if r.get("skipped"):
                     names_skip += 1
                     consecutive_rl = 0
@@ -23940,11 +24010,26 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
                         # Had data but all rows already existed — treat as present
                         names_ok += 1
                     consecutive_rl = 0
-                elif r.get("errors") or r.get("rate_limited") or r.get("timed_out"):
+                elif r.get("rate_limited"):
                     names_fail += 1
+                    # Don't permanent-skip on rate limit — try again next chunk
+                elif r.get("timed_out"):
+                    names_fail += 1
+                    # Transient — do not permanent-skip
+                elif r.get("errors"):
+                    names_fail += 1
+                    # Permanent skip for clear "no filing" style failures only
+                    err0 = " ".join(r.get("errors") or [])
+                    if any(x in err0.lower() for x in (
+                            "no xbrl", "no periods", "not found", "no companyfacts",
+                            "unknown cik", "no data", "0 periods")):
+                        _fin_mark_no_data(tk, err0[:180])
+                    elif not r.get("periods"):
+                        _fin_mark_no_data(tk, err0[:180] or "empty SEC result")
                 else:
-                    # Empty XBRL / no usable periods — no store growth
+                    # Empty XBRL / no usable periods — no store growth; don't retry forever
                     names_fail += 1
+                    _fin_mark_no_data(tk, "no usable periods in SEC extract")
                 for e in (r.get("errors") or [])[:1]:
                     all_errors.append(f"{tk}: {e}")
                 if r.get("timed_out"):
@@ -23986,14 +24071,19 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
 
 
 def _fin_missing_tickers() -> tuple[list[str], int, int]:
-    """Return (missing_tickers, have_count, universe_count). Never reorders
-    already-stored names into the work list — resume only fills gaps."""
+    """Return (missing_tickers, have_count, universe_count).
+
+    Missing = on free US list AND not in company_financials AND not on the
+    no-data skip list. Already-stored names are never re-queued. Tickers we
+    already tried with zero usable XBRL are skipped so the supervisor can
+    actually finish and stop burning Railway CPU."""
     universe = [r["ticker"] for r in _fin_universe_us_listed()]
     have: set[str] = set()
     with _fund_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT DISTINCT ticker FROM company_financials")
         have = {str(r[0]).upper() for r in (cur.fetchall() or []) if r and r[0]}
-    missing = [t for t in universe if t not in have]
+    skip = _fin_skip_set()
+    missing = [t for t in universe if t not in have and t not in skip]
     return missing, len(have), len(universe)
 
 
@@ -24207,24 +24297,24 @@ def _auto_fin_supervisor_worker() -> None:
                 continue
 
             if not missing:
-                # Full coverage — infrequent check
-                print(f"[fin-supervisor] complete have={have_n}/{uni_n}", flush=True)
-                _time.sleep(900)
+                # All universe names are either stored OR marked no-data.
+                # Idle hard: sleep 12h — no SEC traffic, negligible Railway cost
+                # (just a sleeping thread on the already-running web process).
+                print(f"[fin-supervisor] IDLE — have={have_n}/{uni_n} missing=0 "
+                      f"(including no-data skips). Next check in 12h.", flush=True)
+                _time.sleep(12 * 3600)
                 continue
 
             stalled = _fin_pull_seems_stalled(max_idle_min=4.0)
-            # Always keep filling if missing remain and we're not mid-chunk
+            # Keep filling only while true gaps remain
             jid = _fin_start_chunk_async(
                 max_names=_FIN_CHUNK_SIZE,
                 reason=("stall-resume" if stalled else "continue"))
             if jid:
                 print(f"[fin-supervisor] launched {jid} have={have_n} "
                       f"missing={len(missing)} stalled={stalled}", flush=True)
-                # Wait roughly long enough for a chunk (~150 * ~5s ≈ 12 min), then
-                # check again. Heartbeat from the chunk keeps stall detection happy.
                 _time.sleep(90)
             else:
-                # Worker busy — check again soon
                 _time.sleep(60)
         except Exception as e:
             print(f"[fin-supervisor] loop error: {e!s:.200}", flush=True)
