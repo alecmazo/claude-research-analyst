@@ -23276,7 +23276,13 @@ _FIN_UNIVERSE_TTL_S = 24 * 3600
 # upsizing the service. Kill switch: FIN_OVERNIGHT_SYNC=0 or automation UI.
 _FIN_OVERNIGHT_BUDGET = max(50, min(int(os.environ.get("FIN_OVERNIGHT_BUDGET") or "400"), 800))
 _FIN_OVERNIGHT_YEARS = max(3, min(int(os.environ.get("FIN_OVERNIGHT_YEARS") or "6"), 12))
+# Chunk size for continuous supervisor — short runs survive Railway restarts better
+# than one multi-hour thread. Missing-only; never overwrites stored names.
+_FIN_CHUNK_SIZE = max(25, min(int(os.environ.get("FIN_CHUNK_SIZE") or "150"), 400))
+_FIN_TICKER_TIMEOUT_S = max(30, min(int(os.environ.get("FIN_TICKER_TIMEOUT_S") or "90"), 180))
 _DBX_FIN_BACKUP = "/Financials/company_financials.jsonl.gz"
+_FIN_WORKER_LOCK = threading.Lock()
+_FIN_WORKER_ACTIVE = False
 
 # Extractor metric name (CamelCase) → DB column (snake_case). Insertion order
 # defines the column order used when binding values, so keep them in sync.
@@ -23800,7 +23806,7 @@ def _fin_is_rate_limit_error(msg: str) -> bool:
 
 
 def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
-                                max_rate_retries: int = 4,
+                                max_rate_retries: int = 3,
                                 skip_if_stored: bool = True) -> dict:
     """Pull SEC XBRL history for one ticker and persist it. Returns
     {stored, periods, entity, errors, rate_limited?, skipped?}.
@@ -23808,8 +23814,8 @@ def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
     skip_if_stored=True (default): if any rows already exist for this ticker,
     do nothing — resume never re-hits or overwrites completed names.
 
-    On rate-limit errors, wait and retry the same ticker (outer loop; the
-    SEC client also backs off on 429). Wait ladder: 60s → 3m → 10m → 10m."""
+    Hard timeout per ticker (default 90s) so a hung SEC call cannot stall the
+    whole batch. Rate-limit waits capped at 2 min so progress keeps moving."""
     if skip_if_stored and _fin_ticker_already_stored(ticker):
         return {"stored": 0, "periods": 0, "skipped": True, "errors": []}
     import sec_edgar_xbrl as _edgar
@@ -23817,10 +23823,12 @@ def _sync_one_ticker_financials(ticker: str, years_back: int = 10,
         ua = analyst.get_sec_user_agent()
     except Exception as e:
         return {"stored": 0, "periods": 0, "errors": [f"SEC_USER_AGENT not set: {e!s:.80}"]}
-    waits = (60, 180, 600, 600)
+    waits = (30, 60, 120)   # keep bulk jobs moving — 10m freezes looked "stalled"
     last_err = None
     for attempt in range(max(1, max_rate_retries)):
         try:
+            # requests timeouts inside sec_edgar_xbrl bound each HTTP call; keep
+            # outer retries short so a bad ticker cannot stall the chunk forever.
             res = _edgar.extract_financials_history(
                 ticker, years_back=years_back, user_agent=ua)
             rows = res.get("rows") or []
@@ -23920,9 +23928,12 @@ def _run_financials_sync(job_id: str, tickers: list, years_back: int) -> None:
                     consecutive_rl = 0
                 for e in (r.get("errors") or [])[:1]:
                     all_errors.append(f"{tk}: {e}")
-                if r.get("rate_limited"):
+                if r.get("timed_out"):
+                    consecutive_rl = 0  # don't pile cool-down on timeouts
+                    time.sleep(0.2)
+                elif r.get("rate_limited"):
                     consecutive_rl += 1
-                    cool = min(600, 30 * consecutive_rl)
+                    cool = min(120, 20 * consecutive_rl)  # cap 2 min — keep moving
                     _set(label=f"⏳ Rate limited after {tk} — waiting {cool}s then continuing "
                                f"({i+1}/{len(tickers)})…")
                     print(f"[fin sync] cool-down {cool}s after rate limit "
@@ -23959,7 +23970,7 @@ def _fin_missing_tickers() -> tuple[list[str], int, int]:
     return missing, len(have), len(universe)
 
 
-def _fin_pull_seems_stalled(max_idle_min: float = 12.0) -> bool:
+def _fin_pull_seems_stalled(max_idle_min: float = 5.0) -> bool:
     """True if a full-pull checkpoint looks abandoned (no update for max_idle_min)
     while coverage is still incomplete. Used to auto-resume after Railway
     restarts or hung workers."""
@@ -23967,20 +23978,25 @@ def _fin_pull_seems_stalled(max_idle_min: float = 12.0) -> bool:
         missing, have_n, uni_n = _fin_missing_tickers()
         if not missing:
             return False
+        # Live in-memory job with a fresh heartbeat → not stalled
+        now = time.time()
+        for jid, j in list(_fin_sync_jobs.items()):
+            if not str(jid).startswith(("FINFULL", "FINCHUNK")):
+                continue
+            if (j.get("status") == "running"
+                    and now - float(j.get("updated_at") or 0) < max_idle_min * 60):
+                return False
         cp = _kv_get("fin_full_pull.checkpoint") or {}
         ts = cp.get("ts")
         if not ts:
-            # Incomplete coverage and no live checkpoint → stalled / never finished
-            return have_n > 0  # only auto-resume if we already made progress
+            return have_n > 0   # progress made, gaps remain, no live checkpoint
         from datetime import datetime as _dt
         age_min = (_dt.utcnow() - _dt.fromisoformat(
             str(ts).replace("Z", "")).replace(tzinfo=None)).total_seconds() / 60.0
         status = (cp.get("status") or "").lower()
         if status == "done" and missing:
-            return True   # marked done but gaps remain
-        if status in ("running", "syncing", "preparing", "queued", "backup") and age_min >= max_idle_min:
             return True
-        if age_min >= max_idle_min * 2:
+        if age_min >= max_idle_min:
             return True
         return False
     except Exception as e:
@@ -23988,16 +24004,17 @@ def _fin_pull_seems_stalled(max_idle_min: float = 12.0) -> bool:
         return False
 
 
-def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None) -> dict:
-    """Pull ALL never-synced US-listed names (no nightly budget), then backup.
-    Continues through rate limits by waiting and resuming. One ticker at a time.
-    Progress is server-side — browser timeout does not stop the job.
+def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None,
+                       max_names: int | None = None) -> dict:
+    """Pull never-synced US-listed names (missing-only), then optional backup.
 
-    CRITICAL: only processes tickers with ZERO rows in company_financials.
-    Already-stored names are never re-fetched or overwritten."""
+    max_names: if set, only process that many missing tickers this run (chunk).
+    Supervisor chains chunks until the store is full. Already-stored names are
+    never re-fetched or overwritten (insert-only + skip_if_stored)."""
+    global _FIN_WORKER_ACTIVE
     years = years_back if years_back is not None else _FIN_OVERNIGHT_YEARS
+    chunk_cap = max_names  # None = all missing
     jid = job_id or ("FINFULL_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
-    # Mark running IMMEDIATELY so the UI leaves "Queuing…" within one poll.
     _fin_job_set(jid, stage="preparing", status="running",
                  label="📋 Building missing-only list (will not touch stored names)…",
                  started_at=time.time(), total=0, done=0, stored=0,
@@ -24005,57 +24022,191 @@ def _run_fin_full_pull(job_id: str | None = None, years_back: int | None = None)
     tickers: list[str] = []
     have_n = uni_n = 0
     try:
-        _fin_job_set(jid, label="📋 Downloading free Nasdaq + NYSE symbol directories…")
+        _fin_job_set(jid, label="📋 Resolving missing list…")
         tickers, have_n, uni_n = _fin_missing_tickers()
-        _fin_job_set(jid, label=f"📋 Store has {have_n:,} names · {len(tickers):,} missing of {uni_n:,}")
+        total_missing = len(tickers)
+        if chunk_cap is not None and chunk_cap > 0:
+            tickers = tickers[: int(chunk_cap)]
+        _fin_job_set(
+            jid,
+            label=f"📋 Store has {have_n:,} · this chunk {len(tickers):,} "
+                  f"of {total_missing:,} missing (universe {uni_n:,})")
     except Exception as e:
         print(f"[fin-full] missing-list failed: {e!s:.160}", flush=True)
+        tickers, have_n, uni_n = [], 0, 0
         try:
             tickers, have_n, uni_n = _fin_missing_tickers()
+            if chunk_cap:
+                tickers = tickers[: int(chunk_cap)]
         except Exception:
-            tickers = []
+            pass
 
     _fin_job_set(jid, total=len(tickers), done=0,
-                 label=f"🚀 Resume/continue — {len(tickers):,} missing "
+                 label=f"🚀 Chunk — {len(tickers):,} missing "
                        f"(keeping {have_n:,} already stored)…")
     if not tickers:
         _fin_job_set(jid, stage="done", status="done",
-                     label=f"✓ Full pull: store complete ({have_n:,} names) — nothing missing",
+                     label=f"✓ Store complete ({have_n:,} names) — nothing missing",
                      result={"periods_stored": 0, "names": 0, "have": have_n})
         return _fin_sync_jobs[jid]
 
-    # Skip bulk security_meta seed here — nasdaq/nyse free lists have no GICS,
-    # and 6k individual upserts delayed the first SEC pull by minutes. SP500
-    # GICS seed is enough for common comps; names fill in as reports land.
-    print(f"[fin-full] RESUME missing-only: have={have_n} missing={len(tickers)} "
-          f"years={years} job={jid}", flush=True)
-    _run_financials_sync(jid, tickers, years)
-    backup_note = ""
+    print(f"[fin-full] RESUME missing-only chunk: have={have_n} "
+          f"chunk={len(tickers)} years={years} job={jid}", flush=True)
     try:
-        _fin_job_set(jid, stage="backup",
-                     label="☁️ Backing up financials to Dropbox…")
-        ok, info = _dropbox_backup_financials()
-        backup_note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:80]})"
+        _run_financials_sync(jid, tickers, years)
     except Exception as e:
-        backup_note = f" · backup error ({e!s:.60})"
+        print(f"[fin-full] sync crashed: {e!s:.200}", flush=True)
+        _fin_job_set(jid, stage="error", status="error",
+                     label=f"❌ chunk error: {e!s:.160}", error=str(e)[:200])
+
+    # Backup only when remaining missing is small — avoids Dropbox spam every chunk.
+    backup_note = ""
+    remaining: list[str] = []
+    have_now = have_n
+    try:
+        remaining, have_now, _ = _fin_missing_tickers()
+        do_backup = (chunk_cap is None) or (len(remaining) == 0) or (len(remaining) < 50)
+        if do_backup:
+            _fin_job_set(jid, stage="backup",
+                         label="☁️ Backing up financials to Dropbox…")
+            ok, info = _dropbox_backup_financials()
+            backup_note = f" · ☁️ {info}" if ok else f" · backup skipped ({str(info)[:80]})"
+        else:
+            backup_note = f" · {len(remaining):,} still missing (next chunk will continue)"
+    except Exception as e:
+        backup_note = f" · post-chunk error ({e!s:.60})"
+
     job = _fin_sync_jobs.get(jid) or {}
-    label = (job.get("label") or "Full pull done") + backup_note
+    label = (job.get("label") or "Chunk done") + backup_note
     result = dict(job.get("result") or {})
     result["backup"] = backup_note
     result["tickers_attempted"] = len(tickers)
+    result["have_after"] = have_now
+    result["missing_after"] = len(remaining)
     _fin_job_set(jid, label=label, result=result, stage="done",
-                 status=job.get("status") or "done")
+                 status="done" if job.get("status") != "error" else "error")
     try:
         _kv_put("fin_full_pull.last", {
             "ts": datetime.utcnow().isoformat() + "Z",
             "tickers": len(tickers),
             "label": label[:300],
             "job_id": jid,
+            "have": result.get("have_after"),
+            "missing": result.get("missing_after"),
         })
-        _kv_put("fin_full_pull.running", {"ts": None})
     except Exception:
         pass
     return _fin_sync_jobs[jid]
+
+
+def _fin_start_chunk_async(years: int | None = None, max_names: int | None = None,
+                           reason: str = "manual") -> str | None:
+    """Start one missing-only chunk in a daemon thread if none is active.
+    Returns job_id or None if a worker is already running."""
+    global _FIN_WORKER_ACTIVE
+    if not _FIN_WORKER_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if _FIN_WORKER_ACTIVE:
+            return None
+        # Also respect live job heartbeat
+        now = time.time()
+        for jid, j in list(_fin_sync_jobs.items()):
+            if (str(jid).startswith(("FINFULL", "FINCHUNK"))
+                    and j.get("status") == "running"
+                    and now - float(j.get("updated_at") or 0) < 180):
+                return None
+        _FIN_WORKER_ACTIVE = True
+    finally:
+        _FIN_WORKER_LOCK.release()
+
+    import uuid as _uuid
+    job_id = "FINCHUNK_" + _uuid.uuid4().hex[:10]
+    yrs = years if years is not None else _FIN_OVERNIGHT_YEARS
+    cap = max_names if max_names is not None else _FIN_CHUNK_SIZE
+
+    def _runner():
+        global _FIN_WORKER_ACTIVE
+        try:
+            print(f"[fin-supervisor] starting chunk job={job_id} cap={cap} "
+                  f"reason={reason}", flush=True)
+            _run_fin_full_pull(job_id, yrs, max_names=cap)
+        except Exception as e:
+            print(f"[fin-supervisor] chunk failed: {e!s:.200}", flush=True)
+        finally:
+            with _FIN_WORKER_LOCK:
+                _FIN_WORKER_ACTIVE = False
+
+    _fin_job_set(job_id, stage="queued", status="running",
+                 label=f"Queued chunk ({cap} missing max) · {reason}…",
+                 started_at=time.time(), total=0, done=0, stored=0,
+                 universe="us_listed_full")
+    threading.Thread(target=_runner, daemon=True,
+                     name=f"fin-chunk-{job_id[-8:]}").start()
+    return job_id
+
+
+def _auto_fin_supervisor_worker() -> None:
+    """Always-on loop: every few minutes, if names are still missing and no
+    worker is healthy, start another missing-only chunk. Survives stalls from
+    hung SEC calls / deploys better than one giant multi-hour thread.
+
+    Never overwrites stored tickers. Safe to leave on 24/7."""
+    import time as _time
+    _time.sleep(75)   # let DB hydrate finish
+    print("[fin-supervisor] online — will chain missing-only chunks until full",
+          flush=True)
+    while True:
+        try:
+            if not _fin_overnight_enabled():
+                _time.sleep(300)
+                continue
+            if not (_PSYCOPG2_OK and os.environ.get("DATABASE_URL")):
+                _time.sleep(300)
+                continue
+            try:
+                if not analyst.get_sec_user_agent():
+                    _time.sleep(600)
+                    continue
+            except Exception:
+                _time.sleep(600)
+                continue
+
+            try:
+                missing, have_n, uni_n = _fin_missing_tickers()
+            except Exception as e:
+                print(f"[fin-supervisor] missing list error: {e!s:.120}", flush=True)
+                _time.sleep(180)
+                continue
+
+            if not missing:
+                # Full coverage — infrequent check
+                print(f"[fin-supervisor] complete have={have_n}/{uni_n}", flush=True)
+                _time.sleep(900)
+                continue
+
+            stalled = _fin_pull_seems_stalled(max_idle_min=4.0)
+            # Always keep filling if missing remain and we're not mid-chunk
+            jid = _fin_start_chunk_async(
+                max_names=_FIN_CHUNK_SIZE,
+                reason=("stall-resume" if stalled else "continue"))
+            if jid:
+                print(f"[fin-supervisor] launched {jid} have={have_n} "
+                      f"missing={len(missing)} stalled={stalled}", flush=True)
+                # Wait roughly long enough for a chunk (~150 * ~5s ≈ 12 min), then
+                # check again. Heartbeat from the chunk keeps stall detection happy.
+                _time.sleep(90)
+            else:
+                # Worker busy — check again soon
+                _time.sleep(60)
+        except Exception as e:
+            print(f"[fin-supervisor] loop error: {e!s:.200}", flush=True)
+            _time.sleep(120)
+
+
+# Start continuous missing-only supervisor (alongside overnight scheduler)
+threading.Thread(target=_auto_fin_supervisor_worker, daemon=True,
+                 name="fin-supervisor").start()
 
 
 def _fin_rows_for_ticker(ticker: str, period_type: str = "all") -> list:
@@ -24261,21 +24412,30 @@ def financials_overnight_now(request: Request, background_tasks: BackgroundTasks
             miss_n = len(miss)
         except Exception:
             pass
-        job_id = "FINFULL_" + _uuid.uuid4().hex[:10]
-        # Daemon thread (not BackgroundTasks): multi-hour pulls must outlive the
-        # HTTP request lifecycle cleanly and keep running after the browser leaves.
-        _fin_job_set(job_id, stage="queued", status="running",
-                     label=f"Queued — resume missing-only ({miss_n:,} to go, "
-                           f"keeping {have_n:,} stored)…",
-                     started_at=time.time(), total=miss_n, done=0, stored=0,
-                     universe="us_listed_full")
-        threading.Thread(target=_run_fin_full_pull, args=(job_id, years),
-                         daemon=True, name=f"fin-full-{job_id[-8:]}").start()
+        # Chunked resume — supervisor keeps chaining until missing is empty.
+        # One giant multi-hour thread was stalling around ~1–2k names on Railway.
+        job_id = _fin_start_chunk_async(years=years, max_names=_FIN_CHUNK_SIZE,
+                                        reason="manual-resume")
+        if not job_id:
+            # Worker already running — surface its job if possible
+            live = None
+            now = time.time()
+            for jid, j in list(_fin_sync_jobs.items()):
+                if (str(jid).startswith(("FINFULL", "FINCHUNK"))
+                        and j.get("status") == "running"
+                        and now - float(j.get("updated_at") or 0) < 300):
+                    live = jid
+                    break
+            return {"ok": True, "job_id": live, "mode": "full",
+                    "have": have_n, "missing": miss_n, "universe": uni_n,
+                    "note": f"Worker already running (missing-only). Keeping {have_n:,} "
+                            f"stored; {miss_n:,} gaps left. Poll existing job or wait."}
         return {"ok": True, "job_id": job_id, "mode": "full",
-                "years_back": years,
+                "years_back": years, "chunk": _FIN_CHUNK_SIZE,
                 "have": have_n, "missing": miss_n, "universe": uni_n,
-                "note": f"Resume missing-only: will NOT touch {have_n:,} stored names; "
-                        f"pulling {miss_n:,} gaps. On SEC 429 waits then continues. "
+                "note": f"Resume missing-only chunk ({_FIN_CHUNK_SIZE}/batch). "
+                        f"Will NOT touch {have_n:,} stored names; {miss_n:,} gaps. "
+                        f"Supervisor auto-chains next chunks. "
                         f"Poll /api/financials/sync/{job_id}."}
     job_id = "FINOVER_MANUAL_" + _uuid.uuid4().hex[:10]
     threading.Thread(target=_run_fin_overnight, args=(job_id,),
@@ -24313,51 +24473,8 @@ def _auto_fin_overnight_worker() -> None:
     import time as _time
     # Let the rest of startup (DB pool, hydrate) finish before first check.
     _time.sleep(60)
-    # ── Bootstrap / resume full pull when stalled or coverage incomplete ──
-    # Missing-only resume: never re-touches names already in company_financials.
-    # Claims via kv so flapping restarts don't start parallel full pulls.
-    try:
-        if (_fin_overnight_enabled() and _PSYCOPG2_OK
-                and os.environ.get("DATABASE_URL")):
-            miss: list[str] = []
-            have_n = uni_n = 0
-            try:
-                miss, have_n, uni_n = _fin_missing_tickers()
-            except Exception:
-                pass
-            claim = _kv_get("fin_full_pull.running") or {}
-            claim_age_ok = True
-            try:
-                if claim.get("ts"):
-                    from datetime import datetime as _dt
-                    age_h = (_dt.utcnow() - _dt.fromisoformat(
-                        str(claim["ts"]).replace("Z", "")).replace(tzinfo=None)).total_seconds() / 3600
-                    claim_age_ok = age_h > 2   # stale claim (>2h) → allow resume
-            except Exception:
-                pass
-            stalled = _fin_pull_seems_stalled(max_idle_min=12.0)
-            need = bool(miss) and (stalled or have_n < 2500 or len(miss) > 100)
-            if need and claim_age_ok:
-                print(f"[fin-overnight] RESUME missing-only pull — have={have_n} "
-                      f"missing={len(miss)} stalled={stalled}", flush=True)
-                _kv_put("fin_full_pull.running",
-                        {"ts": datetime.utcnow().isoformat() + "Z",
-                         "stored_at_start": have_n, "missing_at_start": len(miss)})
-                try:
-                    job = _run_fin_full_pull()
-                    _automation_record_run(
-                        "fin_overnight", True,
-                        (job.get("label") or "resume missing-only")[:400])
-                finally:
-                    try:
-                        _kv_put("fin_full_pull.running", {"ts": None})
-                    except Exception:
-                        pass
-            else:
-                print(f"[fin-overnight] bootstrap skip (have={have_n} missing={len(miss)} "
-                      f"stalled={stalled} claim_ok={claim_age_ok})", flush=True)
-    except Exception as _be:
-        print(f"[fin-overnight] bootstrap error: {_be!s:.200}", flush=True)
+    # Continuous filling is handled by _auto_fin_supervisor_worker (chunked).
+    # Overnight loop only does scheduled budget refreshes once coverage is healthy.
 
     while True:
         try:
@@ -24391,7 +24508,8 @@ def _auto_fin_overnight_worker() -> None:
                 print("[fin-overnight] SEC_USER_AGENT missing — skipping")
                 _time.sleep(3600)
                 continue
-            # Prefer full missing pull if still incomplete; else budget refresh
+            # Supervisor already fills gaps in chunks. Overnight budget only
+            # refreshes when coverage is already large (maintenance mode).
             stored_n = 0
             try:
                 with _fund_conn() as conn, conn.cursor() as cur:
@@ -24399,18 +24517,19 @@ def _auto_fin_overnight_worker() -> None:
                     stored_n = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
                 pass
-            if stored_n < 2500:
-                print(f"[fin-overnight] coverage still thin ({stored_n}) — full pull",
-                      flush=True)
-                job = _run_fin_full_pull()
+            if stored_n < 4000:
+                jid = _fin_start_chunk_async(max_names=_FIN_CHUNK_SIZE,
+                                             reason="overnight-fill")
+                detail = f"chunk launched {jid} have={stored_n}" if jid else f"worker busy have={stored_n}"
+                _automation_record_run("fin_overnight", True, detail[:400])
+                print(f"[fin-overnight] {detail}", flush=True)
             else:
-                print(f"[fin-overnight] starting budget batch={_FIN_OVERNIGHT_BUDGET} "
-                      f"years={_FIN_OVERNIGHT_YEARS}", flush=True)
+                print(f"[fin-overnight] starting budget refresh={_FIN_OVERNIGHT_BUDGET}",
+                      flush=True)
                 job = _run_fin_overnight()
-            detail = (job.get("label") or "ok")[:400]
-            ok = job.get("status") == "done"
-            _automation_record_run("fin_overnight", bool(ok), detail)
-            print(f"[fin-overnight] finished: {detail}", flush=True)
+                detail = (job.get("label") or "ok")[:400]
+                _automation_record_run("fin_overnight", job.get("status") == "done", detail)
+                print(f"[fin-overnight] finished: {detail}", flush=True)
             _time.sleep(60)
         except Exception as _e:
             print(f"[fin-overnight] error (retrying in 1h): {_e!s:.200}", flush=True)
