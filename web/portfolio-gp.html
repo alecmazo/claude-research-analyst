@@ -5035,9 +5035,9 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div class="panel-body" style="padding:14px 16px;">
         <div id="fin-dash-empty" style="font-size:12px;color:var(--text-tertiary);">
-          Pick a covered ticker and hit View — PM desk: price + TTM multiples, peer comps,
-          margin/ROIC charts, <strong>DGA Score</strong>, and <strong>DGA Value</strong>
-          (mean of saved Grok + Claude targets). All from the free SEC XBRL store + market quotes. Zero LLM tokens.
+          Enter a ticker (e.g. MSFT) and hit View — loads the <strong>dashboard</strong> and the
+          <strong>Financials sheet</strong> below together. Peer comps, rank cards, DGA Score &amp; Value
+          from the free SEC store. Zero LLM tokens.
         </div>
         <div id="fin-dash-head" style="display:none;"></div>
         <div id="fin-dash-ttm" style="display:none;margin-top:12px;"></div>
@@ -5065,9 +5065,9 @@ End with the sleeve block at this account's real market value so I can push it t
       </header>
       <div class="panel-body" style="padding:12px 14px;">
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5;margin-bottom:8px;">
-          <strong>Value Line–style statistical array</strong> of every number already pulled into the store
-          (income, cash flow, balance sheet, margins, ROE/ROA/ROIC, growth).
-          Click a company link below — <em>no SEC re-pull, no LLM, no Railway burn to browse</em>.
+          <strong>Value Line–style statistical array</strong> — same ticker as Company Dashboard above
+          (auto-fills when you View a name). Full income / cash flow / balance sheet / margins from the store.
+          <em>No SEC re-pull, no LLM.</em>
         </div>
         <div id="fin-vl-links" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:28px;">
           <span style="font-size:11px;color:var(--text-tertiary);">Loading company links…</span>
@@ -8962,7 +8962,8 @@ End with the sleeve block at this account's real market value so I can push it t
           '</div>' +
           '<div style="font-size:10.5px;color:var(--text-tertiary);text-align:right;">Value Line–style · SEC store · '
             + _trEsc(d.cost || 'zero tokens') + '<br>'
-            + '<a href="#" id="fin-vl-to-dash" style="color:var(--blue);">Open PM dashboard →</a></div>' +
+            + 'Synced with Company Dashboard · '
+            + '<a href="#" id="fin-vl-to-dash" style="color:var(--blue);">↑ Dashboard</a></div>' +
         '</div>';
       const annualHtml = _vlTable(d.annual, 'Annual');
       const qHtml = _vlTable(d.quarterly, 'Quarterly');
@@ -8974,13 +8975,16 @@ End with the sleeve block at this account's real market value so I can push it t
         + 'Print / Save PDF uses your browser (no server cost). Download PDF is generated on click only. Not investment advice.</div>';
       sheet.style.display = 'block';
       if (empty) empty.style.display = 'none';
+      // Keep dashboard ticker field matched (sheet may have been opened first)
+      const di = document.getElementById('fin-dash-ticker');
+      if (di && !di.value) di.value = tk;
       const toDash = document.getElementById('fin-vl-to-dash');
       if (toDash) toDash.addEventListener('click', e => {
         e.preventDefault();
-        const di = document.getElementById('fin-dash-ticker');
-        if (di) di.value = tk;
-        if (typeof _finDashLoad === 'function') _finDashLoad(tk);
-        try { document.getElementById('fin-dash-head')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+        try {
+          (document.getElementById('fin-dash-panel') || document.getElementById('fin-dash-head'))
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (_) {}
       });
     } catch (e) {
       if (empty) {
