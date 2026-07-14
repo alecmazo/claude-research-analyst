@@ -7952,7 +7952,8 @@ End with the sleeve block at this account's real market value so I can push it t
       const vlo = document.getElementById('fin-vl-open');
       if (vlo) vlo.addEventListener('click', () => {
         const t = ((document.getElementById('fin-vl-ticker') || {}).value || '').trim().toUpperCase();
-        if (t) _loadFinVlSheet(t);
+        // One ticker fills both dashboard + Value Line sheet
+        if (t) _finDashLoad(t);
       });
       const vlt = document.getElementById('fin-vl-ticker');
       if (vlt) {
@@ -7961,7 +7962,7 @@ End with the sleeve block at this account's real market value so I can push it t
           if (e.key === 'Enter') {
             e.preventDefault();
             const t = (vlt.value || '').trim().toUpperCase();
-            if (t) _loadFinVlSheet(t);
+            if (t) _finDashLoad(t);
           }
         });
       }
@@ -8237,6 +8238,10 @@ End with the sleeve block at this account's real market value so I can push it t
     const tk = (tkOverride || (inp && inp.value) || '').trim().toUpperCase();
     if (!tk) return;
     _finDashLast = tk;
+    if (inp) inp.value = tk;
+    // Keep Value Line sheet ticker in sync (one ticker fills both panels)
+    const vlInp = document.getElementById('fin-vl-ticker');
+    if (vlInp) vlInp.value = tk;
     const head = document.getElementById('fin-dash-head');
     const grid = document.getElementById('fin-dash-grid');
     const empty = document.getElementById('fin-dash-empty');
@@ -8249,16 +8254,23 @@ End with the sleeve block at this account's real market value so I can push it t
     const _tt = document.getElementById('fin-dash-ttm'); if (_tt) _tt.style.display = 'none';
     const _pr = document.getElementById('fin-dash-peers'); if (_pr) _pr.style.display = 'none';
     const _nt = document.getElementById('fin-dash-notes'); if (_nt) _nt.style.display = 'none';
-    try {
+    // Fire dashboard + Value Line sheet in parallel (same ticker, two free DB endpoints)
+    const dashP = (async () => {
       const r = await window.dgaFetch('/api/financials/' + encodeURIComponent(tk) + '/dashboard?period_type=' + _finDashPeriod);
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
       _finDashRender(d);
-      // Remember the last company so the dashboard isn't blank next visit.
       try { localStorage.setItem('dga_fin_dash_last', tk); } catch (e) {}
+    })();
+    const sheetP = (typeof _loadFinVlSheet === 'function')
+      ? _loadFinVlSheet(tk).catch(() => {})
+      : Promise.resolve();
+    try {
+      await dashP;
     } catch (e) {
       if (head) head.innerHTML = '<div style="font-size:12px;color:var(--red,#dc2626);">' + _gfEsc(e.message) + '</div>';
     }
+    try { await sheetP; } catch (_) {}
   }
 
   // ── GuruFocus-style ranking cards (Financial Strength / Profitability / DGA Value) ──
@@ -8888,7 +8900,10 @@ End with the sleeve block at this account's real market value so I can push it t
       host.querySelectorAll('[data-vl-tk]').forEach(a => {
         a.addEventListener('click', e => {
           e.preventDefault();
-          _loadFinVlSheet(a.getAttribute('data-vl-tk'));
+          const t = a.getAttribute('data-vl-tk');
+          // Chip → both Company Dashboard and Financials sheet
+          if (typeof _finDashLoad === 'function') _finDashLoad(t);
+          else _loadFinVlSheet(t);
         });
       });
     } catch (e) {
