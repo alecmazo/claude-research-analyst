@@ -1034,8 +1034,189 @@
     else if (du <= 2) cls += ' wl-earn-soon';
     const tip = 'Earnings ' + (du === 0 ? 'TODAY' : (du === -1 ? 'yesterday' : ('in ' + du + 'd')))
       + (dateStr ? ' (' + dateStr + ')' : '') + sess + fq + eps
-      + (earn.has_report ? ' · click 📄 to open saved report' : ' · no saved report yet');
-    return '<span class="' + cls + '" title="' + _cfEsc(tip) + '">EARN ' + _cfEsc(label) + sess + '</span>';
+      + ' · click for results / beat-miss card';
+    return '<span class="' + cls + '" data-open-earnings="' + _cfEsc(tk) + '" title="' + _cfEsc(tip) + '">EARN ' + _cfEsc(label) + sess + '</span>';
+  }
+
+  function _earnFmtEps(v) {
+    if (v == null || isNaN(Number(v))) return '—';
+    const n = Number(v);
+    return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
+  }
+
+  function _earnBeatBadge(beat, surprisePct) {
+    if (!beat) return '<span class="earn-badge earn-pending">PENDING</span>';
+    if (beat === 'beat') {
+      const s = surprisePct != null ? (' +' + Number(surprisePct).toFixed(1) + '%') : '';
+      return '<span class="earn-badge earn-beat">BEAT' + s + '</span>';
+    }
+    if (beat === 'miss') {
+      const s = surprisePct != null ? (' ' + Number(surprisePct).toFixed(1) + '%') : '';
+      return '<span class="earn-badge earn-miss">MISS' + s + '</span>';
+    }
+    return '<span class="earn-badge earn-inline">IN-LINE</span>';
+  }
+
+  async function openEarningsCard(ticker) {
+    const tk = (ticker || '').toUpperCase().trim();
+    if (!tk) return;
+    const old = document.getElementById('earnings-card-modal');
+    if (old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'earnings-card-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9300;';
+    overlay.innerHTML =
+      '<div class="dga-dialog earn-card-dialog" style="width:min(420px,94vw);max-height:88vh;display:flex;flex-direction:column;">' +
+        '<div class="dga-dialog-handle" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--panel-edge);">' +
+          '<span style="font-size:16px;font-weight:800;letter-spacing:0.8px;">' + _cfEsc(tk) + '</span>' +
+          '<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;padding:2px 7px;border-radius:4px;background:#fff7ed;color:#c2410c;border:1px solid #fdba74;">EARNINGS</span>' +
+          '<span id="ec-badge-slot"></span>' +
+          '<button type="button" id="ec-close" style="margin-left:auto;background:rgba(0,0,0,0.05);border:1px solid var(--panel-edge);border-radius:5px;padding:3px 12px;cursor:pointer;font-size:14px;">✕</button>' +
+        '</div>' +
+        '<div id="ec-body" class="dga-dialog-body" style="padding:14px 16px 16px;overflow:auto;">' +
+          '<div class="tab-loading"><span class="spin">↻</span> Loading earnings…</div>' +
+        '</div>' +
+        '<div style="padding:10px 16px 12px;border-top:1px solid var(--panel-edge);display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fafbfc;">' +
+          '<span style="font-size:10px;color:var(--dim);flex:1;">Nasdaq calendar + surprise · free · no LLM</span>' +
+          '<button type="button" id="ec-report" class="tab-btn" style="display:none;font-size:10px;">Open DGA report</button>' +
+          '<button type="button" id="ec-peek" class="tab-btn" style="font-size:10px;">Stock snapshot</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const close = () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    };
+    overlay.querySelector('#ec-close').onclick = close;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const dlg = overlay.querySelector('.dga-dialog');
+    const handle = overlay.querySelector('.dga-dialog-handle');
+    if (dlg && handle && typeof _initDragModal === 'function') _initDragModal(dlg, handle);
+
+    const body = overlay.querySelector('#ec-body');
+    const badgeSlot = overlay.querySelector('#ec-badge-slot');
+    try {
+      const r = await window.dgaFetch('/api/earnings/' + encodeURIComponent(tk));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (!d.ok && d.error) throw new Error(d.error);
+
+      const ev = d.event || {};
+      const res = d.result || {};
+      const q = d.quote || {};
+      const status = d.status || 'unknown';
+      const beat = res.beat || null;
+
+      if (badgeSlot) {
+        if (status === 'reported' && beat) {
+          badgeSlot.innerHTML = _earnBeatBadge(beat, res.surprise_pct);
+        } else if (status === 'scheduled' || status === 'pending_update') {
+          badgeSlot.innerHTML = '<span class="earn-badge earn-pending">AWAITING</span>';
+        }
+      }
+
+      const du = ev.days_until;
+      let whenLine = '—';
+      if (ev.date) {
+        if (du === 0) whenLine = 'Today · ' + ev.date;
+        else if (du === -1) whenLine = 'Yesterday · ' + ev.date;
+        else if (du != null && du > 0) whenLine = 'In ' + du + ' day' + (du === 1 ? '' : 's') + ' · ' + ev.date;
+        else whenLine = String(ev.date);
+      }
+      if (ev.session) whenLine += ' · ' + ev.session;
+      if (ev.fiscal_quarter) whenLine += ' · FQ ' + ev.fiscal_quarter;
+
+      const pxLine = q.price != null
+        ? ('$' + Number(q.price).toFixed(2) + (q.pct_change != null
+            ? (' <span class="' + cssClass(q.pct_change) + '">' + fmtPct(q.pct_change) + '</span>')
+            : ''))
+        : '—';
+
+      let hero = '';
+      if (status === 'reported' && (res.eps_actual != null || res.eps_estimate != null)) {
+        hero =
+          '<div class="earn-hero">' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Actual EPS</div>' +
+              '<div class="earn-metric-val">' + _earnFmtEps(res.eps_actual) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus</div>' +
+              '<div class="earn-metric-val">' + _earnFmtEps(res.eps_estimate) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Surprise</div>' +
+              '<div class="earn-metric-val">' +
+                (res.surprise_pct != null
+                  ? ((Number(res.surprise_pct) >= 0 ? '+' : '') + Number(res.surprise_pct).toFixed(1) + '%')
+                  : '—') +
+              '</div></div>' +
+          '</div>' +
+          '<div style="margin-top:10px;text-align:center;">' + _earnBeatBadge(beat, res.surprise_pct) + '</div>';
+      } else {
+        hero =
+          '<div class="earn-hero earn-hero-pending">' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Consensus EPS</div>' +
+              '<div class="earn-metric-val">' + _earnFmtEps(res.eps_estimate) + '</div></div>' +
+            '<div class="earn-metric"><div class="earn-metric-lbl">Status</div>' +
+              '<div class="earn-metric-val" style="font-size:13px;">' +
+                (status === 'pending_update' ? 'Results pending' : 'Not yet reported') +
+              '</div></div>' +
+          '</div>' +
+          '<div style="margin-top:8px;font-size:11px;color:var(--dim);text-align:center;">' +
+            'Beat / miss appears here once Nasdaq posts the surprise.' +
+          '</div>';
+      }
+
+      const hist = (d.history || []).slice(0, 6);
+      let histHtml = '';
+      if (hist.length) {
+        histHtml =
+          '<div style="margin-top:16px;font-size:10px;font-weight:800;letter-spacing:0.6px;color:var(--dim);text-transform:uppercase;">Recent quarters</div>' +
+          '<table class="earn-hist" style="width:100%;margin-top:6px;border-collapse:collapse;font-size:11.5px;">' +
+          '<thead><tr style="color:var(--dim);text-align:left;">' +
+          '<th style="padding:4px 2px;">Quarter</th><th style="padding:4px 2px;">Reported</th>' +
+          '<th style="padding:4px 2px;text-align:right;">Actual</th><th style="padding:4px 2px;text-align:right;">Est.</th>' +
+          '<th style="padding:4px 2px;text-align:right;">Δ</th></tr></thead><tbody>' +
+          hist.map(function (h) {
+            const b = h.beat;
+            const clr = b === 'beat' ? '#16a34a' : (b === 'miss' ? '#dc2626' : 'var(--text-primary)');
+            const sp = h.surprise_pct != null
+              ? ((Number(h.surprise_pct) >= 0 ? '+' : '') + Number(h.surprise_pct).toFixed(1) + '%')
+              : '—';
+            return '<tr style="border-top:1px solid var(--panel-edge);">' +
+              '<td style="padding:5px 2px;font-weight:600;">' + _cfEsc(h.fiscal_quarter || '—') + '</td>' +
+              '<td style="padding:5px 2px;color:var(--dim);">' + _cfEsc(h.date_reported || '—') + '</td>' +
+              '<td style="padding:5px 2px;text-align:right;font-variant-numeric:tabular-nums;">' + _earnFmtEps(h.eps_actual) + '</td>' +
+              '<td style="padding:5px 2px;text-align:right;font-variant-numeric:tabular-nums;color:var(--dim);">' + _earnFmtEps(h.eps_estimate) + '</td>' +
+              '<td style="padding:5px 2px;text-align:right;font-weight:700;color:' + clr + ';font-variant-numeric:tabular-nums;">' + sp + '</td>' +
+              '</tr>';
+          }).join('') +
+          '</tbody></table>';
+      }
+
+      body.innerHTML =
+        (ev.name ? '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;">' + _cfEsc(ev.name) + '</div>' : '') +
+        '<div style="font-size:12px;font-weight:600;margin-bottom:4px;">' + _cfEsc(whenLine) + '</div>' +
+        '<div style="font-size:12px;margin-bottom:12px;">Price ' + pxLine + '</div>' +
+        hero +
+        histHtml +
+        '<div style="margin-top:12px;font-size:10px;color:var(--dim);">Not investment advice. EPS figures from Nasdaq consensus / reported.</div>';
+
+      const repBtn = overlay.querySelector('#ec-report');
+      if (repBtn && d.has_report) {
+        repBtn.style.display = '';
+        repBtn.onclick = () => { close(); if (typeof openReport === 'function') openReport(tk); };
+      }
+      const peekBtn = overlay.querySelector('#ec-peek');
+      if (peekBtn) {
+        peekBtn.onclick = () => {
+          close();
+          if (typeof openStockPeek === 'function') openStockPeek(tk);
+        };
+      }
+    } catch (e) {
+      body.innerHTML = '<div style="color:#b91c1c;font-size:13px;">Could not load earnings: ' +
+        _cfEsc(e.message || String(e)) + '</div>';
+    }
   }
 
   function renderWatchlist(tickers, quotes, earnings, reports) {
@@ -1099,17 +1280,14 @@
         }
       });
     });
-    // Click earnings chip → report if available, else free snapshot
-    rows.querySelectorAll('.wl-earn').forEach(chip => {
+    // Click earnings chip → earnings results card (beat / miss)
+    rows.querySelectorAll('[data-open-earnings]').forEach(chip => {
       chip.style.cursor = 'pointer';
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
-        const row = chip.closest('.wl-row');
-        const tk = row && row.getAttribute('data-ticker');
-        if (!tk) return;
-        if (reports[tk] && typeof openReport === 'function') openReport(tk);
-        else if (typeof openStockPeek === 'function') openStockPeek(tk);
-        else if (typeof openGuruFocus === 'function') openGuruFocus(tk);
+        const tk = chip.getAttribute('data-open-earnings')
+          || (chip.closest('.wl-row') && chip.closest('.wl-row').getAttribute('data-ticker'));
+        if (tk) openEarningsCard(tk);
       });
     });
   }

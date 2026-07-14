@@ -561,3 +561,180 @@ def earnings_upcoming(symbols: list[str] | None = None,
                     best[sym] = rec
         d += timedelta(days=1)
     return best
+
+
+_EARNINGS_DETAIL_CACHE: dict = {}  # symbol -> (epoch, payload)
+_EARNINGS_DETAIL_TTL_S = 30 * 60
+
+
+def _parse_money_num(v):
+    """Parse '$5.59' / '5.59' / 5.59 → float or None."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        try:
+            f = float(v)
+            return f if f == f else None
+        except (TypeError, ValueError):
+            return None
+    s = str(v).strip().replace(",", "").replace("$", "")
+    if not s or s in ("—", "-", "N/A", "n/a"):
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def nasdaq_earnings_surprise(symbol: str) -> dict:
+    """Historical EPS actual vs consensus from Nasdaq (free).
+
+    Returns {history: [...], latest: {...}|None} — never raises.
+    """
+    import time as _time
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"history": [], "latest": None}
+    hit = _EARNINGS_DETAIL_CACHE.get(sym)
+    if hit and _time.time() - hit[0] < _EARNINGS_DETAIL_TTL_S:
+        return hit[1]
+    history: list[dict] = []
+    try:
+        import requests
+        r = requests.get(
+            f"https://api.nasdaq.com/api/company/{sym}/earnings-surprise",
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; DGA-Capital/1.0)",
+                "Accept": "application/json",
+            },
+            timeout=12,
+        )
+        if r.status_code == 200:
+            data = (r.json() or {}).get("data") or {}
+            table = (data.get("earningsSurpriseTable") or {})
+            for row in (table.get("rows") or []):
+                actual = _parse_money_num(row.get("eps"))
+                est = _parse_money_num(row.get("consensusForecast"))
+                surprise_pct = _parse_money_num(row.get("percentageSurprise"))
+                beat = None
+                if actual is not None and est is not None:
+                    if actual > est:
+                        beat = "beat"
+                    elif actual < est:
+                        beat = "miss"
+                    else:
+                        beat = "inline"
+                history.append({
+                    "fiscal_quarter": row.get("fiscalQtrEnd") or "",
+                    "date_reported": row.get("dateReported") or "",
+                    "eps_actual": actual,
+                    "eps_estimate": est,
+                    "surprise_pct": surprise_pct,
+                    "beat": beat,
+                })
+        else:
+            print(f"[market_data] nasdaq surprise {sym} HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[market_data] nasdaq surprise {sym} failed: {e!s:.120}", flush=True)
+    out = {
+        "history": history,
+        "latest": history[0] if history else None,
+    }
+    _EARNINGS_DETAIL_CACHE[sym] = (_time.time(), out)
+    return out
+
+
+def earnings_card(symbol: str, horizon_days: int = 5,
+                  include_past_days: int = 1) -> dict:
+    """Full earnings card payload for watchlist chip click.
+
+    Combines upcoming calendar event (if any) + surprise history + beat/miss.
+    Free Nasdaq sources only — no LLM.
+    """
+    from datetime import date, datetime, timedelta
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"ok": False, "error": "invalid ticker"}
+
+    upcoming = earnings_upcoming([sym], horizon_days=horizon_days,
+                                 include_past_days=include_past_days).get(sym)
+    surprise = nasdaq_earnings_surprise(sym)
+    history = surprise.get("history") or []
+    latest = surprise.get("latest")
+
+    # Session label from calendar
+    session = ""
+    if upcoming:
+        tlabel = (upcoming.get("time") or "").lower()
+        if "pre" in tlabel:
+            session = "BMO"
+        elif "after" in tlabel or "post" in tlabel:
+            session = "AMC"
+
+    # Determine if latest surprise is "this" event (reported within window)
+    result = None
+    status = "scheduled"  # scheduled | reported | unknown
+    if latest and latest.get("date_reported"):
+        # Parse m/d/yyyy
+        reported_d = None
+        for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+            try:
+                reported_d = datetime.strptime(str(latest["date_reported"]).strip(), fmt).date()
+                break
+            except Exception:
+                continue
+        today = date.today()
+        if reported_d is not None:
+            age = (today - reported_d).days
+            # Fresh result if reported in last 14 days, or matches upcoming date
+            match_upcoming = bool(
+                upcoming and upcoming.get("date")
+                and reported_d.isoformat() == str(upcoming.get("date"))[:10]
+            )
+            if age <= 14 or match_upcoming:
+                result = latest
+                status = "reported"
+    if upcoming and status != "reported":
+        # Still waiting — show estimate from calendar if present
+        status = "scheduled" if (upcoming.get("days_until") or 0) >= 0 else "scheduled"
+        if (upcoming.get("days_until") or 0) < 0 and result is None:
+            # Past schedule but no matching surprise yet
+            status = "pending_update"
+
+    eps_est = None
+    if result and result.get("eps_estimate") is not None:
+        eps_est = result["eps_estimate"]
+    elif upcoming:
+        eps_est = _parse_money_num(upcoming.get("eps_forecast"))
+
+    beat = (result or {}).get("beat")
+    surprise_pct = (result or {}).get("surprise_pct")
+
+    return {
+        "ok": True,
+        "ticker": sym,
+        "status": status,  # scheduled | reported | pending_update
+        "event": {
+            "date": (upcoming or {}).get("date") or (result or {}).get("date_reported"),
+            "days_until": (upcoming or {}).get("days_until"),
+            "session": session,
+            "time": (upcoming or {}).get("time") or "",
+            "fiscal_quarter": (
+                (upcoming or {}).get("fiscal_quarter")
+                or (result or {}).get("fiscal_quarter")
+                or ""
+            ),
+            "name": (upcoming or {}).get("name") or "",
+        } if (upcoming or result) else None,
+        "result": {
+            "eps_actual": (result or {}).get("eps_actual"),
+            "eps_estimate": eps_est,
+            "surprise_pct": surprise_pct,
+            "beat": beat,  # beat | miss | inline | null
+            "date_reported": (result or {}).get("date_reported"),
+            "fiscal_quarter": (result or {}).get("fiscal_quarter"),
+        } if (result or eps_est is not None) else None,
+        "history": history[:8],
+        "source": "nasdaq",
+        "cost": "free · no LLM",
+    }

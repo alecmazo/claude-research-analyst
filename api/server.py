@@ -3080,6 +3080,63 @@ def _claims_or_401(request: Request) -> dict:
     return claims
 
 
+@app.get("/api/earnings/{ticker}")
+def earnings_detail(ticker: str, request: Request):
+    """Earnings card for watchlist chip: schedule + actual vs estimate beat/miss.
+
+    Free Nasdaq sources only — zero LLM tokens.
+    """
+    _claims_or_401(request)
+    tk = (ticker or "").strip().upper()
+    if not tk or len(tk) > 12 or not re.fullmatch(r"[A-Z0-9.\-]+", tk):
+        raise HTTPException(status_code=422, detail="Invalid ticker")
+    try:
+        from market_data import earnings_card
+        card = earnings_card(tk, horizon_days=14, include_past_days=14)
+    except Exception as e:
+        print(f"[earnings] card failed {tk}: {e!s:.160}", flush=True)
+        return JSONResponse({"ok": False, "ticker": tk, "error": str(e)[:200]},
+                            status_code=500)
+    # Attach saved-report pointer so the card can link to DGA report
+    has_report = False
+    report_meta = None
+    try:
+        if _PSYCOPG2_OK and os.environ.get("DATABASE_URL"):
+            with _fund_conn() as conn, conn.cursor(cursor_factory=_RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT generated_at, rating, price_target, upside_pct,
+                           claude_generated_at
+                      FROM analyst_reports
+                     WHERE ticker=%s AND archived IS NOT TRUE
+                     LIMIT 1
+                """, (tk,))
+                r = cur.fetchone()
+                if r:
+                    has_report = True
+                    report_meta = {
+                        "rating": r.get("rating"),
+                        "price_target": float(r["price_target"]) if r.get("price_target") is not None else None,
+                        "upside_pct": float(r["upside_pct"]) if r.get("upside_pct") is not None else None,
+                        "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+                        "has_claude": bool(r.get("claude_generated_at")),
+                    }
+    except Exception:
+        pass
+    card["has_report"] = has_report
+    card["report"] = report_meta
+    # Live quote (optional, free store/batch)
+    try:
+        q = (batch_quotes(tk) or {}).get(tk) or {}
+        if q.get("price") is not None:
+            card["quote"] = {
+                "price": q.get("price"),
+                "pct_change": q.get("pct_change"),
+            }
+    except Exception:
+        pass
+    return card
+
+
 @app.get("/api/watchlist")
 def watchlist_get(request: Request):
     claims = _claims_or_401(request)
