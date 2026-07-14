@@ -5016,8 +5016,9 @@ End with the sleeve block at this account's real market value so I can push it t
       no LLM tokens. Cash flow is de-cumulated to discrete quarters; Q4 = FY − Q1–Q3. $ as labeled.
     </div>
 
-    <!-- ── Company dashboard (GuruFocus-style, zero LLM tokens) ── -->
-    <section class="panel" style="margin-bottom:14px;">
+    <!-- ── Company dashboard (GuruFocus-style, zero LLM tokens) ──
+         Expanded by default (primary PM desk). Store card below starts collapsed. -->
+    <section class="panel" id="fin-dash-panel" data-collapsible="1" data-expanded="1" style="margin-bottom:14px;">
       <header class="panel-head">
         <span class="panel-title">📊 Company Dashboard</span>
         <span class="panel-badge" style="background:#dcfce7;color:#166534;" title="Renders entirely from the SEC XBRL store + saved report targets — no LLM tokens spent">FREE · NO TOKENS</span>
@@ -5051,7 +5052,7 @@ End with the sleeve block at this account's real market value so I can push it t
     <!-- ── Value Line–style Financials sheet (above the store) ──
          All numbers from Postgres company_financials already pulled from SEC.
          Browse = free/DB. Print = browser. PDF = on-demand only (no schedule). -->
-    <section class="panel" id="fin-vl-panel" style="margin-bottom:14px;">
+    <section class="panel" id="fin-vl-panel" data-collapsible="1" data-expanded="1" style="margin-bottom:14px;">
       <header class="panel-head">
         <span class="panel-title">📈 Financials</span>
         <span class="panel-badge" style="background:#dcfce7;color:#166534;" title="Reads the SEC store only — zero LLM, zero background jobs">VALUE LINE · FREE</span>
@@ -5079,10 +5080,9 @@ End with the sleeve block at this account's real market value so I can push it t
     </section>
 
     <!-- ── Financials store (low-cost Railway posture) ──
-         Viewing dashboards is free/DB-only. SEC pulls are free (no LLM) but use
-         CPU/egress — so auto only hits followed names nightly + a light monthly
-         pass over the rest. Full US backfill is opt-in / advanced. -->
-    <section class="panel" id="fin-store-panel">
+         Collapsed by default so the Company Dashboard stays the focus.
+         Expand only when pulling SEC data / managing coverage. -->
+    <section class="panel" id="fin-store-panel" data-collapsible="1">
       <header class="panel-head">
         <span class="panel-title">📊 Financials store</span>
         <span class="panel-badge" id="fin-coverage-badge" style="background:#e0f2fe;color:#075985;">—</span>
